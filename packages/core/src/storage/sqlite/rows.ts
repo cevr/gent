@@ -7,10 +7,9 @@ import {
   Session,
   decodeDateFromMillis,
 } from "../../domain/message.js"
-import { messagePartsSearchText } from "../../domain/message-part-projection.js"
 import { AgentEvent, EventId } from "../../domain/event.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
-import { ReasoningEffort } from "../../domain/agent.js"
+import { isReasoningEffort } from "../../domain/agent.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const StoredPromptPart = Schema.Union([
@@ -99,8 +98,6 @@ export const decodeEventRow = Schema.decodeUnknownEffect(EventRow)
 export const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
 
-export const isReasoningEffort = Schema.is(ReasoningEffort)
-
 const rowToSession = (row: SessionRow) =>
   Effect.gen(function* () {
     const createdAt = yield* decodeDateFromMillis(row.created_at)
@@ -177,8 +174,6 @@ export const encodeStoredMessage = (message: Message) =>
     })
     return { partJsons, metadataJson }
   })
-
-export const messageSearchText = messagePartsSearchText
 
 export const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
   const grouped = new Map<

@@ -7,6 +7,7 @@
 import { Predicate, Context, Effect, Layer, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import { MessageRole, type Message } from "../domain/message.js"
+import { messagePartsSearchText } from "../domain/message-part-projection.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
@@ -16,7 +17,6 @@ import {
   decodeStoredMessage,
   encodeStoredMessage,
   groupMessageChunkRows,
-  messageSearchText,
   toSqlNull,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
@@ -88,7 +88,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
         ) =>
           Effect.gen(function* () {
             yield* sql`DELETE FROM messages_fts WHERE message_id = ${message.id}`
-            yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messageSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
+            yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messagePartsSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
           })
         const ensureMessageWorkspace = Effect.fn("MessageStorage.ensureMessageWorkspace")(
           function* (message: Pick<Message, "sessionId" | "branchId">) {

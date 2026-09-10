@@ -42,7 +42,10 @@ import { EventPublisher } from "../../domain/event-publisher.js"
 import type { MessageMetadata } from "../../domain/message.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
-import { makeAmbientExtensionHostContextProvider } from "../make-extension-host-context.js"
+import {
+  ExtensionHostContextProvider,
+  makeAmbientExtensionHostContextProvider,
+} from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
@@ -62,10 +65,7 @@ import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { AllowAllPermission, Permission } from "../../domain/permission.js"
-import {
-  resolveSessionEnvironment,
-  SessionEnvironmentHostProvider,
-} from "../session-runtime-context.js"
+import { resolveSessionEnvironment } from "../session-runtime-context.js"
 import {
   buildIdleState,
   emptyLoopQueueState,
@@ -301,7 +301,7 @@ export const makeAgentLoopBehavior = (
           permission: defaultPermission,
           baseSections,
         },
-      }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider)),
+      }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),
     ).pipe(
       Effect.map(({ environment }) => {
         const profile = {

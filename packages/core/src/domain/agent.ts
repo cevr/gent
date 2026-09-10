@@ -19,6 +19,7 @@ export const ReasoningEffort = Schema.Literals([
   "max",
 ])
 export type ReasoningEffort = typeof ReasoningEffort.Type
+export const isReasoningEffort = Schema.is(ReasoningEffort)
 
 export const AgentPersistence = Schema.Literals(["durable", "ephemeral"])
 export type AgentPersistence = typeof AgentPersistence.Type

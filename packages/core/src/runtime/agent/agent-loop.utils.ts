@@ -1,5 +1,8 @@
-import { ReasoningEffort } from "../../domain/agent.js"
-import type { AgentDefinition, ReasoningEffort as ReasoningEffortType } from "../../domain/agent.js"
+import {
+  isReasoningEffort,
+  type AgentDefinition,
+  type ReasoningEffort,
+} from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import type { Message } from "../../domain/message.js"
 import {
@@ -10,11 +13,9 @@ import {
   messageSingleText,
 } from "../../domain/message-part-projection.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
-import { Option, Predicate, Schema } from "effect"
+import { Option, Predicate } from "effect"
 import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
-
-const isReasoningEffort = Schema.is(ReasoningEffort)
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
@@ -103,7 +104,7 @@ export const buildTurnPrompt = (
 export const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
-): Option.Option<ReasoningEffortType> => {
+): Option.Option<ReasoningEffort> => {
   if (!Predicate.isUndefined(sessionOverride) && isReasoningEffort(sessionOverride)) {
     return Option.some(sessionOverride)
   }

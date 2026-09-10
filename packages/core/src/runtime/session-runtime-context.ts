@@ -16,8 +16,6 @@ import { ExtensionHostContextProvider } from "./make-extension-host-context.js"
 import type { SessionProfile, SessionProfileCacheService } from "./session-profile.js"
 import type { RuntimeProfileCatalog } from "./profile.js"
 
-export const SessionEnvironmentHostProvider = ExtensionHostContextProvider
-
 export interface SessionEnvironmentDefaults {
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -76,7 +74,7 @@ const resolveActiveRuntimeBindings = (params: {
   readonly defaults: SessionEnvironmentDefaults
 }): Effect.Effect<ActiveRuntimeBindings, never, ExtensionHostContextProvider> =>
   Effect.gen(function* () {
-    const hostProvider = yield* SessionEnvironmentHostProvider
+    const hostProvider = yield* ExtensionHostContextProvider
     if (Option.isNone(params.profile)) {
       return {
         extensionRegistry: hostProvider.defaultExtensionRegistry,
@@ -105,7 +103,7 @@ const buildSessionEnvironment = (params: {
   readonly bindings: ActiveRuntimeBindings
 }): Effect.Effect<SessionEnvironment, never, ExtensionHostContextProvider> =>
   Effect.gen(function* () {
-    const hostProvider = yield* SessionEnvironmentHostProvider
+    const hostProvider = yield* ExtensionHostContextProvider
     const runParams = Option.match(Option.fromUndefinedOr(params.session?.cwd), {
       onNone: () => ({
         sessionId: params.sessionId,

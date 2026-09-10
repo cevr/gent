@@ -11,10 +11,12 @@ import { AllowAllPermission } from "../../src/domain/permission"
 import {
   resolveSessionEnvironment,
   resolveSessionEnvironmentOrFail,
-  SessionEnvironmentHostProvider,
   type SessionEnvironmentDefaults,
 } from "../../src/runtime/session-runtime-context"
-import { makeAmbientExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context"
+import {
+  ExtensionHostContextProvider,
+  makeAmbientExtensionHostContextProvider,
+} from "../../src/runtime/make-extension-host-context"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionProfileCache,
@@ -119,7 +121,7 @@ describe("resolveSessionEnvironment", () => {
               permission: AllowAllPermission,
               baseSections: [],
             },
-          }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider))
+          }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
           expect(resolved.session).toBeDefined()
           expect(resolved.environment.cwd).toBe(secondary)
           expect(resolved.environment.hostCtx.cwd).toBe(secondary)
@@ -167,7 +169,7 @@ describe("resolveSessionEnvironment", () => {
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
           defaults,
-        }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider))
+        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
         expect(resolved.session).toBeUndefined()
         expect(resolved.environment.cwd).toBe("/tmp/runtime-context-default")
         expect(resolved.environment.hostCtx.cwd).toBe("/tmp/runtime-context-default")
@@ -216,7 +218,7 @@ describe("resolveSessionEnvironment", () => {
               baseSections: [],
             },
           }).pipe(
-            Effect.provideService(SessionEnvironmentHostProvider, hostProvider),
+            Effect.provideService(ExtensionHostContextProvider, hostProvider),
             Effect.provideService(SessionStorage, failingSessionStorage),
           ),
         )
@@ -234,7 +236,7 @@ describe("resolveSessionEnvironment", () => {
               baseSections: [],
             },
           }).pipe(
-            Effect.provideService(SessionEnvironmentHostProvider, hostProvider),
+            Effect.provideService(ExtensionHostContextProvider, hostProvider),
             Effect.provideService(SessionStorage, failingSessionStorage),
           ),
         )
@@ -337,7 +339,7 @@ describe("resolveSessionEnvironment", () => {
             permission: AllowAllPermission,
             baseSections: [],
           },
-        }).pipe(Effect.provideService(SessionEnvironmentHostProvider, hostProvider))
+        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
         const fromProfile = yield* resolved.environment.driverRegistry.getExternal("profile-driver")
         const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
         expect(resolved.session).toBeDefined()
