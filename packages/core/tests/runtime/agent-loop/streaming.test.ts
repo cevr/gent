@@ -162,10 +162,16 @@ describe("streaming", () => {
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+            ).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+              ),
+            ),
           )
         }
-        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+        return Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        )
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -204,10 +210,16 @@ describe("streaming", () => {
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+            ).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+              ),
+            ),
           )
         }
-        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+        return Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        )
       })
       const delayedEventStorage = Layer.effect(
         EventStorage,
@@ -297,7 +309,11 @@ describe("streaming", () => {
               yield* Deferred.await(gate)
               return finishPart({ finishReason: "stop" })
             }),
-          ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+          ).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+            ),
+          ),
         )
       })
       const layer = makeLayer(providerLayer)
@@ -346,10 +362,16 @@ describe("streaming", () => {
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+            ).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+              ),
+            ),
           )
         }
-        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+        return Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        )
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -384,7 +406,9 @@ describe("streaming", () => {
   it.live("publishes StreamStarted and TurnCompleted events", () =>
     Effect.gen(function* () {
       const providerLayer = LanguageModelLayers.testStream(() =>
-        Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+        Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        ),
       )
       const layer = makeRecordingLayer(providerLayer)
       yield* Effect.scoped(
@@ -550,10 +574,16 @@ describe("streaming", () => {
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+            ).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+              ),
+            ),
           )
         }
-        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+        return Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        )
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -600,10 +630,16 @@ describe("streaming", () => {
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
+            ).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+              ),
+            ),
           )
         }
-        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+        return Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        )
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(
@@ -688,7 +724,9 @@ describe("streaming", () => {
             ),
           )
         }
-        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+        return Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        )
       })
       const layer = makeLayer(providerLayer)
       yield* Effect.scoped(

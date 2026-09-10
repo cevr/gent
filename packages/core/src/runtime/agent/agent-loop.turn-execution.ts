@@ -108,6 +108,9 @@ const MAX_CONTINUATIONS_PER_TURN = 2
 const CONTINUATION_INSTRUCTION =
   "Your previous reply was cut off by a provider error after partial output. The partial output is saved above. Continue from where you stopped. Do not repeat text you already wrote."
 
+const EMPTY_RESPONSE_INSTRUCTION =
+  "Your previous step returned no text and no tool calls. Answer the request now using the tool results above."
+
 export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
   InteractionRequested: {
@@ -875,42 +878,44 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     /**
-     * Narrow retry after partial output: the partial assistant message stays,
-     * a durable continuation instruction follows it, and the same turn runs one
-     * more model step. Bounded per turn; a further failure ends the turn.
+     * Narrow retry inside a turn: whatever the model did produce stays, a
+     * durable instruction follows it, and the same turn runs one more model
+     * step. Bounded per turn; a further failure ends the turn.
+     *
+     * Two callers share this. A stream that failed after partial output asks
+     * the model to continue; a stream that succeeded with nothing at all asks
+     * it to answer. Both would otherwise finalize a turn the caller cannot
+     * distinguish from a real reply.
      */
-    const continueAfterPartialOutput = Effect.fn("AgentLoop.continueAfterPartialOutput")(
-      function* (params: {
-        readonly messageId: RunningState["message"]["id"]
-        readonly step: number
-        readonly collected: CollectedTurnResponse
-      }) {
-        if (!params.collected.responseParts.some(isObservableModelOutputPart)) return false
-        let used = 0
-        for (let step = 1; step < params.step; step++) {
-          const existing = yield* messageStorage.getMessage(
-            continuationMessageIdForTurn(params.messageId, step),
-          )
-          if (Predicate.isNotUndefined(existing)) used += 1
-        }
-        if (used >= MAX_CONTINUATIONS_PER_TURN) return false
-        yield* persistMessageReceived({
-          message: Message.cases.regular.make({
-            id: continuationMessageIdForTurn(params.messageId, params.step),
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            role: "user",
-            parts: [Prompt.textPart({ text: CONTINUATION_INSTRUCTION })],
-            createdAt: yield* DateTime.nowAsDate,
-            metadata: { customType: "continuation", details: { step: params.step } },
-          }),
-        })
-        yield* Effect.logInfo("turn.continue-after-partial-output").pipe(
-          Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
+    const continueWithinTurn = Effect.fn("AgentLoop.continueWithinTurn")(function* (params: {
+      readonly messageId: RunningState["message"]["id"]
+      readonly step: number
+      readonly instruction: string
+    }) {
+      let used = 0
+      for (let step = 1; step < params.step; step++) {
+        const existing = yield* messageStorage.getMessage(
+          continuationMessageIdForTurn(params.messageId, step),
         )
-        return true
-      },
-    )
+        if (Predicate.isNotUndefined(existing)) used += 1
+      }
+      if (used >= MAX_CONTINUATIONS_PER_TURN) return false
+      yield* persistMessageReceived({
+        message: Message.cases.regular.make({
+          id: continuationMessageIdForTurn(params.messageId, params.step),
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: params.instruction })],
+          createdAt: yield* DateTime.nowAsDate,
+          metadata: { customType: "continuation", details: { step: params.step } },
+        }),
+      })
+      yield* Effect.logInfo("turn.continue-within-turn").pipe(
+        Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
+      )
+      return true
+    })
 
     const runTurnStep = Effect.fn("AgentLoop.runTurnStep")(function* (params: {
       readonly state: RunningState
@@ -999,11 +1004,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         } satisfies TurnStepResult
       }
       if (collected.streamFailed) {
-        const continued = yield* continueAfterPartialOutput({
-          messageId: params.state.message.id,
-          step: params.step,
-          collected,
-        })
+        const continued =
+          collected.responseParts.some(isObservableModelOutputPart) &&
+          (yield* continueWithinTurn({
+            messageId: params.state.message.id,
+            step: params.step,
+            instruction: CONTINUATION_INSTRUCTION,
+          }))
         if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
         return {
           _tag: "stop",
@@ -1023,6 +1030,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const toolCalls = toolCallsFromResponseParts(collected.responseParts)
       if (toolCalls.length === 0) {
+        // A step with no tool calls normally means the model answered. A step
+        // with no observable output either answered nothing at all: persisting
+        // an empty parts list stores no message, so finalizing here reports a
+        // successful turn that produced no reply. Re-prompt once instead.
+        if (!collected.responseParts.some(isObservableModelOutputPart)) {
+          const continued = yield* continueWithinTurn({
+            messageId: params.state.message.id,
+            step: params.step,
+            instruction: EMPTY_RESPONSE_INSTRUCTION,
+          })
+          if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
+        }
         return {
           _tag: "stop",
           currentTurnAgent,

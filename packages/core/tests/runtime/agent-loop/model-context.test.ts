@@ -8,7 +8,11 @@ import { Message, dateFromMillis } from "../../../src/domain/message"
 import { Auth } from "../../../src/domain/auth"
 import type { ModelDriverContribution } from "../../../src/domain/driver"
 import { Model, ModelId, ProviderId } from "../../../src/domain/model"
-import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
+import {
+  finishPart,
+  LanguageModelLayers,
+  textDeltaPart,
+} from "../../../src/test-utils/language-model"
 import { multiToolCallStep, textStep } from "../../../src/debug/provider"
 import { tool } from "@gent/core/extensions/api"
 import { MessageStorage } from "../../../src/storage/message-storage"
@@ -47,7 +51,9 @@ describe("native model context projection", () => {
     let capturedPrompt: Option.Option<Prompt.Prompt> = Option.none()
     const providerLayer = LanguageModelLayers.testStream((options) => {
       capturedPrompt = Option.some(Prompt.make(options.prompt))
-      return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+      return Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      )
     })
     const sessionId = SessionId.make("model-context-session")
     const branchId = BranchId.make("model-context-branch")
@@ -146,7 +152,9 @@ describe("native model context projection", () => {
     let observedMaxTokens = Option.none<number>()
     const observedCacheKeys: Array<Option.Option<string>> = []
     const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      ),
     )
     const driver: ModelDriverContribution = {
       id: "context-driver",
