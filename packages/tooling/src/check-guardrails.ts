@@ -7,6 +7,7 @@ import {
   findSdkPublicExportFindings,
 } from "./core-public-exports"
 import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
+import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 
@@ -62,6 +63,10 @@ const program = Effect.gen(function* () {
       }
 
       for (const finding of findCoreFeatureIndependenceFindings(file, text)) {
+        pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+      }
+
+      for (const finding of findCoreVendorModelPins(file, text)) {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }
     }

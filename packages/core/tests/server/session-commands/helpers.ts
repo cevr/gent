@@ -1,6 +1,7 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { ExtensionContext, hook } from "@gent/core/extensions/api"
 import { textStep } from "../../../src/debug/provider"
+import { ExtensionRegistry } from "../../../src/runtime/extensions/registry.js"
 import type { BranchId, SessionId } from "../../../src/domain/ids"
 import { ExtensionId } from "../../../src/domain/ids"
 import { Branch, dateFromMillis, Session } from "../../../src/domain/message"
@@ -111,6 +112,7 @@ const buildFailingSessionCommandsLayer = () => {
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -161,6 +163,7 @@ const buildSendFailingSessionCommandsLayer = () => {
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -185,6 +188,7 @@ const buildSessionCommandsLayer = () => {
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -237,6 +241,7 @@ export const sessionCommandsLayerWithMachineProbe = (
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -258,6 +263,7 @@ export const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<S
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
 }
@@ -289,6 +295,7 @@ export const failingDeleteSessionCommandsLayerWithMachineProbe = (
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -355,6 +362,7 @@ export const racySessionCommandsLayer = (params: {
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
+    ExtensionRegistry.Test(),
   )
   return Layer.provideMerge(
     SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),

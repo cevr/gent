@@ -4,6 +4,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Predicate, Effect, FileSystem, Layer, Option, Path } from "effect"
 import { TestClock } from "effect/testing"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
+import { ExtensionRegistry } from "../../src/runtime/extensions/registry.js"
 import { Branch, Message } from "../../src/domain/message"
 import { EventStore } from "../../src/domain/event"
 import { EventPublisher } from "../../src/domain/event-publisher"
@@ -45,6 +46,7 @@ describe("requestId idempotency", () => {
       LanguageModelLayers.debug(),
       ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
       GentPlatform.Test(),
+      ExtensionRegistry.Test(),
     )
     return Layer.provideMerge(
       SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -130,6 +132,7 @@ describe("requestId idempotency", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         GentPlatform.Test(),
+        ExtensionRegistry.Test(),
       )
       const layer = Layer.provideMerge(
         SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -185,6 +188,7 @@ describe("requestId idempotency", () => {
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         GentPlatform.Test(),
+        ExtensionRegistry.Test(),
       )
       const layer = Layer.provideMerge(
         SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
@@ -584,6 +588,7 @@ describe("requestId idempotency", () => {
       LanguageModelLayers.debug(),
       ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
       GentPlatform.Test(),
+      ExtensionRegistry.Test(),
       dedupControlLayer,
     )
     const layer = Layer.provideMerge(
@@ -735,6 +740,7 @@ describe("requestId idempotency", () => {
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
           GentPlatform.Test(),
+          ExtensionRegistry.Test(),
         )
         return Layer.provideMerge(
           SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),

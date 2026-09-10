@@ -15,6 +15,8 @@ import {
 } from "../storage/session-operation-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { ModelResolver } from "../providers/model-resolver.js"
+import { DEFAULT_MODEL_ID, resolveDefaultAgentModel } from "../domain/agent.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { toPrompt } from "../providers/ai-transcript.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ProviderError } from "../domain/provider-error.js"
@@ -32,8 +34,6 @@ import type {
   SwitchBranchInput,
   UpdateSessionReasoningLevelInput,
 } from "./transport-contract.js"
-
-const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
 
 type CreateSessionResult = {
   readonly sessionId: SessionId
@@ -100,6 +100,18 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
       const modelResolver = yield* ModelResolver
+      const extensionRegistry = yield* ExtensionRegistry
+
+      /**
+       * Branch summaries run on whatever model this install is already
+       * configured to use, rather than a vendor SKU pinned in core. Falls back
+       * to `DEFAULT_MODEL_ID` when no default agent is registered.
+       */
+      const summaryModelId = () =>
+        Option.getOrElse(
+          resolveDefaultAgentModel([...extensionRegistry.getResolved().agents.values()]),
+          () => DEFAULT_MODEL_ID,
+        )
       const platform = yield* GentPlatform
       // SessionCommands delegates pure-mutation bodies that do not carry RPC
       // request IDs to SessionMutations. Request-id-bearing branch operations
@@ -196,8 +208,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         const parts: string[] = []
         yield* Effect.scoped(
           Effect.gen(function* () {
+            const modelId = summaryModelId()
             const model = yield* modelResolver.resolve({
-              modelId: NAME_GEN_MODEL,
+              modelId,
               hints: { maxTokens: 400 },
             })
             const stream = model.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
@@ -206,7 +219,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
                 if (AiError.isAiError(error)) message = error.message
                 return new ProviderError({
                   message,
-                  model: NAME_GEN_MODEL,
+                  model: modelId,
                   cause: error,
                 })
               }),
