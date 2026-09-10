@@ -60,6 +60,8 @@ export const ProviderSpec = Schema.Union([
   Schema.TaggedStruct("mock", {
     delayMs: Schema.optional(Schema.Finite),
     failing: Schema.optional(Schema.Boolean),
+    /** Finish every step having produced nothing — drives the unanswered turn. */
+    empty: Schema.optional(Schema.Boolean),
     retries: Schema.optional(Schema.Boolean),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
@@ -125,6 +127,7 @@ export const provider = {
   mock: (options?: {
     readonly delayMs?: number
     readonly failing?: boolean
+    readonly empty?: boolean
     readonly retries?: boolean
   }): ProviderSpec => ProviderSpec.cases["mock"].make(options ?? {}),
 }
@@ -141,6 +144,7 @@ const resolveLanguageModelLayer = (
       live: () => Option.none(),
       mock: (mockSpec) => {
         if (mockSpec.failing === true) return Option.some(LanguageModelLayers.failing)
+        if (mockSpec.empty === true) return Option.some(LanguageModelLayers.empty)
         return Option.some(
           LanguageModelLayers.debug({
             delayMs: mockSpec.delayMs,

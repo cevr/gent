@@ -261,6 +261,28 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
   })
 }
 
+/**
+ * A model that finishes every step having produced nothing — no text, no
+ * tool calls. Real providers are trained not to do this on request, so a
+ * live prompt cannot reproduce the unanswered turn; this layer can, in a
+ * real process, through `Gent.provider.mock({ empty: true })`.
+ */
+let emptyCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
+const empty = () => {
+  if (Option.isNone(emptyCache)) {
+    const layer = makeLanguageModelLayer({
+      streamText: () =>
+        Stream.make(
+          finishPart({ finishReason: "stop", usage: { inputTokens: 1, outputTokens: 0 } }),
+        ),
+      generateText: () => Effect.succeed(""),
+    })
+    emptyCache = Option.some(layer)
+    return layer
+  }
+  return emptyCache.value
+}
+
 let failingCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
 const failing = () => {
   if (Option.isNone(failingCache)) {
@@ -426,6 +448,9 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
 export const LanguageModelLayers = {
   testStream,
   debug,
+  get empty() {
+    return empty()
+  },
   get failing() {
     return failing()
   },

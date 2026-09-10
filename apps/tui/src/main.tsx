@@ -294,6 +294,12 @@ const main = Command.make(
       Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
       Flag.withDefault(false),
     ),
+    mockEmpty: Flag.boolean("mock-empty").pipe(
+      Flag.withDescription(
+        "Run against a model that answers nothing, to exercise the unanswered turn",
+      ),
+      Flag.withDefault(false),
+    ),
     prompt: Flag.string("prompt").pipe(
       Flag.withAlias("p"),
       Flag.withDescription("Initial prompt (TUI mode)"),
@@ -320,6 +326,7 @@ const main = Command.make(
     isolate,
     headless,
     debug,
+    mockEmpty,
     prompt,
     promptArg,
     agent,
@@ -359,9 +366,10 @@ const main = Command.make(
       const resolveBundle = () => {
         if (Option.isSome(connect)) return Gent.client(connect.value)
         let serverState = Gent.state.sqlite()
-        if (debug || isolate) serverState = Gent.state.memory()
+        if (debug || isolate || mockEmpty) serverState = Gent.state.memory()
         let serverProvider = Gent.provider.live()
         if (debug) serverProvider = Gent.provider.mock()
+        if (mockEmpty) serverProvider = Gent.provider.mock({ empty: true })
         const serverOptions = {
           cwd,
           state: serverState,

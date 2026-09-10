@@ -115,4 +115,33 @@ describe("empty final step", () => {
       )
     }),
   )
+
+  it.live("spends every continuation before giving up", () =>
+    Effect.gen(function* () {
+      // `LanguageModelLayers.empty` is the layer `gent --mock-empty` runs on,
+      // so this pins the same path the CLI exercises: the loop must re-prompt
+      // MAX_CONTINUATIONS_PER_TURN times rather than stopping at the first
+      // empty step, and it must stop rather than looping forever.
+      const providerLayer = LanguageModelLayers.empty
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const recorder = yield* SequenceRecorder
+          yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+
+          const calls = yield* recorder.getCalls
+          const events = calls
+            .filter((call) => call.service === "EventStore" && call.method === "append")
+            .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
+            .filter(Option.isSome)
+            .map(({ value }) => value)
+
+          const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+          expect(turnCompleted.length).toBeGreaterThan(0)
+          expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
+      )
+    }),
+  )
 })
