@@ -40,7 +40,7 @@ export const buildQueuedTurnItem = (operation: {
   wake: operation.wake,
 })
 
-export const waitForIdleAfterEpoch = (
+const waitForIdleAfterEpoch = (
   behavior: AgentLoopBehavior,
   baseline: number,
 ): Effect.Effect<void> =>
@@ -81,7 +81,7 @@ export const waitForTurnFailureAfterEpoch = (
     })
   })
 
-export const failIfTurnFailedAfterEpoch = (
+const failIfTurnFailedAfterEpoch = (
   behavior: AgentLoopBehavior,
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>

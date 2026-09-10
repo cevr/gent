@@ -75,7 +75,7 @@ export interface LiveRuntimeProfile {
 }
 
 /** Runtime values retained by one owner for exact desired-snapshot replay. */
-export interface RuntimeProfileDesiredState {
+interface RuntimeProfileDesiredState {
   readonly snapshot: ResourceGraphSnapshotType
   readonly config: UserConfig
   readonly declarations: RuntimeProfileDeclarations
@@ -83,7 +83,7 @@ export interface RuntimeProfileDesiredState {
   readonly inputs: RuntimeProfileInputs
 }
 
-export interface RuntimeProfilePreparedDesired extends ResourceGraphPrepared {
+interface RuntimeProfilePreparedDesired extends ResourceGraphPrepared {
   readonly owner: RuntimeProfileOwner
   readonly desired: RuntimeProfileDesiredState
   readonly config: UserConfig

@@ -76,11 +76,11 @@ export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>
 
 export const SessionRuntimeErrorSchema = SessionRuntimeError
 
-export const SessionRuntimeTarget = Schema.Struct({
+const SessionRuntimeTarget = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
 })
-export type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
+type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
 
 /**
  * Client-generated request ID for end-to-end correlation + transport-retry
@@ -133,14 +133,14 @@ const InterjectPayload = Schema.TaggedStruct("Interject", {
 })
 type InterjectPayload = typeof InterjectPayload.Type
 
-export const InterruptPayload = Schema.Union([
+const InterruptPayload = Schema.Union([
   CancelInterruptPayload,
   InterruptTurnPayload,
   InterjectPayload,
 ]).pipe(Schema.toTaggedUnion("_tag"))
-export type InterruptPayload = typeof InterruptPayload.Type
+type InterruptPayload = typeof InterruptPayload.Type
 
-export const RunPromptPayload = Schema.Struct({
+const RunPromptPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   agentName: AgentName,
@@ -148,9 +148,9 @@ export const RunPromptPayload = Schema.Struct({
   interactive: Schema.optional(Schema.Boolean),
   runSpec: Schema.optional(RunSpecSchema),
 })
-export type RunPromptPayload = typeof RunPromptPayload.Type
+type RunPromptPayload = typeof RunPromptPayload.Type
 
-export const QueueFollowUpPayload = Schema.Struct({
+const QueueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
@@ -159,35 +159,35 @@ export const QueueFollowUpPayload = Schema.Struct({
   /** Start a turn for the item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
 })
-export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
+type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
-export const DequeueFollowUpPayload = Schema.Struct({
+const DequeueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
 })
-export type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
+type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
 
-export const ExtensionRequestPayload = Schema.Struct({
+const ExtensionRequestPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   extensionId: ExtensionId,
   capabilityId: Schema.String,
   input: Schema.Unknown,
 })
-export type ExtensionRequestPayload = typeof ExtensionRequestPayload.Type
+type ExtensionRequestPayload = typeof ExtensionRequestPayload.Type
 
-export const DrainQueuedMessagesPayload = Schema.Struct({
+const DrainQueuedMessagesPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   requestId: RequestId,
 })
-export type DrainQueuedMessagesPayload = typeof DrainQueuedMessagesPayload.Type
+type DrainQueuedMessagesPayload = typeof DrainQueuedMessagesPayload.Type
 
-export const SessionRuntimeSessionTarget = Schema.Struct({
+const SessionRuntimeSessionTarget = Schema.Struct({
   sessionId: SessionId,
 })
-export type SessionRuntimeSessionTarget = typeof SessionRuntimeSessionTarget.Type
+type SessionRuntimeSessionTarget = typeof SessionRuntimeSessionTarget.Type
 
 type SessionRuntimeLayerRequirements =
   | ApprovalService
@@ -224,7 +224,7 @@ type SessionRuntimeLayerRequirements =
  * after a restart. Callers that need every agent — not just the running ones —
  * must merge this against durable session storage.
  */
-export interface ActiveLoop {
+interface ActiveLoop {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }

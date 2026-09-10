@@ -23,7 +23,7 @@ const DEDUP_MAX_ENTRIES = 1024
  *   retry observes a still-fresh cache entry; an unrelated stale entry is the
  *   one evicted to make room.
  */
-export interface RequestDeduper<In, A, E> {
+interface RequestDeduper<In, A, E> {
   (input: In): Effect.Effect<A, E>
   readonly invalidate: (input: In) => Effect.Effect<void>
   readonly invalidateKey: (key: string) => Effect.Effect<void>

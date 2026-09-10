@@ -23,7 +23,7 @@ type AgentLoopTurnProfileFields = {
   readonly turnCapabilityContext?: Context.Context<never>
 }
 
-export type LegacyAgentLoopTurnProfile = AgentLoopTurnProfileFields & {
+type LegacyAgentLoopTurnProfile = AgentLoopTurnProfileFields & {
   /** Direct actor tests and the legacy runtime do not own a graph host. */
   readonly turnPublication?: never
 }

@@ -269,7 +269,7 @@ export const loadRuntimeProfileDeclarations = (
  *
  * Extension sections shadow core sections by id.
  */
-export const compileBaseSections = (
+const compileBaseSections = (
   profile: RuntimeProfile,
 ): Effect.Effect<ReadonlyArray<PromptSection>, never, never> =>
   Effect.sync(() => {

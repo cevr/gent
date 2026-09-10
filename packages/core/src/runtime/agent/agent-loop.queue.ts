@@ -38,7 +38,7 @@ import {
 
 const FOLLOW_UP_QUEUE_MAX = 10
 
-export type AgentLoopQueueContext = {
+type AgentLoopQueueContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
@@ -47,7 +47,7 @@ export type AgentLoopQueueContext = {
   readonly startedRef: Ref.Ref<boolean>
 }
 
-export type AgentLoopQueue = {
+type AgentLoopQueue = {
   readonly readState: Effect.Effect<AgentLoopState>
   readonly stateChanges: Stream.Stream<AgentLoopState>
   readonly runtimeState: Effect.Effect<SessionRuntimeState>

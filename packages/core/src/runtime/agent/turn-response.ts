@@ -78,7 +78,7 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
   toolCallCount: 0,
 })
 
-export interface TurnResponseMessages {
+interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>
   readonly tool: ReadonlyArray<ToolResponsePart>
   readonly usage?: AssistantDraft["usage"]

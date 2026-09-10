@@ -5,7 +5,7 @@ interface LockEntry {
   readonly refcount: number
 }
 
-export interface FileLockApi {
+interface FileLockApi {
   readonly withLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,

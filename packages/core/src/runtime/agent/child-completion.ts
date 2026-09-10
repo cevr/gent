@@ -19,12 +19,12 @@ import { followUpMessageIdForSource, SessionRuntime } from "../session-runtime.j
 import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 
 /** Follow-up source for one child completion. The parent message id derives from it. */
-export const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:complete`
+const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:complete`
 
 /** Bounded preview inside the parent message; the full output lives in a file. */
 const maximumPreviewChars = 4_000
 
-export interface ChildCompletionDeliveryService {
+interface ChildCompletionDeliveryService {
   /** Deliver one completed child to its parent branch. Repeats are no-ops. */
   readonly deliver: (requestId: RequestId) => Effect.Effect<void>
   /** Deliver when the admitted turn completes. Returns after the watcher is running. */

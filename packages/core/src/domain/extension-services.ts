@@ -70,7 +70,7 @@ const mapError = <A, E, R>(
 ): Effect.Effect<A, ExtensionServiceError, R> =>
   effect.pipe(Effect.mapError(serviceError(service, operation)))
 
-export interface ExtensionSessionService {
+interface ExtensionSessionService {
   readonly listMessages: (
     branchId?: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, ExtensionServiceError>
@@ -130,7 +130,7 @@ export interface ExtensionSessionService {
   >
 }
 
-export interface ExtensionAgentService extends Pick<
+interface ExtensionAgentService extends Pick<
   ExtensionHostContext.Agent,
   "inspect" | "list" | "cancel"
 > {
@@ -152,7 +152,7 @@ export interface ExtensionAgentService extends Pick<
   }) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
 }
 
-export interface ExtensionInteractionService {
+interface ExtensionInteractionService {
   readonly approve: (
     params: ApprovalRequest,
   ) => Effect.Effect<ApprovalDecision, ExtensionServiceError | InteractionPendingError>
@@ -174,7 +174,7 @@ export interface ExtensionInteractionService {
   >
 }
 
-export interface ExtensionProcessService {
+interface ExtensionProcessService {
   readonly randomId: Effect.Effect<string>
   readonly run: (
     command: string,
@@ -192,7 +192,7 @@ export interface ExtensionProcessService {
   readonly parentEnv: Record<string, string | undefined>
 }
 
-export const extensionProcessFromHostContext = (
+const extensionProcessFromHostContext = (
   host: ExtensionHostContext["host"],
 ): ExtensionProcessService => ({
   randomId: host.randomId,
@@ -206,7 +206,7 @@ export const extensionProcessFromHostContext = (
   parentEnv: host.parentEnv,
 })
 
-export interface ExtensionFileStat {
+interface ExtensionFileStat {
   readonly type:
     | "File"
     | "Directory"
@@ -249,21 +249,21 @@ export interface ExtensionFilesService {
   readonly dirname: (path: string) => string
 }
 
-export interface ExtensionFileLockServiceApi {
+interface ExtensionFileLockServiceApi {
   readonly withLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>
 }
 
-export interface ExtensionStateServiceApi {
+interface ExtensionStateServiceApi {
   readonly changed: (params: {
     readonly sessionId?: SessionId
     readonly branchId?: BranchId
   }) => Effect.Effect<void, ExtensionServiceError>
 }
 
-export interface ExtensionDynamicRegistrationServiceApi {
+interface ExtensionDynamicRegistrationServiceApi {
   readonly registerTool: (
     capability: ToolCapability,
     options?: { readonly scope?: DynamicRegistrationScope },
@@ -297,7 +297,7 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
   "@gent/core/src/domain/extension-services/ExtensionContext",
 ) {}
 
-export const extensionServicesFromHostContext = (
+const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & {
     readonly toolCallId?: ToolCallId
     readonly turn?: ExtensionTurnContext

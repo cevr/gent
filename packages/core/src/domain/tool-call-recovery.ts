@@ -33,7 +33,7 @@ export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
 })
 export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
 
-export interface ToolCallRecoveryApi {
+interface ToolCallRecoveryApi {
   /** Recover one pending call, or report that it is not recoverable here. */
   readonly recover: (params: {
     readonly sessionId: SessionId

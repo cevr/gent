@@ -13,7 +13,7 @@ import { SessionRuntime } from "../runtime/session-runtime.js"
 import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
-export interface SessionQueriesService {
+interface SessionQueriesService {
   readonly getSessionTree: (
     rootSessionId: SessionId,
   ) => Effect.Effect<SessionTreeNode, GentRpcError>

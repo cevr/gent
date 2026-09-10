@@ -39,7 +39,7 @@ export const UsageSchema = Schema.Struct({
 })
 export type Usage = typeof UsageSchema.Type
 
-export const QuestionOptionSchema = Schema.Struct({
+const QuestionOptionSchema = Schema.Struct({
   label: Schema.String,
   description: Schema.optional(Schema.String),
 })
@@ -358,8 +358,6 @@ export const AgentRunSucceeded = AgentEvent.cases.AgentRunSucceeded
 export type AgentRunSucceeded = typeof AgentEvent.cases.AgentRunSucceeded.Type
 export const AgentRunFailed = AgentEvent.cases.AgentRunFailed
 export type AgentRunFailed = typeof AgentEvent.cases.AgentRunFailed.Type
-export const AgentRestarted = AgentEvent.cases.AgentRestarted
-export type AgentRestarted = typeof AgentEvent.cases.AgentRestarted.Type
 export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 export const StreamSynchronized = AgentEvent.cases.StreamSynchronized

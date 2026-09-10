@@ -196,7 +196,7 @@ const collectDuplicateExtensionIds = (
   }
 }
 
-export const collectValidationFailures = (
+const collectValidationFailures = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyMap<string, { ext: LoadedExtension; errors: ReadonlyArray<string> }> => {
   const failures = new Map<string, { ext: LoadedExtension; errors: string[] }>()

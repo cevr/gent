@@ -93,7 +93,7 @@ export type ToolCapability<Input = unknown, Output = unknown, Error = unknown> =
 } & ToolCapabilityApi
 
 // oxlint-disable-next-line effect/noNullish -- Native tools do not carry Gent metadata.
-export const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
+const getToolMetadataOption = (tool: AiTool.Any): GentToolMetadata | undefined =>
   Context.get(tool.annotations, GentToolMetadataTag)
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Native Effect tools are narrowed by their runtime predicates below.
@@ -114,7 +114,7 @@ export const isToolCapability = (value: unknown): value is ToolCapability => {
  * programmer-misuse-only signal — no runtime code can construct a `ToolCapability`
  * without metadata through the public `tool({...})` factory.
  */
-export class ToolMetadataMissingError extends Schema.TaggedError<ToolMetadataMissingError>()(
+class ToolMetadataMissingError extends Schema.TaggedError<ToolMetadataMissingError>()(
   "ToolMetadataMissingError",
   {
     toolName: Schema.String,

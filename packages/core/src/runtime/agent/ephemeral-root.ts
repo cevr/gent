@@ -31,13 +31,13 @@ import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { BranchToolLayer } from "./branch-tool-layer.js"
 import { ToolRunner } from "./tool-runner.js"
 
-export interface EphemeralAgentRootConfig {
+interface EphemeralAgentRootConfig {
   readonly baseSections?: ReadonlyArray<PromptSection>
 }
 
 type EphemeralOverrideError = StorageError | Config.ConfigError
 
-export type EphemeralParentServices =
+type EphemeralParentServices =
   | RuntimeEnvironment
   | FileSystem.FileSystem
   | Path.Path
@@ -78,7 +78,7 @@ type EphemeralExtensionRequires =
   | ConfigService
   | ModelRegistry
 
-export type EphemeralAgentRootLayerFactory = (params: {
+type EphemeralAgentRootLayerFactory = (params: {
   readonly config: EphemeralAgentRootConfig
   readonly extensionRegistry: ExtensionRegistryService
 }) => Layer.Layer<EphemeralOverrideProvides, EphemeralOverrideError, never>

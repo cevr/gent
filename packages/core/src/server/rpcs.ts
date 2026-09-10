@@ -43,7 +43,7 @@ import { WorkspaceHeaderError, WorkspaceRpcMiddleware } from "./workspace-rpc.js
 // Runtime status
 // ============================================================================
 
-export const RuntimeStatusResult = Schema.Struct({
+const RuntimeStatusResult = Schema.Struct({
   serverId: Schema.String,
   pid: Schema.Finite,
   hostname: Schema.String,
@@ -52,9 +52,9 @@ export const RuntimeStatusResult = Schema.Struct({
   dbPath: Schema.String,
   buildFingerprint: Schema.String,
 })
-export type RuntimeStatusResult = typeof RuntimeStatusResult.Type
+type RuntimeStatusResult = typeof RuntimeStatusResult.Type
 
-export class RuntimeRpcs extends RpcGroup.make(
+class RuntimeRpcs extends RpcGroup.make(
   Rpc.make("runtime.status", {
     success: RuntimeStatusResult,
     error: GentRpcError,
@@ -65,7 +65,7 @@ export class RuntimeRpcs extends RpcGroup.make(
 // Auth
 // ============================================================================
 
-export class AuthRpcs extends RpcGroup.make(
+class AuthRpcs extends RpcGroup.make(
   Rpc.make("listProviders", {
     payload: ListAuthProvidersInput.fields,
     success: Schema.Array(AuthProviderInfo),
@@ -144,7 +144,7 @@ export class ExtensionRpcs extends RpcGroup.make(
 // Durable resource graph
 // ============================================================================
 
-export class ResourceGraphRpcs extends RpcGroup.make(
+class ResourceGraphRpcs extends RpcGroup.make(
   Rpc.make("submit", {
     payload: ResourceGraphSubmitInput.fields,
     success: ResourceGraphDesiredReceipt,

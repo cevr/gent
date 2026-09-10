@@ -74,7 +74,7 @@ interface ResourceGraphCommandSqlRow {
   readonly created_at: ResourceGraphCommandRow["created_at"]
 }
 
-export interface ResourceGraphStorageService {
+interface ResourceGraphStorageService {
   readonly recordDesired: (
     command: ResourceGraphDesiredCommand,
   ) => Effect.Effect<

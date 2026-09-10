@@ -49,7 +49,7 @@ export type { SessionRuntimeState } from "../runtime/session-runtime.js"
  * per-server dedup cache with arbitrary-length keys. Callers in this repo
  * use `crypto.randomUUID()` which fits comfortably.
  */
-export const RequestIdSchema = RequestId
+const RequestIdSchema = RequestId
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),

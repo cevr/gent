@@ -13,7 +13,7 @@ import { Context, type Effect } from "effect"
 import type { StorageError } from "./storage-error.js"
 import type { BranchId, SessionId } from "./ids.js"
 
-export interface RetainedBindingsApi {
+interface RetainedBindingsApi {
   readonly list: (params: {
     readonly sessionId: SessionId
     readonly branchId: BranchId

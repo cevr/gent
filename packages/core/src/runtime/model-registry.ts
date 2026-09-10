@@ -136,7 +136,7 @@ const EMPTY_MODELS = [] satisfies readonly Model[]
  */
 export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
-export interface ModelRegistryService {
+interface ModelRegistryService {
   readonly list: Effect.Effect<readonly Model[], DriverError | ProviderAuthError>
   readonly get: (
     modelId: string,

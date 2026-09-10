@@ -30,7 +30,7 @@ const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
 
 // ── Resolved driver state (one map per kind, lookup by id) ──
 
-export interface ResolvedDrivers {
+interface ResolvedDrivers {
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
 }

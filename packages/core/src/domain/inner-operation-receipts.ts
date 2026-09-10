@@ -22,7 +22,7 @@ export interface InnerOperation {
   readonly input: Schema.Json
 }
 
-export interface InnerOperationReceiptsApi {
+interface InnerOperationReceiptsApi {
   /**
    * The inner calls one tool call dispatched, in no guaranteed order.
    * Empty when the call dispatched nothing, or failed before running.

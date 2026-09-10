@@ -30,7 +30,7 @@ import type { BranchId, SessionId } from "./ids.js"
  */
 export const SESSION_NOTIFICATION_CAPACITY = 64
 
-export interface SessionPubSubRegistry {
+interface SessionPubSubRegistry {
   readonly subscribe: (
     sessionId: SessionId,
   ) => Effect.Effect<PubSub.Subscription<EventId>, never, Scope.Scope>

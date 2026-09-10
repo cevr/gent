@@ -96,7 +96,7 @@ import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"
 import type { ProcessRunner } from "../../utils/run-process.js"
 
-export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
+const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
   branchId: BranchId
 }) {
@@ -172,7 +172,7 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
  * `service.queueFollowUp` recursive reference; routes back through the actor
  * via mutual recursion with `Message` as the authoritative payload.
  */
-export type EnqueueFollowUp = (input: {
+type EnqueueFollowUp = (input: {
   sourceId: string
   sessionId: SessionId
   branchId: BranchId
@@ -182,13 +182,13 @@ export type EnqueueFollowUp = (input: {
 }) => Effect.Effect<void, AgentLoopError | StorageError>
 
 /** Removes a queued follow-up by its source; false when absent or already running. */
-export type DequeueFollowUp = (input: {
+type DequeueFollowUp = (input: {
   sessionId: SessionId
   branchId: BranchId
   sourceId: string
 }) => Effect.Effect<boolean, AgentLoopError>
 
-export interface AgentLoopFollowUpService {
+interface AgentLoopFollowUpService {
   readonly enqueue: EnqueueFollowUp
   readonly dequeue: DequeueFollowUp
 }

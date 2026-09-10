@@ -34,7 +34,7 @@ import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
 import { listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
-export interface ExtensionSessionControlService {
+interface ExtensionSessionControlService {
   readonly queueFollowUp: (input: {
     readonly sourceId: string
     readonly sessionId: SessionId
@@ -58,7 +58,7 @@ export interface ExtensionSessionControlService {
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a host-context build. */
 const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
 
-export interface ExtensionActiveLoopsService {
+interface ExtensionActiveLoopsService {
   readonly list: Effect.Effect<
     ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
     Error
@@ -83,7 +83,7 @@ export interface MakeExtensionHostContextDeps {
   readonly activeLoops: ExtensionActiveLoopsService
 }
 
-export interface MakeExtensionHostContextRunInfo {
+interface MakeExtensionHostContextRunInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
@@ -91,12 +91,12 @@ export interface MakeExtensionHostContextRunInfo {
   readonly sessionCwd?: string
 }
 
-export interface ExtensionHostContextOverrides {
+interface ExtensionHostContextOverrides {
   readonly extensionRegistry?: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
 }
 
-export interface ExtensionHostContextProviderService {
+interface ExtensionHostContextProviderService {
   readonly defaultExtensionRegistry: ExtensionRegistryService
   readonly defaultCapabilityContext?: Context.Context<never>
   readonly forRun: (
@@ -179,7 +179,7 @@ const unavailableExtensionPlatform: ExtensionHostPlatform = {
  * Tag, so a caller that has already built one hands it in here. Every other
  * facet resolves from its own Tag.
  */
-export const HostExtensionPlatformRef = Context.Reference<ExtensionHostPlatform>(
+const HostExtensionPlatformRef = Context.Reference<ExtensionHostPlatform>(
   "@gent/core/src/runtime/make-extension-host-context/HostExtensionPlatformRef",
   { defaultValue: () => unavailableExtensionPlatform },
 )
@@ -313,7 +313,7 @@ const resolveAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefault
   activeLoops: activeLoopsFacet,
 })
 
-export interface MakeAmbientExtensionHostContextDepsInput {
+interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionRegistry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
   readonly overrides?: Partial<AmbientHostContextDefaults>

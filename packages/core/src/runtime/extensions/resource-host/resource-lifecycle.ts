@@ -16,7 +16,7 @@ const LifecyclePhase = Schema.Literals(["load", "start", "stop", "release", "act
 type LifecyclePhase = typeof LifecyclePhase.Type
 
 /** A failure reported by a lifecycle operation. */
-export class ResourceLifecycleError extends Schema.TaggedError<ResourceLifecycleError>()(
+class ResourceLifecycleError extends Schema.TaggedError<ResourceLifecycleError>()(
   "ResourceLifecycleError",
   {
     id: ResourceId,
@@ -27,7 +27,7 @@ export class ResourceLifecycleError extends Schema.TaggedError<ResourceLifecycle
 ) {}
 
 /** The serializable state exposed by a resource lifecycle actor. */
-export const ResourceLifecycleState = State({
+const ResourceLifecycleState = State({
   Inactive: {},
   Loading: {},
   Active: {},
@@ -38,7 +38,7 @@ export const ResourceLifecycleState = State({
     message: Schema.String,
   },
 })
-export type ResourceLifecycleSnapshot = typeof ResourceLifecycleState.Type
+type ResourceLifecycleSnapshot = typeof ResourceLifecycleState.Type
 
 const LifecycleReply = Schema.TaggedUnion({
   Activated: {},

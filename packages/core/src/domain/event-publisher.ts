@@ -9,17 +9,17 @@ import {
 } from "./event.js"
 import type { BranchId, ExtensionId, SessionId } from "./ids.js"
 
-export interface EventPublisherService {
+interface EventPublisherService {
   readonly append: (event: AgentEvent) => Effect.Effect<EventEnvelope, EventStoreError>
   readonly deliver: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
 }
 
-export interface ExtensionEventSinkService {
+interface ExtensionEventSinkService {
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
 }
 
-export interface ExtensionStatePublisherService {
+interface ExtensionStatePublisherService {
   readonly changed: (params: {
     readonly sessionId: SessionId
     readonly branchId: BranchId

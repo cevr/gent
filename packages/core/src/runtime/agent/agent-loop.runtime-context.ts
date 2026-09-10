@@ -11,7 +11,7 @@ import type { ModelRegistry } from "../model-registry.js"
 import type { ToolRunner } from "./tool-runner.js"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 
-export type AgentLoopRuntimeServices =
+type AgentLoopRuntimeServices =
   | SessionStorage
   | SessionOperationStorage
   | MessageStorage
@@ -23,7 +23,7 @@ export type AgentLoopRuntimeServices =
   | EventPublisher
   | InteractionStorage
 
-export type AgentLoopRuntimeContext = Context.Context<AgentLoopRuntimeServices>
+type AgentLoopRuntimeContext = Context.Context<AgentLoopRuntimeServices>
 
 export const captureAgentLoopRuntimeContext: Effect.Effect<
   AgentLoopRuntimeContext,

@@ -12,7 +12,7 @@
 import { Context } from "effect"
 import type { MessageId, ToolCallId } from "../../domain/ids.js"
 
-export interface DispatchingCall {
+interface DispatchingCall {
   readonly assistantMessageId: MessageId
   readonly toolCallId: ToolCallId
 }

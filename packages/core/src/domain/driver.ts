@@ -219,7 +219,7 @@ export interface TurnContext {
   readonly hostCtx: ExtensionHostContext
 }
 
-export interface ExternalToolRunnerService {
+interface ExternalToolRunnerService {
   readonly runTool: (
     toolName: string,
     args: Schema.Schema.Type<typeof Schema.Unknown>,
@@ -261,7 +261,7 @@ export interface TurnExecutor {
  * Prompt slots key off this metadata rather than driver-id heuristics —
  * see `acp-agents/index.ts`.
  */
-export type ToolSurface = "native" | "codemode"
+type ToolSurface = "native" | "codemode"
 
 /**
  * Registers an external execution loop as a driver. The wrapped

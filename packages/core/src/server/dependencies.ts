@@ -64,7 +64,7 @@ import { FileIndexLive, type FileIndex } from "../runtime/file-index/index.js"
 import { ProcessRunnerLive } from "../utils/run-process.js"
 import { CurrentWorkspaceId, WorkspaceId } from "./workspace-rpc.js"
 
-export interface DependencyOverrides {
+interface DependencyOverrides {
   readonly eventStoreMode?: "default" | "storage-backed" | "memory"
   readonly authLayer?: Layer.Layer<Auth>
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>

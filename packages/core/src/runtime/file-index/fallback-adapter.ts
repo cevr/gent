@@ -13,7 +13,7 @@ import {
 
 type PathMatcher = (path: string) => boolean
 
-export type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
+type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
 
 export const makeGitignoreCacheRef: Effect.Effect<GitignoreCacheRef> = TxRef.make(
   HashMap.empty<string, ReadonlyArray<PathMatcher>>(),

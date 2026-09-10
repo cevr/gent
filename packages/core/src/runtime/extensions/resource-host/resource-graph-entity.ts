@@ -28,7 +28,7 @@ import {
 } from "../../../storage/resource-graph-storage.js"
 
 /** One phase in durable graph command handling. */
-export const ResourceGraphCommandPhase = Schema.Literals([
+const ResourceGraphCommandPhase = Schema.Literals([
   "route",
   "load",
   "stale",
@@ -37,7 +37,7 @@ export const ResourceGraphCommandPhase = Schema.Literals([
   "apply",
   "storage",
 ])
-export type ResourceGraphCommandPhase = typeof ResourceGraphCommandPhase.Type
+type ResourceGraphCommandPhase = typeof ResourceGraphCommandPhase.Type
 
 /** A graph command could not complete. The durable status records apply failures. */
 export class ResourceGraphCommandError extends Schema.TaggedError<ResourceGraphCommandError>()(
@@ -49,8 +49,8 @@ export class ResourceGraphCommandError extends Schema.TaggedError<ResourceGraphC
 ) {}
 
 /** Failure returned by the live desired-snapshot adapter. */
-export const ResourceGraphApplyPhase = Schema.Literals(["prepare", "validate", "apply"])
-export type ResourceGraphApplyPhase = typeof ResourceGraphApplyPhase.Type
+const ResourceGraphApplyPhase = Schema.Literals(["prepare", "validate", "apply"])
+type ResourceGraphApplyPhase = typeof ResourceGraphApplyPhase.Type
 
 export class ResourceGraphApplyError extends Schema.TaggedError<ResourceGraphApplyError>()(
   "ResourceGraphApplyError",
@@ -175,7 +175,7 @@ const receiptStatus = (
 ): ResourceGraphDesiredApplication => ({ receipt, snapshot })
 
 /** Build one serialized graph entity handler set. */
-export const buildResourceGraphEntityHandlers = Effect.gen(function* () {
+const buildResourceGraphEntityHandlers = Effect.gen(function* () {
   const storage = yield* ResourceGraphStorage
   const applier = yield* ResourceGraphDesiredApplier
   const address = yield* Actor.CurrentAddress

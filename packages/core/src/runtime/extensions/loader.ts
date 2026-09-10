@@ -12,30 +12,8 @@ import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
 import { validateExtensionPackage } from "../../domain/extension-package-shape.js"
-import type { PromptSection } from "../../domain/prompt.js"
-import { getToolMetadata } from "../../domain/capability/tool.js"
 import { makeExtensionHostPlatform } from "./host-platform.js"
 import { isProjectExtensionDirectoryTrusted } from "./project-trust.js"
-
-/** Static prompt sections live on capability leaf `prompt` (folded by the
- *  `tool()` smart constructor or declared directly). Surface them here for
- *  scope collision detection across typed buckets. */
-const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
-  (() => {
-    const prompts: Array<Option.Option<PromptSection>> = []
-    for (const tool of Option.getOrElse(Option.fromUndefinedOr(cs.tools), () => [])) {
-      prompts.push(Option.fromUndefinedOr(getToolMetadata(tool).prompt))
-    }
-    for (const rpc of Option.getOrElse(Option.fromUndefinedOr(cs.requests), () => [])) {
-      prompts.push(Option.fromUndefinedOr(rpc.prompt))
-    }
-    return prompts.flatMap((prompt) =>
-      Option.match(prompt, {
-        onNone: () => [],
-        onSome: (value) => [value],
-      }),
-    )
-  })()
 
 type LoadedUserExtension = GentExtension<ExtensionSetupServices>
 
@@ -327,81 +305,4 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
     loaded = { ...loaded, artifactIdentity: discovered.extension.artifactIdentity }
   }
   return loaded
-})
-
-/** Check same-scope collision for a keyed bucket. */
-const checkScopedCollision = <T>(
-  extensions: ReadonlyArray<LoadedExtension>,
-  pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
-  getKey: (item: T) => string,
-  label: string,
-): Option.Option<ExtensionLoadError> => {
-  const byScope = new Map<string, Map<string, string>>()
-  for (const ext of extensions) {
-    const items = pickItems(ext.contributions)
-    const scope = ext.scope
-    const scopeMap = byScope.get(scope) ?? new Map<string, string>()
-    for (const item of items) {
-      const key = getKey(item)
-      const existing = scopeMap.get(key)
-      if (!Predicate.isUndefined(existing) && existing !== ext.manifest.id) {
-        return Option.some(
-          new ExtensionLoadError({
-            extensionId: ext.manifest.id,
-            message: `Ambiguous ${label} "${key}" — provided by both "${existing}" and "${ext.manifest.id}" in scope "${scope}"`,
-          }),
-        )
-      }
-      scopeMap.set(key, ext.manifest.id)
-    }
-    byScope.set(scope, scopeMap)
-  }
-  return Option.none()
-}
-
-/** Validate a set of loaded extensions for conflicts. */
-export const validateExtensions = Effect.fn("ExtensionLoader.validateExtensions")(function* (
-  extensions: ReadonlyArray<LoadedExtension>,
-) {
-  // Check duplicate manifest ids within same scope
-  const idsByScope = new Map<string, Set<string>>()
-  for (const ext of extensions) {
-    const ids = idsByScope.get(ext.scope) ?? new Set()
-    if (ids.has(ext.manifest.id)) {
-      return yield* new ExtensionLoadError({
-        extensionId: ext.manifest.id,
-        message: `Duplicate extension id "${ext.manifest.id}" in scope "${ext.scope}"`,
-      })
-    }
-    ids.add(ext.manifest.id)
-    idsByScope.set(ext.scope, ids)
-  }
-
-  // Check keyed contributions — same key in same scope from different extensions is ambiguous.
-  // Tool collisions are caught by
-  // `collectScopedCollisions(extractModelToolIdentities, …)` in `activation.ts`.
-  const checks = [
-    checkScopedCollision(
-      extensions,
-      (cs) => Option.getOrElse(Option.fromUndefinedOr(cs.agents), () => []),
-      (a) => a.name,
-      "agent",
-    ),
-    checkScopedCollision(
-      extensions,
-      (cs) => Option.getOrElse(Option.fromUndefinedOr(cs.modelDrivers), () => []),
-      (d) => d.id,
-      "model driver",
-    ),
-    checkScopedCollision(
-      extensions,
-      (cs) => Option.getOrElse(Option.fromUndefinedOr(cs.externalDrivers), () => []),
-      (d) => d.id,
-      "external driver",
-    ),
-    checkScopedCollision(extensions, collectCapabilityPrompts, (p) => p.id, "prompt section"),
-  ]
-  for (const error of checks) {
-    if (Option.isSome(error)) return yield* error.value
-  }
 })

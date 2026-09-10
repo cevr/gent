@@ -5,7 +5,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 
 // Retry Config Schema
 
-export const RetryConfig = Schema.Struct({
+const RetryConfig = Schema.Struct({
   initialDelay: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
     description: "Initial delay in milliseconds",
   }),
@@ -19,7 +19,7 @@ export const RetryConfig = Schema.Struct({
     description: "Maximum retry attempts",
   }),
 })
-export type RetryConfig = typeof RetryConfig.Type
+type RetryConfig = typeof RetryConfig.Type
 
 // Default config
 
@@ -136,7 +136,7 @@ export const getRetryDelay = (
   return Math.min(delay, config["maxDelay"])
 }
 
-export interface RetryAttemptInfo {
+interface RetryAttemptInfo {
   readonly attempt: number
   readonly maxAttempts: number
   readonly delayMs: number

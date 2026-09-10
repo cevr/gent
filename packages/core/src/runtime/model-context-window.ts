@@ -6,11 +6,11 @@ import { Message } from "../domain/message.js"
 /** Custom type of the durable marker `context.newWindow()` leaves in the transcript. */
 export const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
 
-export const ContextWindowDetails = Schema.TaggedStruct(CONTEXT_WINDOW_MESSAGE_TYPE, {
+const ContextWindowDetails = Schema.TaggedStruct(CONTEXT_WINDOW_MESSAGE_TYPE, {
   /** The first durable message the model still sees; everything earlier leaves the projection. */
   keepFromMessageId: MessageId,
 })
-export type ContextWindowDetails = typeof ContextWindowDetails.Type
+type ContextWindowDetails = typeof ContextWindowDetails.Type
 
 const isWindowDetails = Schema.is(ContextWindowDetails)
 

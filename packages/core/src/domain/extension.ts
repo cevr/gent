@@ -199,7 +199,7 @@ export type ExtensionHook<Input, Output, E = never, R = never> = {
 }
 
 /** Input and output of every runtime hook kind. `host.on(kind, handler)` is typed by this map. */
-export interface ExtensionHookSignatures {
+interface ExtensionHookSignatures {
   readonly systemPrompt: { readonly input: SystemPromptInput; readonly output: string }
   readonly turnProjection: { readonly input: void; readonly output: TurnProjection }
   readonly turnAfter: { readonly input: TurnAfterInput; readonly output: void }
@@ -213,7 +213,7 @@ export type ExtensionHookHandler<K extends ExtensionHookKind, E = never, R = nev
   input: ExtensionHookSignatures[K]["input"],
 ) => Effect.Effect<ExtensionHookSignatures[K]["output"], E, R>
 
-export type ExtensionHookSlot<
+type ExtensionHookSlot<
   K extends ExtensionHookKind = ExtensionHookKind,
   E = never,
   R = never,
@@ -303,7 +303,7 @@ import type { ProcessRunner } from "../utils/run-process.js"
 
 // Extension — the core primitive
 
-export interface ExtensionHostOsInfo {
+interface ExtensionHostOsInfo {
   readonly platform: string
   readonly arch: string
   readonly release: string

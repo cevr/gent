@@ -22,14 +22,14 @@ const ToolCallBindingRow = Schema.Struct({
 })
 type ToolCallBindingRow = typeof ToolCallBindingRow.Type
 
-export interface ToolCallBindingStorageWrite extends ToolCallBindingKey {
+interface ToolCallBindingStorageWrite extends ToolCallBindingKey {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly binding: ToolBindingIdentity
   readonly createdAt?: number
 }
 
-export interface ToolCallBindingStorageService {
+interface ToolCallBindingStorageService {
   readonly save: (
     params: ToolCallBindingStorageWrite,
   ) => Effect.Effect<ToolBindingIdentity, StorageError | ToolCallBindingConflictError>

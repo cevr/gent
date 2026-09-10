@@ -34,7 +34,7 @@ const tryPrettyStringifyJson = (value: unknown): Option.Option<string> =>
     return pretty
   }).pipe(Result.getSuccess)
 
-export type ToolOutput = {
+type ToolOutput = {
   readonly type: "json" | "error-json"
   readonly value: unknown
 }

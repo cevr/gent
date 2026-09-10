@@ -68,7 +68,7 @@ const resolveDriverToolSurfaceOption = Effect.fn("TurnHelpers.resolveDriverToolS
   return Option.some(surface)
 })
 
-export const resolveDriverToolSurface = (agent: AgentDefinition) =>
+const resolveDriverToolSurface = (agent: AgentDefinition) =>
   resolveDriverToolSurfaceOption(agent).pipe(Effect.map(Option.getOrUndefined))
 
 const hasAgentOverrides = (overrides: Option.Option<AgentRunOverrides>) =>

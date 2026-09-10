@@ -24,7 +24,7 @@ export interface SessionEnvironmentDefaults {
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 
-export interface SessionEnvironment {
+interface SessionEnvironment {
   readonly cwd: string
   readonly extensionRegistry: ExtensionRegistryService
   /** Resource authority for the exact profile generation resolved for this run. */
@@ -36,13 +36,13 @@ export interface SessionEnvironment {
   readonly hostCtx: ExtensionHostContext
 }
 
-export interface ResolvedSessionEnvironment {
+interface ResolvedSessionEnvironment {
   // oxlint-disable-next-line effect/noNullish -- Environment resolution preserves the public absent-session result.
   readonly session: Session | undefined
   readonly environment: SessionEnvironment
 }
 
-export interface ExistingSessionBranch {
+interface ExistingSessionBranch {
   readonly session: Session
   readonly branch: Branch
   readonly sessionId: SessionId

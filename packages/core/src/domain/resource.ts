@@ -32,7 +32,7 @@ import { ResourceDescriptor, ResourceId, ResourceRevision } from "./resource-gra
  * exists. These types carry no runtime payload; they are purely structural.
  */
 declare const ServerBrand: unique symbol
-export type ServerScope = { readonly [ServerBrand]: true }
+type ServerScope = { readonly [ServerBrand]: true }
 
 /**
  * One agent-loop branch's lifetime. The actor forks a child of its own scope
@@ -40,7 +40,7 @@ export type ServerScope = { readonly [ServerBrand]: true }
  * resource is released when that branch closes.
  */
 declare const BranchBrand: unique symbol
-export type BranchScope = { readonly [BranchBrand]: true }
+type BranchScope = { readonly [BranchBrand]: true }
 
 /** Runtime literal-string union for Resource lifetimes. */
 export type ResourceScope = "process" | "branch"
@@ -49,7 +49,7 @@ export type ResourceScope = "process" | "branch"
  * Type-level mapping from the `scope` literal to the corresponding nominal
  * scope brand. The brand flows into the `R` channel of the Resource's `layer`.
  */
-export type ScopeOf<S extends ResourceScope> = S extends "process"
+type ScopeOf<S extends ResourceScope> = S extends "process"
   ? ServerScope
   : S extends "branch"
     ? BranchScope
@@ -77,7 +77,7 @@ export type ScopeOf<S extends ResourceScope> = S extends "process"
  * `defineResource(...)`. The `tag` is the canonical entry into the service
  * the Resource provides; consumers depend on the tag, not on Resource.
  */
-export interface ResourceContribution<
+interface ResourceContribution<
   A,
   S extends ResourceScope,
   R = never,
@@ -132,7 +132,7 @@ interface ResourceIdentitySpec {
  * a tag for a different service identity is then a type error rather
  * than a silent unification of `A` to a union supertype.
  */
-export interface ResourceSpec<
+interface ResourceSpec<
   A,
   S extends ResourceScope,
   R = never,

@@ -18,11 +18,11 @@ export const ResourceDescriptor = Schema.Struct({
 export type ResourceDescriptor = typeof ResourceDescriptor.Type
 
 /** A resource that cannot activate because one or more requirements are absent. */
-export const ResourceInactive = Schema.Struct({
+const ResourceInactive = Schema.Struct({
   id: ResourceId,
   missing: Schema.Array(ResourceId),
 })
-export type ResourceInactive = typeof ResourceInactive.Type
+type ResourceInactive = typeof ResourceInactive.Type
 
 /** Schema-backed validation failures for a desired resource graph. */
 export const ResourceGraphError = Schema.TaggedUnion({

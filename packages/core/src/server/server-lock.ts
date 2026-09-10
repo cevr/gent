@@ -126,7 +126,7 @@ export const validateServerLockEntry = (
     return { valid: true }
   })
 
-export interface ServerLockIdentity {
+interface ServerLockIdentity {
   readonly serverId: string
   readonly pid: number
   readonly hostname: string

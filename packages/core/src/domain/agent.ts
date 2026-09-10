@@ -105,7 +105,7 @@ export const resolveDefaultAgentModel = (
 export const DriverSource = Schema.Literals(["agent", "config", "default"])
 export type DriverSource = typeof DriverSource.Type
 
-export interface ResolvedAgentDriver {
+interface ResolvedAgentDriver {
   /** The driver to dispatch through. `undefined` ⇒ default model path
    *  (the loop derives a model driver from the agent's model id). */
   readonly driver: AgentDefinition["driver"]
@@ -152,7 +152,7 @@ export const resolveAgentDriver = (
 // "what to override" with "how to invoke". Spawn callers always pass a
 // `RunSpec` (possibly empty) instead of a flat positional bag.
 
-export const AgentRunOverridesSchema = Schema.Struct({
+const AgentRunOverridesSchema = Schema.Struct({
   modelId: Schema.optional(ModelId),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -162,12 +162,12 @@ export const AgentRunOverridesSchema = Schema.Struct({
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
 /** Whether an ephemeral run starts from the caller's branch history or from nothing. */
-export const AgentRunHistory = Schema.Literals(["none", "inherit"])
-export type AgentRunHistory = typeof AgentRunHistory.Type
+const AgentRunHistory = Schema.Literals(["none", "inherit"])
+type AgentRunHistory = typeof AgentRunHistory.Type
 
 /** `private` keeps an ephemeral run out of the parent's event stream and output store. */
-export const AgentRunVisibility = Schema.Literals(["parent", "private"])
-export type AgentRunVisibility = typeof AgentRunVisibility.Type
+const AgentRunVisibility = Schema.Literals(["parent", "private"])
+type AgentRunVisibility = typeof AgentRunVisibility.Type
 
 export const RunSpecSchema = Schema.Struct({
   persistence: Schema.optional(AgentPersistence),
@@ -180,7 +180,7 @@ export const RunSpecSchema = Schema.Struct({
 })
 export type RunSpec = typeof RunSpecSchema.Type
 
-export interface RunSpecInput extends RunSpec {}
+interface RunSpecInput extends RunSpec {}
 
 export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
   const spec: { -readonly [K in keyof RunSpec]: RunSpec[K] } = {}

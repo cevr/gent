@@ -8,7 +8,7 @@ import { GentPlatform } from "../runtime/gent-platform.js"
 
 export { ProviderAuthError } from "../domain/driver.js"
 
-export interface ProviderAuthService {
+interface ProviderAuthService {
   readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
   readonly authorize: (
     sessionId: SessionId,

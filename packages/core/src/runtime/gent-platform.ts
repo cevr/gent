@@ -48,7 +48,7 @@
 
 import { Predicate, Context, Effect, Layer, Ref, Schema } from "effect"
 
-export interface GentPlatformOsInfo {
+interface GentPlatformOsInfo {
   readonly platform: string
   readonly arch: string
   readonly release: string
@@ -61,7 +61,7 @@ export interface GentPlatformOsInfo {
  * without delivering a signal. Named signals are accepted via the
  * `NodeJS.Signals` string union.
  */
-export type GentPlatformSignal = string | 0
+type GentPlatformSignal = string | 0
 
 /**
  * `SignalError` is the typed failure for `GentPlatform.signal(pid, sig)`. The
@@ -76,7 +76,7 @@ export class SignalError extends Schema.TaggedError<SignalError>()("SignalError"
   reason: Schema.String,
 }) {}
 
-export type GentPlatformHashAlgorithm = "sha256" | "md5"
+type GentPlatformHashAlgorithm = "sha256" | "md5"
 
 export interface GentPlatformApi {
   readonly randomId: Effect.Effect<string>

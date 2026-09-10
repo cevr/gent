@@ -16,7 +16,7 @@
 import { Context, Effect, HashMap, HashSet, Layer, TxRef } from "effect"
 import type { SessionId } from "../../domain/ids.js"
 
-export interface AgentLoopSessionGovernanceService {
+interface AgentLoopSessionGovernanceService {
   readonly markTerminated: (workspaceId: string, sessionId: SessionId) => Effect.Effect<void>
   readonly clearTerminated: (workspaceId: string, sessionId: SessionId) => Effect.Effect<void>
   readonly isTerminated: (workspaceId: string, sessionId: SessionId) => Effect.Effect<boolean>

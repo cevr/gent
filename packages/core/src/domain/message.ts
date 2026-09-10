@@ -8,7 +8,7 @@ export const dateFromMillis = (millis: number): Date => Schema.decodeSync(DateFr
 // Actor payloads are already materialized domain values, while persisted and
 // transport inputs use epoch milliseconds. Accept both forms and encode Dates
 // back to numbers at boundaries that request encoding.
-export const DateFromNumber = Schema.Union([Schema.DateFromMillis, Schema.Date])
+const DateFromNumber = Schema.Union([Schema.DateFromMillis, Schema.Date])
 
 export const decodeDateFromMillis = Schema.decodeUnknownEffect(DateFromNumber)
 

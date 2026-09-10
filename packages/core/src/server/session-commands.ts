@@ -51,7 +51,7 @@ type UpdateSessionReasoningLevelResult = {
 
 // Common error union for SessionCommands mutations: storage/event errors plus
 // the typed business errors surfaced from validation paths.
-export type SessionCommandError = SessionMutationError
+type SessionCommandError = SessionMutationError
 
 // SessionCommands is the RPC-facing surface: dedup-wrapped session creates,
 // branch operations with summarization, and session runtime commands. Bodies
@@ -59,7 +59,7 @@ export type SessionCommandError = SessionMutationError
 // branch/message delete) live on `SessionMutations`, an internal RPC-facing
 // service shared with this module so there is exactly one implementation of
 // each durable mutation. Extensions do not see this surface.
-export interface SessionCommandsService {
+interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
   ) => Effect.Effect<CreateSessionResult, GentRpcError>
@@ -75,7 +75,7 @@ export interface SessionCommandsService {
   ) => Effect.Effect<UpdateSessionReasoningLevelResult, GentRpcError>
 }
 
-export interface SessionCommandsDedupControlService {
+interface SessionCommandsDedupControlService {
   readonly registerCreateSessionInvalidator: (
     invalidate: (requestId: string) => Effect.Effect<void>,
   ) => Effect.Effect<void>

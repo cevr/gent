@@ -39,7 +39,7 @@ export interface CompiledExtensionHooks {
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
 }
 
-export interface ExtensionTurnProjection {
+interface ExtensionTurnProjection {
   readonly promptSections: ReadonlyArray<PromptSection>
   readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
 }

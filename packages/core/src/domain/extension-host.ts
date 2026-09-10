@@ -26,7 +26,7 @@ import {
 } from "./extension.js"
 
 /** Author-facing domain name → contribution bucket it lands in. */
-export interface RegistrationDomainMap {
+interface RegistrationDomainMap {
   readonly tool: "tools"
   readonly request: "requests"
   readonly agent: "agents"
@@ -36,7 +36,7 @@ export interface RegistrationDomainMap {
   readonly externalDriver: "externalDrivers"
 }
 
-export const registrationDomains: RegistrationDomainMap = {
+const registrationDomains: RegistrationDomainMap = {
   tool: "tools",
   request: "requests",
   agent: "agents",
@@ -46,10 +46,10 @@ export const registrationDomains: RegistrationDomainMap = {
   externalDriver: "externalDrivers",
 }
 
-export type RegistrationDomain = keyof typeof registrationDomains
+type RegistrationDomain = keyof typeof registrationDomains
 type BucketOf<D extends RegistrationDomain> = RegistrationDomainMap[D]
 type ElementOf<A> = A extends ReadonlyArray<infer Item> ? Item : never
-export type RegistrationValue<D extends RegistrationDomain> = ElementOf<
+type RegistrationValue<D extends RegistrationDomain> = ElementOf<
   NonNullable<ExtensionContributions[BucketOf<D>]>
 >
 
@@ -81,7 +81,7 @@ export class ExtensionHost extends Context.Service<ExtensionHost, ExtensionHostS
   "@gent/core/src/domain/extension-host/ExtensionHost",
 ) {}
 
-export interface ExtensionHostFacts {
+interface ExtensionHostFacts {
   readonly cwd: string
   readonly source: string
   readonly home: string

@@ -43,7 +43,7 @@ import {
 import { provideExtensionLeaf } from "../extensions/extension-effect-membrane.js"
 import type { ToolBindingIdentity } from "../../domain/tool-binding.js"
 
-export type ToolCapabilityMap = Record<string, ToolCapability>
+type ToolCapabilityMap = Record<string, ToolCapability>
 
 export function convertTools(
   tools: ReadonlyArray<ToolCapability>,
@@ -75,7 +75,7 @@ class ToolExecutionFailure extends Schema.TaggedError<ToolExecutionFailure>(
 
 type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 
-export interface ToolRunnerService {
+interface ToolRunnerService {
   /** Capture the currently visible implementation once for a direct invocation. */
   readonly capture: (params: {
     readonly sessionId: SessionId

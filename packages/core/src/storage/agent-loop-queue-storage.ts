@@ -35,7 +35,7 @@ const emptyLoopQueueState = (): LoopQueueStateType => ({
 
 const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
-export interface AgentLoopQueueStorageService {
+interface AgentLoopQueueStorageService {
   readonly getQueueState: (
     sessionId: SessionId,
     branchId: BranchId,

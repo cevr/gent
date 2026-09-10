@@ -41,14 +41,14 @@ let cachedStartTs: Option.Option<string> = Option.none()
  * memoized so module import has no platform side effect, and so synchronous
  * callers (TUI logger module init) share the same value as Effect callers.
  */
-export const processStartTs = (): string => {
+const processStartTs = (): string => {
   if (Option.isSome(cachedStartTs)) return cachedStartTs.value
   const startTs = formatStartTs(performance.timeOrigin)
   cachedStartTs = Option.some(startTs)
   return startTs
 }
 
-export interface LogPaths {
+interface LogPaths {
   readonly dir: string
   readonly log: string
   readonly trace: string

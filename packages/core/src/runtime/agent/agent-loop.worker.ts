@@ -16,7 +16,7 @@ import type { TurnOutcome } from "./agent-loop.turn-execution.js"
 import type { TurnInterruption } from "./turn-interruption.js"
 import { turnBoundary, withWideEvent } from "../wide-event-boundary.js"
 
-export type AgentLoopWorkerContext<E = never, R = never> = {
+type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly sideMutationSemaphore: Semaphore.Semaphore
@@ -43,7 +43,7 @@ export type AgentLoopWorkerContext<E = never, R = never> = {
  * withdrawing it. `started` names the turn the worker claimed; `withdrawn`
  * names an admission the worker must skip. One `Ref.modify` decides each side.
  */
-export interface AdmissionGate {
+interface AdmissionGate {
   readonly started: Option.Option<MessageId>
   readonly withdrawn: Option.Option<MessageId>
 }

@@ -15,19 +15,19 @@ const DEFAULT_HEAD_LINES = 50
 const DEFAULT_TAIL_LINES = 50
 const OUTPUT_DIR = "/tmp/gent/outputs"
 
-export interface HeadTailResult<T> {
+interface HeadTailResult<T> {
   readonly head: T[]
   readonly tail: T[]
   readonly truncatedCount: number
 }
 
-export interface HeadTailCharsResult {
+interface HeadTailCharsResult {
   readonly text: string
   readonly truncated: boolean
   readonly totalChars: number
 }
 
-export interface OutputBufferFormat {
+interface OutputBufferFormat {
   readonly text: string
   readonly truncatedLines: number
 }

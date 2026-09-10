@@ -41,13 +41,6 @@ export class ToolInteractionPending extends Schema.TaggedError<ToolInteractionPe
   completedResults: Schema.Array(Prompt.ToolResultPart),
 }) {}
 
-export class ToolInvocationInteractionError extends Schema.TaggedError<ToolInvocationInteractionError>(
-  "@gent/core/src/runtime/agent/turn-tool-execution/ToolInvocationInteractionError",
-)("ToolInvocationInteractionError", {
-  message: Schema.String,
-  toolCallId: ToolCallId,
-}) {}
-
 export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(function* (params: {
   assistantMessageId: MessageId
   toolCalls: ReadonlyArray<Prompt.ToolCallPart>

@@ -31,7 +31,7 @@ export const CurrentResolveModelAssertion = Context.Reference<
   defaultValue: () => undefined,
 })
 
-export interface ModelResolverService {
+interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
   ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>

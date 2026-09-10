@@ -29,8 +29,8 @@ export class PermissionRule extends Schema.Class<PermissionRule>("PermissionRule
 
 // Permission Check Result
 
-export const PermissionResult = Schema.Literals(["allowed", "denied"])
-export type PermissionResult = typeof PermissionResult.Type
+const PermissionResult = Schema.Literals(["allowed", "denied"])
+type PermissionResult = typeof PermissionResult.Type
 
 type StoredRule = { rule: PermissionRule; regex?: RegExp }
 

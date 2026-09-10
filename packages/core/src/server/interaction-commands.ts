@@ -19,7 +19,7 @@ export interface RespondInteractionInput {
   readonly editedContent?: string
 }
 
-export interface InteractionCommandsService {
+interface InteractionCommandsService {
   readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, GentRpcError>
 }
 

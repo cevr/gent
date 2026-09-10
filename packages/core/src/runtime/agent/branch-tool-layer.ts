@@ -18,7 +18,7 @@ import {
 } from "../extensions/extension-effect-membrane.js"
 import type { TurnInterruptionStatus } from "./turn-interruption.js"
 
-export interface BranchToolLayerInput {
+interface BranchToolLayerInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   /** Lets branch work notice that the turn was interrupted, and stop. */

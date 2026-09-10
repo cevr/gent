@@ -107,7 +107,7 @@ export interface ResourceGraphPublication<Catalog> {
 }
 
 /** Options for one host's catalog stage callback. */
-export interface ResourceGraphHostOptions {
+interface ResourceGraphHostOptions {
   readonly baseContext?: Context.Context<unknown>
 }
 

@@ -96,7 +96,7 @@ type ResourceGraphSubmitError =
 export type ResourceGraphRecoveryError = StorageError | ClientSendError
 
 /** Result for one owner during process-start recovery. */
-export interface ResourceGraphRecoveryOutcome {
+interface ResourceGraphRecoveryOutcome {
   readonly request: ResourceGraphRecoveryPayload
   readonly applying: boolean
   readonly settled: boolean
@@ -105,12 +105,12 @@ export interface ResourceGraphRecoveryOutcome {
 }
 
 /** Recovery results used to gate the launch profile without hiding other owners. */
-export interface ResourceGraphRecoveryReport {
+interface ResourceGraphRecoveryReport {
   readonly requests: ReadonlyArray<ResourceGraphRecoveryPayload>
   readonly outcomes: ReadonlyArray<ResourceGraphRecoveryOutcome>
 }
 
-export interface ResourceGraphCommandServiceApi {
+interface ResourceGraphCommandServiceApi {
   /** Record and dispatch one desired graph without waiting for application. */
   readonly submit: (
     command: ResourceGraphDesiredCommand,

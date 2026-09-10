@@ -19,12 +19,12 @@ export {
   responsePartsFromMessages,
 }
 
-export interface PromptTranscriptOptions {
+interface PromptTranscriptOptions {
   readonly systemPrompt?: string
   readonly includeHidden?: boolean
 }
 
-export const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
+const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
 
 const toSystemMessage = (message: Message): Option.Option<Prompt.SystemMessage> => {
   const text = message.parts

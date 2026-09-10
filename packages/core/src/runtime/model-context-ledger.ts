@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 
 /** What the model last saw as its context, recorded after each projection. */
-export const ModelContextStatus = Schema.Struct({
+const ModelContextStatus = Schema.Struct({
   estimatedTokens: Schema.Natural,
   availableInputTokens: Schema.Natural,
   contextLimitTokens: Schema.Natural,
@@ -9,7 +9,7 @@ export const ModelContextStatus = Schema.Struct({
   /** Revision of the newest summary in the projection; absent when nothing is compacted. */
   compactedRevision: Schema.optional(Schema.String),
 })
-export type ModelContextStatus = typeof ModelContextStatus.Type
+type ModelContextStatus = typeof ModelContextStatus.Type
 
 /** A request the model made from inside a cell; the next projection consumes it. */
 export const ContextDirective = Schema.TaggedUnion({
@@ -18,7 +18,7 @@ export const ContextDirective = Schema.TaggedUnion({
 })
 export type ContextDirective = typeof ContextDirective.Type
 
-export interface ModelContextLedgerService {
+interface ModelContextLedgerService {
   readonly status: Effect.Effect<Option.Option<ModelContextStatus>>
   readonly recordProjection: (status: ModelContextStatus) => Effect.Effect<void>
   /** A later directive replaces an earlier one; only the newest is honored. */

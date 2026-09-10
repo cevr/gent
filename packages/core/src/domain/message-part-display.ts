@@ -11,13 +11,13 @@ import {
 } from "./message.js"
 import { stringifyOutput, summarizeOutput } from "./tool-output.js"
 
-export interface ImagePartProjection {
+interface ImagePartProjection {
   readonly image: string
   readonly mediaType: string
   readonly rawMediaType: string
 }
 
-export interface ToolCallPartProjection {
+interface ToolCallPartProjection {
   readonly id: string
   readonly toolName: string
   readonly input: unknown
@@ -52,7 +52,7 @@ interface IndexedToolCallState extends ToolCallPartProjection {
   readonly position: ToolCallPosition
 }
 
-export interface MessagePartsDisplayTextOptions {
+interface MessagePartsDisplayTextOptions {
   readonly maxToolChars?: number
 }
 
@@ -352,7 +352,7 @@ export const messagePartsDisplayText = (
   return chunks.join("\n")
 }
 
-export const stringifySearchValue = (value: JsonEncoderInput): string => {
+const stringifySearchValue = (value: JsonEncoderInput): string => {
   if (Predicate.isString(value)) return value
   if (Predicate.isUndefined(value)) return ""
   const encoded = Result.try(() => encodeJson(value))
@@ -360,7 +360,7 @@ export const stringifySearchValue = (value: JsonEncoderInput): string => {
   return encoded.success
 }
 
-export const messagePartSearchText = (part: MessagePart): string => {
+const messagePartSearchText = (part: MessagePart): string => {
   const text = messagePartText(part)
   if (!Predicate.isUndefined(text)) return text
 

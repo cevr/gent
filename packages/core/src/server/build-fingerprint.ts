@@ -55,7 +55,7 @@ const computeLocalFingerprintUncached: Effect.Effect<
   return "unknown"
 })
 
-export interface BuildFingerprintApi {
+interface BuildFingerprintApi {
   /** Cached local fingerprint computation. Identical across yields within TTL. */
   readonly local: Effect.Effect<string>
   /** Resolved fingerprint — env override (`GENT_BUILD_FINGERPRINT`) wins, else local. */

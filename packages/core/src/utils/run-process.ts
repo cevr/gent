@@ -18,13 +18,13 @@ export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessErr
   timedOut: Schema.optional(Schema.Boolean),
 }) {}
 
-export interface ProcessResult {
+interface ProcessResult {
   readonly exitCode: number
   readonly stdout: string
   readonly stderr: string
 }
 
-export interface ProcessRunnerService {
+interface ProcessRunnerService {
   readonly run: (
     command: string,
     args: ReadonlyArray<string>,
@@ -32,7 +32,7 @@ export interface ProcessRunnerService {
   ) => Effect.Effect<ProcessResult, ProcessError>
 }
 
-export interface RunProcessOptions {
+interface RunProcessOptions {
   readonly cwd?: string
   // oxlint-disable-next-line effect/noNullish -- Child-process environments use undefined to remove inherited variables.
   readonly env?: Record<string, string | undefined>
@@ -144,7 +144,7 @@ export const runProcess = (
   )
 }
 
-export const makeProcessRunner: Effect.Effect<
+const makeProcessRunner: Effect.Effect<
   ProcessRunnerService,
   never,
   ChildProcessSpawner.ChildProcessSpawner

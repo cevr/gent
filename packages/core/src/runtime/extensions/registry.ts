@@ -41,7 +41,7 @@ import { compileExtensionHooks, type CompiledExtensionHooks } from "./extension-
 // SlashCommand — public-facing slash entry. Built from `requests:` bucket
 // winners that carry a `slash:` presentation block. The slash block is the
 // load-bearing filter.
-export interface SlashCommand {
+interface SlashCommand {
   /** Routing key (capability id, extension-local). */
   readonly name: string
   /** Author-supplied display name for the slash menu. Falls back to `name`
@@ -87,7 +87,7 @@ interface RegisteredRpcEntry {
 
 type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredRpcEntry
 
-export interface CompiledRpcRegistry {
+interface CompiledRpcRegistry {
   readonly run: (
     extensionId: ExtensionId,
     capabilityId: RpcId | string,
@@ -450,7 +450,7 @@ export const resolveExtensions = (
 
 // ToolPolicy compiler — unified tool filtering + prompt section collection
 
-export interface CompiledToolPolicy {
+interface CompiledToolPolicy {
   readonly tools: ReadonlyArray<ToolCapability>
   readonly modelTools: ReadonlyArray<ToolCapability>
   readonly promptSections: ReadonlyArray<PromptSection>

@@ -10,7 +10,7 @@ const DisabledConfig = Schema.Struct({
 })
 
 /** Read disabledExtensions from a JSON config file. Returns [] on any error. */
-export const readDisabledFromFile = (filePath: string) =>
+const readDisabledFromFile = (filePath: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const text = yield* fs.readFileString(filePath)

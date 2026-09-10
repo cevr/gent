@@ -118,7 +118,7 @@ export const TurnOutcome = Schema.TaggedUnion({
 })
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
 
-export type AgentLoopTurnExecutionContext = {
+type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>

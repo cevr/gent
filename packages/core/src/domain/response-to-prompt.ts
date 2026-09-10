@@ -31,7 +31,7 @@ export const responseUsage = (usage: Response.FinishPart["usage"]): Option.Optio
   })
 }
 
-export interface MessagePartProjection {
+interface MessagePartProjection {
   readonly assistant: ReadonlyArray<
     | Prompt.TextPart
     | Prompt.ReasoningPart

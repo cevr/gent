@@ -77,7 +77,7 @@ class EventTable extends Model.Class<EventTable>("EventTable")({
   trace_id: Schema.NullOr(Schema.String),
 }) {}
 
-export interface EventStorageService {
+interface EventStorageService {
   readonly appendEvent: (
     event: AgentEvent,
     options?: { traceId?: string },

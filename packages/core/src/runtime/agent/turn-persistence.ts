@@ -145,7 +145,7 @@ export const findPersistedToolResults = Effect.fn("TurnHelpers.findPersistedTool
   },
 )
 
-export const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E, R>(
+const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E, R>(
   mutation: Effect.Effect<CommittedMutation<A>, E, R>,
 ) {
   const eventPublisher = yield* EventPublisher
@@ -236,7 +236,7 @@ export const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProj
   },
 )
 
-export const persistMessageParts = Effect.fn("TurnHelpers.persistMessageParts")(function* (params: {
+const persistMessageParts = Effect.fn("TurnHelpers.persistMessageParts")(function* (params: {
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId

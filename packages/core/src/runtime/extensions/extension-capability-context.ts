@@ -1,6 +1,6 @@
 import { Context, Effect } from "effect"
 
-export const CurrentExtensionCapabilityContext = Context.Reference<Context.Context<never>>(
+const CurrentExtensionCapabilityContext = Context.Reference<Context.Context<never>>(
   "@gent/core/src/runtime/extensions/extension-capability-context/CurrentExtensionCapabilityContext",
   {
     defaultValue: Context.empty,

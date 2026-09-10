@@ -35,8 +35,8 @@ import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 
 // ── Driver-facing wire types ────────────────────────────────────────────
 
-export const AuthMethodType = Schema.Literals(["oauth", "api"])
-export type AuthMethodType = typeof AuthMethodType.Type
+const AuthMethodType = Schema.Literals(["oauth", "api"])
+type AuthMethodType = typeof AuthMethodType.Type
 
 export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
   type: AuthMethodType,
@@ -88,13 +88,13 @@ export type AuthApi = typeof AuthInfo.cases.Api.Type
 export const AuthOauth = AuthInfo.cases.Oauth
 export type AuthOauth = typeof AuthInfo.cases.Oauth.Type
 
-export const AuthType = Schema.Literals(["api", "oauth"])
-export type AuthType = typeof AuthType.Type
+const AuthType = Schema.Literals(["api", "oauth"])
+type AuthType = typeof AuthType.Type
 
 // ── Auth-guard wire types ───────────────────────────────────────────────
 
-export const AuthSource = Schema.Literals(["none", "stored"])
-export type AuthSource = typeof AuthSource.Type
+const AuthSource = Schema.Literals(["none", "stored"])
+type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({
   provider: ProviderId,
@@ -217,7 +217,7 @@ export class Auth extends Context.Service<Auth, AuthService>()("@gent/core/src/d
 
 // ── Auth guard ──────────────────────────────────────────────────────────
 
-export interface AuthGuardService {
+interface AuthGuardService {
   readonly requiredProviders: (query?: AuthProviderQuery) => Effect.Effect<readonly ProviderId[]>
   readonly listProviders: (
     query?: AuthProviderQuery,

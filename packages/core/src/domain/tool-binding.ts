@@ -70,7 +70,7 @@ export type ToolBindingIdentity = typeof ToolBindingIdentity.Type
 export const validateToolBindingIdentity = Schema.decodeUnknownEffect(ToolBindingIdentity)
 
 /** JSON codec used by the durable binding storage. */
-export const ToolBindingIdentityJson = Schema.fromJsonString(ToolBindingIdentity)
+const ToolBindingIdentityJson = Schema.fromJsonString(ToolBindingIdentity)
 
 export const encodeToolBindingIdentity = Schema.encodeEffect(ToolBindingIdentityJson)
 export const decodeToolBindingIdentity = Schema.decodeUnknownEffect(ToolBindingIdentityJson)

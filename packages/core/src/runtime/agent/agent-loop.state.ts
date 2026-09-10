@@ -33,7 +33,7 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
 
 // ── Queue ──
 
-export const QueuedTurnItemSchema = Schema.Struct({
+const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
   agentOverride: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
@@ -295,7 +295,7 @@ const RunningTurnFields = {
 
 // ── Turn types (not persisted in machine state) ──
 
-export const AssistantDraftSchema = Schema.Struct({
+const AssistantDraftSchema = Schema.Struct({
   text: Schema.String,
   reasoning: Schema.String,
   toolCalls: Schema.Array(Prompt.ToolCallPart),
@@ -344,9 +344,9 @@ export const LoopState = Schema.TaggedUnion({
 // ── Type aliases ──
 
 export type LoopState = Schema.Schema.Type<typeof LoopState>
-export type IdleState = Extract<LoopState, { _tag: "Idle" }>
+type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
-export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
+type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
 
 interface QueuedTurnTake {
   readonly queue: LoopQueueState
@@ -465,7 +465,7 @@ export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapsho
 
 // ── Runtime state projection ──
 
-export const runtimeStateFromLoopState = (
+const runtimeStateFromLoopState = (
   state: LoopState,
   queue: LoopQueueState,
 ): SessionRuntimeState => {

@@ -37,14 +37,14 @@ type ServerRootServices =
   | Layer.Success<typeof ConnectionTracker.Live>
   | ServerIdentity
 
-export interface ServerRootConfig {
+interface ServerRootConfig {
   readonly dependencies: DependenciesConfig
   readonly identity: Omit<ServerIdentityApi, "startedAt"> & {
     readonly startedAt?: number
   }
 }
 
-export interface BuiltServerRoot {
+interface BuiltServerRoot {
   readonly connectionTracker: ConnectionTrackerService
   readonly coreServices: Context.Context<ServerRootServices>
   readonly coreServicesLive: Layer.Layer<ServerRootServices>

@@ -79,14 +79,12 @@ export const InteractionRequestRecord = Schema.Struct({
 export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
 
 /** All interaction records use this type — the old per-handler types are gone */
-export const INTERACTION_TYPE = "approval"
+const INTERACTION_TYPE = "approval"
 
 const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
 const decisionJsonCodec = Schema.fromJsonString(ApprovalDecisionSchema)
 
-export const encodeInteractionParams = (
-  params: ApprovalRequest,
-): Effect.Effect<string, EventStoreError> =>
+const encodeInteractionParams = (params: ApprovalRequest): Effect.Effect<string, EventStoreError> =>
   Schema.encodeEffect(interactionJsonCodec)(params).pipe(
     Effect.mapError(
       (cause) =>
@@ -184,7 +182,7 @@ export interface InteractionStorageConfig {
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
 }
 
-export interface InteractionServiceConfig {
+interface InteractionServiceConfig {
   readonly onPresent: (
     requestId: InteractionRequestId,
     params: ApprovalRequest,

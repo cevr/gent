@@ -10,7 +10,7 @@
 
 import { Context, type Effect } from "effect"
 
-export interface BranchToolWorkApi {
+interface BranchToolWorkApi {
   /** Cancel in-flight work. Must be safe to call when nothing is running. */
   readonly cancel: Effect.Effect<void>
 }

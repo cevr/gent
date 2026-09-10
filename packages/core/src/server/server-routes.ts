@@ -72,7 +72,7 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
 
 // ── Route Assembly ──
 
-export interface ServerRoutesConfig {
+interface ServerRoutesConfig {
   readonly identity: {
     readonly serverId: string
     readonly pid: number

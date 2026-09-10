@@ -24,7 +24,7 @@ import {
 } from "./model-context.js"
 
 /** Maximum estimated input tokens for one summary request. */
-export const MODEL_COMPACTION_INPUT_TOKENS = 16_384
+const MODEL_COMPACTION_INPUT_TOKENS = 16_384
 
 /** Maximum estimated output tokens for one summary request. */
 export const MODEL_COMPACTION_OUTPUT_TOKENS = 512
@@ -46,11 +46,11 @@ const SUMMARY_STORED_MAX_TOKENS =
   MODEL_COMPACTION_OUTPUT_TOKENS + Math.ceil(SUMMARY_PATHS_MAX_CHARS / 4)
 
 /** Files the summarized history touched, carried forward across revisions. */
-export const CompactionPaths = Schema.Struct({
+const CompactionPaths = Schema.Struct({
   read: Schema.Array(Schema.String),
   modified: Schema.Array(Schema.String),
 })
-export type CompactionPaths = typeof CompactionPaths.Type
+type CompactionPaths = typeof CompactionPaths.Type
 
 export const ModelCompactionDetails = Schema.TaggedStruct("model-compaction", {
   sourceMessageIds: Schema.Array(MessageId),

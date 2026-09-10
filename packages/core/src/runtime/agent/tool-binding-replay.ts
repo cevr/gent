@@ -25,16 +25,6 @@ export type ToolBindingReplayReason =
   | "SchemaMismatch"
   | "ResourceMismatch"
 
-export class ToolBindingCaptureError extends Schema.TaggedError<ToolBindingCaptureError>()(
-  "ToolBindingCaptureError",
-  {
-    assistantMessageId: Schema.String,
-    toolCallId: Schema.String,
-    toolId: Schema.String,
-    message: Schema.String,
-  },
-) {}
-
 export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplayError>()(
   "ToolBindingReplayError",
   {
@@ -54,7 +44,7 @@ export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplay
   },
 ) {}
 
-export interface ToolBindingIdentityContext {
+interface ToolBindingIdentityContext {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly resources: ReadonlyArray<ResourceDescriptor>
   readonly publicationRevision?: string

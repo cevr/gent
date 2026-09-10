@@ -148,7 +148,7 @@ const canonicalSource = (source: ResourceGraphSource): ResourceGraphSource => ({
 })
 
 /** Canonicalize JSON-safe source and descriptor ordering before persistence. */
-export const canonicalizeResourceGraphSnapshot = (
+const canonicalizeResourceGraphSnapshot = (
   snapshot: ResourceGraphSnapshot,
 ): ResourceGraphSnapshot => ({
   source: canonicalSource(snapshot.source),

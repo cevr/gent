@@ -99,7 +99,7 @@ export interface LiveSessionProfile extends SessionProfile {
 
 // ── SessionProfileCache ──
 
-export interface SessionProfileCacheConfig {
+interface SessionProfileCacheConfig {
   readonly home: string
   readonly platform: string
   readonly shell?: string
@@ -543,14 +543,14 @@ interface SessionProfileRuntime {
   readonly resourceGraphSnapshot?: ResourceGraphSnapshot
 }
 
-export function sessionProfileFromRuntime(
+function sessionProfileFromRuntime(
   runtime: SessionProfileRuntime & {
     readonly publication: ResourceGraphPublication<RuntimeProfileCatalog>
     readonly resourceGraphSnapshot: ResourceGraphSnapshot
   },
 ): LiveSessionProfile
-export function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfile
-export function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfile {
+function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfile
+function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfile {
   return {
     cwd: runtime.profile.cwd,
     extensions: runtime.profile.resolved.extensions,
@@ -566,7 +566,7 @@ export function sessionProfileFromRuntime(runtime: SessionProfileRuntime): Sessi
   }
 }
 
-export const sessionProfileFromLiveRuntime = (runtime: LiveRuntimeProfile): LiveSessionProfile =>
+const sessionProfileFromLiveRuntime = (runtime: LiveRuntimeProfile): LiveSessionProfile =>
   sessionProfileFromRuntime({
     ...runtime.publication.value,
     publication: runtime.publication,

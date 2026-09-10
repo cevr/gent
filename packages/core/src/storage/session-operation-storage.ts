@@ -13,14 +13,12 @@ const START_AGENT_OPERATION = "agent.start"
 const CANCEL_TURN_OPERATION = "turn.cancel"
 const CHILD_MODEL_BUDGET_OPERATION = "agent.model-budget"
 
-export const TurnCancellationAddress = Schema.Struct({
+const TurnCancellationAddress = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   messageId: MessageId,
 })
-export interface TurnCancellationAddress extends Schema.Schema.Type<
-  typeof TurnCancellationAddress
-> {}
+interface TurnCancellationAddress extends Schema.Schema.Type<typeof TurnCancellationAddress> {}
 
 export const StoredAgentStartInput = Schema.Struct({
   parentSessionId: SessionId,
@@ -41,7 +39,7 @@ const StoredAgentStartResultJson = Schema.fromJsonString(StoredAgentStartResult)
 const decodeStoredAgentStartResult = Schema.decodeUnknownEffect(StoredAgentStartResultJson)
 
 /** One parent-owned child registry row. Completed means the admitted turn has a receipt. */
-export interface AgentStartRegistryRow {
+interface AgentStartRegistryRow {
   readonly requestId: RequestId
   readonly result: StoredAgentStartResult
   readonly completed: boolean
@@ -80,7 +78,7 @@ const StoredSwitchBranchResultJson = Schema.fromJsonString(StoredSwitchBranchRes
 const encodeStoredSwitchBranchResult = Schema.encodeEffect(StoredSwitchBranchResultJson)
 const decodeStoredSwitchBranchResult = Schema.decodeUnknownEffect(StoredSwitchBranchResultJson)
 
-export interface SessionOperationStorageService {
+interface SessionOperationStorageService {
   /** None: no admitted child. Some(false): exhausted. A successful reservation is never refunded. */
   readonly reserveChildModelAttempt: (address: {
     readonly sessionId: SessionId

@@ -13,7 +13,7 @@ import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { ReasoningEffort } from "../../domain/agent.js"
 
 // Schema decoders - Effect-based (no sync throws)
-export const StoredPromptPart = Schema.Union([
+const StoredPromptPart = Schema.Union([
   Prompt.TextPart,
   Prompt.FilePart,
   Prompt.ToolCallPart,
@@ -22,17 +22,17 @@ export const StoredPromptPart = Schema.Union([
   Prompt.ToolApprovalRequestPart,
   Prompt.ToolApprovalResponsePart,
 ])
-export const StoredPromptPartJson = Schema.fromJsonString(StoredPromptPart)
+const StoredPromptPartJson = Schema.fromJsonString(StoredPromptPart)
 export const decodeStoredPromptPart = Schema.decodeUnknownEffect(StoredPromptPartJson)
-export const encodeStoredPromptPart = Schema.encodeEffect(StoredPromptPartJson)
-export const EventJson = Schema.fromJsonString(Schema.Unknown)
-export const decodeEventJson = Schema.decodeUnknownEffect(EventJson)
-export const encodeEventJson = Schema.encodeEffect(EventJson)
+const encodeStoredPromptPart = Schema.encodeEffect(StoredPromptPartJson)
+const EventJson = Schema.fromJsonString(Schema.Unknown)
+const decodeEventJson = Schema.decodeUnknownEffect(EventJson)
+const encodeEventJson = Schema.encodeEffect(EventJson)
 export const encodeEvent = (event: AgentEvent) =>
   Schema.encodeEffect(AgentEvent)(event).pipe(Effect.flatMap(encodeEventJson))
-export const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
-export const decodeMessageMetadata = Schema.decodeUnknownEffect(MessageMetadataJson)
-export const encodeMessageMetadata = Schema.encodeEffect(MessageMetadataJson)
+const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
+const decodeMessageMetadata = Schema.decodeUnknownEffect(MessageMetadataJson)
+const encodeMessageMetadata = Schema.encodeEffect(MessageMetadataJson)
 
 /** Encode an absent domain field as SQLite NULL at the storage boundary. */
 export const toSqlNull = <A>(value?: A) =>
@@ -66,7 +66,7 @@ export const BranchRow = Schema.Struct({
 })
 export type BranchRow = typeof BranchRow.Type
 
-export const MessageRow = Schema.Struct({
+const MessageRow = Schema.Struct({
   id: MessageId,
   session_id: SessionId,
   branch_id: BranchId,
@@ -76,7 +76,7 @@ export const MessageRow = Schema.Struct({
   turn_duration_ms: Schema.NullOr(Schema.Finite),
   metadata: Schema.NullOr(Schema.String),
 })
-export type MessageRow = typeof MessageRow.Type
+type MessageRow = typeof MessageRow.Type
 
 export const MessageChunkRow = Schema.Struct({
   ...MessageRow.fields,
@@ -85,13 +85,13 @@ export const MessageChunkRow = Schema.Struct({
 })
 export type MessageChunkRow = typeof MessageChunkRow.Type
 
-export const EventRow = Schema.Struct({
+const EventRow = Schema.Struct({
   id: EventId,
   event_json: Schema.String,
   created_at: Schema.Finite,
   trace_id: Schema.NullOr(Schema.String),
 })
-export type EventRow = typeof EventRow.Type
+type EventRow = typeof EventRow.Type
 
 export const decodeMessageChunkRow = Schema.decodeUnknownEffect(MessageChunkRow)
 export const decodeEventRow = Schema.decodeUnknownEffect(EventRow)

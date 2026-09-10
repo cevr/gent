@@ -27,12 +27,12 @@ export const sameProcessLocalGeneration = (
   return left.value === right.value
 }
 
-export interface ProcessLocalReplayBinding {
+interface ProcessLocalReplayBinding {
   readonly entry: ResolvedToolCapability
   readonly generationId: Option.Option<ResourceGenerationId>
 }
 
-export interface ProcessLocalToolReplayService {
+interface ProcessLocalToolReplayService {
   readonly getBinding: (key: string) => Effect.Effect<Option.Option<ProcessLocalReplayBinding>>
   readonly setBinding: (key: string, binding: ProcessLocalReplayBinding) => Effect.Effect<void>
   readonly removeBinding: (key: string) => Effect.Effect<void>

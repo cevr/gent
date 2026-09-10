@@ -8,7 +8,7 @@ import { provideExtensionCapabilityContext } from "./extension-capability-contex
 
 type ErasedValue = Schema.Schema.Type<typeof Schema.Unknown>
 
-export interface ErasedEffectHandlers<A, E> {
+interface ErasedEffectHandlers<A, E> {
   // This alias marks the intentional unknown channel at the single host
   // membrane. The extension effect is parsed or handled after this point.
   readonly onFailure: (error: ErasedValue) => Effect.Effect<A, E>
@@ -70,7 +70,7 @@ export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): Erased
 export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
 
 /** Per-leaf facts layered over the current run's host context. */
-export interface ExtensionLeafFrame {
+interface ExtensionLeafFrame {
   readonly extensionId?: ExtensionId
   readonly toolCallId?: ToolCallId
   readonly turn?: ExtensionTurnContext
