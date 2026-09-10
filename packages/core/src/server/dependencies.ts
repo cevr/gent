@@ -35,7 +35,6 @@ import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import {
   CurrentBranchToolFeature,
-  noBranchTools,
   type BranchToolFeature,
 } from "../runtime/agent/branch-tool-feature.js"
 import { BranchToolLayer } from "../runtime/agent/branch-tool-layer.js"
@@ -122,10 +121,12 @@ export interface DependenciesConfig {
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /**
    * The branch-tool feature this deployment ships — its migrations, storage,
-   * and per-branch factory as one value. Defaults to `noBranchTools`, which
-   * is correct for a deployment whose tools are all stateless.
+   * and per-branch factory as one value. Required, not defaulted: a root that
+   * ships a stateful tool surface and forgets this would get a tool that
+   * fails on first use, and a default would hide that until run time. A
+   * deployment whose tools are all stateless passes `noBranchTools`.
    */
-  branchTools?: BranchToolFeature<never>
+  branchTools: BranchToolFeature<never>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
@@ -174,12 +175,8 @@ const platformServicesLive = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
-/** The feature the root named, or the stateless-tools default. */
-const branchToolsOf = (config: DependenciesConfig): BranchToolFeature<never> =>
-  Option.getOrElse(Option.fromUndefinedOr(config.branchTools), () => noBranchTools)
-
 const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") => {
-  const branchTools = branchToolsOf(config)
+  const branchTools = config.branchTools
   if (persistenceMode === "memory")
     return SqliteStorage.MemoryWithSql(branchTools.storage, branchTools.migrations)
   const dbPath = Option.getOrElse(Option.fromUndefinedOr(config.dbPath), () => ".gent/data.db")
@@ -563,8 +560,8 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.mergeAll(
       // The app names the branch-tool feature it ships. The loop builds its
       // layer without knowing what it is.
-      Layer.succeed(BranchToolLayer, branchToolsOf(config).branchLayer),
-      Layer.succeed(CurrentBranchToolFeature, branchToolsOf(config)),
+      Layer.succeed(BranchToolLayer, config.branchTools.branchLayer),
+      Layer.succeed(CurrentBranchToolFeature, config.branchTools),
       platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,

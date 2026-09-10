@@ -5,9 +5,9 @@
  * loop, so core carries it through agnostic seams -- `BranchToolLayer`,
  * `InnerOperationReceipts`, `ToolCallRecoveryService` -- and never imports it.
  *
- * The runtime itself names no feature: it takes a `BranchToolFeature` as
- * input. Only composition roots are exempt -- `apps/server` lives outside
- * core, and the test-utils harnesses assemble the same stack for tests.
+ * No site is exempt. Core takes a `BranchToolFeature` as input, and every
+ * composition root that names a concrete one -- `apps/server`, the SDK, the
+ * test harnesses -- lives outside core.
  *
  * @module
  */
@@ -35,15 +35,11 @@ export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
 export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
 
 /**
- * Files allowed to import a feature: composition roots, whose job is naming
- * what the runtime they build ships. Every one is a harness that assembles a
- * whole application; no file in the runtime proper belongs here.
+ * Files allowed to import a feature. Empty, and meant to stay so: a core file
+ * that needs a concrete feature should take it as input. Kept as a seam so
+ * adding an exemption is a deliberate, reviewed edit rather than a silent one.
  */
-export const ASSEMBLY_SITES: ReadonlyArray<string> = [
-  "packages/core/src/test-utils/e2e-layer.ts",
-  "packages/core/src/test-utils/extension-harness.ts",
-  "packages/core/src/test-utils/in-process-layer.ts",
-]
+export const ASSEMBLY_SITES: ReadonlyArray<string> = []
 
 const CORE_SRC_PREFIX = "packages/core/src/"
 
