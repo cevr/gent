@@ -5,9 +5,9 @@
  * loop, so core carries it through agnostic seams -- `BranchToolLayer`,
  * `InnerOperationReceipts`, `ToolCallRecoveryService` -- and never imports it.
  *
- * Two sites are exempt, because naming the features an application ships is
- * exactly their job: the server's dependency graph and the ephemeral child
- * root both assemble a concrete runtime.
+ * The runtime itself names no feature: it takes a `BranchToolFeature` as
+ * input. Only composition roots are exempt -- `apps/server` lives outside
+ * core, and the test-utils harnesses assemble the same stack for tests.
  *
  * @module
  */
@@ -35,12 +35,14 @@ export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["code-cell"]
 export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
 
 /**
- * Files allowed to import a feature. These assemble an application, so they
- * name what it ships. Paths are repository-relative.
+ * Files allowed to import a feature: composition roots, whose job is naming
+ * what the runtime they build ships. Every one is a harness that assembles a
+ * whole application; no file in the runtime proper belongs here.
  */
 export const ASSEMBLY_SITES: ReadonlyArray<string> = [
-  "packages/core/src/server/dependencies.ts",
-  "packages/core/src/runtime/agent/ephemeral-root.ts",
+  "packages/core/src/test-utils/e2e-layer.ts",
+  "packages/core/src/test-utils/extension-harness.ts",
+  "packages/core/src/test-utils/in-process-layer.ts",
 ]
 
 const CORE_SRC_PREFIX = "packages/core/src/"

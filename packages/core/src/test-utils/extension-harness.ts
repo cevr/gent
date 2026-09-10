@@ -34,6 +34,7 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { createDependencies } from "../server/dependencies.js"
+import { CellBranchTools } from "../runtime/code-cell/cell-storage.js"
 
 export interface ToolTestLayerConfig {
   /** Agents to register */
@@ -72,6 +73,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
       }),
       ...(config.extensions ?? []),
     ],
+    branchTools: CellBranchTools,
     overrides: {
       authLayer: Auth.Test(),
       approvalLayer: ApprovalService.Test(),

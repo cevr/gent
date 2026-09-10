@@ -20,12 +20,13 @@ import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { buildCellWorker } from "./cell-worker-fixture.js"
-import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+import { CellBranchTools } from "../../src/runtime/code-cell/cell-storage"
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
-const testLayer = SqliteStorage.MemoryWithSql(cellStorageLayer, cellMigrations).pipe(
-  Layer.provideMerge(platform),
-)
+const testLayer = SqliteStorage.MemoryWithSql(
+  CellBranchTools.storage,
+  CellBranchTools.migrations,
+).pipe(Layer.provideMerge(platform))
 const sessionId = SessionId.make("cell-execution-session")
 const branchId = BranchId.make("cell-execution-branch")
 const now = dateFromMillis(1_767_225_600_000)

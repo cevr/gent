@@ -12,6 +12,7 @@ import { SqlClient } from "effect/unstable/sql"
 import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { CellExecution } from "./cell-execution.js"
 import type { BranchToolLayerFactory } from "../agent/branch-tool-layer.js"
+import type { BranchToolFeature } from "../agent/branch-tool-feature.js"
 import { eraseResourceLayer } from "../extensions/extension-effect-membrane.js"
 import { CellExecutionStorage } from "./cell-execution-storage.js"
 import { CellNamespaceStorage } from "./cell-namespace-storage.js"
@@ -32,7 +33,7 @@ import { cellToolCallRecovery } from "./cell-tool-call-recovery.js"
  * and keeps them for the life of the schema. These three shipped as 012-014
  * and must keep those ids or an existing database re-runs them.
  */
-export const cellMigrations: FeatureMigrations = {
+const cellMigrations: FeatureMigrations = {
   "012_cell_executions": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     yield* sql.unsafe(`
@@ -85,14 +86,17 @@ export const cellMigrations: FeatureMigrations = {
  * and interaction records must share one instance, or a suspended approval
  * would be written to a store nothing reads back.
  */
-export const cellStorageLayer = <E, R>(
+/** What the cell's storage installs. Core merges it without naming it. */
+export type CellStorageTags =
+  | DispatchingToolStorage
+  | InnerOperationReceipts
+  | RetainedBindings
+  | ToolCallRecoveryService
+
+const cellStorageLayer = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
   interactionStorage: Layer.Layer<InteractionStorage, E, R>,
-): Layer.Layer<
-  DispatchingToolStorage | InnerOperationReceipts | RetainedBindings | ToolCallRecoveryService,
-  E,
-  R | GentPlatform
-> => {
+): Layer.Layer<CellStorageTags, E, R | GentPlatform> => {
   const tables = Layer.mergeAll(
     Layer.provide(CellExecutionStorage.Live, base),
     Layer.provide(CellNamespaceStorage.Live, base),
@@ -154,5 +158,18 @@ export const cellRetainedBindings = Layer.effect(
  * The cell kernel lives for the life of a branch: one worker process holding a
  * namespace across turns. It is built with the loop and torn down with it.
  */
-export const cellBranchLayer: BranchToolLayerFactory = (input) =>
+const cellBranchLayer: BranchToolLayerFactory = (input) =>
   eraseResourceLayer(CellExecution.Branch(input))
+
+/**
+ * The cell, as one thing a composition root can install.
+ *
+ * Its tables, the migrations that create them, and its per-branch kernel are
+ * useless apart: the kernel writes rows only the cell's storage reads back.
+ * Bundling them is what lets core take the cell as input instead of naming it.
+ */
+export const CellBranchTools: BranchToolFeature<CellStorageTags> = {
+  migrations: cellMigrations,
+  storage: cellStorageLayer,
+  branchLayer: cellBranchLayer,
+}

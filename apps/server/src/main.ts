@@ -7,6 +7,7 @@ import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions } from "@gent/extensions"
 import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension.js"
+import { CellBranchTools } from "@gent/core-internal/runtime/code-cell/cell-storage.js"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
@@ -124,6 +125,7 @@ const program = Effect.scoped(
         providerMode: config.providerMode,
         scheduledJobCommand: Option.getOrUndefined(config.scheduledJobCommand),
         extensions: [CellExtension, ...BuiltinExtensions],
+        branchTools: CellBranchTools,
       },
       identity: {
         serverId: config.serverId,

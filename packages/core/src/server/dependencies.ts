@@ -34,10 +34,10 @@ import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import {
-  cellBranchLayer,
-  cellMigrations,
-  cellStorageLayer,
-} from "../runtime/code-cell/cell-storage.js"
+  CurrentBranchToolFeature,
+  noBranchTools,
+  type BranchToolFeature,
+} from "../runtime/agent/branch-tool-feature.js"
 import { BranchToolLayer } from "../runtime/agent/branch-tool-layer.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
@@ -120,6 +120,12 @@ export interface DependenciesConfig {
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+  /**
+   * The branch-tool feature this deployment ships — its migrations, storage,
+   * and per-branch factory as one value. Defaults to `noBranchTools`, which
+   * is correct for a deployment whose tools are all stateless.
+   */
+  branchTools?: BranchToolFeature<never>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
@@ -168,11 +174,16 @@ const platformServicesLive = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
+/** The feature the root named, or the stateless-tools default. */
+const branchToolsOf = (config: DependenciesConfig): BranchToolFeature<never> =>
+  Option.getOrElse(Option.fromUndefinedOr(config.branchTools), () => noBranchTools)
+
 const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") => {
+  const branchTools = branchToolsOf(config)
   if (persistenceMode === "memory")
-    return SqliteStorage.MemoryWithSql(cellStorageLayer, cellMigrations)
+    return SqliteStorage.MemoryWithSql(branchTools.storage, branchTools.migrations)
   const dbPath = Option.getOrElse(Option.fromUndefinedOr(config.dbPath), () => ".gent/data.db")
-  return SqliteStorage.LiveWithSql(dbPath, cellStorageLayer, cellMigrations)
+  return SqliteStorage.LiveWithSql(dbPath, branchTools.storage, branchTools.migrations)
 }
 
 const makeClusterRunnerLayer = (persistenceMode: "disk" | "memory") => {
@@ -550,9 +561,10 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(
-      // The app names the branch-scoped tool layer it ships. The loop builds
-      // it without knowing what it is.
-      Layer.succeed(BranchToolLayer, cellBranchLayer),
+      // The app names the branch-tool feature it ships. The loop builds its
+      // layer without knowing what it is.
+      Layer.succeed(BranchToolLayer, branchToolsOf(config).branchLayer),
+      Layer.succeed(CurrentBranchToolFeature, branchToolsOf(config)),
       platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,

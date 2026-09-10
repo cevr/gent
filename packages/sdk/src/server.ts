@@ -13,7 +13,8 @@ import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 
-import { ShippedExtensions } from "./shipped-extensions.js"
+import { ShippedBranchTools, ShippedExtensions } from "./shipped-extensions.js"
+import type { BranchToolFeature } from "@gent/core-internal/runtime/agent/branch-tool-feature.js"
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
@@ -68,6 +69,12 @@ export interface GentServerOptions {
   readonly cwd: string
   /** Extension declarations for this server. Defaults to the builtins. */
   readonly extensions?: ReadonlyArray<GentExtension>
+  /**
+   * The branch-tool feature these extensions run on -- storage plus the
+   * per-branch kernel. A server naming its own `extensions` names this too;
+   * a tool surface whose feature is missing fails on first use.
+   */
+  readonly branchTools?: BranchToolFeature<never>
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly env?: Readonly<Record<string, string>>
@@ -243,6 +250,7 @@ const buildOwnedServer = (
             }),
           ),
           extensions: options.extensions ?? ShippedExtensions,
+          branchTools: options.branchTools ?? ShippedBranchTools,
           languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
         },
         identity: {

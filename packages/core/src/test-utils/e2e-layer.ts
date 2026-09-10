@@ -36,6 +36,7 @@ import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
 import { makeServerRootLayer } from "../server/server-root.js"
+import { CellBranchTools } from "../runtime/code-cell/cell-storage.js"
 
 export interface E2ELayerConfig {
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
@@ -200,6 +201,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       dbPath: config.storagePath,
       languageModelLayerOverride: config.providerLayer,
       extensions: extensionInputsForConfig(config),
+      branchTools: CellBranchTools,
       overrides: {
         eventStoreMode: "storage-backed",
         authLayer: config.authLayer ?? Auth.Test(),

@@ -19,6 +19,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeServerRootLayer } from "../server/server-root.js"
+import { CellBranchTools } from "../runtime/code-cell/cell-storage.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
@@ -48,6 +49,7 @@ const buildLayer = (
       providerMode: "debug-scripted",
       languageModelLayerOverride: languageModelLive,
       extensions: [testAgentsExtension],
+      branchTools: CellBranchTools,
       overrides: {
         eventStoreMode: "storage-backed",
         authLayer: Auth.Test(),

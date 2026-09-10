@@ -1,5 +1,6 @@
 import type { GentExtension } from "@gent/core/extensions/api"
 import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension.js"
+import { CellBranchTools } from "@gent/core-internal/runtime/code-cell/cell-storage.js"
 import { BuiltinExtensions } from "@gent/extensions"
 
 /**
@@ -8,3 +9,13 @@ import { BuiltinExtensions } from "@gent/extensions"
  * surface everywhere.
  */
 export const ShippedExtensions: ReadonlyArray<GentExtension> = [CellExtension, ...BuiltinExtensions]
+
+/**
+ * The branch-tool feature the shipped composition installs.
+ *
+ * `CellExtension` gives the model the `cell` surface; this gives the loop the
+ * storage and per-branch kernel that surface runs on. A root passing one
+ * without the other gets a `cell` tool that fails on first use, so they are
+ * named side by side.
+ */
+export const ShippedBranchTools = CellBranchTools

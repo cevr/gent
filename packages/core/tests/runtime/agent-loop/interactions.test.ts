@@ -82,7 +82,7 @@ import {
   steerAgentLoop,
   waitForPhase,
 } from "./helpers"
-import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 describe("interaction", () => {
@@ -158,7 +158,7 @@ describe("interaction", () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const baseDeps = Layer.mergeAll(
-      SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
+      SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
       resolvedProviderLayer,
       ModelResolver.fromLanguageModel(resolvedProviderLayer),
       makeExtRegistry(tools),
@@ -306,7 +306,7 @@ describe("interaction", () => {
         ),
       )
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
+        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),

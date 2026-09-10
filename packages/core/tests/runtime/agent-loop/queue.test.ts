@@ -41,7 +41,7 @@ import {
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
@@ -108,7 +108,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
+          SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
           gatedProvider,
           ModelResolver.fromLanguageModel(gatedProvider),
           makeExtRegistry(),
@@ -245,7 +245,7 @@ describe("queue drain regression", () => {
         )
         const makeLayer = () => {
           const deps = Layer.mergeAll(
-            SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
+            SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
             queueStorageLayer,
             queuedProvider,
             ModelResolver.fromLanguageModel(queuedProvider),
@@ -334,7 +334,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
+          SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
@@ -416,7 +416,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations),
+          SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
           queueStorageLayer,
           heldProvider,
           ModelResolver.fromLanguageModel(heldProvider),

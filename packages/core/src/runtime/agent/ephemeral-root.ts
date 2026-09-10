@@ -14,7 +14,7 @@ import type { MessageStorage } from "../../storage/message-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { SqliteStorage } from "../../storage/sqlite-storage.js"
-import { cellBranchLayer, cellMigrations, cellStorageLayer } from "../code-cell/cell-storage.js"
+import { CurrentBranchToolFeature } from "./branch-tool-feature.js"
 import { ApprovalService } from "../approval-service.js"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -169,6 +169,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   const gentPlatform = yield* GentPlatform
   const crypto = yield* Crypto.Crypto
   const processRunner = yield* ProcessRunner
+  const branchTools = yield* CurrentBranchToolFeature
 
   const parentRuntimeEnvironmentLayer = Layer.succeed(RuntimeEnvironment, runtimeEnvironment)
   const parentFileSystemLayer = Layer.succeed(FileSystem.FileSystem, fileSystem)
@@ -197,12 +198,14 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   }) => {
     const resolved = params.extensionRegistry.getResolved()
     const extensionLayers = buildExtensionLayers(resolved, { lifecycle: "skip" })
-    const storageLayer = SqliteStorage.MemoryWithSql(cellStorageLayer, cellMigrations).pipe(
-      Layer.provide(parentGentPlatformLayer),
-    )
-    // The cell's storage and its per-branch kernel must arrive together: storage
-    // alone gives a child agent the tables with nothing to run against them.
-    const branchToolLayer = Layer.succeed(BranchToolLayer, cellBranchLayer)
+    const storageLayer = SqliteStorage.MemoryWithSql(
+      branchTools.storage,
+      branchTools.migrations,
+    ).pipe(Layer.provide(parentGentPlatformLayer))
+    // The feature's storage and its per-branch factory arrive together by
+    // construction: storage alone gives a child agent the tables with nothing
+    // to run against them.
+    const branchToolLayer = Layer.succeed(BranchToolLayer, branchTools.branchLayer)
     const clusterRunnerLayer = Layer.provide(
       SingleRunner.layer({ runnerStorage: "memory" }),
       Layer.merge(storageLayer, parentCryptoLayer),

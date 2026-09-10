@@ -30,7 +30,7 @@ import { MessageStorage } from "../../../src/storage/message-storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
-import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage.js"
+import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage.js"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
@@ -54,7 +54,10 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations)
+  const storageLayer = SqliteStorage.TestWithSql(
+    CellBranchTools.storage,
+    CellBranchTools.migrations,
+  )
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),

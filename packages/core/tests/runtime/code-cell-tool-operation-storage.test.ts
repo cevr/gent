@@ -39,7 +39,7 @@ import { InteractionStorage } from "../../src/storage/interaction-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ensureStorageParents } from "../../src/test-utils"
-import { cellMigrations, cellStorageLayer } from "../../src/runtime/code-cell/cell-storage"
+import { CellBranchTools } from "../../src/runtime/code-cell/cell-storage"
 
 const cell = {
   sessionId: SessionId.make("cell-operation-session"),
@@ -152,7 +152,9 @@ it.live("admits an operation once and preserves its original input, binding, and
           .pipe(Effect.flip),
       ),
     ).toBe(true)
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
+  }).pipe(
+    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
+  ),
 )
 
 it.scopedLive(
@@ -257,7 +259,9 @@ it.live("never leaves an approval behind when its operation link fails", () =>
     yield* storage.suspend(key, request)
     expect(yield* interactions.listPending(cell)).toEqual([request])
     expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
+  }).pipe(
+    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
+  ),
 )
 
 it.live(
@@ -313,7 +317,11 @@ it.live(
         "Started",
       ])
       expect((yield* storage.admit(params)).admitted).toBe(false)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
+    }).pipe(
+      Effect.provide(
+        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+      ),
+    ),
 )
 
 it.live("binds a decision to one waiting operation and grants one resume attempt", () =>
@@ -351,7 +359,9 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     )
     expect((yield* storage.admit(params)).admitted).toBe(false)
     expect((yield* storage.get(key)).state._tag).toBe("Resuming")
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
+  }).pipe(
+    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
+  ),
 )
 
 it.live(
@@ -380,7 +390,11 @@ it.live(
         readonly count: number
       }>`SELECT COUNT(*) AS count FROM cell_tool_operations`
       expect(rows[0]?.count).toBe(0)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
+    }).pipe(
+      Effect.provide(
+        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+      ),
+    ),
 )
 
 it.live("does not admit external work inside a caller transaction or after cell completion", () =>
@@ -421,7 +435,9 @@ it.live("does not admit external work inside a caller transaction or after cell 
         yield* storage.admit({ ...params, operationId: "2" }).pipe(Effect.flip),
       ),
     ).toBe(true)
-  }).pipe(Effect.provide(SqliteStorage.TestWithSql(cellStorageLayer, cellMigrations))),
+  }).pipe(
+    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
+  ),
 )
 
 it.scopedLive("retains approval ownership and prevents a second resume after database reopen", () =>
@@ -431,8 +447,8 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
     const directory = yield* fs.makeTempDirectoryScoped()
     const layer = SqliteStorage.LiveWithSql(
       path.join(directory, "gent.db"),
-      cellStorageLayer,
-      cellMigrations,
+      CellBranchTools.storage,
+      CellBranchTools.migrations,
     ).pipe(Layer.provide(GentPlatform.Test()))
     yield* Effect.scoped(
       Effect.gen(function* () {
