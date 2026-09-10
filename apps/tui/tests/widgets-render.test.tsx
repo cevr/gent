@@ -48,7 +48,7 @@ const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnaps
       scope: "builtin",
       sourcePath: "builtin",
       _tag: "degraded",
-      issues: [{ _tag: "scheduled-job-failed", jobId: "reflect", error }],
+      issues: [{ _tag: "activation-failed", phase: "startup", error }],
     },
   ],
 })
@@ -77,16 +77,14 @@ const HealthControlsProbe = (props: {
       client.switchSession(testSession.id, BranchId.make("branch-alt"), testName),
     clearSession: () => client.clearSession(),
   })
-  const failedScheduled = () => {
+  const failedActivation = () => {
     const health = client.extensionHealth()
     if (health._tag !== "degraded") return []
     return health.degradedExtensions
-      .filter((extension) =>
-        extension.issues.some((issue) => issue._tag === "scheduled-job-failed"),
-      )
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
       .map((extension) => extension.manifest.id)
   }
-  return <text>{failedScheduled().join(",")}</text>
+  return <text>{failedActivation().join(",")}</text>
 }
 const createMutableRuntime = (initialState: ConnectionState) => {
   let state = initialState
@@ -237,7 +235,7 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("@gent/memory")
     }),
   )
-  it.live("ConnectionWidget surfaces failed scheduled jobs", () =>
+  it.live("ConnectionWidget surfaces failed extensions for the active session", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <ConnectionWidget />, {
@@ -257,8 +255,8 @@ describe("TUI renderer surfaces", () => {
                       _tag: "degraded",
                       issues: [
                         {
-                          _tag: "scheduled-job-failed",
-                          jobId: "reflect",
+                          _tag: "activation-failed",
+                          phase: "startup",
                           error: "launchd boom",
                         },
                       ],
@@ -272,44 +270,8 @@ describe("TUI renderer surfaces", () => {
       )
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
-      expect(frame).toContain("failed scheduled jobs")
+      expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
-    }),
-  )
-  it.live("ConnectionWidget surfaces failed scheduled jobs", () =>
-    Effect.gen(function* () {
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ConnectionWidget />, {
-          client: createMockClient({
-            extension: {
-              listStatus: () =>
-                Effect.succeed({
-                  _tag: "degraded",
-                  healthyExtensions: [],
-                  degradedExtensions: [
-                    {
-                      manifest: { id: "@gent/memory" },
-                      scope: "builtin",
-                      sourcePath: "builtin",
-                      _tag: "degraded",
-                      issues: [
-                        {
-                          _tag: "scheduled-job-failed",
-                          jobId: "reflect",
-                          error: "launchd registration failed",
-                        },
-                      ],
-                    },
-                  ],
-                }),
-            },
-          }),
-        }),
-      )
-      const frame = renderFrame(setup)
-      expect(frame).toContain("connection")
-      expect(frame).toContain("failed scheduled jobs")
-      expect(frame).toContain("@gent/memory:reflect")
     }),
   )
   it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
@@ -329,8 +291,8 @@ describe("TUI renderer surfaces", () => {
             _tag: "degraded",
             issues: [
               {
-                _tag: "scheduled-job-failed",
-                jobId: "reflect",
+                _tag: "activation-failed",
+                phase: "startup",
                 error: "launchd boom",
               },
             ],
@@ -352,7 +314,7 @@ describe("TUI renderer surfaces", () => {
           }),
         }),
       )
-      expect(renderFrame(setup)).toContain("failed scheduled jobs")
+      expect(renderFrame(setup)).toContain("failed extensions")
       expect(callCount).toBe(1)
       currentHealth = {
         _tag: "healthy",
@@ -368,7 +330,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(callCount).toBe(2)
-      expect(frame).not.toContain("failed scheduled jobs")
+      expect(frame).not.toContain("failed extensions")
       expect(frame).not.toContain("@gent/plan")
     }),
   )
@@ -409,7 +371,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).not.toContain("failed scheduled jobs")
+      expect(frame).not.toContain("failed extensions")
       expect(frame).not.toContain("@gent/plan")
     }),
   )
@@ -451,7 +413,7 @@ describe("TUI renderer surfaces", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).toContain("failed scheduled jobs")
+      expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
     }),
   )

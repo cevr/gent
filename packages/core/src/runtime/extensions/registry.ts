@@ -25,7 +25,6 @@ import {
   type TurnProjection,
   type LoadedExtension,
   type RunContext,
-  type ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
@@ -99,8 +98,6 @@ interface CompiledRpcRegistry {
     CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
   >
 }
-
-type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<ScheduledJobFailureInfo>>
 
 /** Compile a keyed bucket from sorted extensions. Later scope wins. */
 const compileBucket = <T>(
@@ -277,46 +274,17 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const scheduledFailuresFor = (
-  id: ExtensionId,
-  failures: ScheduledJobFailureByExtension,
-): Option.Option<ReadonlyArray<ScheduledJobFailureInfo>> => Option.fromUndefinedOr(failures.get(id))
+const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatusInfo => ({
+  manifest: extension.manifest,
+  scope: extension.scope,
+  sourcePath: extension.sourcePath,
+  status: "active",
+})
 
-const activeExtensionStatus = (
-  extension: LoadedExtension,
-  scheduledJobFailures: ScheduledJobFailureByExtension,
-): ExtensionStatusInfo => {
-  const base = {
-    manifest: extension.manifest,
-    scope: extension.scope,
-    sourcePath: extension.sourcePath,
-    status: "active",
-  } satisfies ExtensionStatusInfo
-  return Object.assign(
-    base,
-    Option.match(scheduledFailuresFor(extension.manifest.id, scheduledJobFailures), {
-      onNone: () => ({}),
-      onSome: (value) => ({ scheduledJobFailures: value }),
-    }),
-  )
-}
-
-const failedExtensionStatus = (
-  failure: FailedExtension,
-  scheduledJobFailures: ScheduledJobFailureByExtension,
-): ExtensionStatusInfo => {
-  const base = {
-    ...failure,
-    status: "failed",
-  } satisfies ExtensionStatusInfo
-  return Object.assign(
-    base,
-    Option.match(scheduledFailuresFor(failure.manifest.id, scheduledJobFailures), {
-      onNone: () => ({}),
-      onSome: (value) => ({ scheduledJobFailures: value }),
-    }),
-  )
-}
+const failedExtensionStatus = (failure: FailedExtension): ExtensionStatusInfo => ({
+  ...failure,
+  status: "failed",
+})
 
 export const capabilityToCommand = (
   extensionId: ExtensionId,
@@ -368,7 +336,6 @@ export const capabilityToCommand = (
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
   failedExtensions: ReadonlyArray<FailedExtension> = [],
-  scheduledJobFailures: ScheduledJobFailureByExtension = new Map(),
 ): ResolvedExtensions => {
   const mergedFailures = [...failedExtensions]
   const sorted = sortExtensionsByScope(extensions)
@@ -428,8 +395,8 @@ export const resolveExtensions = (
 
   const extensionHooks = compileExtensionHooks(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
-    ...sorted.map((ext) => activeExtensionStatus(ext, scheduledJobFailures)),
-    ...mergedFailures.map((failure) => failedExtensionStatus(failure, scheduledJobFailures)),
+    ...sorted.map(activeExtensionStatus),
+    ...mergedFailures.map(failedExtensionStatus),
   ]
 
   return {

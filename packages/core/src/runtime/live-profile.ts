@@ -54,11 +54,6 @@ import {
   type ConfigServiceService,
   UserConfig,
 } from "./config-service.js"
-import {
-  reconcileScheduledJobs,
-  type CronRuntimeApi,
-  type SchedulerFailure,
-} from "./extensions/resource-host/schedule-engine.js"
 import { resolveExtensions } from "./extensions/registry.js"
 import {
   ResourceGraphApplyError,
@@ -181,15 +176,6 @@ const driverOverridesDescriptor = (
   return result
 }
 
-const stringRecordDescriptor = (
-  values: Option.Option<Readonly<Record<string, string>>>,
-): Schema.Json => {
-  const result: Record<string, Schema.Json> = {}
-  const entries = Option.getOrElse(values, () => ({}))
-  for (const [key, value] of Object.entries(entries)) result[key] = value
-  return result
-}
-
 const schemaDescriptor = (schema: Schema.Top): Schema.Json =>
   Schema.decodeUnknownSync(Schema.Json)(Schema.toJsonSchemaDocument(schema))
 
@@ -204,15 +190,6 @@ const extensionDescriptor = (extension: RuntimeProfile["resolved"]["extensions"]
     revision: resource.revision,
     requires: [...resource.requires].sort(),
     required: resource.required,
-  })),
-  scheduledJobs: (extension.contributions.scheduledJobs ?? []).map((job) => ({
-    id: job.id,
-    cron: job.cron,
-    target: {
-      agent: job.target.agent,
-      prompt: job.target.prompt,
-      cwd: optionalString(Option.fromUndefinedOr(job.target.cwd)),
-    },
   })),
   tools: (extension.contributions.tools ?? []).map((tool) => {
     const metadata = getToolMetadata(tool)
@@ -290,10 +267,6 @@ const profileRevision = (
           disabledExtensions: optionalStringArray(
             Option.fromUndefinedOr(inputs.disabledExtensions),
           ),
-          scheduledJobCommand: optionalStringArray(
-            Option.fromUndefinedOr(inputs.scheduledJobCommand),
-          ),
-          scheduledJobEnv: stringRecordDescriptor(Option.fromUndefinedOr(inputs.scheduledJobEnv)),
         },
         config: {
           permissions: permissionRulesDescriptor(Option.fromUndefinedOr(config.permissions)),
@@ -330,37 +303,19 @@ const profileRevision = (
     )}`,
   )
 
-const scheduledFailuresByExtension = (failures: ReadonlyArray<SchedulerFailure>) => {
-  const grouped = new Map<string, Array<{ readonly jobId: string; readonly error: string }>>()
-  for (const failure of failures) {
-    const current = grouped.get(failure.extensionId) ?? []
-    current.push({ jobId: failure.jobId, error: failure.error })
-    grouped.set(failure.extensionId, current)
-  }
-  return grouped
-}
-
-const runtimeProfileFromDeclarations = (params: {
-  readonly declarations: RuntimeProfileDeclarations
-  readonly scheduledJobFailures: ReadonlyArray<{
-    readonly extensionId: SchedulerFailure["extensionId"]
-    readonly jobId: SchedulerFailure["jobId"]
-    readonly error: SchedulerFailure["error"]
-  }>
-}): RuntimeProfile => {
-  const scheduledJobFailures = params.scheduledJobFailures
+const runtimeProfileFromDeclarations = (
+  declarations: RuntimeProfileDeclarations,
+): RuntimeProfile => {
   const resolved = resolveExtensions(
-    params.declarations.extensionDeclarations.active,
-    params.declarations.extensionDeclarations.failed,
-    scheduledFailuresByExtension(scheduledJobFailures),
+    declarations.extensionDeclarations.active,
+    declarations.extensionDeclarations.failed,
   )
   return {
-    cwd: params.declarations.cwd,
+    cwd: declarations.cwd,
     resolved,
-    coreSections: params.declarations.coreSections,
+    coreSections: declarations.coreSections,
     extensionSectionInputs: [...resolved.promptSections.values()],
-    instructions: params.declarations.instructions,
-    scheduledJobFailures,
+    instructions: declarations.instructions,
   }
 }
 
@@ -534,7 +489,6 @@ export const makeRuntimeProfileOwner = (params: {
   readonly platform: GentPlatformApi
   readonly childProcessSpawner: ChildProcessSpawner["Service"]
   readonly processRunner: ProcessRunner["Service"]
-  readonly schedulerRuntime?: CronRuntimeApi
 }) => {
   let latestDesired = Option.none<RuntimeProfileDesiredState>()
 
@@ -553,7 +507,7 @@ export const makeRuntimeProfileOwner = (params: {
       const resources = collectResourceEntries(declarations.resolved.extensions, "process").map(
         ({ resource }) => resource,
       )
-      const profile = runtimeProfileFromDeclarations({ declarations, scheduledJobFailures: [] })
+      const profile = runtimeProfileFromDeclarations(declarations)
       const revision = profileRevision(
         params.platform,
         effectiveInputs(inputs, config),
@@ -576,7 +530,7 @@ export const makeRuntimeProfileOwner = (params: {
     })
 
   const stageCatalog =
-    (config: UserConfig, inputs: RuntimeProfileInputs) =>
+    (config: UserConfig) =>
     (stageInput: {
       readonly payload: RuntimeProfileDeclarations
       readonly plan: ResourcePlan
@@ -584,20 +538,7 @@ export const makeRuntimeProfileOwner = (params: {
     }) =>
       Effect.gen(function* () {
         const declarations = stageableDeclarations(stageInput.payload, stageInput.plan)
-        const scheduledJobFailures = yield* reconcileScheduledJobs({
-          extensions: declarations.extensionDeclarations.active,
-          home: inputs.home,
-          command: inputs.scheduledJobCommand,
-          env: inputs.scheduledJobEnv,
-          runtime: params.schedulerRuntime,
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, params.fileSystem),
-          Effect.provideService(Path.Path, params.path),
-        )
-        const profile = runtimeProfileFromDeclarations({
-          declarations,
-          scheduledJobFailures,
-        })
+        const profile = runtimeProfileFromDeclarations(declarations)
         return yield* buildProfileCatalog({
           profile,
           configService: params.configService,
@@ -615,7 +556,7 @@ export const makeRuntimeProfileOwner = (params: {
         payload: desired.declarations,
         retireMode,
         resources: desired.resources,
-        stage: stageCatalog(desired.config, desired.inputs),
+        stage: stageCatalog(desired.config),
       })
       latestDesired = Option.some(desired)
       return {
@@ -766,7 +707,7 @@ export const makeRuntimeProfileOwner = (params: {
         retireMode: "drain",
         resources: prepared.desired.resources,
         admit: toHostAdmission(admit),
-        stage: stageCatalog(prepared.config, prepared.desired.inputs),
+        stage: stageCatalog(prepared.config),
       })
       .pipe(
         Effect.tap((publication) =>

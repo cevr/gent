@@ -152,7 +152,6 @@ export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export { ToolResultFailure } from "../domain/tool-output.js"
 export type { AnyResourceContribution } from "../domain/resource.js"
-export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 export { ProjectionError } from "../domain/extension.js"
 export {
   ExtensionContext,

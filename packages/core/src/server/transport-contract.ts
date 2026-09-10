@@ -276,19 +276,9 @@ export const ExtensionManifestInfo = Schema.Struct({
 })
 export type ExtensionManifestInfo = typeof ExtensionManifestInfo.Type
 
-export const ScheduledJobFailureInfo = Schema.Struct({
-  jobId: Schema.String,
-  error: Schema.String,
-})
-export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
-
 export const ExtensionHealthIssue = Schema.Union([
   Schema.TaggedStruct("activation-failed", {
     phase: ExtensionActivationPhase,
-    error: Schema.String,
-  }),
-  Schema.TaggedStruct("scheduled-job-failed", {
-    jobId: Schema.String,
     error: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))

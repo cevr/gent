@@ -24,33 +24,20 @@ export function ConnectionWidget() {
     degradedExtensions()
       .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
       .map((extension) => extension.manifest.id)
-  const failedScheduledJobs = () =>
-    degradedExtensions().flatMap((extension) => {
-      const jobs: string[] = []
-      for (const issue of extension.issues) {
-        if (issue._tag === "scheduled-job-failed") {
-          jobs.push(`${extension.manifest.id}:${issue.jobId}`)
-        }
-      }
-      return jobs
-    })
   const hasFailedExtensions = () => failedExtensions().length > 0
-  const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
   const visible = () =>
     client.isReconnecting() ||
     Option.isSome(connectionIssue()) ||
     Option.isSome(disconnectedReason()) ||
-    hasFailedExtensions() ||
-    hasFailedScheduledJobs()
+    hasFailedExtensions()
   const accent = () => {
     if (client.isReconnecting()) return theme.warning
-    if (hasFailedExtensions() || hasFailedScheduledJobs()) return theme.warning
+    if (hasFailedExtensions()) return theme.warning
     return theme.error
   }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
     if (hasFailedExtensions()) return "extension activation degraded"
-    if (hasFailedScheduledJobs()) return "scheduled jobs degraded"
     if (Option.isSome(disconnectedReason())) return "runtime unavailable"
     return Option.getOrElse(connectionIssue(), () => "")
   }
@@ -88,13 +75,6 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: theme.text }}>
                 failed extensions: {failedExtensions().join(", ")}
-              </span>
-            </text>
-          </Show>
-          <Show when={hasFailedScheduledJobs()}>
-            <text>
-              <span style={{ fg: theme.text }}>
-                failed scheduled jobs: {failedScheduledJobs().join(", ")}
               </span>
             </text>
           </Show>

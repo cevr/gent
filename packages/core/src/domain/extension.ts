@@ -55,25 +55,18 @@ export interface FailedExtension {
   readonly error: string
 }
 
-export interface ScheduledJobFailureInfo {
-  readonly jobId: string
-  readonly error: string
-}
-
 export type ExtensionStatusInfo =
   | {
       readonly manifest: ExtensionManifest
       readonly scope: ExtensionScope
       readonly sourcePath: string
       readonly status: "active"
-      readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     }
   | ({
       readonly manifest: ExtensionManifest
       readonly scope: ExtensionScope
       readonly sourcePath: string
       readonly status: "failed"
-      readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
 
 /** Scope precedence for extension resolution. Higher value = higher priority. */

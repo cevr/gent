@@ -97,11 +97,6 @@ describe("defineExtension", () => {
               layer: myLayer,
             }) as never,
           )
-          yield* host.register("job", {
-            id: "test-job",
-            cron: "0 0 * * *",
-            target: { agent: DEFAULT_AGENT_NAME, prompt: "hi" },
-          })
         }),
       })
       const contributions = yield* setupOf(ext)
@@ -117,7 +112,6 @@ describe("defineExtension", () => {
       expect(contributions.hooks?.[0]?.kind).toBe("systemPrompt")
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
-      expect(contributions.scheduledJobs?.[0]?.id).toBe("test-job")
     }))
 
   test("Resource.start and Resource.stop run at scope build/teardown via buildResourceLayer in declaration / reverse order", () =>

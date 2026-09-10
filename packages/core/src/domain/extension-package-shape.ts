@@ -111,7 +111,6 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
 
 const allowedContributionBuckets = new Set([
   "resources",
-  "scheduledJobs",
   "tools",
   "requests",
   "agents",

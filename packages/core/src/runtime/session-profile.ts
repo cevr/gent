@@ -33,8 +33,6 @@ import {
 } from "./extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
 import { ConfigService, type ConfigLoadError } from "./config-service.js"
-import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
-import { CronRuntime } from "./extensions/resource-host/schedule-engine.js"
 import { ProcessRunner } from "../utils/run-process.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
@@ -100,8 +98,6 @@ interface SessionProfileCacheConfig {
   readonly shell?: string
   readonly osVersion?: string
   readonly disabledExtensions?: ReadonlyArray<string>
-  readonly scheduledJobCommand?: ScheduledJobCommand
-  readonly scheduledJobEnv?: Readonly<Record<string, string>>
   readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
 }
 
@@ -167,7 +163,6 @@ export class SessionProfileCache extends Context.Service<
         const spawner = yield* ChildProcessSpawner
         const platform = yield* GentPlatform
         const processRunner = yield* ProcessRunner
-        const schedulerRuntime = yield* Effect.serviceOption(CronRuntime)
         const cacheRef = yield* TxRef.make(HashMap.empty<string, ProfileCacheEntry>())
         // The global lock only protects creation of per-key locks. Profile
         // discovery and graph reconciliation must not block unrelated cwd or
@@ -195,8 +190,6 @@ export class SessionProfileCache extends Context.Service<
           osVersion: config.osVersion,
           extensions: config.extensions,
           disabledExtensions: config.disabledExtensions,
-          scheduledJobCommand: config.scheduledJobCommand,
-          scheduledJobEnv: config.scheduledJobEnv,
         })
 
         const rememberEntry = (
@@ -232,7 +225,6 @@ export class SessionProfileCache extends Context.Service<
                 platform,
                 childProcessSpawner: spawner,
                 processRunner,
-                schedulerRuntime: Option.getOrUndefined(schedulerRuntime),
               }),
             })),
           )

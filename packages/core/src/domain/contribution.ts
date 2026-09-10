@@ -24,7 +24,6 @@ import type { RequestCapability } from "./capability/request.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyResourceContribution } from "./resource.js"
-import type { ScheduledJobContribution } from "./scheduled-job.js"
 import type { AnyExtensionHook } from "./extension.js"
 
 // ── Typed buckets ──
@@ -42,7 +41,6 @@ import type { AnyExtensionHook } from "./extension.js"
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
-  readonly scheduledJobs?: ReadonlyArray<ScheduledJobContribution>
   /**
    * LLM-callable tools authored via `tool({...})`. Bucket name IS the
    * dispatch surface: every entry is a `ToolCapability` — no runtime tag check

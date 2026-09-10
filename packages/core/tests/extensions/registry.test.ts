@@ -208,27 +208,6 @@ describe("resolveExtensions", () => {
     ])
     expect(resolved.modelDrivers.get("anthropic")?.name).toBe("Custom Anthropic")
   })
-  test("merges scheduled job failures into extension statuses", () => {
-    const resolved = resolveExtensions(
-      [makeExt("@gent/memory", "builtin")],
-      [],
-      new Map([
-        [
-          ExtensionId.make("@gent/memory"),
-          [{ jobId: "reflect", error: "launchd registration failed" }],
-        ],
-      ]),
-    )
-    expect(resolved.extensionStatuses).toEqual([
-      {
-        manifest: { id: ExtensionId.make("@gent/memory") },
-        scope: "builtin",
-        sourcePath: "/test/@gent/memory",
-        status: "active",
-        scheduledJobFailures: [{ jobId: "reflect", error: "launchd registration failed" }],
-      },
-    ])
-  })
   test("surfaces provided failed extensions without recomputing validation", () => {
     const resolved = resolveExtensions(
       [makeExt("healthy", "builtin", { tools: [makeTool("read")] })],

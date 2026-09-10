@@ -1,4 +1,3 @@
-import { AgentName } from "../../src/domain/agent"
 /**
  * Extension surface regression locks (compile-time).
  *
@@ -734,11 +733,6 @@ describe("Effect-purity locks (compile-time)", () => {
             stop: Effect.void,
           }),
         )
-        yield* host.register("job", {
-          id: "j",
-          cron: "0 0 * * *",
-          target: { agent: AgentName.make("cowork"), prompt: "hi" },
-        })
       }),
     })
 

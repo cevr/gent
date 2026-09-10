@@ -1,4 +1,3 @@
-import { AgentName } from "../../src/domain/agent"
 /**
  * ResourceHost — service/lifecycle Resource tests.
  *
@@ -16,7 +15,6 @@ import { Context, Effect, Layer, Option } from "effect"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import type { AnyResourceContribution, ExtensionState } from "../../src/domain/resource"
 import { defineResource, defineStateResource } from "../../src/domain/contribution"
-import type { ScheduledJobContribution } from "../../src/domain/scheduled-job"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "../../src/domain/ids"
 
@@ -65,16 +63,6 @@ describe("defineResource", () => {
     expect(r.required).toBe(false)
     expect(r.scope).toBe("process")
     expect(r.tag).toBe(TestServiceA)
-  })
-
-  test("scheduled job contribution shape", () => {
-    const job: ScheduledJobContribution = {
-      id: "tick",
-      cron: "0 * * * *",
-      target: { agent: AgentName.make("memory:dream"), prompt: "reflect" },
-    }
-    expect(job.id).toBe("tick")
-    expect(job.cron).toBe("0 * * * *")
   })
 
   test("normalizes and snapshots resource metadata", () => {

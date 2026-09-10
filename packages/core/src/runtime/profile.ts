@@ -31,10 +31,6 @@ import {
 } from "./extensions/activation.js"
 import { discoverExtensions } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
-import type {
-  ScheduledJobCommand,
-  SchedulerFailure,
-} from "./extensions/resource-host/schedule-engine.js"
 import { buildBasePromptSections } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 import type { ProcessRunner } from "../utils/run-process.js"
@@ -43,7 +39,7 @@ import type { ProcessRunner } from "../utils/run-process.js"
  * Inputs that fully describe a runtime profile.
  *
  * `cwd` is the only per-call axis; everything else is composition-root configuration
- * (home dir, platform metadata, builtin extensions, scheduler).
+ * (home dir, platform metadata, builtin extensions).
  */
 export interface RuntimeProfileInputs {
   readonly cwd: string
@@ -55,8 +51,6 @@ export interface RuntimeProfileInputs {
   /** Fresh config supplied by an explicit refresh. */
   readonly config?: UserConfig
   readonly disabledExtensions?: ReadonlyArray<string>
-  readonly scheduledJobCommand?: ScheduledJobCommand
-  readonly scheduledJobEnv?: Readonly<Record<string, string>>
 }
 
 /**
@@ -76,7 +70,6 @@ export interface RuntimeProfile {
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly extensionSectionInputs: ReadonlyArray<PromptSection>
   readonly instructions: string
-  readonly scheduledJobFailures: ReadonlyArray<SchedulerFailure>
 }
 
 /**
@@ -105,7 +98,7 @@ export type RuntimeProfilePublication = ResourceGraphPublication<RuntimeProfileC
  *
  * Extension setup is trusted code and can perform its own ordinary effects.
  * This boundary only guarantees that it does not build Resource layers,
- * invoke Resource start/stop hooks, or reconcile scheduled jobs.
+ * invoke Resource start/stop hooks.
  */
 export interface RuntimeProfileDeclarations {
   readonly cwd: string
@@ -151,7 +144,7 @@ const makeProfilePermissionService = (params: {
  *
  * This function performs discovery, trusted extension setup, validation, and
  * prompt input loading. It does not build Resource layers, invoke Resource
- * lifecycle hooks, or reconcile scheduled jobs. The returned declarations are
+ * lifecycle hooks. The returned declarations are
  * consumed by the live Profile owner before resource acquisition.
  */
 export const loadRuntimeProfileDeclarations = (

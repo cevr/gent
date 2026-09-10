@@ -20,19 +20,10 @@ const resolveProviderMode = (value: Option.Option<string>): ProviderMode => {
   return "live"
 }
 
-type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
-
-const resolveScheduledJobCommand = (runtimePath: string): Option.Option<ScheduledJobCommand> => {
-  if (!runtimePath.includes("bun")) return Option.none()
-  const cliEntryUrl = new URL("../../tui/src/main.tsx", import.meta.url)
-  return Option.some([runtimePath, cliEntryUrl.pathname])
-}
-
 const resolveRuntimeConfig = Effect.gen(function* () {
   const platform = yield* GentPlatform
   const osInfo = yield* platform.osInfo
   const pid = yield* platform.pid
-  const execPath = yield* platform.execPath
   const homeDefault = yield* platform.homeDirectory
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
   const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
@@ -72,7 +63,6 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     osVersion: osInfo.release,
     hostname: osInfo.hostname,
     pid,
-    scheduledJobCommand: resolveScheduledJobCommand(execPath),
     persistenceMode,
     providerMode: resolveProviderMode(providerOpt),
     isManaged: Option.getOrUndefined(serverModeOpt) === "shared",
@@ -121,7 +111,6 @@ const program = Effect.scoped(
         authDirectory: Option.getOrUndefined(config.authDirectory),
         persistenceMode: config.persistenceMode,
         providerMode: config.providerMode,
-        scheduledJobCommand: Option.getOrUndefined(config.scheduledJobCommand),
         extensions: BuiltinExtensions,
         branchTools: CellBranchTools,
       },

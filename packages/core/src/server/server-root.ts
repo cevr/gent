@@ -12,7 +12,7 @@ import { buildServerRoutes } from "./server-routes.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
 import { GentLogger, GentLogLevel } from "../runtime/logger.js"
 import { GentTracerLive } from "../runtime/tracer.js"
-import { BunCronRuntimeLive, BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // `SessionCommands.Live` depends on `SessionMutations` and `SessionRuntime`.
 // Neither is provided here: production wiring builds them once in
@@ -55,7 +55,6 @@ interface BuiltServerRoot {
 const ServerRootPlatformLayer = Layer.mergeAll(
   BunFileSystem.layer,
   BunServices.layer,
-  BunCronRuntimeLive,
   BunGentPlatformLive,
 )
 

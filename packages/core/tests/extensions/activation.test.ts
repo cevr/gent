@@ -1,4 +1,3 @@
-import { AgentName } from "../../src/domain/agent"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Exit, FileSystem, Layer, Option, Path, Predicate, Schema } from "effect"
@@ -25,7 +24,6 @@ import {
 import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
-import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
 import { ExtensionId } from "../../src/domain/ids"
 import type { PromptSection } from "../../src/domain/prompt"
@@ -480,30 +478,11 @@ describe("extension activation isolation", () => {
                     execute: () => Effect.void,
                   }),
                 ],
-                scheduledJobs: [
-                  {
-                    id: "reflect",
-                    cron: "0 21 * * 1-5",
-                    target: { agent: AgentName.make("memory:reflect"), prompt: "Reflect." },
-                  },
-                ],
               }),
             ),
             makeBuiltin("broken-setup", Effect.die(new Error("setup boom"))),
           ],
-          scheduledJobCommand: ["/usr/local/bin/gent"],
-          scheduledJobEnv: { HOME: home },
-        }).pipe(
-          Layer.provide(
-            Layer.succeed(
-              CronRuntime,
-              CronRuntime.of({
-                install: () => Effect.die(new Error("cron install boom")),
-                remove: () => Effect.void,
-              }),
-            ),
-          ),
-        ),
+        }),
       )
       const cache = Context.get(context, SessionProfileCache)
       const profile = yield* cache.resolve(home)
@@ -517,10 +496,7 @@ describe("extension activation isolation", () => {
         phase: "setup",
       })
       expect(profile.resolved.failedExtensions[0]?.error).toContain("setup boom")
-      expect(profile.resolved.extensionStatuses[0]).toMatchObject({
-        status: "active",
-        scheduledJobFailures: [{ jobId: "reflect", error: "Error: cron install boom" }],
-      })
+      expect(profile.resolved.extensionStatuses[0]).toMatchObject({ status: "active" })
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 

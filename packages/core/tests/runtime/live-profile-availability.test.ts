@@ -31,11 +31,9 @@ import { ProcessRunnerLive } from "../../src/utils/run-process"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { ExtensionId } from "../../src/domain/ids"
-import { AgentName } from "../../src/domain/agent"
 import { ResourceId } from "../../src/domain/resource-graph"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ExtensionProtocolError } from "../../src/server/errors"
-import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
 
 class ProviderToken extends Context.Service<ProviderToken, { readonly value: string }>()(
   "@gent/core/tests/runtime/live-profile-availability.test/ProviderToken",
@@ -66,8 +64,6 @@ describe("live profile resource availability", () => {
       let providerStops = 0
       let consumerStarts = 0
       let consumerStops = 0
-      let schedulerInstalls = 0
-      let schedulerRemoves = 0
 
       yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
       yield* fs.writeFileString(configPath, encodeJson({ disabledExtensions: [providerId] }))
@@ -121,11 +117,6 @@ describe("live profile resource availability", () => {
               }),
             }),
           )
-          yield* host.register("job", {
-            id: "availability-job",
-            cron: "0 * * * *",
-            target: { agent: AgentName.make("cowork"), prompt: "availability" },
-          })
           yield* host.register(
             "request",
             request({
@@ -155,7 +146,6 @@ describe("live profile resource availability", () => {
           SessionProfileCache.Live({
             home,
             platform: "test",
-            scheduledJobCommand: ["gent"],
             extensions: [providerExtension, consumerExtension],
           }).pipe(
             Layer.provide(
@@ -165,19 +155,6 @@ describe("live profile resource availability", () => {
                 configServiceLive,
                 SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
                   Layer.provide(BunPlatformLive),
-                ),
-                Layer.succeed(
-                  CronRuntime,
-                  CronRuntime.of({
-                    install: () =>
-                      Effect.sync(() => {
-                        schedulerInstalls += 1
-                      }),
-                    remove: () =>
-                      Effect.sync(() => {
-                        schedulerRemoves += 1
-                      }),
-                  }),
                 ),
               ),
             ),
@@ -199,7 +176,6 @@ describe("live profile resource availability", () => {
           expect(providerStops).toBe(0)
           expect(consumerStarts).toBe(0)
           expect(consumerStops).toBe(0)
-          expect(schedulerInstalls).toBe(0)
 
           const unavailableProfile = yield* cache
             .current(profileCwd)
@@ -253,7 +229,6 @@ describe("live profile resource availability", () => {
           expect(providerStops).toBe(0)
           expect(consumerStarts).toBe(1)
           expect(consumerStops).toBe(0)
-          expect(schedulerInstalls).toBe(1)
           const available = yield* client.extension.request({
             sessionId,
             branchId,
@@ -271,8 +246,6 @@ describe("live profile resource availability", () => {
           expect(providerStops).toBe(1)
           expect(consumerStarts).toBe(1)
           expect(consumerStops).toBe(1)
-          expect(schedulerInstalls).toBe(1)
-          expect(schedulerRemoves).toBe(1)
           const revoked = yield* client.extension
             .request({
               sessionId,

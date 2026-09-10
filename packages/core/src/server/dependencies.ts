@@ -28,7 +28,6 @@ import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
-import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
@@ -113,7 +112,6 @@ export interface DependenciesConfig {
   persistenceMode?: "disk" | "memory"
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
-  scheduledJobCommand?: ScheduledJobCommand
   /** Language model layer override. When set, bypasses providerMode string and uses this layer directly.
    *  Must be a fully-provided layer (no requirements, no errors). */
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
@@ -129,27 +127,6 @@ export interface DependenciesConfig {
   branchTools: BranchToolFeature<never>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
-}
-
-interface ScheduledJobEnvironment {
-  [key: string]: string
-}
-
-type ScheduledJobEnvironmentEntry = readonly [string, Option.Option<string>]
-
-const scheduledJobEnv = (config: DependenciesConfig): ScheduledJobEnvironment => {
-  const env: ScheduledJobEnvironment = { HOME: config.home }
-  const entries: ReadonlyArray<ScheduledJobEnvironmentEntry> = [
-    ["SHELL", Option.fromNullishOr(config.shell)],
-    ["GENT_DB_PATH", Option.fromNullishOr(config.dbPath)],
-    ["GENT_AUTH_DIRECTORY", Option.fromNullishOr(config.authDirectory)],
-    ["GENT_PERSISTENCE_MODE", Option.fromNullishOr(config.persistenceMode)],
-    ["GENT_PROVIDER_MODE", Option.fromNullishOr(config.providerMode)],
-  ]
-  for (const [key, value] of entries) {
-    if (Option.isSome(value)) env[key] = value.value
-  }
-  return env
 }
 
 const makeBaseEventStoreLayer = (
@@ -348,8 +325,6 @@ const makeSessionProfileCacheLayer = <A, E, R>(
       shell: config.shell,
       osVersion: config.osVersion,
       disabledExtensions: config.disabledExtensions,
-      scheduledJobCommand: config.scheduledJobCommand,
-      scheduledJobEnv: scheduledJobEnv(config),
       extensions: config.extensions,
     }),
     resolverDeps,

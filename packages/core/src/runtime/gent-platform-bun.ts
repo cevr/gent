@@ -17,73 +17,12 @@ import * as os from "node:os"
 import { createServer } from "node:net"
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
 import { fileURLToPath as nodeFileURLToPath, pathToFileURL } from "node:url"
-import { Predicate, Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
-import { CronRuntime, SchedulerRuntimeError } from "./extensions/resource-host/schedule-engine.js"
 import { ProcessRunnerLive } from "../utils/run-process.js"
 
 declare const __GENT_COMPILED__: boolean
-
-const bunCronFunction = (): Option.Option<Function> => {
-  const bun = Reflect.get(globalThis, "Bun")
-  if (!Predicate.isObjectOrArray(bun)) return Option.none()
-  const cron = Reflect.get(bun, "cron")
-  if (Predicate.isFunction(cron)) return Option.some(cron)
-  return Option.none()
-}
-
-const bunCronRemoveFunction = (cron: Function): Option.Option<Function> => {
-  const remove = Reflect.get(cron, "remove")
-  if (Predicate.isFunction(remove)) return Option.some(remove)
-  return Option.none()
-}
-
-const missingCronRuntime = (operation: "install" | "remove", jobName: string) =>
-  new SchedulerRuntimeError({
-    operation,
-    jobName,
-    cause: "Bun.cron is unavailable",
-  })
-
-export const BunCronRuntimeLive: Layer.Layer<CronRuntime> = Layer.succeed(
-  CronRuntime,
-  CronRuntime.of({
-    install: Effect.fn("CronRuntime.install")(function* (entryPath, schedule, name) {
-      const cron = bunCronFunction()
-      if (Option.isNone(cron)) return yield* missingCronRuntime("install", name)
-      return yield* Effect.try({
-        try: () => {
-          const install = cron.value
-          install(entryPath, schedule, name)
-        },
-        catch: (cause) => {
-          if (Schema.is(SchedulerRuntimeError)(cause)) {
-            return cause
-          }
-          return new SchedulerRuntimeError({ operation: "install", jobName: name, cause })
-        },
-      })
-    }),
-    remove: Effect.fn("CronRuntime.remove")(function* (name) {
-      const cron = bunCronFunction()
-      if (Option.isNone(cron)) return yield* missingCronRuntime("remove", name)
-      const remove = bunCronRemoveFunction(cron.value)
-      if (Option.isNone(remove)) return yield* missingCronRuntime("remove", name)
-      return yield* Effect.try({
-        try: () => {
-          Reflect.apply(remove.value, cron.value, [name])
-        },
-        catch: (cause) => {
-          if (Schema.is(SchedulerRuntimeError)(cause)) {
-            return cause
-          }
-          return new SchedulerRuntimeError({ operation: "remove", jobName: name, cause })
-        },
-      })
-    }),
-  }),
-)
 
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
@@ -203,6 +142,5 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 export const BunPlatformLive = Layer.mergeAll(
   BunServices.layer,
   BunGentPlatformLive,
-  BunCronRuntimeLive,
   ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
 )

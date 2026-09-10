@@ -371,7 +371,6 @@ const formatIssue = (issue: ExtensionHealthIssue): string =>
   Match.value(issue).pipe(
     Match.tagsExhaustive({
       "activation-failed": (issue) => `activation failed during ${issue.phase}: ${issue.error}`,
-      "scheduled-job-failed": (issue) => `scheduled job ${issue.jobId} failed: ${issue.error}`,
     }),
   )
 

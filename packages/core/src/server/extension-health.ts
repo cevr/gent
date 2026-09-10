@@ -10,10 +10,6 @@ export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
 ): ExtensionHealthSnapshot => {
   const extensions = activationStatuses.map((status) => {
-    const schedulerFailures = Option.getOrElse(
-      Option.fromUndefinedOr(status.scheduledJobFailures),
-      () => [],
-    )
     let activationFailure = Option.none<ExtensionHealthIssue>()
     if (status.status === "failed") {
       activationFailure = Option.some(
@@ -23,18 +19,10 @@ export const buildExtensionHealthSnapshot = (
         }),
       )
     }
-    const issues = [
-      ...Option.match(activationFailure, {
-        onNone: () => [],
-        onSome: (issue) => [issue],
-      }),
-      ...schedulerFailures.map((failure) =>
-        ExtensionHealthIssue.cases["scheduled-job-failed"].make({
-          jobId: failure.jobId,
-          error: failure.error,
-        }),
-      ),
-    ]
+    const issues = Option.match(activationFailure, {
+      onNone: (): ReadonlyArray<ExtensionHealthIssue> => [],
+      onSome: (issue) => [issue],
+    })
 
     const payload = {
       manifest: status.manifest,

@@ -9,7 +9,7 @@ import {
 import { ExtensionId } from "../../src/domain/ids"
 
 describe("buildExtensionHealthSnapshot", () => {
-  test("merges activation and scheduler failures into typed issue rows", () => {
+  test("reports one typed issue row per failed extension", () => {
     const snapshot = buildExtensionHealthSnapshot([
       {
         manifest: { id: ExtensionId.make("@gent/memory") },
@@ -23,8 +23,9 @@ describe("buildExtensionHealthSnapshot", () => {
         manifest: { id: ExtensionId.make("@gent/plan") },
         scope: "builtin",
         sourcePath: "builtin",
-        status: "active",
-        scheduledJobFailures: [{ jobId: "reflect", error: "launchd boom" }],
+        status: "failed",
+        phase: "setup",
+        error: "setup boom",
       },
     ])
 
@@ -53,9 +54,9 @@ describe("buildExtensionHealthSnapshot", () => {
         _tag: "degraded",
         issues: [
           {
-            _tag: "scheduled-job-failed",
-            jobId: "reflect",
-            error: "launchd boom",
+            _tag: "activation-failed",
+            phase: "setup",
+            error: "setup boom",
           },
         ],
       },
@@ -96,16 +97,6 @@ describe("buildExtensionHealthSnapshot", () => {
       phase: "startup",
       error: "startup boom",
     })
-    expect(
-      ExtensionHealthIssue.cases["scheduled-job-failed"].make({
-        jobId: "reflect",
-        error: "launchd boom",
-      }),
-    ).toEqual({
-      _tag: "scheduled-job-failed",
-      jobId: "reflect",
-      error: "launchd boom",
-    })
   })
 
   test("degraded constructor requires non-empty issues", () => {
@@ -115,8 +106,8 @@ describe("buildExtensionHealthSnapshot", () => {
         scope: "builtin",
         sourcePath: "builtin",
         issues: [
-          ExtensionHealthIssue.cases["scheduled-job-failed"].make({
-            jobId: "reflect",
+          ExtensionHealthIssue.cases["activation-failed"].make({
+            phase: "startup",
             error: "launchd boom",
           }),
         ],
@@ -128,8 +119,8 @@ describe("buildExtensionHealthSnapshot", () => {
       sourcePath: "builtin",
       issues: [
         {
-          _tag: "scheduled-job-failed",
-          jobId: "reflect",
+          _tag: "activation-failed",
+          phase: "startup",
           error: "launchd boom",
         },
       ],
@@ -148,8 +139,8 @@ describe("buildExtensionHealthSnapshot", () => {
           _tag: "degraded",
           issues: [
             {
-              _tag: "scheduled-job-failed",
-              jobId: "reflect",
+              _tag: "activation-failed",
+              phase: "startup",
               error: "launchd boom",
             },
           ],
@@ -161,8 +152,8 @@ describe("buildExtensionHealthSnapshot", () => {
     expect(decoded._tag).toBe("degraded")
     if (decoded._tag !== "degraded") return
     expect(decoded.degradedExtensions[0]?.issues[0]).toEqual({
-      _tag: "scheduled-job-failed",
-      jobId: "reflect",
+      _tag: "activation-failed",
+      phase: "startup",
       error: "launchd boom",
     })
 
@@ -174,8 +165,8 @@ describe("buildExtensionHealthSnapshot", () => {
           _tag: "degraded",
           issues: [
             {
-              _tag: "scheduled-job-failed",
-              jobId: "reflect",
+              _tag: "activation-failed",
+              phase: "startup",
               error: "launchd boom",
             },
           ],

@@ -22,7 +22,6 @@ import {
 } from "../../src/runtime/profile"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { CronRuntime } from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 
@@ -133,13 +132,12 @@ const dynamicExtension = defineExtension({
 describe("live Profile", () => {
   const test = it.live.layer(BunServices.layer)
 
-  test("loads declarations without lifecycle or scheduler work before boot activation", () =>
+  test("loads declarations without lifecycle work before boot activation", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const home = yield* fs.makeTempDirectoryScoped()
         let nextInstance = 0
-        let schedulerInstalls = 0
         const events: Array<readonly [string, number]> = []
 
         const resourceExtension = defineExtension({
@@ -173,14 +171,6 @@ describe("live Profile", () => {
                 }),
               }) as never,
             )
-            yield* host.register("job", {
-              id: "declaration-resource",
-              cron: "0 21 * * 1-5",
-              target: {
-                agent: AgentName.make("cowork"),
-                prompt: "Check declaration loading.",
-              },
-            })
             yield* host.register(
               "tool",
               tool({
@@ -231,28 +221,9 @@ describe("live Profile", () => {
           home,
           platform: "darwin",
           extensions: [resourceExtension, validExtension, invalidExtension],
-          scheduledJobCommand: ["/usr/local/bin/gent"] satisfies readonly [
-            string,
-            ...ReadonlyArray<string>,
-          ],
         }
-        const schedulerLayer = Layer.succeed(
-          CronRuntime,
-          CronRuntime.of({
-            install: () =>
-              Effect.sync(() => {
-                schedulerInstalls += 1
-              }),
-            remove: () => Effect.void,
-          }),
-        )
-
-        const declarations = yield* loadRuntimeProfileDeclarations(inputs).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test provides a local scheduler spy for the declaration boundary.
-          Effect.provide(schedulerLayer),
-        )
+        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
         expect(events).toEqual([])
-        expect(schedulerInstalls).toBe(0)
         expect(declarations.extensionSectionInputs).toEqual([
           {
             id: "rp-declaration-prompt-section",
@@ -267,10 +238,7 @@ describe("live Profile", () => {
           }),
         )
 
-        const runtimeExit = yield* Effect.exit(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test provides a local scheduler spy for the boot boundary.
-          Effect.scoped(openProfile(inputs).pipe(Effect.provide(schedulerLayer))),
-        )
+        const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs)))
         expect(runtimeExit._tag).toBe("Success")
         if (runtimeExit._tag === "Success") {
           expect(runtimeExit.value.profile.resolved.failedExtensions).toContainEqual(
@@ -286,7 +254,6 @@ describe("live Profile", () => {
           ["stop", 1],
           ["release", 1],
         ])
-        expect(schedulerInstalls).toBe(1)
       }),
     ).pipe(Effect.provide(sharedLayer)))
 

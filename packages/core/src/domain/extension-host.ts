@@ -31,7 +31,6 @@ interface RegistrationDomainMap {
   readonly request: "requests"
   readonly agent: "agents"
   readonly resource: "resources"
-  readonly job: "scheduledJobs"
   readonly modelDriver: "modelDrivers"
   readonly externalDriver: "externalDrivers"
 }
@@ -41,7 +40,6 @@ const registrationDomains: RegistrationDomainMap = {
   request: "requests",
   agent: "agents",
   resource: "resources",
-  job: "scheduledJobs",
   modelDriver: "modelDrivers",
   externalDriver: "externalDrivers",
 }
@@ -169,7 +167,6 @@ export const registerContributions = (contributions: ExtensionContributions) =>
   Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("resource", ...(contributions.resources ?? []))
-    yield* host.register("job", ...(contributions.scheduledJobs ?? []))
     yield* host.register("tool", ...(contributions.tools ?? []))
     yield* host.register("request", ...(contributions.requests ?? []))
     yield* host.register("agent", ...(contributions.agents ?? []))
