@@ -90,8 +90,12 @@ export type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
 const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
 
 export const SendUserMessagePayload = Schema.Struct({
-  /** Admission returns after durable enqueue. Turn waits for the response. Omission preserves legacy behavior. */
-  completion: Schema.optional(Schema.Literals(["admission", "turn"])),
+  /**
+   * `"admission"` returns once the turn is durably enqueued, without waiting
+   * for it to run. Omitted, the call waits for the turn when the caller gave a
+   * `requestId`/`commandId` to correlate on, and is fire-and-forget otherwise.
+   */
+  completion: Schema.optional(Schema.Literals(["admission"])),
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
@@ -512,7 +516,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     if (input.completion === "admission") {
       yield* ref.execute(AgentLoopActor.SubmitDurable.make(payload))
-    } else if (input.completion === "turn" || shouldHoldCompletion) {
+    } else if (shouldHoldCompletion) {
       yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
     } else {
       yield* ref.execute(AgentLoopActor.Submit.make(payload))

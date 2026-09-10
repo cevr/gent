@@ -813,6 +813,9 @@ export const buildAgentLoopActorHandlers = (config: {
         ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
           submitTurnAndWait(operation).pipe(provideActorWorkspace),
       ),
+      // Same body as `Submit` by design. `persisted` is a static RPC
+      // annotation compiled into the protocol, not a payload field, so the
+      // durable variant has to be its own operation. Do not merge the two.
       SubmitDurable: Effect.fn("AgentLoop.SubmitDurable")(
         ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
           submitTurn(operation).pipe(provideActorWorkspace),
