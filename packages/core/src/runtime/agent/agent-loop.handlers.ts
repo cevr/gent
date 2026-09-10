@@ -105,8 +105,8 @@ import type { CurrentExtensionHostContext } from "./current-extension-host-conte
 import { runExtensionCapability } from "../extensions/registry.js"
 import {
   buildQueuedTurnItem,
-  failIfTurnFailedAfterEpoch,
-  waitForIdleAfterEpoch,
+  awaitTurnCompletion,
+  turnBaseline,
   waitForTurnFailureAfterEpoch,
 } from "./agent-loop.actor-state.js"
 import {
@@ -673,12 +673,7 @@ export const buildAgentLoopActorHandlers = (config: {
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      const failureBaseline = Option.getOrElse(
-        Option.fromUndefinedOr((yield* handle.readState).turnFailure).pipe(
-          Option.map(({ epoch }) => epoch),
-        ),
-        () => 0,
-      )
+      const baseline = yield* turnBaseline(handle)
       yield* ensureTarget(operation.message)
       yield* markWrite
       const item = buildQueuedTurnItem(operation)
@@ -694,10 +689,13 @@ export const buildAgentLoopActorHandlers = (config: {
             ),
           )
       }
+      // This turn is done when *its* message is completed, which can happen
+      // while the loop stays busy with a follow-up, so Idle is not the signal
+      // here -- only failure is shared with `awaitTurnCompletion`.
       yield* Effect.raceFirst(
         waitForMessageTurnCompleted(operation.message.id),
         Effect.raceFirst(
-          waitForTurnFailureAfterEpoch(handle, failureBaseline),
+          waitForTurnFailureAfterEpoch(handle, baseline.turnFailure),
           handle.persistenceFailure,
         ),
       ).pipe(
@@ -721,16 +719,9 @@ export const buildAgentLoopActorHandlers = (config: {
           ),
         )
 
-      yield* Effect.raceFirst(
-        Effect.raceFirst(
-          waitForIdleAfterEpoch(handle, start.value.stateEpochBaseline),
-          waitForTurnFailureAfterEpoch(handle, start.value.turnFailureBaseline),
-        ),
-        handle.persistenceFailure,
-      ).pipe(
+      yield* awaitTurnCompletion(handle, start.value).pipe(
         Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
       )
-      yield* failIfTurnFailedAfterEpoch(handle, start.value.turnFailureBaseline)
     })
 
     const isCancellation = Predicate.or(
@@ -855,7 +846,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 if (state._tag !== "Idle") return
                 const message = yield* latestIncompleteUserTurn
                 if (Option.isNone(message)) return
-                const baseline = (yield* handle.readState).stateEpoch
+                const baseline = yield* turnBaseline(handle)
                 yield* handle
                   .startTurn({ message: message.value })
                   .pipe(
@@ -863,10 +854,7 @@ export const buildAgentLoopActorHandlers = (config: {
                       cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
                     ),
                   )
-                yield* Effect.raceFirst(
-                  waitForIdleAfterEpoch(handle, baseline),
-                  waitForTurnFailureAfterEpoch(handle, baseline),
-                )
+                yield* awaitTurnCompletion(handle, baseline)
                 return
               }
             }

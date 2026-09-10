@@ -79,6 +79,8 @@ import {
   type QueuedTurnItem,
   type RunningState,
   type SessionRuntimeState,
+  turnFailureEpoch,
+  type TurnBaseline,
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
@@ -123,13 +125,9 @@ export type AgentLoopBehavior = {
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
-  reserveRunStartOrQueueFollowUp: (item: QueuedTurnItem) => Effect.Effect<
-    Option.Option<{
-      readonly stateEpochBaseline: number
-      readonly turnFailureBaseline: number
-    }>,
-    AgentLoopError
-  >
+  reserveRunStartOrQueueFollowUp: (
+    item: QueuedTurnItem,
+  ) => Effect.Effect<Option.Option<TurnBaseline>, AgentLoopError>
   takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
@@ -365,11 +363,7 @@ export const makeAgentLoopBehavior = (
       TxSubscriptionRef.update(loopRef, (s) => ({
         ...s,
         turnFailure: {
-          epoch:
-            Option.getOrElse(
-              Option.fromUndefinedOr(s.turnFailure).pipe(Option.map(({ epoch }) => epoch)),
-              () => 0,
-            ) + 1,
+          epoch: turnFailureEpoch(s) + 1,
           error: causeToAgentLoopError(cause),
         },
       }))

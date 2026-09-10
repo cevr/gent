@@ -1,7 +1,29 @@
+/**
+ * When a turn is finished, told from the outside.
+ *
+ * The loop reports its progress as two monotonic counters -- `stateEpoch` for
+ * every state change, `turnFailure.epoch` for every failure -- so a caller
+ * waiting on a turn must first record where those counters stood, then watch
+ * for one to pass that mark. Getting the mark wrong is invisible: read it too
+ * late and the wait hangs, too early and a previous turn's failure is
+ * reported as this one's.
+ *
+ * `TurnBaseline` is that mark, taken once by `turnBaseline`. Nothing outside
+ * this module reads an epoch off the state, and no caller compares one.
+ *
+ * @module
+ */
+
 import { Effect, Option, Predicate, Schema, Stream } from "effect"
 import type { AgentName, RunSpec } from "../../domain/agent.js"
 import type { AgentLoopBehavior } from "./agent-loop.behavior.js"
-import { AgentLoopError, type AgentLoopState, type QueuedTurnItem } from "./agent-loop.state.js"
+import {
+  AgentLoopError,
+  turnFailureEpoch,
+  type AgentLoopState,
+  type QueuedTurnItem,
+  type TurnBaseline,
+} from "./agent-loop.state.js"
 import type { MessageType } from "./agent-loop.protocol.js"
 
 export const buildQueuedTurnItem = (operation: {
@@ -69,3 +91,32 @@ export const failIfTurnFailedAfterEpoch = (
       return yield* failTurnFailureState(current.turnFailure)
     }
   })
+
+/** Record the mark to wait from. Take this *before* starting the turn. */
+export const turnBaseline = (behavior: AgentLoopBehavior): Effect.Effect<TurnBaseline> =>
+  Effect.map(behavior.readState, (state) => ({
+    stateEpoch: state.stateEpoch,
+    turnFailure: turnFailureEpoch(state),
+  }))
+
+/**
+ * Wait until the turn started after `baseline` is over.
+ *
+ * It ends three ways, and all three end the wait: the loop goes Idle, the turn
+ * fails, or persistence fails. The last two fail the effect.
+ */
+export const awaitTurnCompletion = (
+  behavior: AgentLoopBehavior,
+  baseline: TurnBaseline,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.raceFirst(
+    Effect.raceFirst(
+      waitForIdleAfterEpoch(behavior, baseline.stateEpoch),
+      waitForTurnFailureAfterEpoch(behavior, baseline.turnFailure),
+    ),
+    behavior.persistenceFailure,
+  ).pipe(
+    // Reaching Idle wins the race even when the turn failed on its way there,
+    // so the failure is checked once more after the race settles.
+    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline.turnFailure)),
+  )

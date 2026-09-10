@@ -32,6 +32,8 @@ import {
   type QueuedTurnItem,
   type RunningState,
   type SessionRuntimeState,
+  turnFailureEpoch,
+  type TurnBaseline,
 } from "./agent-loop.state.js"
 
 const FOLLOW_UP_QUEUE_MAX = 10
@@ -60,7 +62,7 @@ export type AgentLoopQueue = {
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
   readonly reserveRunStartOrQueueFollowUp: (
     item: QueuedTurnItem,
-  ) => Effect.Effect<Option.Option<RunStartReservation>, AgentLoopError>
+  ) => Effect.Effect<Option.Option<TurnBaseline>, AgentLoopError>
   readonly takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly clearInFlightTurn: (
@@ -79,11 +81,6 @@ export type AgentLoopQueue = {
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<boolean, AgentLoopError>
   readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
-}
-
-interface RunStartReservation {
-  readonly stateEpochBaseline: number
-  readonly turnFailureBaseline: number
 }
 
 const mergeConcurrentLoopMetadata = (
@@ -269,7 +266,7 @@ export const makeAgentLoopQueue = (
     const reserveRunStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveRunStartOrQueueFollowUp")(
       function* (item: QueuedTurnItem) {
         const startedAtMs = yield* Clock.currentTimeMillis
-        return yield* commitQueueTransaction<Option.Option<RunStartReservation>>(
+        return yield* commitQueueTransaction<Option.Option<TurnBaseline>>(
           "run start reservation",
           (current) => {
             if (current.state._tag !== "Idle" || !Predicate.isUndefined(current.startingState)) {
@@ -286,14 +283,9 @@ export const makeAgentLoopQueue = (
 
             return {
               value: Option.some({
-                stateEpochBaseline: current.stateEpoch,
-                turnFailureBaseline: Option.getOrElse(
-                  Option.fromUndefinedOr(current.turnFailure).pipe(
-                    Option.map(({ epoch }) => epoch),
-                  ),
-                  () => 0,
-                ),
-              } satisfies RunStartReservation),
+                stateEpoch: current.stateEpoch,
+                turnFailure: turnFailureEpoch(current),
+              } satisfies TurnBaseline),
               next: {
                 ...current,
                 startingState: buildRunningState(current.state, item, { startedAtMs }),

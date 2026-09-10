@@ -518,3 +518,21 @@ export const buildInitialAgentLoopState = (params: {
 
 export const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState =>
   runtimeStateFromLoopState(s.state, s.queue)
+
+/** How many failures this branch had recorded, or 0 if it has had none. */
+export const turnFailureEpoch = (state: AgentLoopState): number =>
+  Option.getOrElse(
+    Option.fromUndefinedOr(state.turnFailure).pipe(Option.map(({ epoch }) => epoch)),
+    () => 0,
+  )
+
+/**
+ * Where the loop's counters stood before a turn was started.
+ *
+ * Both are needed: a turn ends either by reaching Idle or by failing, and the
+ * two are counted separately.
+ */
+export interface TurnBaseline {
+  readonly stateEpoch: number
+  readonly turnFailure: number
+}
