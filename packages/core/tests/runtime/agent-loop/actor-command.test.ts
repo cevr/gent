@@ -38,6 +38,7 @@ import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage.js"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 const makeTestExtensions = (
   tools: ReadonlyArray<ToolCapability> = [],
@@ -97,6 +98,7 @@ const makeRuntimeLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     AgentLoopSessionGovernance.Live,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)

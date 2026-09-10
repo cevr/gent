@@ -19,6 +19,7 @@ import { ApprovalService } from "../approval-service.js"
 import { type ExtensionRegistryService } from "../extensions/registry.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { GentPlatform } from "../gent-platform.js"
+import { ProcessRunner } from "../../utils/run-process.js"
 import { ConfigService } from "../config-service.js"
 import { ModelRegistry } from "../model-registry.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
@@ -45,6 +46,7 @@ export type EphemeralParentServices =
   | ModelRegistry
   | GentPlatform
   | Crypto.Crypto
+  | ProcessRunner
 
 type EphemeralStorageProvides =
   | SqlClient.SqlClient
@@ -166,6 +168,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   const modelRegistry = yield* ModelRegistry
   const gentPlatform = yield* GentPlatform
   const crypto = yield* Crypto.Crypto
+  const processRunner = yield* ProcessRunner
 
   const parentRuntimeEnvironmentLayer = Layer.succeed(RuntimeEnvironment, runtimeEnvironment)
   const parentFileSystemLayer = Layer.succeed(FileSystem.FileSystem, fileSystem)
@@ -175,6 +178,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
   const parentModelRegistryLayer = Layer.succeed(ModelRegistry, modelRegistry)
   const parentGentPlatformLayer = Layer.succeed(GentPlatform, gentPlatform)
   const parentCryptoLayer = Layer.succeed(Crypto.Crypto, crypto)
+  const parentProcessRunnerLayer = Layer.succeed(ProcessRunner, processRunner)
   const parentLayer = Layer.mergeAll(
     parentRuntimeEnvironmentLayer,
     parentFileSystemLayer,
@@ -184,6 +188,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     parentModelRegistryLayer,
     parentGentPlatformLayer,
     parentCryptoLayer,
+    parentProcessRunnerLayer,
   )
 
   return (params: {

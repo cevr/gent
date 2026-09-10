@@ -42,12 +42,16 @@ export interface RunProcessOptions {
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
 
-export const ProcessRunner: Context.Reference<ProcessRunnerService> =
-  Context.Reference<ProcessRunnerService>("@gent/core/src/utils/run-process/ProcessRunner", {
-    defaultValue: () => ({
-      run: (command) => Effect.die(new Error(`ProcessRunner unavailable for command: ${command}`)),
-    }),
-  })
+/**
+ * Running a child process.
+ *
+ * A plain service, not a defaulted reference: there is one implementation and
+ * every caller needs it, so a deployment that forgets to provide it should
+ * fail to compile rather than die on the first command it runs.
+ */
+export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerService>()(
+  "@gent/core/src/utils/run-process/ProcessRunner",
+) {}
 
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()

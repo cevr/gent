@@ -42,6 +42,7 @@ import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-sto
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
@@ -119,6 +120,7 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -256,6 +258,7 @@ describe("queue drain regression", () => {
             BunServices.layer,
             ModelRegistry.Test(),
             GentPlatform.Test(),
+            ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
           )
           const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
           return AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -343,6 +346,7 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -425,6 +429,7 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(

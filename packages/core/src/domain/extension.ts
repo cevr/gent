@@ -299,6 +299,7 @@ export type {
   ProviderAuthContribution,
   ProviderAuthorizationResult,
 } from "./driver.js"
+import type { ProcessRunner } from "../utils/run-process.js"
 
 // Extension — the core primitive
 
@@ -366,6 +367,7 @@ export type ExtensionLoaderServices =
   | Path.Path
   | ChildProcessSpawner
   | GentPlatform
+  | ProcessRunner
 
 /** Services available to every `setup` Effect: the loader platform plus the registration host. */
 export type ExtensionSetupServices = ExtensionLoaderServices | ExtensionHost

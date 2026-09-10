@@ -33,6 +33,7 @@ import { EventStorage } from "../../storage/event-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { GentPlatform } from "../gent-platform.js"
+import type { ProcessRunner } from "../../utils/run-process.js"
 import { SessionRuntime } from "../session-runtime.js"
 import type { ModelResolver } from "../../providers/model-resolver.js"
 import type { RuntimeEnvironment } from "../runtime-environment.js"
@@ -75,6 +76,7 @@ export const InProcessRunner = (
   | ModelRegistry
   | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
+  | ProcessRunner
   | Crypto.Crypto
   | ChildCompletionDelivery
 > =>

@@ -31,6 +31,7 @@ import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage.js"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,
@@ -77,6 +78,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     Permission.Test(),
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,

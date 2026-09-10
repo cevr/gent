@@ -64,6 +64,7 @@ export {
   SessionRuntimeStateSchema,
   type SessionRuntimeState,
 } from "./agent/agent-loop.state.js"
+import type { ProcessRunner } from "../utils/run-process.js"
 
 export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
   "SessionRuntimeError",
@@ -208,6 +209,7 @@ type SessionRuntimeLayerRequirements =
   | ConfigService
   | AgentLoopSessionGovernance
   | ChildProcessSpawner
+  | ProcessRunner
   | FileSystem.FileSystem
   | Path.Path
   | Scope.Scope

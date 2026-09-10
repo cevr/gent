@@ -94,6 +94,7 @@ import {
 } from "./agent-loop.runtime-context.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"
+import type { ProcessRunner } from "../../utils/run-process.js"
 
 export const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
@@ -236,6 +237,7 @@ export const makeAgentLoopBehavior = (
   | ModelRegistry
   | ChildProcessSpawner
   | GentPlatform
+  | ProcessRunner
   | FileSystem.FileSystem
   | Path.Path
 > =>

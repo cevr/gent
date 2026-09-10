@@ -66,6 +66,7 @@ import {
   type ResourceGraphPrepared,
 } from "./extensions/resource-host/resource-graph-entity.js"
 import { extensionKey } from "./extensions/activation.js"
+import { ProcessRunner } from "../utils/run-process.js"
 
 export interface LiveRuntimeProfile {
   readonly profile: RuntimeProfile
@@ -532,6 +533,7 @@ export const makeRuntimeProfileOwner = (params: {
   readonly path: Path.Path
   readonly platform: GentPlatformApi
   readonly childProcessSpawner: ChildProcessSpawner["Service"]
+  readonly processRunner: ProcessRunner["Service"]
   readonly schedulerRuntime?: CronRuntimeApi
 }) => {
   let latestDesired = Option.none<RuntimeProfileDesiredState>()
@@ -546,6 +548,7 @@ export const makeRuntimeProfileOwner = (params: {
         Effect.provideService(ChildProcessSpawner, params.childProcessSpawner),
         Effect.provideService(ConfigService, params.configService),
         Effect.provideService(GentPlatform, params.platform),
+        Effect.provideService(ProcessRunner, params.processRunner),
       )
       const resources = collectResourceEntries(declarations.resolved.extensions, "process").map(
         ({ resource }) => resource,

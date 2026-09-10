@@ -57,6 +57,7 @@ import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
 import type { TurnStreamPart } from "../../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 // ============================================================================
 // Shared helpers
 // ============================================================================
@@ -315,6 +316,7 @@ export const makeLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -336,6 +338,7 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     recorderLayer,
     eventStoreLayer,
   )
@@ -383,6 +386,7 @@ export const makeLiveToolLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     Option.match(Option.fromUndefinedOr(additionalDeps), {
       onNone: () => Layer.empty,
       onSome: (layer) => layer,
@@ -437,6 +441,7 @@ export const makeLayerWithEvents = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -460,6 +465,7 @@ export const makeLayerWithEventPublisher = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -526,6 +532,7 @@ export const makeExternalLayerWithEvents = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(

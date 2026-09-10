@@ -65,6 +65,7 @@ import { waitFor } from "../../../src/test-utils/fixtures"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")
@@ -319,6 +320,7 @@ const makeLayerWithEvents = (
     ModelRegistry.Test(),
     ConfigService.Test(),
     GentPlatform.Test(),
+    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   let approvalLayer = ApprovalService.Test()
@@ -762,6 +764,7 @@ describe("external turn execution", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
+        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -931,6 +934,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
+        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -1015,6 +1019,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
+        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -1114,6 +1119,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
+        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -1212,6 +1218,7 @@ describe("ExternalDriverContribution end-to-end", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
+        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(

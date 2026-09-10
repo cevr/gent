@@ -31,6 +31,7 @@ import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-a
 import { MODEL_OUTPUT_RESERVE_TOKENS } from "../../../src/runtime/model-context"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -195,6 +196,7 @@ describe("native model context projection", () => {
         }),
       ]),
       GentPlatform.Test(),
+      ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       modelResolver,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)

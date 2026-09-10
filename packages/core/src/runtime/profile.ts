@@ -34,6 +34,7 @@ import type {
 } from "./extensions/resource-host/schedule-engine.js"
 import { buildBasePromptSections } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
+import type { ProcessRunner } from "../utils/run-process.js"
 
 /**
  * Inputs that fully describe a runtime profile.
@@ -155,7 +156,12 @@ export const loadRuntimeProfileDeclarations = (
 ): Effect.Effect<
   RuntimeProfileDeclarations,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | ConfigService | GentPlatform
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner
+  | ConfigService
+  | GentPlatform
+  | ProcessRunner
 > =>
   Effect.gen(function* () {
     const path = yield* Path.Path

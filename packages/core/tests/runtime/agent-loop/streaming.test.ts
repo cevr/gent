@@ -49,6 +49,7 @@ import {
   steerAgentLoop,
 } from "./helpers"
 import { cellMigrations, cellStorageLayer } from "../../../src/runtime/code-cell/cell-storage"
+import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 describe("run completion", () => {
   it.live("run returns after a fast turn completes before the caller awaits idle", () =>
@@ -234,6 +235,7 @@ describe("streaming", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
+        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(

@@ -162,6 +162,7 @@ export class SessionProfileCache extends Context.Service<
     | ConfigService
     | ScopeType.Scope
     | GentPlatform
+    | ProcessRunner
   > =>
     Layer.effectContext(
       Effect.gen(function* () {
@@ -235,6 +236,7 @@ export class SessionProfileCache extends Context.Service<
                 path: pathSvc,
                 platform,
                 childProcessSpawner: spawner,
+                processRunner,
                 schedulerRuntime: Option.getOrUndefined(schedulerRuntime),
               }),
             })),
