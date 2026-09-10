@@ -34,9 +34,14 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { createDependencies } from "../server/dependencies.js"
-import { CellBranchTools } from "../runtime/code-cell/cell-storage.js"
+import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 export interface ToolTestLayerConfig {
+  /**
+   * The branch-tool feature this harness installs. Defaults to
+   * `noBranchTools`; a test exercising a real feature names it.
+   */
+  readonly branchTools?: BranchToolFeature<never>
   /** Agents to register */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
@@ -73,7 +78,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
       }),
       ...(config.extensions ?? []),
     ],
-    branchTools: CellBranchTools,
+    branchTools: config.branchTools ?? noBranchTools,
     overrides: {
       authLayer: Auth.Test(),
       approvalLayer: ApprovalService.Test(),

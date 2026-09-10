@@ -8,6 +8,8 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { BuiltinArtifactIdentity } from "./artifact-identity.js"
+import { CellExtension } from "./cell/cell-extension.js"
+import { CellBranchTools } from "./cell/cell-storage.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
 import { AgentsExtension } from "./agents.js"
@@ -112,7 +114,15 @@ export {
   AgentsViewExtension,
 }
 
+/**
+ * The cell: the surface the model runs code on, and the branch-tool feature
+ * that surface needs installed. A root naming one names the other -- a `cell`
+ * tool whose storage and kernel are missing fails on first use.
+ */
+export { CellExtension, CellBranchTools }
+
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
+  CellExtension,
   HandoffExtension,
   GoalExtension,
   BtwExtension,

@@ -22,7 +22,7 @@ export interface FeatureIndependenceFinding {
 }
 
 /** Feature directories under `packages/core/src` that core proper must not import. */
-export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["code-cell"]
+export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
 
 /**
  * SQL table-name prefixes owned by a feature.

@@ -36,9 +36,14 @@ import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
 import { makeServerRootLayer } from "../server/server-root.js"
-import { CellBranchTools } from "../runtime/code-cell/cell-storage.js"
+import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 export interface E2ELayerConfig {
+  /**
+   * The branch-tool feature this harness installs. Defaults to
+   * `noBranchTools`; a test exercising a real feature names it.
+   */
+  readonly branchTools?: BranchToolFeature<never>
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
   /** Agents to register in the extension registry */
@@ -201,7 +206,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       dbPath: config.storagePath,
       languageModelLayerOverride: config.providerLayer,
       extensions: extensionInputsForConfig(config),
-      branchTools: CellBranchTools,
+      branchTools: config.branchTools ?? noBranchTools,
       overrides: {
         eventStoreMode: "storage-backed",
         authLayer: config.authLayer ?? Auth.Test(),

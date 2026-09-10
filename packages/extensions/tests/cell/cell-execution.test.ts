@@ -1,0 +1,488 @@
+import { describe, expect, it } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
+import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import {
+  BranchId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+  InteractionRequestId,
+} from "@gent/core-internal/domain/ids.js"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request.js"
+import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message.js"
+import { CellExecution } from "../../src/cell/cell-execution.js"
+import { CellOperationHost, CellToolCallSuspended } from "../../src/cell/cell-kernel.js"
+import { CellEvaluationError } from "../../src/cell/cell-protocol.js"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
+import { buildCellWorker } from "./cell-worker-fixture.js"
+import { CellBranchTools } from "../../src/cell/cell-storage.js"
+
+const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
+const testLayer = SqliteStorage.MemoryWithSql(
+  CellBranchTools.storage,
+  CellBranchTools.migrations,
+).pipe(Layer.provideMerge(platform))
+const sessionId = SessionId.make("cell-execution-session")
+const branchId = BranchId.make("cell-execution-branch")
+const now = dateFromMillis(1_767_225_600_000)
+
+const setupCalls = Effect.fn("test.setupCells")(function* (
+  sources: ReadonlyArray<string>,
+  resetAt: ReadonlyArray<number> = [],
+) {
+  const sessions = yield* SessionStorage
+  const branches = yield* BranchStorage
+  const messages = yield* MessageStorage
+  yield* sessions.createSession(new Session({ id: sessionId, createdAt: now, updatedAt: now }))
+  yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+  return yield* Effect.forEach(sources, (code, index) =>
+    Effect.gen(function* () {
+      const call = {
+        assistantMessageId: MessageId.make(`cell-message-${index}`),
+        toolCallId: ToolCallId.make(`cell-call-${index}`),
+      }
+      yield* messages.createMessage(
+        Message.cases.regular.make({
+          id: call.assistantMessageId,
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [
+            Prompt.toolCallPart({
+              id: call.toolCallId,
+              name: "cell",
+              params: { code, reset: resetAt.includes(index) },
+              providerExecuted: false,
+            }),
+          ],
+          createdAt: now,
+        }),
+      )
+      return call
+    }),
+  )
+})
+
+describe.skipIf(process.platform !== "darwin")("recorded cell execution", () => {
+  it.scopedLive(
+    "records reset once and does not clear newer state on repeat",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [first, reset, next, read] = yield* setupCalls(
+          ["let kept = 21; kept", "typeof kept", "let kept = 42; kept", "kept"],
+          [1],
+        )
+        if (!first || !reset || !next || !read) return yield* Effect.die("Missing cells")
+        const execution = Context.get(
+          yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId })),
+          CellExecution,
+        )
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const run = (call: Parameters<typeof execution.run>[0]) =>
+          execution.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        expect((yield* run(first)).result).toMatchObject({ display: "21" })
+        const cleared = yield* run(reset)
+        expect(cleared).toMatchObject({ isFailure: false, result: { display: "undefined" } })
+        expect((yield* run(next)).result).toMatchObject({ display: "42" })
+        expect(yield* run(reset)).toEqual(cleared)
+        expect((yield* run(read)).result).toMatchObject({ display: "42" })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "cancels active and queued cells without replay and replaces the lost worker",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [first, second, third, fourth] = yield* setupCalls(
+          ["await tools.call('wait', {})", "await tools.call('must-not-run', {})", "1", "6 * 7"],
+          [3],
+        )
+        if (!first || !second || !third || !fourth) return yield* Effect.die("Missing test cells")
+        const started = yield* Deferred.make<boolean>()
+        const stopped = yield* Deferred.make<boolean>()
+        const calls = yield* Ref.make(0)
+        const host = CellOperationHost.of({
+          call: () =>
+            Ref.update(calls, (n) => n + 1).pipe(
+              Effect.andThen(Deferred.succeed(started, true)),
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(stopped, true)),
+            ),
+        })
+        const context = yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId }))
+        const cells = Context.get(context, CellExecution)
+        const running = yield* cells
+          .run(first)
+          .pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.forkScoped({ startImmediately: true }),
+          )
+        yield* Deferred.await(started)
+        const queued = yield* cells
+          .run(second)
+          .pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.forkScoped({ startImmediately: true }),
+          )
+        yield* cells.cancel
+        expect(yield* Deferred.isDone(stopped)).toBe(true)
+        const cancelled = yield* Fiber.join(running)
+        expect(cancelled).toMatchObject({
+          isFailure: true,
+          result: { reason: "cancelled", stateLost: true },
+        })
+        expect(yield* Fiber.join(queued)).toMatchObject({
+          isFailure: true,
+          result: { message: "Cell did not start because execution was cancelled." },
+        })
+        expect(
+          yield* cells.run(first).pipe(Effect.provideService(CellOperationHost, host)),
+        ).toEqual(cancelled)
+        // The host replaces the lost worker itself; no namespace was saved yet, so nothing is restored.
+        expect(
+          yield* cells.run(third).pipe(Effect.provideService(CellOperationHost, host)),
+        ).toMatchObject({ isFailure: false, result: { display: "1" } })
+        expect(
+          yield* cells.run(fourth).pipe(Effect.provideService(CellOperationHost, host)),
+        ).toMatchObject({ isFailure: false, result: { display: "42" } })
+        expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "restores the saved namespace into a replaced worker and into a new branch owner",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [define, hang, useAgain, later, wipe, gone] = yield* setupCalls(
+          [
+            "let n = 41; const seen = new Map([['k', new Date(0)]]); const fn = () => 1; n",
+            "await tools.call('wait', {})",
+            "n + 1",
+            "[n, seen.get('k') instanceof Date, typeof fn].join(',')",
+            "typeof n",
+            "typeof n",
+          ],
+          [4],
+        )
+        if (!define || !hang || !useAgain || !later || !wipe || !gone)
+          return yield* Effect.die("Missing test cells")
+        const started = yield* Deferred.make<boolean>()
+        const host = CellOperationHost.of({
+          call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
+        })
+        const open = Effect.gen(function* () {
+          const context = yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId }))
+          return Context.get(context, CellExecution)
+        })
+        const cells = yield* open
+        const run = (owner: typeof cells, call: Parameters<typeof cells.run>[0]) =>
+          owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        expect((yield* run(cells, define)).result).toMatchObject({ display: "41" })
+        // Cancellation loses the worker. The host replaces it and restores the last good namespace.
+        const running = yield* run(cells, hang).pipe(Effect.forkScoped({ startImmediately: true }))
+        yield* Deferred.await(started)
+        yield* cells.cancel
+        expect(yield* Fiber.join(running)).toMatchObject({ isFailure: true })
+        expect((yield* run(cells, useAgain)).result).toMatchObject({
+          display: "42",
+          restored: { restored: ["n", "seen"], omitted: [{ name: "fn", reason: "function" }] },
+        })
+        // A second owner over the same storage stands in for a process restart.
+        const restarted = yield* open
+        const revived = yield* run(restarted, later)
+        expect(revived.result).toMatchObject({ display: "41,true,undefined" })
+        // The report is attached once, to the first cell after a restore.
+        expect((yield* run(restarted, later)).result).toEqual(revived.result)
+        // An explicit reset clears the saved namespace for every later owner.
+        expect((yield* run(restarted, wipe)).result).toMatchObject({ display: "undefined" })
+        const fresh = yield* open
+        const cleared = yield* run(fresh, gone)
+        expect(cleared.result).toMatchObject({ display: "undefined" })
+        expect(cleared.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "restores the saved namespace in the cell after a suspended one without an explicit reset",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [keep, suspend, reuse] = yield* setupCalls([
+          "const kept = 7; kept",
+          "await tools.call('approve', {})",
+          "kept + 1",
+        ])
+        if (!keep || !suspend || !reuse) return yield* Effect.die("Missing test cell")
+        const pending = new InteractionPendingError({
+          requestId: InteractionRequestId.make("cell-pending-sibling"),
+          sessionId,
+          branchId,
+        })
+        const host = CellOperationHost.of({
+          call: (request) =>
+            Effect.fail(
+              new CellToolCallSuspended({
+                operationId: request.operationId,
+                toolCallId: ToolCallId.make("cell-inner-sibling"),
+                pending,
+              }),
+            ),
+        })
+        const execution = Context.get(
+          yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId })),
+          CellExecution,
+        )
+        const kept = yield* execution.run(keep).pipe(Effect.provideService(CellOperationHost, host))
+        expect(kept.result).toMatchObject({ display: "7" })
+        const suspended = yield* execution
+          .run(suspend)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(suspended._tag).toBe("CellToolCallSuspended")
+        // The suspended cell lost its worker; the next cell gets the last good namespace back.
+        const reused = yield* execution
+          .run(reuse)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(reused.isFailure).toBe(false)
+        expect(reused.result).toMatchObject({
+          display: "8",
+          restored: { restored: ["kept"], omitted: [] },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "stops on host approval without exposing it to a cell catch block or replaying source",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [first, next] = yield* setupCalls([
+          "try { await tools.call('approve', {}) } catch { await tools.call('must-not-run', {}) }",
+          "42",
+        ])
+        if (!first || !next) return yield* Effect.die("Missing test cell")
+        const calls = yield* Ref.make(0)
+        const pending = new InteractionPendingError({
+          requestId: InteractionRequestId.make("cell-pending"),
+          sessionId,
+          branchId,
+        })
+        const innerCallId = ToolCallId.make("cell-inner-call")
+        const host = CellOperationHost.of({
+          call: (request) =>
+            Ref.update(calls, (count) => count + 1).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new CellToolCallSuspended({
+                    operationId: request.operationId,
+                    toolCallId: innerCallId,
+                    pending,
+                  }),
+                ),
+              ),
+            ),
+        })
+        const execution = Context.get(
+          yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId })),
+          CellExecution,
+        )
+        const suspended = yield* execution
+          .run(first)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(suspended).toMatchObject({
+          _tag: "CellToolCallSuspended",
+          toolCallId: innerCallId,
+          pending,
+        })
+        expect(yield* Ref.get(calls)).toBe(1)
+        yield* execution.reset
+        expect(
+          (yield* execution
+            .run(first)
+            .pipe(Effect.provideService(CellOperationHost, host), Effect.flip))._tag,
+        ).toBe("CellExecutionIncomplete")
+        expect(
+          (yield* execution.run(next).pipe(Effect.provideService(CellOperationHost, host))).result,
+        ).toMatchObject({ display: "42" })
+        expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "reuses completed cells without host effects or launching another worker",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const output = path.join(directory, "effects.txt")
+        yield* fs.writeFileString(output, "")
+        const calls = yield* setupCalls([
+          "let n = await tools.call('append', {}); n",
+          "n++; throw new Error('cell failed')",
+          "n",
+        ])
+        const [first, failed, next] = calls
+        if (!first || !failed || !next) return yield* Effect.die("Missing test cell")
+        const host = CellOperationHost.of({
+          call: () =>
+            Effect.gen(function* () {
+              const before = yield* fs.readFileString(output)
+              yield* fs.writeFileString(output, `${before}x`)
+              return 1
+            }).pipe(
+              Effect.mapError(
+                (error) =>
+                  new CellEvaluationError({ phase: "execute", message: String(error), output: "" }),
+              ),
+            ),
+        })
+        const result = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const execution = Context.get(
+              yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId })),
+              CellExecution,
+            )
+            const saved = yield* execution.run(first)
+            expect(saved.isFailure).toBe(false)
+            expect(yield* execution.run(first)).toEqual(saved)
+            const error = yield* execution.run(failed)
+            expect(error.isFailure).toBe(true)
+            expect(error.result).toMatchObject({
+              _tag: "CellEvaluationError",
+              message: expect.stringContaining("cell failed"),
+            })
+            expect(yield* execution.run(failed)).toEqual(error)
+            expect((yield* execution.run(next)).result).toMatchObject({ display: "2" })
+            expect(yield* fs.readFileString(output)).toBe("x")
+            return saved
+          }).pipe(Effect.provideService(CellOperationHost, host)),
+        )
+        const replay = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({
+              ...worker,
+              workerPath: path.join(directory, "missing-worker.js"),
+              sessionId,
+              branchId,
+            }),
+          ),
+          CellExecution,
+        )
+        yield* replay.reset
+        expect(
+          yield* replay.run(first).pipe(Effect.provideService(CellOperationHost, host)),
+        ).toEqual(result)
+        expect(yield* fs.readFileString(output)).toBe("x")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "does not repeat an interrupted cell after resetting the worker",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const output = path.join(directory, "effects.txt")
+        yield* fs.writeFileString(output, "")
+        const [first, next] = yield* setupCalls([
+          "await tools.call('append-and-wait', {})",
+          "21 * 2",
+        ])
+        if (!first || !next) return yield* Effect.die("Missing test cell")
+        const started = yield* Deferred.make<boolean>()
+        const stopped = yield* Deferred.make<boolean>()
+        const host = CellOperationHost.of({
+          call: () =>
+            Effect.gen(function* () {
+              const before = yield* fs.readFileString(output)
+              yield* fs.writeFileString(output, `${before}x`)
+              yield* Deferred.succeed(started, true)
+              return yield* Effect.never
+            }).pipe(
+              Effect.mapError(
+                (error) =>
+                  new CellEvaluationError({ phase: "execute", message: String(error), output: "" }),
+              ),
+              Effect.ensuring(Deferred.succeed(stopped, true)),
+            ),
+        })
+        const execution = Context.get(
+          yield* Layer.build(CellExecution.Live({ ...worker, sessionId, branchId })),
+          CellExecution,
+        )
+        const running = yield* execution
+          .run(first)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
+        yield* Deferred.await(started)
+        yield* Fiber.interrupt(running)
+        expect(yield* Deferred.isDone(stopped)).toBe(true)
+        yield* execution.reset
+        const unknown = yield* execution
+          .run(first)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(unknown._tag).toBe("CellExecutionIncomplete")
+        expect(yield* fs.readFileString(output)).toBe("x")
+        const fresh = yield* execution
+          .run(next)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(fresh.result).toMatchObject({ display: "42" })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "counts failed lazy startup against the same worker replacement limit",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const fs = yield* FileSystem.FileSystem
+        const savedWorker = `${worker.workerPath}.saved`
+        yield* fs.rename(worker.workerPath, savedWorker)
+        const [first, next, crash] = yield* setupCalls([
+          "41",
+          "42",
+          "tools.call.constructor('return process.exit(0)')()",
+        ])
+        if (!first || !next || !crash) return yield* Effect.die("Missing test cell")
+        const execution = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ ...worker, sessionId, branchId, maximumReplacements: 1 }),
+          ),
+          CellExecution,
+        )
+        const host = CellOperationHost.of({ call: () => Effect.die("Unexpected host operation") })
+        const failed = yield* execution
+          .run(first)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(failed.isFailure).toBe(true)
+        expect(failed.result).toMatchObject({ _tag: "CellProcessError", phase: "launch" })
+        yield* fs.rename(savedWorker, worker.workerPath)
+        expect(
+          (yield* execution.run(next).pipe(Effect.provideService(CellOperationHost, host))).result,
+        ).toMatchObject({ display: "42" })
+        expect(
+          (yield* execution.run(crash).pipe(Effect.provideService(CellOperationHost, host)))
+            .isFailure,
+        ).toBe(true)
+        expect((yield* execution.reset.pipe(Effect.flip)).reason).toBe("replacement-limit")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+})

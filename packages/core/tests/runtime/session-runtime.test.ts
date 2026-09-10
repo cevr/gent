@@ -63,7 +63,7 @@ import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
-import { CellBranchTools } from "../../src/runtime/code-cell/cell-storage.js"
+import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({
@@ -104,10 +104,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(
-    CellBranchTools.storage,
-    CellBranchTools.migrations,
-  )
+  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   const baseDepsWithoutProfile = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -152,10 +149,7 @@ const makeLiveToolRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(
-    CellBranchTools.storage,
-    CellBranchTools.migrations,
-  )
+  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),

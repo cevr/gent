@@ -32,7 +32,6 @@ import { BranchToolWork } from "../../src/runtime/agent/branch-tool-work"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { CurrentBranchToolFeature } from "../../src/runtime/agent/branch-tool-feature"
 import { emptyQueueSnapshot } from "../../src/domain/queue"
 import { dateFromMillis, Session, Branch, Message } from "../../src/domain/message"
 import {
@@ -98,7 +97,12 @@ import {
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
 import { BunCrypto, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
-import { CellBranchTools } from "../../src/runtime/code-cell/cell-storage"
+import {
+  CurrentBranchToolFeature,
+  noBranchTools,
+  type BranchToolFeature,
+} from "../../src/runtime/agent/branch-tool-feature"
+import { eraseResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
 import { neverInterrupted } from "../../src/runtime/agent/turn-interruption.js"
 const bashStubTool = tool({
   id: "bash",
@@ -152,10 +156,7 @@ const makeLiveAgentRunnerLayer = (
     },
   ])
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
-  const storageLayer = SqliteStorage.TestWithSql(
-    CellBranchTools.storage,
-    CellBranchTools.migrations,
-  )
+  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -223,8 +224,16 @@ const waitForCompletion = <E, R>(
     "child completion",
   )
 // Extra services the parent context needs for ephemeral child runtime
+/** A branch-tool feature whose per-branch layer provides one recognizable service. */
+const probeBranchTools: BranchToolFeature<never> = {
+  migrations: {},
+  storage: () => Layer.empty,
+  branchLayer: () =>
+    eraseResourceLayer(Layer.succeed(BranchToolWork, BranchToolWork.of({ cancel: Effect.void }))),
+}
+
 const ephemeralParentDeps = Layer.mergeAll(
-  Layer.succeed(CurrentBranchToolFeature, CellBranchTools),
+  Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   BunPlatformLive,
   Permission.Live([], "allow"),
   RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -232,7 +241,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   ModelRegistry.Test(),
 )
 const ephemeralParentServices = Layer.mergeAll(
-  Layer.succeed(CurrentBranchToolFeature, CellBranchTools),
+  Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   Permission.Live([], "allow"),
   RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
@@ -1169,7 +1178,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         ExtensionRegistry.Test(),
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -1263,7 +1272,7 @@ describe("AgentRunner", () => {
   it.live("rolls back durable child session when spawn event append fails", () =>
     Effect.gen(function* () {
       const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       )
       const failingPublisherLayer = Layer.succeed(
         EventPublisher,
@@ -1330,7 +1339,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         ExtensionRegistry.Test(),
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -1383,7 +1392,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         ExtensionRegistry.Test(),
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -1440,7 +1449,7 @@ describe("AgentRunner", () => {
         textStep("ephemeral response"),
       ])
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         eventStoreLayer,
         eventPublisherLayer,
         testRegistryLayer,
@@ -1499,7 +1508,7 @@ describe("AgentRunner", () => {
   it.live("ephemeral helper runs mirror child tool events into the parent store", () =>
     Effect.gen(function* () {
       const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       )
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
@@ -1571,7 +1580,7 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         ExtensionRegistry.Test(),
         LanguageModelLayers.debug(),
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -1628,8 +1637,8 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const storageLayer = SqliteStorage.TestWithSql(
-        CellBranchTools.storage,
-        CellBranchTools.migrations,
+        noBranchTools.storage,
+        noBranchTools.migrations,
       )
       // Mock agent loop that writes a reasoning-only assistant message
       const mockRuntime = sessionRuntimeStub((input) =>
@@ -1706,8 +1715,8 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const storageLayer = SqliteStorage.TestWithSql(
-        CellBranchTools.storage,
-        CellBranchTools.migrations,
+        noBranchTools.storage,
+        noBranchTools.migrations,
       )
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
@@ -1786,8 +1795,8 @@ describe("AgentRunner", () => {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
       const storageLayer = SqliteStorage.TestWithSql(
-        CellBranchTools.storage,
-        CellBranchTools.migrations,
+        noBranchTools.storage,
+        noBranchTools.migrations,
       )
       const mockRuntime = sessionRuntimeStub((input) =>
         Effect.gen(function* () {
@@ -1928,9 +1937,7 @@ describe("agent runner metadata", () => {
         expect(result.success.usage).toEqual(sample.expected)
       }
     }).pipe(
-      Effect.provide(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
-      ),
+      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
     ),
   )
 
@@ -2021,9 +2028,7 @@ describe("agent runner metadata", () => {
         { toolName: "object-tool", args: { path: "src", limit: 2 }, isError: false },
       ])
     }).pipe(
-      Effect.provide(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
-      ),
+      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
     ),
   )
 })
@@ -2036,9 +2041,7 @@ describe("session depth guard", () => {
   ) =>
     effect.pipe(
       Effect.timeout("4 seconds"),
-      Effect.provide(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
-      ),
+      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
     )
   const makeSession = (id: string, parentSessionId?: string) => {
     const fields = {
@@ -2153,7 +2156,7 @@ describe("session depth guard", () => {
 describe("ephemeral service propagation", () => {
   const makeEphemeralLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
     const storageLayer = Layer.orDie(
-      SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+      SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     )
     const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
@@ -2343,7 +2346,7 @@ describe("ephemeral service propagation", () => {
         textStep("approved"),
       ])
       const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       )
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
@@ -2441,7 +2444,7 @@ describe("ephemeral service propagation", () => {
         textStep("done"),
       ])
       const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       )
       const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)

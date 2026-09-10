@@ -37,7 +37,7 @@ import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-lo
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
-import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage.js"
+import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 const makeTestExtensions = (
@@ -76,10 +76,7 @@ const makeRuntimeLayer = (
   const resolvedExtensions = makeTestExtensions(tools, requests)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const storageLayer = SqliteStorage.TestWithSql(
-    CellBranchTools.storage,
-    CellBranchTools.migrations,
-  )
+  const storageLayer = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live
   const baseDeps = Layer.mergeAll(

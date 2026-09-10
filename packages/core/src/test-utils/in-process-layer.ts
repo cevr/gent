@@ -19,11 +19,16 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeServerRootLayer } from "../server/server-root.js"
-import { CellBranchTools } from "../runtime/code-cell/cell-storage.js"
+import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
 export interface InProcessLayerConfig {
+  /**
+   * The branch-tool feature this harness installs. Defaults to
+   * `noBranchTools`; a test exercising a real feature names it.
+   */
+  readonly branchTools?: BranchToolFeature<never>
   readonly agents: ReadonlyArray<AgentDefinition>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
@@ -49,7 +54,7 @@ const buildLayer = (
       providerMode: "debug-scripted",
       languageModelLayerOverride: languageModelLive,
       extensions: [testAgentsExtension],
-      branchTools: CellBranchTools,
+      branchTools: config.branchTools ?? noBranchTools,
       overrides: {
         eventStoreMode: "storage-backed",
         authLayer: Auth.Test(),

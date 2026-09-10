@@ -16,8 +16,9 @@ mkdirSync(binDir, { recursive: true })
 
 console.log("Transforming Solid JSX, bundling, and compiling to binary...")
 
-// Turbo builds the declared core dependency before packaging this application.
-copyFileSync(join(rootDir, "../../packages/core/dist/gent-cell"), join(binDir, "gent-cell"))
+// Turbo builds the declared extensions dependency before packaging this app;
+// the cell ships as a sibling binary the runtime resolves by name.
+copyFileSync(join(rootDir, "../../packages/extensions/dist/gent-cell"), join(binDir, "gent-cell"))
 
 const buildResult = await Bun.build({
   entrypoints: [join(rootDir, "src/main.tsx")],

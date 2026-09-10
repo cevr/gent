@@ -29,6 +29,7 @@ export interface RpcHarnessConfig extends Pick<
   | "extensions"
   | "agents"
   | "extensionInputs"
+  | "branchTools"
   | "subagentRunner"
   | "approvalLayer"
   | "durableApproval"

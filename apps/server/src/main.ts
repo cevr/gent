@@ -5,9 +5,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Config, Console, Context, Deferred, Effect, Layer, Option } from "effect"
 import { seedDebugSession } from "@gent/core-internal/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
-import { BuiltinExtensions } from "@gent/extensions"
-import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension.js"
-import { CellBranchTools } from "@gent/core-internal/runtime/code-cell/cell-storage.js"
+import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
@@ -124,7 +122,7 @@ const program = Effect.scoped(
         persistenceMode: config.persistenceMode,
         providerMode: config.providerMode,
         scheduledJobCommand: Option.getOrUndefined(config.scheduledJobCommand),
-        extensions: [CellExtension, ...BuiltinExtensions],
+        extensions: BuiltinExtensions,
         branchTools: CellBranchTools,
       },
       identity: {

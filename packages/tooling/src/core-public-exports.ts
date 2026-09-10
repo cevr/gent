@@ -26,9 +26,18 @@ export interface SdkPublicSurfaceFinding {
   readonly message: string
 }
 
+/**
+ * Core's public entry points. Two authoring surfaces, deliberately split:
+ * `extensions/api` for extensions that use the loop, `extensions/branch-tools`
+ * for the rarer feature that implements a loop seam. Keeping them apart is
+ * what keeps `api` small -- nothing in `branch-tools` belongs in an ordinary
+ * extension's vocabulary.
+ */
 const publicCoreExports = new Set([
   "./extensions/api",
   "./extensions/api.js",
+  "./extensions/branch-tools",
+  "./extensions/branch-tools.js",
   "./protocol",
   "./protocol.js",
 ])

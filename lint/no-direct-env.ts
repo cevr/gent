@@ -468,11 +468,16 @@ const plugin: Plugin = {
         const inTuiExtensions = filename.includes("apps/tui/src/extensions/")
         if (!inCoreExtensions && !inExtensionsPackage && !inTuiExtensions) return {}
 
-        // Exempt: api.ts is the public bridge implementation. It lives inside
-        // `packages/core/src/extensions/` but IS the re-export surface other
-        // extensions consume, so it needs to reach into core internals to
-        // assemble the public API.
-        if (filename.endsWith("/extensions/api.ts")) {
+        // Exempt: the public bridge implementations. They live inside
+        // `packages/core/src/extensions/` but ARE the re-export surfaces other
+        // extensions consume, so they need to reach into core internals to
+        // assemble the public API. `api.ts` serves extensions that use the
+        // loop; `branch-tools.ts` serves the feature that implements a loop
+        // seam.
+        if (
+          filename.endsWith("/extensions/api.ts") ||
+          filename.endsWith("/extensions/branch-tools.ts")
+        ) {
           return {}
         }
 
@@ -481,7 +486,9 @@ const plugin: Plugin = {
           /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
 
         // Allowed @gent/core subpaths (everything else is forbidden).
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
+        // Two authoring entry points: `api` for extensions that use the loop,
+        // `branch-tools` for the rarer feature that implements a loop seam.
+        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
         const ALLOWED_CLIENT_PROTOCOL = /^@gent\/core\/protocol(?:\.js)?$/
         const ALLOWED_BUILTIN_INTERNAL_PACKAGE =
           /^@gent\/core-internal\/runtime\/gent-platform(?:-bun)?(?:\.js)?$/

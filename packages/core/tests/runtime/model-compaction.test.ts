@@ -3,26 +3,11 @@ import { Cause, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "e
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import {
-  BranchId,
-  ExtensionId,
-  MessageId,
-  SessionId,
-  ToolCallId,
-  ToolId,
-} from "../../src/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { Message, dateFromMillis } from "../../src/domain/message"
 import { ModelId } from "../../src/domain/model"
 import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
 import { ensureStorageParents } from "../../src/test-utils"
-import {
-  makeToolBindingIdentity,
-  ToolBindingSource,
-  ToolSchemaRevision,
-  ToolSourceRevision,
-} from "../../src/domain/tool-binding"
-import { CellExecutionStorage } from "../../src/runtime/code-cell/cell-execution-storage"
-import { CellToolOperationStorage } from "../../src/runtime/code-cell/cell-tool-operation-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -35,13 +20,13 @@ import {
   ModelCompactionFailure,
 } from "../../src/runtime/model-compaction"
 import { ModelContextBudget, ModelContextProjectionError } from "../../src/runtime/model-context"
-import { CellBranchTools } from "../../src/runtime/code-cell/cell-storage"
+import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature"
 
 // The cell's storage carries the projections core reads from it, so this is
 // the same wiring production uses.
 const storageWithReceipts = SqliteStorage.TestWithSql(
-  CellBranchTools.storage,
-  CellBranchTools.migrations,
+  noBranchTools.storage,
+  noBranchTools.migrations,
 )
 
 const sessionId = SessionId.make("compaction-session")
@@ -840,111 +825,6 @@ describe("model context compaction", () => {
     },
   )
 
-  it.live("a dispatching tool reports the paths its inner operations touched", () => {
-    // The outer call's own params describe the dispatch, not the files. Core
-    // does not know which tools dispatch — the receipts say so.
-    const outerCallId = ToolCallId.make("dispatch-outer")
-    const outerMessageId = MessageId.make("dispatch-assistant")
-    const cell = {
-      sessionId,
-      branchId,
-      assistantMessageId: outerMessageId,
-      toolCallId: outerCallId,
-    }
-    const round = [
-      textMessage("dispatch-ask", "user", "read the file through a dispatcher", 1),
-      Message.cases.regular.make({
-        id: outerMessageId,
-        sessionId,
-        branchId,
-        role: "assistant",
-        parts: [
-          Prompt.toolCallPart({
-            id: outerCallId,
-            // A path in the dispatcher's own params, to prove it is ignored.
-            name: "cell",
-            params: { code: "await tools.call('read', {})", path: "/repo/dispatch.ts" },
-            providerExecuted: false,
-          }),
-        ],
-        createdAt: dateFromMillis(1_002),
-      }),
-      Message.cases.regular.make({
-        id: MessageId.make("dispatch-tool"),
-        sessionId,
-        branchId,
-        role: "tool",
-        parts: [
-          Prompt.toolResultPart({
-            id: outerCallId,
-            name: "cell",
-            isFailure: false,
-            providerExecuted: false,
-            result: { ok: true },
-          }),
-        ],
-        createdAt: dateFromMillis(1_003),
-      }),
-      textMessage("dispatch-latest", "user", "next", 10),
-    ]
-    const binding = makeToolBindingIdentity({
-      toolId: ToolId.make("read"),
-      extensionId: ExtensionId.make("files"),
-      source: ToolBindingSource.cases.Static.make({
-        sourceRevision: ToolSourceRevision.make("source-1"),
-      }),
-      schemaRevision: ToolSchemaRevision.make("schema-1"),
-      resources: [],
-    })
-    const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(
-        Stream.fromIterable([
-          textDeltaPart("summary"),
-          finishPart({ finishReason: "stop", usage: { inputTokens: 20, outputTokens: 4 } }),
-        ]),
-      ),
-    )
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        yield* createTranscript(round)
-        yield* (yield* CellExecutionStorage).claim(cell)
-        yield* (yield* CellToolOperationStorage).admit({
-          cell,
-          operationId: "1",
-          binding,
-          input: { path: "/repo/inner.ts" },
-        })
-        const model = yield* LanguageModel.LanguageModel
-        const result = yield* compactModelContext({
-          modelId,
-          sessionId,
-          branchId,
-          messages: round,
-          budget: budget(),
-          force: {},
-          summaryModel: Effect.succeed(model),
-        })
-        expect(result.compacted).toBe(true)
-        const details = Option.filter(
-          Option.fromNullishOr(
-            result.projection.messages.findLast(
-              (message) => message.metadata?.customType === "model-compaction",
-            )?.metadata?.details,
-          ),
-          Schema.is(ModelCompactionDetails),
-        )
-        expect(Option.getOrThrow(details).paths).toEqual({
-          read: ["/repo/inner.ts"],
-          modified: [],
-        })
-      }),
-    ).pipe(
-      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
-      Effect.timeout("10 seconds"),
-    )
-  })
-
   it.effect("only a summary the model could not produce is recoverable", () =>
     Effect.sync(() => {
       const recoverable = [
@@ -964,77 +844,4 @@ describe("model context compaction", () => {
       expect(integrity.map(isRecoverableCompactionFailure)).toEqual([false, false])
     }),
   )
-
-  it.live("a failed cell without an execution receipt does not block compaction", () => {
-    const cellCallId = ToolCallId.make("cell-without-receipt")
-    const messages = [
-      textMessage("ask", "user", "run a cell", 1),
-      Message.cases.regular.make({
-        id: MessageId.make("assistant-cell"),
-        sessionId,
-        branchId,
-        role: "assistant",
-        parts: [
-          Prompt.toolCallPart({
-            id: cellCallId,
-            name: "cell",
-            params: { code: "throw new Error('before run')" },
-            providerExecuted: false,
-          }),
-        ],
-        createdAt: dateFromMillis(1_002),
-      }),
-      Message.cases.regular.make({
-        id: MessageId.make("tool-cell"),
-        sessionId,
-        branchId,
-        role: "tool",
-        parts: [
-          Prompt.toolResultPart({
-            id: cellCallId,
-            name: "cell",
-            isFailure: true,
-            providerExecuted: false,
-            result: { error: "before run" },
-          }),
-        ],
-        createdAt: dateFromMillis(1_003),
-      }),
-      textMessage("latest", "user", "next", 10),
-    ]
-    const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(
-        Stream.fromIterable([
-          textDeltaPart("summary"),
-          finishPart({ finishReason: "stop", usage: { inputTokens: 20, outputTokens: 4 } }),
-        ]),
-      ),
-    )
-    return Effect.scoped(
-      Effect.gen(function* () {
-        yield* createTranscript(messages)
-        const model = yield* LanguageModel.LanguageModel
-        const result = yield* compactModelContext({
-          modelId,
-          sessionId,
-          branchId,
-          messages,
-          budget: budget(),
-          force: {},
-          summaryModel: Effect.succeed(model),
-        })
-        expect(result.compacted).toBe(true)
-        const details = result.projection.messages.findLast(
-          (message) => message.metadata?.customType === "model-compaction",
-        )?.metadata?.details
-        expect(Schema.is(ModelCompactionDetails)(details)).toBe(true)
-        if (Schema.is(ModelCompactionDetails)(details)) {
-          expect(details.paths).toEqual({ read: [], modified: [] })
-        }
-      }),
-    ).pipe(
-      Effect.provide(Layer.mergeAll(storageWithReceipts, GentPlatform.Test(), providerLayer)),
-      Effect.timeout("10 seconds"),
-    )
-  })
 })

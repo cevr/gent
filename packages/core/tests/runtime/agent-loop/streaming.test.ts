@@ -48,7 +48,7 @@ import {
   scriptedProvider,
   steerAgentLoop,
 } from "./helpers"
-import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage"
+import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 describe("run completion", () => {
@@ -221,8 +221,8 @@ describe("streaming", () => {
         }),
       )
       const baseStorageLayer = SqliteStorage.TestWithSql(
-        CellBranchTools.storage,
-        CellBranchTools.migrations,
+        noBranchTools.storage,
+        noBranchTools.migrations,
       )
       const slowStorage = Layer.provideMerge(delayedEventStorage, baseStorageLayer)
       const deps = Layer.mergeAll(

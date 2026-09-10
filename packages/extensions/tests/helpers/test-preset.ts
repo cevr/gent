@@ -2,17 +2,22 @@
  * Test preset — provides extension config for core integration tests.
  * Imports from @gent/extensions so test-utils don't need to.
  */
-import { BuiltinExtensions } from "@gent/extensions"
-import { CellExtension } from "@gent/core-internal/runtime/code-cell/cell-extension"
+import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import { CELL_EXTENSION_ID } from "../../src/cell/cell-extension.js"
 import { AllBuiltinAgents } from "./builtin-agents.js"
 import type { E2ELayerConfig } from "@gent/core-internal/test-utils/e2e-layer"
 import type { ToolTestLayerConfig } from "@gent/core-internal/test-utils/extension-harness"
 
-/** The shipped composition: core's cell builtin plus the extension builtins. */
+/**
+ * The shipped composition: every builtin extension, and the branch-tool
+ * feature the cell surface among them runs on. Named together because a
+ * `cell` tool whose storage and kernel are missing fails on first use.
+ */
 export const shippedPreset = {
   agents: AllBuiltinAgents,
-  extensionInputs: [CellExtension, ...BuiltinExtensions],
-} satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs">
+  extensionInputs: BuiltinExtensions,
+  branchTools: CellBranchTools,
+} satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs" | "branchTools">
 
 /**
  * Native tool surface for tool-behavior tests. Without the cell builtin the
@@ -20,7 +25,9 @@ export const shippedPreset = {
  */
 export const e2ePreset = {
   agents: AllBuiltinAgents,
-  extensionInputs: BuiltinExtensions,
+  extensionInputs: BuiltinExtensions.filter(
+    (extension) => extension.manifest.id !== CELL_EXTENSION_ID,
+  ),
 } satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs">
 
 export const toolPreset = {

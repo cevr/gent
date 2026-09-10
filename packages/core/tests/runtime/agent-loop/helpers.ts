@@ -56,7 +56,7 @@ import type { BranchId, InteractionRequestId, SessionId } from "../../../src/dom
 import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
 import type { TurnStreamPart } from "../../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
-import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage"
+import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 // ============================================================================
 // Shared helpers
@@ -304,7 +304,7 @@ export const makeLayer = (
   resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools, resources),
@@ -327,7 +327,7 @@ export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.Lang
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
@@ -374,7 +374,7 @@ export const makeLiveToolLayer = (
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     extRegistry,
@@ -429,7 +429,7 @@ export const makeLayerWithEvents = (
   tools: ReadonlyArray<ToolCapability> = [],
 ) => {
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(tools),
@@ -453,7 +453,7 @@ export const makeLayerWithEventPublisher = (
   eventPublisherLayer: Layer.Layer<EventPublisher>,
 ) => {
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistry(),
@@ -520,7 +520,7 @@ export const makeExternalLayerWithEvents = (
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )
   const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     registryLayer,

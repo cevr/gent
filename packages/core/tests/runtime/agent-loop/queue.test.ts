@@ -41,7 +41,7 @@ import {
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { CellBranchTools } from "../../../src/runtime/code-cell/cell-storage"
+import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
@@ -108,7 +108,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           gatedProvider,
           ModelResolver.fromLanguageModel(gatedProvider),
           makeExtRegistry(),
@@ -245,7 +245,7 @@ describe("queue drain regression", () => {
         )
         const makeLayer = () => {
           const deps = Layer.mergeAll(
-            SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
             queueStorageLayer,
             queuedProvider,
             ModelResolver.fromLanguageModel(queuedProvider),
@@ -334,7 +334,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
@@ -416,7 +416,7 @@ describe("queue drain regression", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           queueStorageLayer,
           heldProvider,
           ModelResolver.fromLanguageModel(heldProvider),
