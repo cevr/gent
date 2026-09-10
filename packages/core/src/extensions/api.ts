@@ -67,24 +67,17 @@ export {
   getDurableAgentRunSessionId,
   AgentRunError,
   type RunSpec,
-  resolveDefaultAgentModel,
 } from "../domain/agent.js"
 export { requireAgent, requireCurrentAgent } from "../domain/extension-services.js"
 export {
   type GentExtension,
   LoadedArtifactIdentity,
-  type TurnProjection,
   type SystemPromptInput,
   type ToolCallInput,
-  type ToolCallPreflightResult,
   type TurnAfterInput,
-  type ToolResultInput,
   hook,
   type AnyExtensionHook,
-  type ExtensionHook,
-  type ExtensionHookSlot,
 } from "../domain/extension.js"
-export type { LoadedArtifactIdentity as ExtensionArtifactIdentity } from "../domain/extension.js"
 export type { PromptSection } from "../domain/prompt.js"
 export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
 export { ExternalToolRunner } from "../domain/driver.js"
@@ -94,14 +87,10 @@ export { InteractionPendingError } from "../domain/interaction-request.js"
 export type {
   ExternalDriverContribution,
   ModelDriverContribution,
-  ProviderAuthContribution,
   ProviderAuthInfo,
   ProviderAuthorizationResult,
-  ProviderAuthorizeContext,
-  ProviderCallbackContext,
   ProviderHints,
   ProviderResolution,
-  PersistAuth,
 } from "../domain/driver.js"
 export { DriverError } from "../domain/driver.js"
 export {
@@ -114,13 +103,7 @@ export {
 } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
 export { AuthMethod, AuthOauth } from "../domain/auth.js"
-export {
-  DateFromNumber,
-  dateFromMillis,
-  type Message,
-  type MessagePart,
-  type Branch,
-} from "../domain/message.js"
+export { dateFromMillis, type Message, type MessagePart, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
 export {
   messagePartImage,
@@ -137,7 +120,7 @@ export {
   messagePartsToolCalls,
   messagePartsToolResults,
 } from "../domain/message-part-projection.js"
-export { PermissionRule, type PermissionResult } from "../domain/permission.js"
+export { PermissionRule } from "../domain/permission.js"
 export {
   type ExtensionContributions,
   // Smart constructor — returns a bare leaf value; the bucket it's placed
@@ -155,7 +138,6 @@ export {
   getToolId,
   getToolPrompt,
   tool,
-  type GentToolMetadata,
   type ToolInput,
   type ToolCapability,
 } from "../domain/capability/tool.js"
@@ -169,7 +151,7 @@ export {
 export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export { ToolResultFailure } from "../domain/tool-output.js"
-export type { ResourceContribution, AnyResourceContribution } from "../domain/resource.js"
+export type { AnyResourceContribution } from "../domain/resource.js"
 export type { ScheduledJobContribution } from "../domain/scheduled-job.js"
 export { ProjectionError } from "../domain/extension.js"
 export {
@@ -184,13 +166,7 @@ export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
 // ── Public API ──
 
-export {
-  ExtensionHost,
-  registrationDomains,
-  type ExtensionHostService,
-  type RegistrationDomain,
-  type RegistrationValue,
-} from "../domain/extension-host.js"
+export { ExtensionHost, type ExtensionHostService } from "../domain/extension-host.js"
 
 interface DefineExtensionInput<R = never> {
   readonly id: string

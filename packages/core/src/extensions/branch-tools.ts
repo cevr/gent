@@ -38,11 +38,7 @@ export {
   CurrentBranchToolFeature,
   noBranchTools,
 } from "../runtime/agent/branch-tool-feature.js"
-export {
-  BranchToolLayer,
-  type BranchToolLayerFactory,
-  type BranchToolLayerInput,
-} from "../runtime/agent/branch-tool-layer.js"
+export { BranchToolLayer, type BranchToolLayerFactory } from "../runtime/agent/branch-tool-layer.js"
 export { BranchToolWork } from "../runtime/agent/branch-tool-work.js"
 export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
 
