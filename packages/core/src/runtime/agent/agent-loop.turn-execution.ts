@@ -96,6 +96,8 @@ type TurnStepResult =
       readonly currentTurnAgent: AgentNameType
       readonly interrupted: boolean
       readonly streamFailed: boolean
+      /** The model never produced an answer and no continuation is left. */
+      readonly unanswered: boolean
     }
   | {
       readonly _tag: "interaction"
@@ -603,6 +605,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       startedAtMs: number
       turnInterrupted: boolean
       streamFailed: boolean
+      unanswered: boolean
       currentAgent: AgentNameType
     }) {
       const extensionRegistry = yield* ExtensionRegistry
@@ -637,6 +640,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           if (params.turnInterrupted) {
             Object.assign(completionFields, { interrupted: true })
           }
+          if (params.unanswered) {
+            Object.assign(completionFields, { unanswered: true })
+          }
           return yield* eventPublisher.append(TurnCompleted.make(completionFields))
         }),
       )
@@ -658,8 +664,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Effect.annotateLogs({
           durationMs: Number(turnDurationMs),
           interrupted: params.turnInterrupted,
+          unanswered: params.unanswered,
         }),
       )
+      if (params.unanswered) {
+        yield* Effect.logWarning("turn.unanswered").pipe(
+          Effect.annotateLogs({ continuations: MAX_CONTINUATIONS_PER_TURN }),
+        )
+      }
 
       const wideEventFields = {
         actor: metrics.agent,
@@ -671,6 +683,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
       if (params.streamFailed && !params.turnInterrupted) {
         Object.assign(wideEventFields, { streamFailed: true })
+      }
+      if (params.unanswered) {
+        Object.assign(wideEventFields, { unanswered: true })
       }
       yield* WideEvent.set(wideEventFields)
     })
@@ -940,6 +955,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           currentTurnAgent: params.currentTurnAgent,
           interrupted: false,
           streamFailed: false,
+          unanswered: false,
         } satisfies TurnStepResult
       }
 
@@ -957,6 +973,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           currentTurnAgent,
           interrupted: true,
           streamFailed: false,
+          unanswered: false,
         } satisfies TurnStepResult
       }
 
@@ -1001,6 +1018,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           currentTurnAgent,
           interrupted: true,
           streamFailed: false,
+          unanswered: false,
         } satisfies TurnStepResult
       }
       if (collected.streamFailed) {
@@ -1017,6 +1035,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           currentTurnAgent,
           interrupted: false,
           streamFailed: true,
+          unanswered: false,
         } satisfies TurnStepResult
       }
       if (collected.driverKind === "external") {
@@ -1025,6 +1044,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           currentTurnAgent,
           interrupted: false,
           streamFailed: false,
+          unanswered: false,
         } satisfies TurnStepResult
       }
 
@@ -1034,7 +1054,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // with no observable output either answered nothing at all: persisting
         // an empty parts list stores no message, so finalizing here reports a
         // successful turn that produced no reply. Re-prompt once instead.
-        if (!collected.responseParts.some(isObservableModelOutputPart)) {
+        const producedNothing = !collected.responseParts.some(isObservableModelOutputPart)
+        if (producedNothing) {
           const continued = yield* continueWithinTurn({
             messageId: params.state.message.id,
             step: params.step,
@@ -1042,11 +1063,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           })
           if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
         }
+        // Continuations are spent and the model still said nothing. Say so on
+        // the receipt rather than finalizing a turn that looks like a reply.
         return {
           _tag: "stop",
           currentTurnAgent,
           interrupted: false,
           streamFailed: false,
+          unanswered: producedNothing,
         } satisfies TurnStepResult
       }
       const interactionSignal = yield* executeToolsWithInteraction({
@@ -1100,6 +1124,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* scope.clearInFlightTurn(state.message.id)
         let interrupted = yield* scope.turnInterruption.interrupted
         let streamFailed = false
+        let unanswered = false
         let currentTurnAgent: AgentNameType = Option.getOrElse(
           Option.fromUndefinedOr(state.currentAgent),
           () => DEFAULT_AGENT_NAME,
@@ -1137,6 +1162,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             currentTurnAgent = stepResult.currentTurnAgent
             interrupted = stepResult.interrupted
             streamFailed = stepResult.streamFailed
+            unanswered = stepResult.unanswered
             break
           }
           if (stepResult._tag === "continue") {
@@ -1152,6 +1178,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           messageId: state.message.id,
           turnInterrupted: interrupted,
           streamFailed,
+          unanswered,
           currentAgent: currentTurnAgent,
         })
         return TurnOutcome.cases.Done.make({})

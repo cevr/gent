@@ -7,6 +7,7 @@ import {
   Option,
   Predicate,
   Schedule,
+  Schema,
   Stdio,
   Stream,
 } from "effect"
@@ -19,6 +20,17 @@ import {
   type HeadlessToolCall,
 } from "./headless-tool-renderers"
 import { randomId } from "./utils/random-id"
+
+/**
+ * The turn finished without the model ever answering. Distinct from a
+ * connection fault: the run reached the server, spent its continuations and
+ * came back empty. Failing here is what gives a scripted caller a non-zero
+ * exit — a silent exit 0 with no output is indistinguishable from success.
+ */
+export class HeadlessUnansweredError extends Schema.TaggedError<HeadlessUnansweredError>()(
+  "@gent/tui/HeadlessUnansweredError",
+  { message: Schema.String },
+) {}
 
 export const runHeadless = (
   client: GentNamespacedClient,
@@ -34,7 +46,9 @@ export const runHeadless = (
       const stdio = yield* Stdio.Stdio
       const writeStdout = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stdout()))
       const writeStderr = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stderr()))
-      const done = yield* Deferred.make<void>()
+      // Carries whether the turn actually answered, so the race below can fail
+      // the run instead of exiting 0 on an empty transcript.
+      const done = yield* Deferred.make<boolean>()
       const activeTools = new Map<string, HeadlessToolCall>()
       const renderTool = (toolCall: HeadlessToolCall, parentToolCallId?: string) => {
         const rendered = renderHeadlessToolCall(toolCall, toolRenderers)
@@ -102,10 +116,10 @@ export const runHeadless = (
                 break
               case "ErrorOccurred":
                 yield* writeStderr(`\nError: ${event.error}\n`)
-                yield* Deferred.succeed(done, void 0)
+                yield* Deferred.succeed(done, true)
                 break
               case "TurnCompleted":
-                yield* Deferred.succeed(done, void 0)
+                yield* Deferred.succeed(done, event.unanswered !== true)
                 break
               case "InteractionPresented":
                 yield* writeStdout(`\n[interaction: auto-approving]\n`)
@@ -149,7 +163,7 @@ export const runHeadless = (
         Effect.withSpan("Headless.sendMessage"),
       )
 
-      yield* Effect.raceFirst(
+      const answered = yield* Effect.raceFirst(
         Deferred.await(done),
         Fiber.await(streamFiber).pipe(
           Effect.flatMap((exit) =>
@@ -171,5 +185,11 @@ export const runHeadless = (
         ),
       )
       yield* Fiber.interrupt(streamFiber).pipe(Effect.asVoid)
+      if (!answered) {
+        yield* writeStderr("\nError: the turn ended without an answer.\n")
+        return yield* new HeadlessUnansweredError({
+          message: "turn completed without producing an answer",
+        })
+      }
     }),
   )

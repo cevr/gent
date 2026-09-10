@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers, finishPart } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/debug/provider"
@@ -17,7 +17,14 @@ import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
-import { makeAgentLoopService, makeLayer, runAgentLoop } from "./agent-loop/helpers"
+import { AgentEvent } from "../../src/domain/event"
+import { SequenceRecorder } from "../../src/test-utils"
+import {
+  makeAgentLoopService,
+  makeLayer,
+  makeRecordingLayer,
+  runAgentLoop,
+} from "./agent-loop/helpers"
 
 describe("empty final step", () => {
   const sessionId = SessionId.make("empty-step-session")
@@ -72,6 +79,40 @@ describe("empty final step", () => {
         expect(assistantTexts.length).toBeGreaterThan(0)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
+    }),
+  )
+
+  it.live("marks the turn unanswered once every continuation is spent", () =>
+    Effect.gen(function* () {
+      // Three empty steps: the first two burn both continuations, the third
+      // still says nothing. The loop has no move left, so the receipt must
+      // record that it gave up rather than reporting an ordinary reply.
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        emptyStep(),
+        emptyStep(),
+        emptyStep(),
+      ])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const recorder = yield* SequenceRecorder
+          yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+
+          const calls = yield* recorder.getCalls
+          const turnCompleted = calls
+            .filter((call) => call.service === "EventStore" && call.method === "append")
+            .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
+            .filter(Option.isSome)
+            .map(({ value }) => value)
+            .filter((event) => event._tag === "TurnCompleted")
+
+          expect(turnCompleted.length).toBeGreaterThan(0)
+          // Without the flag every field here reads exactly like a successful
+          // turn, and the caller cannot tell "gave up" from "replied".
+          expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
+      )
     }),
   )
 })

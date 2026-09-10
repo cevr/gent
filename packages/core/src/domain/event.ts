@@ -111,6 +111,14 @@ export const AgentEvent = Schema.TaggedUnion({
     interrupted: Schema.optional(Schema.Boolean),
     // Absent in historical receipts; absence does not prove model success.
     streamFailed: Schema.optional(Schema.Boolean),
+    /**
+     * True when the turn ended without the model ever producing an answer —
+     * every continuation was spent and the last step still yielded nothing.
+     * Distinguishes "gave up" from "replied": without it a caller sees a
+     * successful turn and an empty transcript, and cannot tell them apart.
+     * Absent on historical receipts and on every turn that did reply.
+     */
+    unanswered: Schema.optional(Schema.Boolean),
   },
   /** What the model saw this turn after projection and compaction. */
   ModelContextProjected: {
