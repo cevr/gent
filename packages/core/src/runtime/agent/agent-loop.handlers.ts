@@ -92,9 +92,7 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
-import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
-import { provideExtensionLeaf } from "../extensions/extension-effect-membrane.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import {
@@ -102,7 +100,6 @@ import {
   type AgentLoopTurnProfile,
 } from "./agent-loop.turn-profile.js"
 import type { CurrentExtensionHostContext } from "./current-extension-host-context.js"
-import { runExtensionCapability } from "../extensions/registry.js"
 import {
   buildQueuedTurnItem,
   awaitTurnCompletion,
@@ -169,7 +166,6 @@ export const buildAgentLoopActorHandlers = (config: {
     const eventStorage = yield* EventStorage
     const operations = yield* SessionOperationStorage
     const eventStore = yield* EventStore
-    const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
@@ -992,24 +988,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 RpcId.make(operation.capabilityId),
                 input,
               )
-              let dynamicRequest: ExtensionRequestEffect = staticRequest
-              if (Option.isSome(dynamicRegistryOption)) {
-                dynamicRequest = Effect.gen(function* () {
-                  const dynamic = yield* dynamicRegistryOption.value.findRequest({
-                    sessionId: operation.sessionId,
-                    extensionId: operation.extensionId,
-                    capabilityId: operation.capabilityId,
-                  })
-                  if (Option.isNone(dynamic)) return yield* staticRequest
-                  return yield* runExtensionCapability(
-                    dynamic.value.extensionId,
-                    RpcId.make(operation.capabilityId),
-                    dynamic.value.capability,
-                    input,
-                  ).pipe(provideExtensionLeaf({ extensionId: dynamic.value.extensionId }))
-                })
-              }
-              return yield* runExtensionRequest(environment, dynamicRequest).pipe(
+              return yield* runExtensionRequest(environment, staticRequest).pipe(
                 // Branch Resources live on the loop scope, not on the turn
                 // profile. Without this an extension leaf reached over RPC
                 // cannot see a `scope: "branch"` service.

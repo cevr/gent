@@ -105,26 +105,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("dynamic registration uses the current ExtensionContext identity", () => {
-    const DynamicLockTool = tool({
-      id: "dynamic-lock-tool",
-      description: "ok",
-      params: NoInput,
-      output: StringOutput,
-      execute: () => Effect.succeed("ok"),
-    })
-    type RegisterTool = PublicExtensionApi.ExtensionContextService["Dynamic"]["registerTool"]
-
-    const good: Parameters<RegisterTool> = [DynamicLockTool]
-
-    // @ts-expect-error — extension identity is supplied by ExtensionContext, not a parameter
-    const bad: Parameters<RegisterTool> = [ExtensionId.make("surface-locks"), DynamicLockTool]
-
-    void good
-    void bad
-    expect(true).toBe(true)
-  })
-
   test("state change notifications use the current ExtensionContext identity", () => {
     type StateChanged = PublicExtensionApi.ExtensionContextService["State"]["changed"]
 

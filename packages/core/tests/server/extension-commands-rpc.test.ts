@@ -41,7 +41,6 @@ import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SlashCommandInfo } from "../../src/server/transport-contract"
-import { ToolCallSucceeded } from "../../src/domain/event"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
@@ -63,7 +62,6 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
-import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
 import { ExtensionProtocolError } from "../../src/server/errors"
 import { registerContributions } from "../../src/domain/extension-host.js"
 class ProfileToken extends Context.Service<
@@ -1445,171 +1443,6 @@ describe("extension command RPCs", () => {
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
-  )
-  it.live("RPC dynamic registrations update slash, request, and model tool surfaces", () =>
-    Effect.gen(function* () {
-      const extensionId = ExtensionId.make("@test/dynamic-authoring")
-      const DynamicEchoTool = tool({
-        id: "dynamic_echo",
-        description: "Dynamic echo",
-        params: Schema.Struct({ text: Schema.String }),
-        output: Schema.String,
-        execute: ({ text }) => Effect.succeed(`tool:${text}`),
-      })
-      const DynamicEchoRequest = request({
-        id: "dynamic-echo",
-        extensionId,
-        slash: { name: "dynamic-echo", description: "Dynamic echo" },
-        description: "Dynamic echo",
-        input: Schema.String,
-        output: Schema.String,
-        execute: (input) => Effect.succeed(`request:${input}`),
-      })
-      const ext: GentExtension = {
-        manifest: { id: extensionId },
-        setup: registerContributions({
-          requests: [
-            request({
-              id: "install-dynamic",
-              extensionId,
-              description: "Install dynamic capabilities",
-              input: Schema.Void,
-              output: Schema.Void,
-              execute: () =>
-                Effect.gen(function* () {
-                  const ctx = yield* ExtensionContext
-                  const unregisterTool = yield* ctx.Dynamic.registerTool(DynamicEchoTool)
-                  const unregisterRequest = yield* ctx.Dynamic.registerRequest(DynamicEchoRequest)
-                  void unregisterTool
-                  void unregisterRequest
-                }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new CapabilityError({
-                        extensionId,
-                        capabilityId: "install-dynamic",
-                        reason: cause.message,
-                      }),
-                  ),
-                ),
-            }),
-          ],
-        }),
-      }
-
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            {
-              ...textStep("dynamic registered"),
-              assertOptions: (options) => {
-                expect(options.tools.map((entry) => entry.name)).toContain("dynamic_echo")
-              },
-            },
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [...e2ePreset.extensionInputs, ext],
-            cwd: "/tmp/gent-dynamic-authoring",
-          })
-
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "install-dynamic",
-            // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-            input: undefined,
-          })
-
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toContain("dynamic-echo")
-
-          const requestResult = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId,
-            capabilityId: "dynamic-echo",
-            input: "hello",
-          })
-          expect(requestResult).toBe("request:hello")
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "use the dynamic tool",
-          })
-        }).pipe(Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("reference dynamic extension registers session tools and slash requests", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          {
-            ...toolCallStep("scratchpad_append", { text: "from the model" }),
-            assertOptions: (options) => {
-              expect(options.tools.map((entry) => entry.name)).toContain("scratchpad_append")
-            },
-          },
-          textStep("noted"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          extensionInputs: [...e2ePreset.extensionInputs, DynamicScratchpadExtension],
-          cwd: "/tmp/gent-dynamic-scratchpad",
-        })
-        const extensionId = ExtensionId.make("dynamic-scratchpad")
-
-        const installResult = yield* client.extension.request({
-          sessionId,
-          branchId,
-          extensionId,
-          capabilityId: "scratchpad-install",
-          input: {},
-        })
-        expect(installResult).toEqual({
-          tool: "scratchpad_append",
-          request: "scratchpad-show",
-        })
-
-        const commands = yield* client.extension.listSlashCommands({ sessionId })
-        const commandNames = commands.map((command) => command.name)
-        expect(commandNames).toContain("scratchpad-install")
-        expect(commandNames).toContain("scratchpad")
-
-        const toolEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter(
-            (envelope) =>
-              Schema.is(ToolCallSucceeded)(envelope.event) &&
-              envelope.event.toolName === "scratchpad_append",
-          ),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkScoped,
-        )
-
-        yield* client.message.send({
-          sessionId,
-          branchId,
-          content: "store the scratchpad note",
-        })
-        const toolEvents = Array.from(yield* Fiber.join(toolEventFiber))
-        expect(toolEvents).toHaveLength(1)
-
-        const scratchpad = yield* client.extension.request({
-          sessionId,
-          branchId,
-          extensionId,
-          capabilityId: "scratchpad-show",
-          input: {},
-        })
-        expect(scratchpad).toBe("1. from the model")
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
   )
   it.live("RPC listSlashCommands omits lower-scope slash request shadowed by project request", () =>
     Effect.gen(function* () {

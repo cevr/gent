@@ -89,9 +89,6 @@ const sourceRevisionFor = (
   return Option.some(ToolSourceRevision.make(sourceParts.join(":")))
 }
 
-const dynamicSourceRevisionFor = (entry: ResolvedToolCapability): ToolSourceRevision =>
-  ToolSourceRevision.make(`dynamic:${entry.extensionId}:${getToolId(entry.capability)}`)
-
 /** Attach the durable identity available for one freshly selected capability. */
 export const attachToolBindingIdentity = (
   entry: ResolvedToolCapability,
@@ -101,22 +98,13 @@ export const attachToolBindingIdentity = (
     (candidate) => candidate.manifest.id === entry.extensionId,
   )
   let sourceRevision = Option.none<ToolSourceRevision>()
-  if (entry.origin === "dynamic") {
-    sourceRevision = Option.some(dynamicSourceRevisionFor(entry))
-  } else if (Predicate.isNotUndefined(extension)) {
+  if (Predicate.isNotUndefined(extension)) {
     const revision = sourceRevisionFor(extension, context.publicationRevision)
     if (Option.isSome(revision)) sourceRevision = revision
   }
   if (Option.isNone(sourceRevision)) return entry
 
-  let source: ToolBindingIdentity["source"]
-  if (entry.origin === "dynamic") {
-    source = ToolBindingSource.cases.DynamicNonReplayable.make({
-      sourceRevision: sourceRevision.value,
-    })
-  } else {
-    source = ToolBindingSource.cases.Static.make({ sourceRevision: sourceRevision.value })
-  }
+  const source = ToolBindingSource.cases.Static.make({ sourceRevision: sourceRevision.value })
   const binding = makeToolBindingIdentity({
     toolId: getToolId(entry.capability),
     extensionId: entry.extensionId,
@@ -136,7 +124,7 @@ export const processLocalToolBindingIdentity = (
     readonly hash: (input: string) => string
   },
 ): Option.Option<ToolBindingIdentity> => {
-  if (entry.origin === "dynamic" || Predicate.isNotUndefined(entry.binding)) return Option.none()
+  if (Predicate.isNotUndefined(entry.binding)) return Option.none()
   return Option.some(
     makeToolBindingIdentity({
       toolId: getToolId(entry.capability),

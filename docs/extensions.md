@@ -46,13 +46,6 @@ Its regression test loads the file through the public package path and executes
 the contributed tool and hook under the real resource layer while checking the
 slash request through the registry surface.
 
-For capabilities that should appear only after a runtime decision, see
-`examples/extensions/dynamic-scratchpad.ts`. It starts with one slash-presented
-installer request, then uses `ExtensionContext.Dynamic` to register a
-session-scoped tool and slash request. Its RPC acceptance test proves the
-dynamic slash command appears, the model sees the dynamic tool, and the dynamic
-request reads the same extension-owned state.
-
 ## Named Concepts
 
 You need at most 7 concepts to write a complete extension:
@@ -67,9 +60,9 @@ You need at most 7 concepts to write a complete extension:
 | 6   | `defineAgent`     | Spawnable subagent                                  |
 | 7   | `PermissionRule`  | Allow/deny rule for tool patterns                   |
 
-Registration domains: `"tool"`, `"request"`, `"resource"`, `"job"`, `"agent"`,
+Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
 `"modelDriver"`, `"externalDriver"`. Hook kinds: `"systemPrompt"`,
-`"turnProjection"`, `"turnAfter"`, `"toolCall"`, `"toolResult"`.
+`"turnProjection"`, `"turnAfter"`.
 
 Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
@@ -286,31 +279,8 @@ export default defineExtension({
 ```
 
 Lifecycle extension points are typed hook kinds, not keyed middleware bags:
-`systemPrompt`, `turnProjection`, `turnAfter`, `toolCall`, and `toolResult`.
+`systemPrompt`, `turnProjection`, and `turnAfter`.
 Each `host.on` call is typed by the kind's input and output.
-
-## Dynamic Capabilities
-
-Use `ExtensionContext.Dynamic` when an extension needs to register tools or
-requests for the current session after setup. Dynamic registration is still
-ordinary Effect code: the installing request or hook yields `ExtensionContext`,
-registers public `tool(...)` / `request(...)` leaves, and stores any private
-state in extension-owned services.
-
-```ts
-const install = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  const unregisterTool = yield* ctx.Dynamic.registerTool(ScratchpadAppendTool)
-  const unregisterRequest = yield* ctx.Dynamic.registerRequest(ShowScratchpad)
-})
-```
-
-The host supplies the current extension identity, so authors register leaves
-instead of threading extension IDs through dynamic calls. The returned effects
-unregister the dynamic leaves. Keep them when the
-extension owns a lifecycle that should later remove or replace the capability.
-For the complete shape, including state and slash presentation, see
-`examples/extensions/dynamic-scratchpad.ts`.
 
 ## Resource (long-lived state)
 

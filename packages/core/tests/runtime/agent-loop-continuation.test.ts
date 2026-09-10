@@ -1,23 +1,18 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema } from "effect"
+import { Effect, Fiber, Predicate, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/debug/provider"
 import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../src/domain/message"
-import {
-  DynamicExtensionRegistry,
-  type DynamicExtensionRegistryService,
-} from "../../src/domain/dynamic-extension-registry"
 import { tool } from "@gent/core/extensions/api"
 import { TurnCompleted, type AgentEvent } from "../../src/domain/event"
 import { MessageStorage } from "../../src/storage/message-storage"
-import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
+import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { toolResultMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
 import {
   makeAgentLoopService,
   makeLayer,
   makeLayerWithEvents,
-  makeLiveToolLayer,
   runAgentLoop,
   steerAgentLoop,
   waitForPhase,
@@ -301,97 +296,6 @@ describe("continuation", () => {
         expect(yield* controls.callCount).toBe(3)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }),
-  )
-
-  it.live("executes the advertised dynamic tool after replacement", () =>
-    Effect.gen(function* () {
-      const first = tool({
-        id: "replaceable",
-        description: "First implementation",
-        params: Schema.Struct({}),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: () => Effect.succeed({ value: "A" }),
-      })
-      const replacement = tool({
-        id: "replaceable",
-        description: "Replacement implementation",
-        params: Schema.Struct({}),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: () => Effect.succeed({ value: "B" }),
-      })
-      const sessionId = SessionId.make("replacement-turn-session")
-      const branchId = BranchId.make("replacement-turn-branch")
-      const makeMessage = (id: string, text: string) =>
-        Message.cases.regular.make({
-          id: MessageId.make(id),
-          sessionId,
-          branchId,
-          role: "user",
-          parts: [Prompt.textPart({ text })],
-          createdAt: dateFromMillis(1_767_225_600_000),
-        })
-      let dynamicRegistry = Option.none<DynamicExtensionRegistryService>()
-      let unregisterFirst = Option.none<Effect.Effect<void>>()
-      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-        {
-          ...toolCallStep("replaceable", {}),
-          assertOptions: (options) => {
-            if (Option.isNone(dynamicRegistry) || Option.isNone(unregisterFirst)) return
-            expect(options.tools.map((entry) => entry.name)).toContain("replaceable")
-            Effect.runSyncWith(Context.empty())(unregisterFirst.value)
-            unregisterFirst = Option.some(
-              Effect.runSyncWith(Context.empty())(
-                dynamicRegistry.value.registerTool({
-                  extensionId: ExtensionId.make("dynamic-b"),
-                  scope: { _tag: "session", sessionId },
-                  capability: replacement,
-                }),
-              ),
-            )
-          },
-        },
-        textStep("Old turn done."),
-        toolCallStep("replaceable", {}),
-        textStep("New turn done."),
-      ])
-
-      yield* Effect.gen(function* () {
-        const dynamic = yield* DynamicExtensionRegistry
-        dynamicRegistry = Option.some(dynamic)
-        unregisterFirst = Option.some(
-          yield* dynamic.registerTool({
-            extensionId: ExtensionId.make("dynamic-a"),
-            scope: { _tag: "session", sessionId },
-            capability: first,
-          }),
-        )
-        const agentLoop = yield* makeAgentLoopService
-        const oldMessage = makeMessage("replacement-old-message", "old turn")
-        const currentMessage = makeMessage("replacement-current-message", "current turn")
-        yield* runAgentLoop(agentLoop, oldMessage)
-        yield* runAgentLoop(agentLoop, currentMessage)
-
-        const messageStorage = yield* MessageStorage
-        const oldResult = yield* messageStorage.getMessage(
-          toolResultMessageIdForTurn(oldMessage.id, 1),
-        )
-        const currentResult = yield* messageStorage.getMessage(
-          toolResultMessageIdForTurn(currentMessage.id, 1),
-        )
-        expect(oldResult?.parts[0]).toEqual(expect.objectContaining({ result: { value: "A" } }))
-        expect(currentResult?.parts[0]).toEqual(expect.objectContaining({ result: { value: "B" } }))
-        expect(yield* controls.callCount).toBe(4)
-        yield* controls.assertDone
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(
-          Layer.mergeAll(
-            makeLiveToolLayer(providerLayer, [], [], DynamicExtensionRegistry.Live),
-            DynamicExtensionRegistry.Live,
-          ),
-        ),
-      )
     }),
   )
 })

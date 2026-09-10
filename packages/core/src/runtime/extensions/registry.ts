@@ -191,7 +191,7 @@ const resolveCapabilityEntry = (
   return Option.none()
 }
 
-export const runExtensionCapability = (
+const runExtensionCapability = (
   extensionId: ExtensionId,
   capabilityId: RpcId | string,
   capability: RequestCapability,
@@ -286,10 +286,7 @@ const failedExtensionStatus = (failure: FailedExtension): ExtensionStatusInfo =>
   status: "failed",
 })
 
-export const capabilityToCommand = (
-  extensionId: ExtensionId,
-  cap: RequestCapability,
-): SlashCommand => {
+const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
   const slash = Option.fromUndefinedOr(cap.slash)
   const name = Option.match(slash, {
     onNone: () => String(cap.id),

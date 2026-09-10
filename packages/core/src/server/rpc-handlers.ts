@@ -3,14 +3,12 @@ import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
-import { DynamicExtensionRegistry } from "../domain/dynamic-extension-registry.js"
 import { EventId, EventStore, type EventEnvelope } from "../domain/event.js"
 import { SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import {
-  capabilityToCommand,
   ExtensionRegistry,
   listSlashCommands,
   type ExtensionRegistryService,
@@ -652,18 +650,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
           const { registry } = yield* resolveSessionServices(Option.fromUndefinedOr(sessionId))
-          const dynamicRegistry = yield* Effect.serviceOption(DynamicExtensionRegistry)
-          let dynamicCommands: ReadonlyArray<ReturnType<typeof capabilityToCommand>> = []
-          if (Option.isSome(dynamicRegistry)) {
-            dynamicCommands = (yield* dynamicRegistry.value.listRequests(SessionId.make(sessionId)))
-              .filter((entry) => !Predicate.isUndefined(entry.capability.slash))
-              .map((entry) => capabilityToCommand(entry.extensionId, entry.capability))
-          }
-          const commandsByName = new Map(
-            listSlashCommands(registry.getResolved()).map((command) => [command.name, command]),
-          )
-          for (const command of dynamicCommands) commandsByName.set(command.name, command)
-          return [...commandsByName.values()].map(
+          return listSlashCommands(registry.getResolved()).map(
             (command) =>
               new SlashCommandInfo({
                 name: command.name,

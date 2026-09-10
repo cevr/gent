@@ -6,7 +6,6 @@ import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensio
 import { tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 import { executeToolCalls } from "../../src/runtime/agent/turn-tool-execution"
-import { DynamicExtensionRegistry } from "../../src/domain/dynamic-extension-registry"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -108,59 +107,7 @@ describe("tool execution", () => {
       expect(result.result).toEqual({ echoed: "hello" })
     }))
 
-  test("runs a tool registered dynamically for the session", () =>
-    Effect.gen(function* () {
-      const DynamicTool = tool({
-        id: "dynamic_echo",
-        description: "Echo input",
-        params: Schema.Struct({ message: Schema.String }),
-        output: Schema.Struct({ echoed: Schema.String }),
-        execute: ({ message }) => Effect.succeed({ echoed: message }),
-      })
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(resolveExtensions([])),
-        DynamicExtensionRegistry.Live,
-        Permission.Test(),
-        EventPublisher.Test(),
-        ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const { allowed } = yield* Effect.gen(function* () {
-        const dynamic = yield* DynamicExtensionRegistry
-        const unregister = yield* dynamic.registerTool({
-          extensionId: ExtensionId.make("dynamic"),
-          scope: { _tag: "session", sessionId: SessionId.make("s") },
-          capability: DynamicTool,
-        })
-        void unregister
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc-dynamic")
-        const allowed = yield* runner
-          .run({
-            toolCallId,
-            toolName: "dynamic_echo",
-            input: { message: "hello" },
-          })
-          .pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("s"),
-                branchId: BranchId.make("b"),
-                toolCallId,
-                agentName: AgentName.make("cowork"),
-              }),
-            ),
-          )
-        return { allowed }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(allowed.isFailure).toBe(false)
-      expect(allowed.result).toEqual({ echoed: "hello" })
-    }))
-
-  test("executes the captured dynamic implementation after replacement", () =>
+  test("executes the captured implementation after the registry replaces it", () =>
     Effect.gen(function* () {
       const makeReplacementTool = (value: string) =>
         tool({
@@ -174,9 +121,33 @@ describe("tool execution", () => {
       const replacement = makeReplacementTool("B")
       const sessionId = SessionId.make("replacement-session")
       const branchId = BranchId.make("replacement-branch")
+
+      // A registry whose resolution changes mid-test, standing in for a
+      // profile refresh. `getResolved` is a thunk, so swapping the cell is
+      // enough -- the point is that a captured entry keeps running the
+      // implementation it captured, not whatever the registry holds now.
+      const resolvedFor = (capability: typeof first) =>
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("replaceable-owner") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { tools: [capability] },
+          },
+        ])
+      let current = resolvedFor(first)
+      const registryLayer = Layer.succeed(
+        ExtensionRegistry,
+        ExtensionRegistry.of({
+          get extensionHooks() {
+            return current.extensionHooks
+          },
+          getResolved: () => current,
+        }),
+      )
+
       const deps = Layer.mergeAll(
-        ExtensionRegistry.Test(),
-        DynamicExtensionRegistry.Live,
+        registryLayer,
         Permission.Test(),
         EventPublisher.Test(),
         ApprovalService.Test(),
@@ -186,20 +157,9 @@ describe("tool execution", () => {
       const layer = Layer.mergeAll(deps, runnerLayer)
 
       const result = yield* Effect.gen(function* () {
-        const dynamic = yield* DynamicExtensionRegistry
-        const unregisterFirst = yield* dynamic.registerTool({
-          extensionId: ExtensionId.make("dynamic-a"),
-          scope: { _tag: "session", sessionId },
-          capability: first,
-        })
         const runner = yield* ToolRunner
-        const captured = yield* runner.capture({ sessionId, toolName: "replaceable" })
-        yield* unregisterFirst
-        const unregisterReplacement = yield* dynamic.registerTool({
-          extensionId: ExtensionId.make("dynamic-b"),
-          scope: { _tag: "session", sessionId },
-          capability: replacement,
-        })
+        const captured = yield* runner.capture({ toolName: "replaceable" })
+        current = resolvedFor(replacement)
 
         const run = (toolCallId: string, entry: Option.Option<ResolvedToolCapability>) =>
           runner
@@ -219,10 +179,10 @@ describe("tool execution", () => {
             )
 
         const oldTurn = yield* run("replacement-old", captured)
-        const current = yield* runner.capture({ sessionId, toolName: "replaceable" })
-        const currentTurn = yield* run("replacement-current", current)
+        const currentEntry = yield* runner.capture({ toolName: "replaceable" })
+        const currentTurn = yield* run("replacement-current", currentEntry)
         const hiddenTurn = yield* run("replacement-hidden", Option.none<ResolvedToolCapability>())
-        const hostEntry = yield* Effect.fromOption(current)
+        const hostEntry = yield* Effect.fromOption(currentEntry)
         const hiddenOuterTurn = yield* executeToolCalls({
           assistantMessageId: MessageId.make("outer-message"),
           sessionId,
@@ -239,7 +199,6 @@ describe("tool execution", () => {
           toolBindings: new Map(),
           hostToolBindings: new Map([["replaceable", hostEntry]]),
         }).pipe(provideCurrentHostCtx(testToolContext({ sessionId, branchId })))
-        yield* unregisterReplacement
         return { oldTurn, currentTurn, hiddenTurn, hiddenOuterTurn }
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))

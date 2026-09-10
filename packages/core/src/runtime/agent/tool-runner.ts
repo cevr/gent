@@ -18,11 +18,6 @@ import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import {
-  DynamicExtensionRegistry,
-  type DynamicExtensionRegistryService,
-  type DynamicToolEntry,
-} from "../../domain/dynamic-extension-registry.js"
-import {
   encodeToolOutput,
   summarizeToolOutput,
   stringifyOutput,
@@ -30,7 +25,7 @@ import {
 } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { ToolCallId, type ExtensionId, type SessionId } from "../../domain/ids.js"
+import { ToolCallId, type ExtensionId } from "../../domain/ids.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -61,7 +56,7 @@ type ToolCapabilityContext = ExtensionHostContext & {
 export interface ResolvedToolCapability {
   readonly extensionId: ExtensionId
   readonly capability: ToolCapability
-  readonly origin: "static" | "dynamic"
+  readonly origin: "static"
   readonly binding?: ToolBindingIdentity
 }
 
@@ -78,7 +73,6 @@ type ToolRunnerToolkit = AiToolkit.WithHandler<ToolCapabilityMap>
 interface ToolRunnerService {
   /** Capture the currently visible implementation once for a direct invocation. */
   readonly capture: (params: {
-    readonly sessionId: SessionId
     readonly toolName: string
   }) => Effect.Effect<Option.Option<ResolvedToolCapability>, never, ExtensionRegistry>
   readonly run: (
@@ -271,42 +265,15 @@ export const staticToolEntries = (
   return entries
 }
 
-export const dynamicToolEntry = (entry: DynamicToolEntry): ResolvedToolCapability => ({
-  extensionId: entry.extensionId,
-  capability: entry.capability,
-  origin: "dynamic",
-})
-
-/** Merge visible tool entries with dynamic entries shadowing static entries. */
-export const mergeResolvedToolEntries = (
-  staticEntries: ReadonlyArray<ResolvedToolCapability>,
-  dynamicEntries: ReadonlyArray<ResolvedToolCapability>,
-): ReadonlyArray<ResolvedToolCapability> => {
-  const winners = new Map<string, ResolvedToolCapability>()
-  for (const entry of staticEntries) winners.set(String(getToolId(entry.capability)), entry)
-  for (const entry of dynamicEntries) winners.set(String(getToolId(entry.capability)), entry)
-  return [...winners.values()]
-}
-
 const captureToolEntry = (params: {
-  readonly sessionId: SessionId
   readonly toolName: string
   readonly activeRegistry: ExtensionRegistryService
-  readonly dynamicRegistry: Option.Option<DynamicExtensionRegistryService>
-}): Effect.Effect<Option.Option<ResolvedToolCapability>> =>
-  Effect.gen(function* () {
-    const staticEntries = staticToolEntries(params.activeRegistry)
-    let dynamicEntries: ReadonlyArray<ResolvedToolCapability> = []
-    if (Option.isSome(params.dynamicRegistry)) {
-      dynamicEntries = yield* params.dynamicRegistry.value
-        .listToolEntries(params.sessionId)
-        .pipe(Effect.map((entries) => entries.map(dynamicToolEntry)))
-    }
-    const entry = mergeResolvedToolEntries(staticEntries, dynamicEntries).find(
-      (candidate) => String(getToolId(candidate.capability)) === params.toolName,
-    )
-    return Option.fromUndefinedOr(entry)
-  })
+}): Option.Option<ResolvedToolCapability> => {
+  const entry = staticToolEntries(params.activeRegistry).find(
+    (candidate) => String(getToolId(candidate.capability)) === params.toolName,
+  )
+  return Option.fromUndefinedOr(entry)
+}
 
 const runTool = Effect.fn("ToolRunner.execute")(function* (
   toolCall: ToolCall,
@@ -476,23 +443,11 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       capture: (params) =>
         Effect.gen(function* () {
           const activeRegistry = yield* ExtensionRegistry
-          const dynamicRegistry = yield* Effect.serviceOption(DynamicExtensionRegistry)
-          return yield* captureToolEntry({
-            ...params,
-            activeRegistry,
-            dynamicRegistry,
-          })
+          return captureToolEntry({ ...params, activeRegistry })
         }),
       run: Effect.fn("ToolRunner.run")(function* (toolCall) {
         const activeRegistry = yield* ExtensionRegistry
-        const dynamicRegistry = yield* Effect.serviceOption(DynamicExtensionRegistry)
-        const hostCtx = yield* CurrentExtensionHostContext
-        const entry = yield* captureToolEntry({
-          sessionId: hostCtx.sessionId,
-          toolName: toolCall.toolName,
-          activeRegistry,
-          dynamicRegistry,
-        })
+        const entry = captureToolEntry({ toolName: toolCall.toolName, activeRegistry })
         return yield* runTool(toolCall, entry)
       }),
       runBound: (toolCall, entry) => runTool(toolCall, entry),

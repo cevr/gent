@@ -16,7 +16,6 @@ import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loo
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import type { DynamicExtensionRegistry } from "../../../src/domain/dynamic-extension-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
@@ -370,7 +369,6 @@ export const makeLiveToolLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
-  additionalDeps?: Layer.Layer<DynamicExtensionRegistry>,
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
@@ -387,10 +385,6 @@ export const makeLiveToolLayer = (
     ModelRegistry.Test(),
     GentPlatform.Test(),
     ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
-    Option.match(Option.fromUndefinedOr(additionalDeps), {
-      onNone: () => Layer.empty,
-      onSome: (layer) => layer,
-    }),
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)

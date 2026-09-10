@@ -4,7 +4,6 @@ import { BunServices } from "@effect/platform-bun"
 import SessionNotesExtension, {
   AddNoteTool,
 } from "../../../../examples/extensions/session-notes.js"
-import DynamicScratchpadExtension from "../../../../examples/extensions/dynamic-scratchpad.js"
 import { getToolId, type GentExtension } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
 import { getToolMetadata } from "../../src/domain/capability/tool"
@@ -15,10 +14,6 @@ import { collectTestContributions } from "../../src/test-utils"
 
 const sessionNotesSourceUrl = new URL(
   "../../../../examples/extensions/session-notes.ts",
-  import.meta.url,
-)
-const dynamicScratchpadSourceUrl = new URL(
-  "../../../../examples/extensions/dynamic-scratchpad.ts",
   import.meta.url,
 )
 
@@ -80,18 +75,6 @@ describe("extension authoring reference", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const source = yield* fs.readFileString(yield* path.fromFileUrl(sessionNotesSourceUrl))
-      expect(source).toContain('from "@gent/core/extensions/api"')
-      expect(source).not.toContain("@gent/core-internal")
-      expect(source).not.toContain("@gent/core/src")
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-
-  it.live("dynamic reference example source imports only the public extension API", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const source = yield* fs.readFileString(yield* path.fromFileUrl(dynamicScratchpadSourceUrl))
-      expect(String(DynamicScratchpadExtension.manifest.id)).toBe("dynamic-scratchpad")
       expect(source).toContain('from "@gent/core/extensions/api"')
       expect(source).not.toContain("@gent/core-internal")
       expect(source).not.toContain("@gent/core/src")

@@ -19,7 +19,6 @@ import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
-import { DynamicExtensionRegistry } from "../../domain/dynamic-extension-registry.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
@@ -27,12 +26,7 @@ import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js
 import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import type { ResourceGraphPublication } from "../extensions/resource-host/resource-graph-host.js"
 import type { RuntimeProfileCatalog } from "../profile.js"
-import {
-  dynamicToolEntry,
-  mergeResolvedToolEntries,
-  staticToolEntries,
-  type ResolvedToolCapability,
-} from "./tool-runner.js"
+import { staticToolEntries, type ResolvedToolCapability } from "./tool-runner.js"
 import { attachToolBindingIdentity, bindingResourcesFromPlan } from "./tool-binding-replay.js"
 
 export interface ResolvedTurnContext extends ResolvedTurn {
@@ -204,17 +198,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   }
 
   // Derive extension projections from explicit prompt/message slots.
-  const dynamicRegistryOption = yield* Effect.serviceOption(DynamicExtensionRegistry)
-  let dynamicTools: ReadonlyArray<ResolvedToolCapability> = []
-  if (dynamicRegistryOption._tag === "Some") {
-    dynamicTools = yield* dynamicRegistryOption.value
-      .listToolEntries(params.sessionId)
-      .pipe(Effect.map((entries) => entries.map(dynamicToolEntry)))
-  }
-  const allToolEntries = mergeResolvedToolEntries(
-    staticToolEntries(extensionRegistry),
-    dynamicTools,
-  )
+  const allToolEntries = staticToolEntries(extensionRegistry)
   const allTools = allToolEntries.map((entry) => entry.capability)
   const turnCtx = {
     sessionId: params.sessionId,
