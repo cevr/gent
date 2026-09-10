@@ -7,8 +7,8 @@ import { dateFromMillis, Session } from "../../src/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { AllowAllPermission } from "../../src/domain/permission"
 import {
-  AllowAllPermission,
   resolveSessionEnvironment,
   resolveSessionEnvironmentOrFail,
   SessionEnvironmentHostProvider,
@@ -307,7 +307,6 @@ describe("resolveSessionEnvironment", () => {
         )
         const fakeProfile: SessionProfile = {
           cwd: "/tmp/profile-driver-scope",
-          extensions: [],
           resolved: resolveExtensions([]),
           layerContext: Context.makeUnsafe(new Map<string, unknown>()),
           permissionService: {

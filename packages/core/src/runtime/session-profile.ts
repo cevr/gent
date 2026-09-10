@@ -22,8 +22,8 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { GentPlatform } from "./gent-platform.js"
-import type { LoadedExtension, GentExtension, ExtensionSetupServices } from "../domain/extension.js"
-import { type PermissionService } from "../domain/permission.js"
+import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
+import { AllowAllPermission, type PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {
   type ExtensionRegistryService,
@@ -65,15 +65,10 @@ import type {
 } from "./profile.js"
 import type { ResourceGraphSnapshot } from "../domain/resource-graph-state.js"
 
-const allowAllPermission: PermissionService = {
-  check: () => Effect.succeed("allowed"),
-}
-
 // ── SessionProfile ──
 
 export interface SessionProfile {
   readonly cwd: string
-  readonly extensions: ReadonlyArray<LoadedExtension>
   readonly resolved: ResolvedExtensions
   /**
    * Legacy context view. New callers must enter `publication.run` before
@@ -492,10 +487,9 @@ export class SessionProfileCache extends Context.Service<
             )
             const profile: SessionProfile = {
               cwd,
-              extensions: [],
               resolved,
               layerContext,
-              permissionService: allowAllPermission,
+              permissionService: AllowAllPermission,
               registryService: Context.get(layerContext, ExtensionRegistry),
               driverRegistryService: Context.get(layerContext, DriverRegistry),
               baseSections: [],
@@ -553,7 +547,6 @@ function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfi
 function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfile {
   return {
     cwd: runtime.profile.cwd,
-    extensions: runtime.profile.resolved.extensions,
     resolved: runtime.profile.resolved,
     layerContext: runtime.layerContext,
     permissionService: runtime.permissionService,

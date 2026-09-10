@@ -61,9 +61,8 @@ import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
-import { Permission } from "../../domain/permission.js"
+import { AllowAllPermission, Permission } from "../../domain/permission.js"
 import {
-  AllowAllPermission,
   resolveSessionEnvironment,
   SessionEnvironmentHostProvider,
 } from "../session-runtime-context.js"

@@ -134,7 +134,6 @@ describe("extension command RPCs", () => {
       const layerContext = yield* Layer.build(buildExtensionLayers(resolved))
       return {
         cwd,
-        extensions,
         resolved,
         layerContext,
         permissionService: allowAllPermission,

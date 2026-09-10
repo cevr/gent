@@ -146,10 +146,6 @@ const buildSessionEnvironment = (params: {
     })
   })
 
-export const AllowAllPermission: PermissionService = {
-  check: () => Effect.succeed("allowed"),
-}
-
 interface ResolveSessionEnvironmentParams {
   readonly sessionId: SessionId
   readonly branchId: BranchId

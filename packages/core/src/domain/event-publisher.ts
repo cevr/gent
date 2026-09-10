@@ -47,28 +47,12 @@ export class EventPublisher extends Context.Service<EventPublisher, EventPublish
 export class ExtensionEventSink extends Context.Service<
   ExtensionEventSink,
   ExtensionEventSinkService
->()("@gent/core/src/domain/event-publisher/ExtensionEventSink") {
-  static Test = (): Layer.Layer<ExtensionEventSink> =>
-    Layer.succeed(
-      ExtensionEventSink,
-      ExtensionEventSink.of({
-        publish: () => Effect.void,
-      }),
-    )
-}
+>()("@gent/core/src/domain/event-publisher/ExtensionEventSink") {}
 
 export class ExtensionStatePublisher extends Context.Service<
   ExtensionStatePublisher,
   ExtensionStatePublisherService
->()("@gent/core/src/domain/event-publisher/ExtensionStatePublisher") {
-  static Test = (): Layer.Layer<ExtensionStatePublisher> =>
-    Layer.succeed(
-      ExtensionStatePublisher,
-      ExtensionStatePublisher.of({
-        changed: () => Effect.void,
-      }),
-    )
-}
+>()("@gent/core/src/domain/event-publisher/ExtensionStatePublisher") {}
 
 const makePublisherContext = (publisher: EventPublisherService) =>
   Context.empty().pipe(

@@ -1,4 +1,4 @@
-import { Context, Layer, Schema } from "effect"
+import { Context, Schema } from "effect"
 import type { Effect } from "effect"
 
 // ---------------------------------------------------------------------------
@@ -37,6 +37,4 @@ export interface FileIndexService {
 
 export class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
   "@gent/core/src/domain/file-index/FileIndex",
-) {
-  static Test = (impl: FileIndexService): Layer.Layer<FileIndex> => Layer.succeed(FileIndex, impl)
-}
+) {}

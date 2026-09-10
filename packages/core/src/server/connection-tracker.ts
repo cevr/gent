@@ -25,6 +25,4 @@ export class ConnectionTracker extends Context.Service<
       })
     }),
   )
-
-  static Test = (): Layer.Layer<ConnectionTracker> => ConnectionTracker.Live
 }

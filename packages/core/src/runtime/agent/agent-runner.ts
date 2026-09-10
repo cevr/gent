@@ -12,7 +12,7 @@ import {
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import type { SqlClient } from "effect/unstable/sql"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
-import { AgentSwitched, EventStore, type AgentEvent } from "../../domain/event.js"
+import { AgentSwitched, EventStore } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import {
   AgentRunError,
@@ -97,7 +97,6 @@ export const InProcessRunner = (
       yield* Effect.forkScoped(delivery.reconcile)
 
       const platform = yield* GentPlatform
-      const notifyMirroredEventObservers = (_event: AgentEvent) => Effect.void
       const publishAgentSwitch = (params: {
         sessionId: SessionId
         branchId: BranchId
@@ -229,7 +228,6 @@ export const InProcessRunner = (
               runSpec: normalizedRunSpec,
               persistence,
               parentBaseEventStore: baseEventStore,
-              notifyMirroredEventObservers,
               sessionId,
               branchId,
               extensionRegistry,

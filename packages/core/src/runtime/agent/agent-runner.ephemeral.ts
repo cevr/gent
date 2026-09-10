@@ -123,7 +123,6 @@ export const runEphemeralAgent = (params: {
   observe?: (event: AgentEvent) => Effect.Effect<void>
   persistence: AgentPersistence
   parentBaseEventStore: EventStoreService
-  notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
   sessionId: SessionId
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
@@ -221,11 +220,7 @@ export const runEphemeralAgent = (params: {
               params.parentBranchId,
             ),
           ).pipe(
-            Effect.flatMap((event) =>
-              params.parentBaseEventStore
-                .publish(event)
-                .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
-            ),
+            Effect.flatMap((event) => params.parentBaseEventStore.publish(event)),
             Effect.catchEager(() => Effect.void),
           )
         }),

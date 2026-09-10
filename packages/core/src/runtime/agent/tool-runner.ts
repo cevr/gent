@@ -13,7 +13,7 @@ import {
 } from "effect"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { Permission, type PermissionService } from "../../domain/permission.js"
+import { AllowAllPermission, Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -276,10 +276,6 @@ const normalizeToolExecutionError = (
   return new ToolExecutionFailure({ message: String(failure) })
 }
 
-const allowAllPermission: PermissionService = {
-  check: () => Effect.succeed("allowed"),
-}
-
 export const staticToolEntries = (
   activeRegistry: ExtensionRegistryService,
 ): ReadonlyArray<ResolvedToolCapability> => {
@@ -347,7 +343,7 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
   const basePermissionOpt = yield* Effect.serviceOption(Permission)
   const activePermission: PermissionService = Option.getOrElse(
     basePermissionOpt,
-    () => allowAllPermission,
+    () => AllowAllPermission,
   )
   return yield* Effect.gen(function* () {
     yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })

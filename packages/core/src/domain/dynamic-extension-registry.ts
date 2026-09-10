@@ -237,6 +237,4 @@ export class DynamicExtensionRegistry extends Context.Service<
       })
     }),
   )
-
-  static Test = (): Layer.Layer<DynamicExtensionRegistry> => DynamicExtensionRegistry.Live
 }

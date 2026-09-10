@@ -71,6 +71,18 @@ export interface PermissionService {
   ) => Effect.Effect<PermissionResult>
 }
 
+/**
+ * The permissive service: every tool call is allowed.
+ *
+ * The single definition of that value. Callers that need a permission
+ * service but have no rules to apply -- an unconfigured session profile, a
+ * tool runner outside a profile, `Permission.Test` -- use this one rather
+ * than restating the shape.
+ */
+export const AllowAllPermission: PermissionService = {
+  check: () => Effect.succeed("allowed"),
+}
+
 export class Permission extends Context.Service<Permission, PermissionService>()(
   "@gent/core/src/domain/permission",
 ) {
@@ -87,10 +99,5 @@ export class Permission extends Context.Service<Permission, PermissionService>()
     })
 
   static Test = (): Layer.Layer<Permission> =>
-    Layer.succeed(
-      Permission,
-      Permission.of({
-        check: () => Effect.succeed("allowed"),
-      }),
-    )
+    Layer.succeed(Permission, Permission.of(AllowAllPermission))
 }
