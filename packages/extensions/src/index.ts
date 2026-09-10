@@ -1,4 +1,5 @@
 import { Effect, Option, Schema } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   type GentExtension,
   defineExtension,
@@ -18,6 +19,7 @@ import { AnthropicExtension } from "./anthropic/index.js"
 import { OpenAIExtension } from "./openai/index.js"
 import { GoogleExtension, MistralExtension } from "./openai-compatible-driver.js"
 import { SkillsExtension } from "./skills/index.js"
+import { AcpAgentsExtension } from "./acp-agents/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { GoalExtension } from "./goal/index.js"
@@ -107,6 +109,7 @@ export {
   DelegateExtension,
   AgentsExtension,
   SkillsExtension,
+  AcpAgentsExtension,
   WorkflowsExtension,
   HandoffExtension,
   GoalExtension,
@@ -121,29 +124,31 @@ export {
  */
 export { CellExtension, CellBranchTools }
 
-export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
-  CellExtension,
-  HandoffExtension,
-  GoalExtension,
-  BtwExtension,
-  FsToolsExtension,
-  ExecToolsExtension,
-  NetworkToolsExtension,
-  DelegateExtension,
-  InteractionToolsExtension,
-  SessionToolsExtension,
-  AgentsExtension,
-  AgentsViewExtension,
-  WorkflowsExtension,
-  SkillsExtension,
-  AnthropicExtension,
-  OpenAIExtension,
-  GoogleExtension,
-  MistralExtension,
-].map((extension) => {
-  if (Option.isNone(BuiltinArtifactIdentity)) return extension
-  return {
-    ...extension,
-    artifactIdentity: BuiltinArtifactIdentity.value,
-  }
-})
+export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner | ExtensionHost>> =
+  [
+    CellExtension,
+    HandoffExtension,
+    GoalExtension,
+    BtwExtension,
+    FsToolsExtension,
+    ExecToolsExtension,
+    NetworkToolsExtension,
+    DelegateExtension,
+    InteractionToolsExtension,
+    SessionToolsExtension,
+    AgentsExtension,
+    AgentsViewExtension,
+    WorkflowsExtension,
+    SkillsExtension,
+    AcpAgentsExtension,
+    AnthropicExtension,
+    OpenAIExtension,
+    GoogleExtension,
+    MistralExtension,
+  ].map((extension) => {
+    if (Option.isNone(BuiltinArtifactIdentity)) return extension
+    return {
+      ...extension,
+      artifactIdentity: BuiltinArtifactIdentity.value,
+    }
+  })
