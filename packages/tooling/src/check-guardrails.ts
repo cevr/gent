@@ -8,6 +8,8 @@ import {
 } from "./core-public-exports"
 import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
+import { findAliasTestLayers } from "./core-alias-test-layers"
+import { declaredCoreExports, findCoreDeadExports, identifiersIn } from "./core-dead-exports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 
@@ -40,6 +42,11 @@ const program = Effect.gen(function* () {
     if (!failures.includes(message)) failures.push(message)
   }
 
+  // Dead-export scan needs the whole tree: collect every declared core export,
+  // then count which names any other file mentions.
+  const coreDeclarations: Array<{ file: string; name: string; line: number }> = []
+  const identifiersByFile = new Map<string, ReadonlySet<string>>()
+
   for (const maybeEntry of textFiles) {
     if (Option.isNone(maybeEntry)) continue
     const { file, text } = maybeEntry.value
@@ -58,18 +65,24 @@ const program = Effect.gen(function* () {
     }
 
     if (/\.[cm]?[jt]sx?$/.test(file)) {
-      for (const finding of findPlatformDuplicationViolations(file, text)) {
+      for (const finding of [
+        ...findPlatformDuplicationViolations(file, text),
+        ...findCoreFeatureIndependenceFindings(file, text),
+        ...findCoreVendorModelPins(file, text),
+        ...findAliasTestLayers(file, text),
+      ]) {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }
 
-      for (const finding of findCoreFeatureIndependenceFindings(file, text)) {
-        pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+      for (const declaration of declaredCoreExports(file, text)) {
+        coreDeclarations.push({ file, ...declaration })
       }
-
-      for (const finding of findCoreVendorModelPins(file, text)) {
-        pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-      }
+      identifiersByFile.set(file, identifiersIn(text))
     }
+  }
+
+  for (const finding of findCoreDeadExports(coreDeclarations, identifiersByFile)) {
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 
   const [

@@ -183,7 +183,7 @@ export interface DiscoveredBuiltinExtension {
   readonly sourcePath: string
 }
 
-export interface SkippedExtension {
+interface SkippedExtension {
   readonly path: string
   readonly scope: ExtensionScope
   readonly error: string
