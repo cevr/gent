@@ -13,6 +13,7 @@ import { declaredCoreExports, findCoreDeadExports, identifiersIn } from "./core-
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
+import { consumedNamesIn, findUnconsumedPublicApi } from "./core-public-api-consumers"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
@@ -51,6 +52,9 @@ const program = Effect.gen(function* () {
   // adapters that fill them live in the shipped extensions and the apps.
   const sourceTexts = new Map<string, string>()
   const adaptedSeams = new Set<string>()
+  // Public-API scan needs it as well: the names live in core's entry point,
+  // the consumers live everywhere else.
+  const consumedApiNames = new Set<string>()
 
   /**
    * Facts the cross-file scans need, gathered in the single pass over the
@@ -64,6 +68,7 @@ const program = Effect.gen(function* () {
     identifiersByFile.set(file, identifiersIn(text))
     sourceTexts.set(file, text)
     for (const seam of adaptedSeamsIn(file, text)) adaptedSeams.add(seam)
+    for (const name of consumedNamesIn(file, text)) consumedApiNames.add(name)
   }
 
   for (const maybeEntry of textFiles) {
@@ -102,6 +107,10 @@ const program = Effect.gen(function* () {
   }
 
   for (const finding of findUnadaptedSeams(sourceTexts, adaptedSeams)) {
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+  }
+
+  for (const finding of findUnconsumedPublicApi(sourceTexts, consumedApiNames)) {
     pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 

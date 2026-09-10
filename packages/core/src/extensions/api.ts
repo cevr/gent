@@ -70,21 +70,20 @@ export {
 } from "../domain/agent.js"
 export { requireAgent, requireCurrentAgent } from "../domain/extension-services.js"
 export {
+  type AnyExtensionHook,
   type GentExtension,
   LoadedArtifactIdentity,
   type SystemPromptInput,
   type TurnAfterInput,
   hook,
-  type AnyExtensionHook,
 } from "../domain/extension.js"
-export type { PromptSection } from "../domain/prompt.js"
-export { sectionPatternFor, withSectionMarkers } from "../domain/prompt.js"
+export { withSectionMarkers } from "../domain/prompt.js"
+export { ProjectionError } from "../domain/extension.js"
 export { ExternalToolRunner } from "../domain/driver.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction-request.js"
 export type {
-  ExternalDriverContribution,
   ModelDriverContribution,
   ProviderAuthInfo,
   ProviderAuthorizationResult,
@@ -112,16 +111,10 @@ export {
   messagePartsDisplayText,
   messagePartsImages,
   messagePartsReasoning,
-  messagePartsReasoningLines,
-  messagePartsSearchText,
   messagePartsText,
-  messagePartsTextLines,
-  messagePartsToolCalls,
-  messagePartsToolResults,
 } from "../domain/message-part-projection.js"
 export { PermissionRule } from "../domain/permission.js"
 export {
-  type ExtensionContributions,
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
@@ -144,14 +137,12 @@ export {
   defineRequests,
   ref,
   request,
-  type RequestInput,
   type RequestCapability,
+  type RequestInput,
 } from "../domain/capability/request.js"
 export type { CapabilityRef } from "../domain/capability.js"
-export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
+export { CapabilityError } from "../domain/capability.js"
 export { ToolResultFailure } from "../domain/tool-output.js"
-export type { AnyResourceContribution } from "../domain/resource.js"
-export { ProjectionError } from "../domain/extension.js"
 export {
   ExtensionContext,
   ExtensionServiceError,
