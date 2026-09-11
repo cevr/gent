@@ -3,7 +3,7 @@ import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
-import { EventId, EventStore, type EventEnvelope } from "../domain/event.js"
+import { EventId, EventStore } from "../domain/event.js"
 import { SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -78,9 +78,6 @@ interface ResolvedSessionServices {
   readonly registry: ExtensionRegistryService
   readonly capabilityContext?: Context.Context<never>
 }
-
-const isPublicTransportEvent = (envelope: EventEnvelope) =>
-  envelope.event._tag !== "MachineTaskSucceeded" && envelope.event._tag !== "MachineTaskFailed"
 
 const invalidateExternalDriversFor = (
   prev: Option.Option<DriverRef>,
@@ -290,7 +287,7 @@ const RpcHandlers = GentRpcs.toLayer(
         const subscription = { sessionId, branchId, synchronize: true }
         if (!Predicate.isUndefined(after))
           Object.assign(subscription, { after: EventId.make(after) })
-        return eventStore.subscribe(subscription).pipe(Stream.filter(isPublicTransportEvent))
+        return eventStore.subscribe(subscription)
       },
 
       "session.watchRuntime": (input: QueueTarget) => watchRuntimeStream(input),

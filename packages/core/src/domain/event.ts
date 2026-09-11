@@ -14,7 +14,6 @@ import {
 
 import { Message } from "./message"
 import {
-  ActorId,
   branded,
   BranchId,
   ExtensionId,
@@ -194,19 +193,6 @@ export const AgentEvent = Schema.TaggedUnion({
     delayMs: Schema.Int,
     error: Schema.String,
   },
-  MachineTaskSucceeded: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    actorId: ActorId,
-    stateTag: Schema.String,
-  },
-  MachineTaskFailed: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    actorId: ActorId,
-    stateTag: Schema.String,
-    error: Schema.String,
-  },
   SessionNameUpdated: {
     sessionId: SessionId,
     name: Schema.String,
@@ -344,10 +330,6 @@ export const ErrorOccurred = AgentEvent.cases.ErrorOccurred
 export type ErrorOccurred = typeof AgentEvent.cases.ErrorOccurred.Type
 export const ProviderRetrying = AgentEvent.cases.ProviderRetrying
 export type ProviderRetrying = typeof AgentEvent.cases.ProviderRetrying.Type
-export const MachineTaskSucceeded = AgentEvent.cases.MachineTaskSucceeded
-export type MachineTaskSucceeded = typeof AgentEvent.cases.MachineTaskSucceeded.Type
-export const MachineTaskFailed = AgentEvent.cases.MachineTaskFailed
-export type MachineTaskFailed = typeof AgentEvent.cases.MachineTaskFailed.Type
 export const SessionNameUpdated = AgentEvent.cases.SessionNameUpdated
 export type SessionNameUpdated = typeof AgentEvent.cases.SessionNameUpdated.Type
 export const SessionSettingsUpdated = AgentEvent.cases.SessionSettingsUpdated
@@ -477,8 +459,6 @@ const matchEventSessionId = AgentEvent.match({
   InteractionResolved: (e) => e.sessionId,
   ErrorOccurred: (e) => e.sessionId,
   ProviderRetrying: (e) => e.sessionId,
-  MachineTaskSucceeded: (e) => e.sessionId,
-  MachineTaskFailed: (e) => e.sessionId,
   SessionNameUpdated: (e) => e.sessionId,
   SessionSettingsUpdated: (e) => e.sessionId,
   BranchCreated: (e) => e.sessionId,
@@ -510,8 +490,6 @@ const matchEventBranchId = AgentEvent.match({
   InteractionResolved: (e) => e.branchId,
   ErrorOccurred: (e) => e.branchId,
   ProviderRetrying: (e) => e.branchId,
-  MachineTaskSucceeded: (e) => e.branchId,
-  MachineTaskFailed: (e) => e.branchId,
   SessionNameUpdated: () =>
     // oxlint-disable-next-line effect/noNullish -- Session-name events have no branch identity by design.
     undefined,
