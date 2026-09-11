@@ -17,13 +17,17 @@
  * public path, which is a real consumer of the export rather than a
  * registrant proving a mechanism runs.
  *
- * Known limit: matching is by name, so a symbol a core test imports over a
- * relative path reads as consumed even though nothing reaches it through
- * `extensions/api`. That makes this a ratchet against new dead names rather
- * than a proof the current surface is minimal -- it catches a name nothing
- * anywhere reaches for, which is the case that actually accumulates. Tracing
- * real import paths would catch the rest and is the upgrade if this proves
- * too loose.
+ * Consumption is read from the import itself, not from the name appearing
+ * somewhere in the file. A symbol a core test imports over a relative path
+ * does not count -- nothing reaches it through `extensions/api`, which is the
+ * only question this guard asks. Three import shapes reach this module today
+ * and all three are read: named imports (with `as` aliases), namespace
+ * imports, and re-exports.
+ *
+ * Names on a `@ts-expect-error` line never count. The surface-lock suites
+ * reach for `PublicExtensionApi.action` and friends precisely to assert they
+ * are *absent*; reading those as consumption would pin removed surface in
+ * place forever.
  *
  * @module
  */
@@ -75,17 +79,112 @@ export const publicApiNames = (
   return found
 }
 
-/** Names a consumer file mentions. Word-bounded, so a substring never counts. */
+const API_SPECIFIER = /["']@gent\/core\/extensions\/api(?:\.js)?["']/
+
+/** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
+const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
+  const marked = new Set<number>()
+  for (const [index, line] of lines.entries()) {
+    if (!line.includes("@ts-expect-error")) continue
+    // The directive sits on its own line, above the line it excuses.
+    marked.add(index + 1)
+    marked.add(index + 2)
+  }
+  return marked
+}
+
+/**
+ * The statement a specifier belongs to, joined back into one string.
+ *
+ * An import block is routinely broken across lines, so the specifier and the
+ * names it brings in are rarely on the same line. Walking back to the opening
+ * `import`/`export` keeps them together.
+ */
+const statementEndingAt = (lines: ReadonlyArray<string>, end: number): string => {
+  let start = end
+  while (start > 0 && !/^\s*(?:import|export)\b/.test(lines[start] ?? "")) start--
+  return lines.slice(start, end + 1).join("\n")
+}
+
+/** The one name a `{ ... }` import entry brings in, before any `as` alias. */
+const importedName = (entry: string): Option.Option<string> => {
+  const cleaned = entry.replace(/\btype\b/g, "").trim()
+  if (cleaned.length === 0) return Option.none()
+  return Option.flatMap(Option.fromNullishOr(/^([A-Za-z_][A-Za-z0-9_]*)/.exec(cleaned)), (found) =>
+    Option.fromNullishOr(found[1]),
+  )
+}
+
+/** Names one `import { ... } from "<api>"` statement brings in. */
+const namedImportsIn = (statement: string): ReadonlyArray<string> => {
+  const braces = Option.fromNullishOr(/\{([^}]*)\}/s.exec(statement))
+  if (Option.isNone(braces)) return []
+  const body = Option.getOrElse(Option.fromNullishOr(braces.value[1]), () => "")
+  return body.split(",").flatMap((entry) =>
+    Option.match(importedName(entry), {
+      onNone: (): ReadonlyArray<string> => [],
+      onSome: (name) => [name],
+    }),
+  )
+}
+
+/** Aliases bound by `import * as X from "<api>"`. */
+const namespaceAliasesIn = (statement: string): ReadonlyArray<string> =>
+  [...statement.matchAll(/\*\s+as\s+([A-Za-z_][A-Za-z0-9_]*)/g)].flatMap((match) =>
+    Option.match(Option.fromNullishOr(match[1]), {
+      onNone: (): ReadonlyArray<string> => [],
+      onSome: (alias) => [alias],
+    }),
+  )
+
+/** Members read off a namespace alias, skipping lines that assert absence. */
+const namespaceMembersIn = (
+  lines: ReadonlyArray<string>,
+  alias: string,
+  skip: ReadonlySet<number>,
+): ReadonlyArray<string> => {
+  const member = new RegExp(`\\b${alias}\\.([A-Za-z_][A-Za-z0-9_]*)`, "g")
+  const found: Array<string> = []
+  for (const [index, line] of lines.entries()) {
+    if (skip.has(index + 1)) continue
+    for (const match of line.matchAll(member)) {
+      Option.match(Option.fromNullishOr(match[1]), {
+        onNone: () => {},
+        onSome: (name) => {
+          found.push(name)
+        },
+      })
+    }
+  }
+  return found
+}
+
+/**
+ * Names this file reaches for through `@gent/core/extensions/api`.
+ *
+ * A named import credits the *original* name, not the local alias: `X as Y`
+ * means the public API still has to export `X`. A namespace import credits
+ * every member the file reads off it.
+ */
 export const consumedNamesIn = (file: string, text: string): ReadonlySet<string> => {
   if (!isConsumerSource(file)) return new Set()
-  return new Set(
-    [...text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/g)].flatMap((match) =>
-      Option.match(Option.fromNullishOr(match[1]), {
-        onNone: (): ReadonlyArray<string> => [],
-        onSome: (name) => [name],
-      }),
-    ),
-  )
+  const lines = text.split("\n")
+  const skip = expectErrorLines(lines)
+  const names = new Set<string>()
+  const aliases = new Set<string>()
+
+  for (const [index, line] of lines.entries()) {
+    if (!API_SPECIFIER.test(line)) continue
+    const statement = statementEndingAt(lines, index)
+    for (const alias of namespaceAliasesIn(statement)) aliases.add(alias)
+    for (const name of namedImportsIn(statement)) names.add(name)
+  }
+
+  for (const alias of aliases) {
+    for (const name of namespaceMembersIn(lines, alias, skip)) names.add(name)
+  }
+
+  return names
 }
 
 export const findUnconsumedPublicApi = (

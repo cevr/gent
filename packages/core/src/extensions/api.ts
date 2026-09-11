@@ -57,7 +57,6 @@ export {
   AgentName,
   DEFAULT_AGENT_NAME,
   DriverRef,
-  ModelDriverRef,
   ExternalDriverRef,
   makeRunSpec,
   RunSpecSchema,
@@ -66,7 +65,6 @@ export {
   ChildAgentRegistryEntry,
   getDurableAgentRunSessionId,
   AgentRunError,
-  type RunSpec,
 } from "../domain/agent.js"
 export { requireAgent, requireCurrentAgent } from "../domain/extension-services.js"
 export {
@@ -79,7 +77,6 @@ export {
 } from "../domain/extension.js"
 export { withSectionMarkers } from "../domain/prompt.js"
 export { ProjectionError } from "../domain/extension.js"
-export { ExternalToolRunner } from "../domain/driver.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction-request.js"
@@ -90,7 +87,6 @@ export type {
   ProviderHints,
   ProviderResolution,
 } from "../domain/driver.js"
-export { DriverError } from "../domain/driver.js"
 export {
   SessionId,
   BranchId,
@@ -100,19 +96,10 @@ export {
   ExtensionId,
 } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
-export { AuthMethod, AuthOauth } from "../domain/auth.js"
-export { dateFromMillis, type Message, type MessagePart, type Branch } from "../domain/message.js"
+export { AuthMethod } from "../domain/auth.js"
+export { dateFromMillis, type Message, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
-export {
-  messagePartImage,
-  messagePartReasoning,
-  messagePartText,
-  messagePartToolCall,
-  messagePartsDisplayText,
-  messagePartsImages,
-  messagePartsReasoning,
-  messagePartsText,
-} from "../domain/message-part-projection.js"
+export { messagePartsDisplayText } from "../domain/message-part-projection.js"
 export { PermissionRule } from "../domain/permission.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
@@ -148,7 +135,7 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
-export { ResourceId, ResourceRevision } from "../domain/resource-graph.js"
+export { ResourceId } from "../domain/resource-graph.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
 // ── Public API ──

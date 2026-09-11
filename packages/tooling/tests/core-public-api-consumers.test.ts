@@ -6,6 +6,7 @@ import {
 } from "../src/core-public-api-consumers"
 
 const API_FILE = "packages/core/src/extensions/api.ts"
+const CONSUMER = "packages/extensions/src/notes/index.ts"
 
 const apiSource = `export { defineExtension } from "../domain/extension.js"
 export {
@@ -36,16 +37,66 @@ describe("public API consumer guard", () => {
     expect(findings[0]?.line).toBe(6)
   })
 
-  test("core's own source never counts as a consumer", () => {
-    // Core naming its own export proves nothing about whether the public
-    // entry point needs to expose it.
-    expect(consumedNamesIn("packages/core/src/domain/capability.ts", "CapabilityError").size).toBe(
-      0,
+  test("only an import through the public path counts", () => {
+    // The same symbol reached over a relative path is not consumption of the
+    // public API -- nothing gets it from `extensions/api`, which is the only
+    // question this guard asks.
+    expect(
+      consumedNamesIn(CONSUMER, `import { tool } from "../../../core/src/domain/capability/tool"`),
+    ).not.toContain("tool")
+    expect(consumedNamesIn(CONSUMER, `import { tool } from "@gent/core/extensions/api"`)).toContain(
+      "tool",
     )
-    expect(consumedNamesIn("packages/core-internal/src/x.ts", "CapabilityError").size).toBe(0)
   })
 
-  test("an extension naming a symbol counts as consuming it", () => {
-    expect(consumedNamesIn("packages/extensions/src/notes/index.ts", "tool({")).toContain("tool")
+  test("an alias credits the original name, not the local one", () => {
+    // `X as Y` still requires the public API to export `X`.
+    const names = consumedNamesIn(
+      CONSUMER,
+      `import { messagePartText as renderText } from "@gent/core/extensions/api"`,
+    )
+    expect(names).toContain("messagePartText")
+    expect(names).not.toContain("renderText")
+  })
+
+  test("a multi-line import block is read as one statement", () => {
+    const names = consumedNamesIn(
+      CONSUMER,
+      `import {
+  tool,
+  type ToolCapability,
+} from "@gent/core/extensions/api"`,
+    )
+    expect([...names].sort()).toEqual(["ToolCapability", "tool"])
+  })
+
+  test("a namespace import credits every member it reads", () => {
+    const names = consumedNamesIn(
+      CONSUMER,
+      `import * as Api from "@gent/core/extensions/api"
+const x: Api.ToolCapability = Api.tool({})`,
+    )
+    expect([...names].sort()).toEqual(["ToolCapability", "tool"])
+  })
+
+  test("a @ts-expect-error reference asserts absence, so it never counts", () => {
+    // The surface-lock suites reach for removed names precisely to prove they
+    // are gone. Crediting those would pin removed surface in place forever.
+    const names = consumedNamesIn(
+      CONSUMER,
+      `import * as Api from "@gent/core/extensions/api"
+    // @ts-expect-error — action factory was removed
+    type Bad = typeof Api.action`,
+    )
+    expect(names).not.toContain("action")
+  })
+
+  test("core's own source never counts as a consumer", () => {
+    expect(
+      consumedNamesIn(
+        "packages/core/src/domain/capability.ts",
+        `import { tool } from "@gent/core/extensions/api"`,
+      ).size,
+    ).toBe(0)
   })
 })
