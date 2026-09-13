@@ -10,7 +10,7 @@ import {
   type ToolCallBindingKey,
 } from "../domain/tool-binding.js"
 import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { StorageError, storageError } from "../domain/storage-error.js"
+import { StorageError, storageError, storageErrorExcept } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const ToolCallBindingRow = Schema.Struct({
@@ -41,10 +41,7 @@ interface ToolCallBindingStorageService {
   ) => Effect.Effect<ToolBindingIdentity | undefined, StorageError>
 }
 
-const mapStorageError = (message: string) => (cause: unknown) => {
-  if (Schema.is(ToolCallBindingConflictError)(cause)) return cause
-  return storageError(message)(cause)
-}
+const mapStorageError = storageErrorExcept(Schema.is(ToolCallBindingConflictError))
 
 export class ToolCallBindingStorage extends Context.Service<
   ToolCallBindingStorage,

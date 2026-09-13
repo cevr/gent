@@ -83,7 +83,6 @@ export interface ToolCapability extends ToolDeclarations {
   readonly readonly: boolean
   readonly input: unknown
   readonly output: unknown
-  readonly native: unknown
   readonly effect: unknown
   readonly description: string
   readonly metadata: unknown
@@ -100,7 +99,6 @@ export interface RequestCapability {
   readonly input: unknown
   readonly output: unknown
   readonly effect: unknown
-  readonly public: true
   readonly slash?: unknown
   readonly description?: string
   readonly ref: unknown

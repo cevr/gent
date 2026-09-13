@@ -14,7 +14,7 @@ import {
   type AgentEventTag,
 } from "../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { StorageError, storageError } from "../domain/storage-error.js"
+import { StorageError, storageError, storageErrorExcept } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
 import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
@@ -93,12 +93,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
     EventStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const mapEventStorageError = (message: string) => (cause: unknown) => {
-        if (isEventDecodeError(cause)) {
-          return cause
-        }
-        return storageError(message)(cause)
-      }
+      const mapEventStorageError = storageErrorExcept(isEventDecodeError)
 
       return {
         appendEvent: Effect.fn("EventStorage.appendEvent")(

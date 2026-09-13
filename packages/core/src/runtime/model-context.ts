@@ -1,13 +1,12 @@
 import { Option, Result, Schema } from "effect"
 import type { ToolCapability } from "../domain/capability/tool.js"
+import { encodeToolOutput } from "../domain/tool-output.js"
 import { Message, MessageRole } from "../domain/message.js"
 import { MessageId, ToolCallId } from "../domain/ids.js"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"
 
 /** Input tokens the context projection keeps free for the reply. The request itself carries no output cap: each provider uses the model's own limit. */
 export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
-
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 /** ~4 chars per token, the estimate every budget in the projection shares. */
 export const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
@@ -22,10 +21,10 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
           chars += part.text.length
           break
         case "tool-call":
-          chars += encodeJson(part.params).length
+          chars += encodeToolOutput(part.params).length
           break
         case "tool-result":
-          chars += encodeJson(part.result).length
+          chars += encodeToolOutput(part.result).length
           break
         case "file":
           chars += 1000 // ~250 tokens estimate for image references
@@ -50,7 +49,7 @@ export const estimateToolSchemaTokens = (tools: ReadonlyArray<ToolCapability>): 
     description: tool.description,
     parameters: Schema.toJsonSchemaDocument(tool.parametersSchema),
   }))
-  return estimateTextTokens(encodeJson(definitions))
+  return estimateTextTokens(encodeToolOutput(definitions))
 }
 
 /** The separate context reservations supplied by the model host. */

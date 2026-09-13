@@ -24,3 +24,12 @@ export const storageError = (message: string) => (cause: unknown) => {
   if (Schema.is(StorageError)(cause)) return cause
   return new StorageError({ message, cause })
 }
+
+/** Like storageError, but failures the guard accepts cross the storage boundary unchanged. */
+export const storageErrorExcept =
+  <E>(passThrough: (cause: unknown) => cause is E) =>
+  (message: string) =>
+  (cause: unknown): StorageError | E => {
+    if (passThrough(cause)) return cause
+    return storageError(message)(cause)
+  }

@@ -221,7 +221,7 @@ export class SessionProfileCache extends Context.Service<
                 ...started.failed,
               ])
               return yield* buildSessionProfile({
-                cwd: declarations.cwd,
+                cwd,
                 resolved,
                 coreSections: declarations.coreSections,
                 configService,

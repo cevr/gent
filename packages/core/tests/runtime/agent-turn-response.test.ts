@@ -7,7 +7,6 @@ import {
   collectFailedModelTurnResponse,
   collectModelTurnResponse,
   collectNormalizedResponse,
-  formatStreamErrorMessage,
   makeActiveStreamHandle,
   signalActiveStreamInterrupt,
   type ActiveStreamHandle,
@@ -127,13 +126,6 @@ describe("agent turn response collectors", () => {
       inputTokens: 100,
       outputTokens: 5,
     })
-  })
-
-  test("stream error formatting accepts errors message objects and primitives", () => {
-    // oxlint-disable-next-line effect/noNewError -- This formatter accepts native host error values at its boundary.
-    expect(formatStreamErrorMessage(new Error("native boom"))).toBe("native boom")
-    expect(formatStreamErrorMessage({ message: "structured boom" })).toBe("structured boom")
-    expect(formatStreamErrorMessage("plain boom")).toBe("plain boom")
   })
 
   test("unknown finish reasons collapse to unknown", () => {})

@@ -17,6 +17,7 @@ import * as os from "node:os"
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
 import { fileURLToPath as nodeFileURLToPath, pathToFileURL } from "node:url"
 import { Effect, Layer, Option, Schema } from "effect"
+import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
 import { ProcessRunnerLive } from "./run-process.js"
@@ -72,8 +73,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
             Option.map((error) => error.code),
             Option.getOrNull,
           )
-          let reason = String(cause)
-          if (cause instanceof Error) reason = cause.message
+          const reason = causeMessage(cause)
           return new SignalError({
             pid,
             signal,

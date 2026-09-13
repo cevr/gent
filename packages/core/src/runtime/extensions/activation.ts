@@ -11,7 +11,7 @@ import {
   rpcCapabilities,
 } from "../../domain/contribution.js"
 import { getToolMetadata, isToolCapability } from "../../domain/capability/tool.js"
-import { hasMessage } from "../../domain/guards.js"
+import { causeMessage } from "../../domain/guards.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
@@ -39,11 +39,6 @@ export const toFailedExtension = (
   phase,
   error,
 })
-
-const formatFailure = (error: Parameters<typeof hasMessage>[0]): string => {
-  if (hasMessage(error)) return error.message
-  return String(error)
-}
 
 export const setupExtensions = (params: {
   readonly extensions: ReadonlyArray<DiscoveredExtension>
@@ -77,7 +72,7 @@ export const setupExtensions = (params: {
           }),
         )
       } else {
-        const error = formatFailure(Cause.squash(exit.cause))
+        const error = causeMessage(Cause.squash(exit.cause))
         failed.push(
           toFailedExtension(
             {

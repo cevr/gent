@@ -48,7 +48,6 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
     readonly output: Output
   }
   readonly id: RpcId
-  readonly public: true
   readonly slash?: RequestInput<Input, Output>["slash"]
   readonly description?: string
   readonly prompt?: PromptSection
@@ -133,7 +132,6 @@ export function request(input: {
   const capability: RequestCapabilityApi = {
     _tag: "request",
     id: rpcId,
-    public: true,
     slash: input.slash,
     description: input.description,
     input: input.input,

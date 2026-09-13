@@ -121,7 +121,7 @@ const makeRegistryLayer = (home: string, responseText: string) =>
       Layer.mergeAll(
         BunFileSystem.layer,
         Path.layer,
-        RuntimeEnvironment.Test({ cwd: home, home, platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: home, home, platform: "test" }),
         passThroughDrivers,
         authLayer,
         makeHttpLayer(responseText),
@@ -140,7 +140,7 @@ const makeRegistryLayerWithDrivers = (
       Layer.mergeAll(
         BunFileSystem.layer,
         Path.layer,
-        RuntimeEnvironment.Test({ cwd: home, home, platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: home, home, platform: "test" }),
         DriverRegistry.fromResolved({
           modelDrivers: new Map(modelDrivers.map((driver) => [driver.id, driver])),
           externalDrivers: new Map(),
@@ -161,7 +161,7 @@ const makeDeferredRegistryLayer = (
       Layer.mergeAll(
         BunFileSystem.layer,
         Path.layer,
-        RuntimeEnvironment.Test({ cwd: home, home, platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: home, home, platform: "test" }),
         passThroughDrivers,
         authLayer,
         makeDeferredHttpLayer(started, response),
@@ -463,7 +463,7 @@ describe("model catalog resolution", () => {
             Layer.mergeAll(
               BunFileSystem.layer,
               Path.layer,
-              RuntimeEnvironment.Test({ cwd: tmpDir, home: tmpDir, platform: "test" }),
+              RuntimeEnvironment.Live({ cwd: tmpDir, home: tmpDir, platform: "test" }),
               passThroughDrivers,
               authLayer,
               racingHttpLayer,

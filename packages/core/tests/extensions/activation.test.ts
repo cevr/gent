@@ -234,7 +234,6 @@ describe("extension activation isolation", () => {
     // oxlint-disable-next-line effect/noAs -- This invalid RPC leaf is a runtime validation fixture.
     ({
       id,
-      public: true,
       input: Schema.Unknown,
       output: Schema.Unknown,
       effect: () => Effect.void,

@@ -27,12 +27,12 @@ import { makeCollectingExtensionHost, registerContributions } from "../domain/ex
 import { testHostFacts } from "./index.js"
 import { makeServerRootLayer } from "../server/server-root.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import { ModelRegistry } from "../runtime/model-registry.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,
   testEnvironment,
   testIdentity,
-  testOverrides,
 } from "./test-root.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
@@ -182,7 +182,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       extensions: extensionInputsForConfig(config),
       branchTools: config.branchTools ?? noBranchTools,
       overrides: {
-        ...testOverrides(),
+        modelRegistryLayer: ModelRegistry.Test(),
         authLayer: config.authLayer ?? Auth.Test(),
         approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
         configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),

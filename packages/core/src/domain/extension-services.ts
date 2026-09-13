@@ -9,7 +9,7 @@ import type {
 } from "./agent.js"
 import { DEFAULT_AGENT_NAME } from "./agent.js"
 import type { AgentEvent, TurnCompleted } from "./event.js"
-import { hasMessage } from "./guards.js"
+import { causeMessage } from "./guards.js"
 import type {
   ExtensionHostPlatform,
   ExtensionHostRunProcessOptions,
@@ -45,21 +45,13 @@ export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceEr
   },
 ) {}
 
-const errorMessage = (cause: unknown): string => {
-  if (cause instanceof Error) return cause.message
-  if (hasMessage(cause)) {
-    return cause.message
-  }
-  return String(cause)
-}
-
 export const extensionServiceError =
   (service: string, operation: string) =>
   (cause: unknown): ExtensionServiceError =>
     new ExtensionServiceError({
       service,
       operation,
-      message: errorMessage(cause),
+      message: causeMessage(cause),
       cause,
     })
 

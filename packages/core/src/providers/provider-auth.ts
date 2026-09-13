@@ -1,4 +1,5 @@
 import { Predicate, Context, Effect, Layer, Option } from "effect"
+import { causeMessage } from "../domain/guards.js"
 import { Auth, AuthApi, AuthOauth, AuthAuthorization } from "../domain/auth.js"
 import type { AuthMethod, AuthService } from "../domain/auth.js"
 import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
@@ -58,11 +59,6 @@ const makeProviderAuth: Effect.Effect<
   const authStore = yield* Auth
   const platform = yield* GentPlatform
 
-  const errorMessage = (cause: unknown): string => {
-    if (Predicate.isError(cause)) return cause.message
-    return String(cause)
-  }
-
   const makePersist = (providerId: string) => persistAuthTo(authStore, providerId)
 
   const listMethods = Effect.gen(function* () {
@@ -99,7 +95,7 @@ const makeProviderAuth: Effect.Effect<
         Effect.catchDefect((e) =>
           Effect.fail(
             new ProviderAuthError({
-              message: `Provider auth failed: ${errorMessage(e)}`,
+              message: `Provider auth failed: ${causeMessage(e)}`,
               cause: e,
             }),
           ),
@@ -140,7 +136,7 @@ const makeProviderAuth: Effect.Effect<
         Effect.catchDefect((e) =>
           Effect.fail(
             new ProviderAuthError({
-              message: `Provider auth callback failed: ${errorMessage(e)}`,
+              message: `Provider auth callback failed: ${causeMessage(e)}`,
               cause: e,
             }),
           ),

@@ -244,7 +244,7 @@ describe("streaming", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ConfigService.Test(),
         EventStore.Memory,
         ToolRunner.Test(),

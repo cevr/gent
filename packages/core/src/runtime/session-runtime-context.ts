@@ -42,14 +42,11 @@ export const resolveTurnProfile = (params: {
       Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
       Effect.orElseSucceed(() => Option.none<string>()),
     )
-    const runInfo = Option.match(sessionCwd, {
-      onNone: () => ({ sessionId: params.sessionId, branchId: params.branchId }),
-      onSome: (cwd) => ({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        sessionCwd: cwd,
-      }),
-    })
+    const runInfo = {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      sessionCwd: Option.getOrUndefined(sessionCwd),
+    }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
       {
@@ -63,7 +60,7 @@ export const resolveTurnProfile = (params: {
         turnDriverRegistry: params.defaults.driverRegistry,
         turnPermission: params.defaults.permission,
         turnBaseSections: params.defaults.baseSections,
-        turnHostCtx: hostProvider.forRun(runInfo, hostProvider.defaultExtensionRegistry),
+        turnHostCtx: hostProvider.forRun(runInfo),
       }
     }
     return {

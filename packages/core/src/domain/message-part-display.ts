@@ -9,7 +9,7 @@ import {
   type ToolInteraction,
   projectMessage,
 } from "./message.js"
-import { stringifyOutput, summarizeOutput } from "./tool-output.js"
+import { encodeToolOutput, stringifyOutput, summarizeOutput } from "./tool-output.js"
 
 interface ImagePartProjection {
   readonly mediaType: string
@@ -59,11 +59,10 @@ const truncateDisplayText = (text: string, max: number): string => {
   return text
 }
 
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
-type JsonEncoderInput = Parameters<typeof encodeJson>[0]
+type JsonEncoderInput = Parameters<typeof encodeToolOutput>[0]
 
 const stringifyDisplayValue = (value: JsonEncoderInput): string => {
-  const encoded = Result.try(() => encodeJson(value))
+  const encoded = Result.try(() => encodeToolOutput(value))
   if (Result.isFailure(encoded)) return String(value)
   return encoded.success
 }
@@ -360,7 +359,7 @@ export const messagePartsDisplayText = (
 const stringifySearchValue = (value: JsonEncoderInput): string => {
   if (Predicate.isString(value)) return value
   if (Predicate.isUndefined(value)) return ""
-  const encoded = Result.try(() => encodeJson(value))
+  const encoded = Result.try(() => encodeToolOutput(value))
   if (Result.isFailure(encoded)) return ""
   return encoded.success
 }
@@ -400,9 +399,9 @@ export const partToText = (part: MessagePart): string => {
     case "reasoning":
       return `[reasoning] ${part.text}`
     case "tool-call":
-      return `[tool-call ${part.name} ${part.id}] ${encodeJson(part.params)}`
+      return `[tool-call ${part.name} ${part.id}] ${encodeToolOutput(part.params)}`
     case "tool-result":
-      return `[tool-result ${part.name} ${part.id}] ${encodeJson(part.result)}`
+      return `[tool-result ${part.name} ${part.id}] ${encodeToolOutput(part.result)}`
     case "file":
       return `[file ${part.mediaType}]`
     case "tool-approval-request":

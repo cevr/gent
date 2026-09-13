@@ -9,6 +9,7 @@
 import { Predicate, Clock, Context, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import {
+  emptyLoopQueueState,
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
 } from "../runtime/agent/agent-loop.state.js"
@@ -22,11 +23,6 @@ const encodeLoopQueueState = Schema.encodeEffect(LoopQueueStateJson)
 
 const QueueRow = Schema.Struct({ queue_json: Schema.String })
 const decodeQueueRow = Schema.decodeUnknownEffect(QueueRow)
-
-const emptyLoopQueueState = (): LoopQueueStateType => ({
-  steering: [],
-  followUp: [],
-})
 
 interface AgentLoopQueueStorageService {
   readonly getQueueState: (

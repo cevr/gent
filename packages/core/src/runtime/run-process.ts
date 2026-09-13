@@ -3,13 +3,13 @@ import {
   Effect,
   Layer,
   Option,
-  Predicate,
   Schema,
   Stream,
   type Duration,
   type PlatformError,
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { causeMessage } from "../domain/guards.js"
 
 export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessError", {
   command: Schema.String,
@@ -58,11 +58,6 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   let out = ""
   for (const chunk of chunks) out += decoder.decode(chunk)
   return out
-}
-
-const processErrorMessage = (error: PlatformError.PlatformError): string => {
-  if (Predicate.isError(error)) return error.message
-  return String(error)
 }
 
 export const runProcess = (
@@ -117,7 +112,7 @@ export const runProcess = (
       (e) =>
         new ProcessError({
           command,
-          message: `${command} failed: ${processErrorMessage(e)}`,
+          message: `${command} failed: ${causeMessage(e)}`,
           cause: e,
         }),
     ),

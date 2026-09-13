@@ -132,7 +132,7 @@ describe("resolveTurnProfile", () => {
   )
   it.live("falls back to host deps and defaults when no session profile is available", () =>
     Effect.gen(function* () {
-      const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
         platform: "test",
@@ -178,7 +178,7 @@ describe("resolveTurnProfile", () => {
   )
   it.live("preserves storage lookup failures when fallback is disabled", () =>
     Effect.gen(function* () {
-      const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-fail",
         home: "/tmp/runtime-context-home",
         platform: "test",
@@ -243,7 +243,7 @@ describe("resolveTurnProfile", () => {
           ],
         ]),
       })
-      const runtimeEnvironmentLayer = RuntimeEnvironment.Test({
+      const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
         platform: "test",

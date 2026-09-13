@@ -236,7 +236,6 @@ export const tool = <
     readonly: metadata.readonly,
     input: metadata.input,
     output: metadata.output,
-    native,
     effect: metadata.effect,
     description: input.description,
     metadata,

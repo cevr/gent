@@ -1,23 +1,17 @@
-import { Effect, Predicate, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../../domain/extension.js"
 import { ProcessRunner } from "../../runtime/run-process.js"
 import { GentPlatform } from "../gent-platform.js"
-import { hasMessage } from "../../domain/guards.js"
-
-const errorMessage = (error: Parameters<typeof hasMessage>[0]): string => {
-  if (Predicate.isError(error)) return error.message
-  if (hasMessage(error)) return error.message
-  return String(error)
-}
+import { causeMessage } from "../../domain/guards.js"
 
 const hasTimedOut = Schema.is(Schema.Struct({ timedOut: Schema.Literal(true) }))
 
 const toHostProcessError =
   (command: string) =>
-  (error: Parameters<typeof hasMessage>[0]): ExtensionHostProcessError => {
+  (error: Parameters<typeof causeMessage>[0]): ExtensionHostProcessError => {
     const fields = {
       command,
-      message: errorMessage(error),
+      message: causeMessage(error),
       cause: error,
     }
     if (hasTimedOut(error)) {

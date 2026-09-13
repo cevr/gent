@@ -1,4 +1,5 @@
 import { Predicate, Context, Effect, Layer, Result, Schema } from "effect"
+import { encodeToolOutput } from "./tool-output.js"
 
 // Valid Regex Pattern - validates regex at decode time
 const ValidRegexPattern = Schema.String.pipe(
@@ -49,7 +50,7 @@ export const evaluatePermissionRules = (
   tool: string,
   args: Schema.Schema.Type<typeof Schema.Unknown>,
 ): PermissionResult => {
-  const argsStr = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(args)
+  const argsStr = encodeToolOutput(args)
   for (const entry of rules) {
     const rule = entry.rule
     if (rule.tool !== tool && rule.tool !== "*") continue

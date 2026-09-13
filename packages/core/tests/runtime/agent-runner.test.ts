@@ -130,7 +130,7 @@ const withEventPublisher = (baseEventStoreLayer: Layer.Layer<EventStore>) =>
     Layer.mergeAll(
       baseEventStoreLayer,
       testRegistryLayer,
-      RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
 const makeLiveAgentRunnerLayer = (
@@ -162,7 +162,7 @@ const makeLiveAgentRunnerLayer = (
       storageLayer,
       eventStoreLayer,
       registryLayer,
-      RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
   const baseDeps = Layer.mergeAll(
@@ -179,7 +179,7 @@ const makeLiveAgentRunnerLayer = (
     ModelResolver.fromLanguageModel(providerLayer),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunPlatformLive,
     ConfigService.Test(),
     ModelRegistry.Test(),
@@ -236,14 +236,14 @@ const runnerDeps = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   BunPlatformLive,
   Permission.Live(),
-  RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),
 )
 const parentServices = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   Permission.Live(),
-  RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),
 )

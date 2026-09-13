@@ -188,7 +188,7 @@ describe("native model context projection", () => {
       SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       extensionRegistry,
       driverRegistry,
-      RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       EventStore.Memory,
       ToolRunner.Test(),

@@ -12,7 +12,4 @@ export class RuntimeEnvironment extends Context.Service<
 >()("@gent/core/src/runtime/runtime-environment/RuntimeEnvironment") {
   static Live = (config: RuntimeEnvironmentApi): Layer.Layer<RuntimeEnvironment> =>
     Layer.succeed(RuntimeEnvironment, config)
-
-  static Test = (config: RuntimeEnvironmentApi): Layer.Layer<RuntimeEnvironment> =>
-    Layer.succeed(RuntimeEnvironment, config)
 }

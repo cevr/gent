@@ -79,7 +79,6 @@ export interface SessionProfile {
  * invoke Resource start/stop hooks.
  */
 interface RuntimeProfileDeclarations {
-  readonly cwd: string
   readonly extensionDeclarations: ExtensionActivationResult
   readonly coreSections: ReadonlyArray<PromptSection>
 }
@@ -202,7 +201,6 @@ export const loadRuntimeProfileDeclarations = (
     ]
 
     return {
-      cwd: canonicalCwd,
       extensionDeclarations: declarations,
       coreSections,
     }

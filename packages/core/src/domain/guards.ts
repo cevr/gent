@@ -7,7 +7,13 @@ const JsonRecord = Schema.Record(Schema.String, Schema.Unknown)
 export const isRecord = Schema.is(JsonRecord)
 
 /** Narrow an unknown value to an object with a `.message` string property. */
-export const hasMessage = Schema.is(Schema.Struct({ message: Schema.String }))
+const hasMessage = Schema.is(Schema.Struct({ message: Schema.String }))
+
+/** The message an unknown failure carries, or its string form. */
+export const causeMessage = (cause: unknown): string => {
+  if (hasMessage(cause)) return cause.message
+  return String(cause)
+}
 
 /** Narrow an unknown value to a readonly array of records. */
 export const isRecordArray = Schema.is(Schema.Array(JsonRecord))

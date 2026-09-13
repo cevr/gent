@@ -17,7 +17,7 @@ const ctx = testToolContext({
 
 const ToolLayer = Layer.merge(
   BunServices.layer,
-  RuntimeEnvironment.Test({
+  RuntimeEnvironment.Live({
     cwd: process.cwd(),
     home: "/tmp/test-home",
     platform: "test",

@@ -15,7 +15,7 @@ import {
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
-import { hasMessage } from "../../domain/guards.js"
+import { causeMessage } from "../../domain/guards.js"
 import { normalizeResponseParts } from "../../domain/response-part-normalization.js"
 import {
   projectResponsePartsToMessageParts,
@@ -96,13 +96,6 @@ export interface CollectedTurnResponse {
   readonly interrupted: boolean
   readonly streamFailed: boolean
   readonly driverKind: "model" | "external"
-}
-
-// oxlint-disable-next-line effect/noUnknownParameters -- Provider and external-driver errors cross an untyped SDK boundary.
-export const formatStreamErrorMessage = (streamError: unknown) => {
-  if (streamError instanceof Error) return streamError.message
-  if (hasMessage(streamError)) return streamError.message
-  return String(streamError)
 }
 
 const publishEventOrDie = (event: AgentEvent) =>
@@ -210,7 +203,7 @@ export const collectModelTurnResponse = (params: {
         Effect.gen(function* () {
           if (part.type === "error") {
             return yield* new ProviderError({
-              message: formatStreamErrorMessage(part.error),
+              message: causeMessage(part.error),
               model: params.modelId,
               cause: part.error,
             })
@@ -376,7 +369,7 @@ export const collectExternalTurnResponse = <R>(params: {
         Effect.gen(function* () {
           if (part.type === "error") {
             return yield* new TurnError({
-              message: formatStreamErrorMessage(part.error),
+              message: causeMessage(part.error),
               cause: part.error,
             })
           }

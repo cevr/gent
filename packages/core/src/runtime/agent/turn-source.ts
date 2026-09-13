@@ -60,11 +60,11 @@ import { convertTools, ToolRunner } from "./tool-runner"
 import { persistMessageParts } from "./turn-persistence.js"
 import {
   collectFailedModelTurnResponse,
-  formatStreamErrorMessage,
   type ActiveStreamHandle,
   type CollectedTurnResponse,
 } from "./turn-response.js"
 import { GentPlatform } from "../gent-platform.js"
+import { causeMessage } from "../../domain/guards.js"
 import type { ResolvedTurnContext } from "./turn-resolve.js"
 import type { ResolveModelRequest } from "../../providers/model-resolver.js"
 
@@ -286,7 +286,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         .pipe(Stream.provideService(ExternalToolRunner, externalToolRunner)),
       // oxlint-disable-next-line effect/noUnknownParameters -- External driver errors cross an untyped executor boundary.
       formatStreamError: (streamError: unknown) =>
-        `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
+        `External turn executor error: ${causeMessage(streamError)}`,
       collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
     } satisfies ExternalTurnSource
   }
@@ -535,7 +535,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         },
       ),
     ),
-    formatStreamError: formatStreamErrorMessage,
+    formatStreamError: causeMessage,
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) =>
@@ -565,7 +565,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
             sessionId: params.sessionId,
             branchId: params.branchId,
             activeStream: params.activeStream,
-            formatStreamError: formatStreamErrorMessage,
+            formatStreamError: causeMessage,
           }),
         ),
         Effect.tap((collected) => {

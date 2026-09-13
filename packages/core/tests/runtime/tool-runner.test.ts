@@ -82,7 +82,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -151,7 +151,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -260,7 +260,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -312,7 +312,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -358,7 +358,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -406,7 +406,7 @@ describe("tool execution", () => {
         denyAllPermission,
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -524,7 +524,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -587,7 +587,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -664,7 +664,7 @@ describe("tool execution", () => {
         Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -739,7 +739,7 @@ describe("tool execution", () => {
         Permission.Live(),
         eventPublisherLayer,
         ApprovalService.Test(),
-        RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)

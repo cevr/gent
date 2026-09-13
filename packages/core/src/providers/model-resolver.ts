@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, type Scope } from "effect"
+import { causeMessage } from "../domain/guards.js"
 import { LanguageModel } from "effect/unstable/ai"
 import { Auth } from "../domain/auth.js"
 import { persistAuthTo } from "./provider-auth.js"
@@ -45,8 +46,7 @@ const resolveModelDefect = (
   modelId: ModelId | string,
 ): ProviderError | ProviderAuthError => {
   if (Schema.is(ProviderAuthError)(defect)) return defect
-  let detail = String(defect)
-  if (Predicate.isError(defect)) detail = defect.message
+  const detail = causeMessage(defect)
   return new ProviderError({
     message: `Extension provider "${providerName}" failed: ${detail}`,
     model: modelId,

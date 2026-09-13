@@ -74,7 +74,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     }),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
