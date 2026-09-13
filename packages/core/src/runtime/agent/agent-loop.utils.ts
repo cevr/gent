@@ -8,13 +8,11 @@ import type { Message } from "../../domain/message.js"
 import {
   messagePartsReasoning,
   messagePartsText,
-  messagePartsTextLines,
   messagePartsToolCallParts,
-  messageSingleText,
 } from "../../domain/message-part-display.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Option, Predicate } from "effect"
-import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
+import { withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
 /**
@@ -89,18 +87,6 @@ export const buildTurnPromptSections = (
   return sections
 }
 
-/**
- * Build a per-turn system prompt from base sections, agent addendum, and
- * active tools. Wraps `buildTurnPromptSections` for callers that don't
- * need the structured intermediate form.
- */
-export const buildTurnPrompt = (
-  baseSections: ReadonlyArray<PromptSection>,
-  agent: AgentDefinition,
-  tools: ReadonlyArray<ToolCapability>,
-  extraSections?: ReadonlyArray<PromptSection>,
-): string => compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools, extraSections))
-
 export const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
@@ -110,12 +96,6 @@ export const resolveReasoning = (
   }
   return Option.fromUndefinedOr(agent.reasoningEffort)
 }
-
-export const getSingleText = (message: Message): Option.Option<string> =>
-  Option.fromUndefinedOr(messageSingleText(message.parts))
-
-export const messageText = (message: Message): string =>
-  messagePartsTextLines(message.parts).join("\n")
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)

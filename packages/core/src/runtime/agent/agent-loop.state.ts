@@ -11,6 +11,7 @@ import {
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
+import { messagePartsTextLines, messageSingleText } from "../../domain/message-part-display.js"
 import { ModelId, type ModelId as ModelIdType } from "../../domain/model.js"
 import {
   FollowUpQueueEntryInfo,
@@ -23,7 +24,6 @@ import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
 } from "../../domain/ids.js"
-import { messageText, getSingleText } from "./agent-loop.utils.js"
 
 export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
   message: Schema.String,
@@ -71,7 +71,8 @@ const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnIt
     return false
   }
   return (
-    Option.isSome(getSingleText(existing.message)) && Option.isSome(getSingleText(incoming.message))
+    !Predicate.isUndefined(messageSingleText(existing.message.parts)) &&
+    !Predicate.isUndefined(messageSingleText(incoming.message.parts))
   )
 }
 
@@ -79,8 +80,8 @@ const mergeQueuedFollowUp = (
   existing: QueuedTurnItem,
   incoming: QueuedTurnItem,
 ): QueuedTurnItem => {
-  const existingText = getSingleText(existing.message)
-  const incomingText = getSingleText(incoming.message)
+  const existingText = Option.fromUndefinedOr(messageSingleText(existing.message.parts))
+  const incomingText = Option.fromUndefinedOr(messageSingleText(incoming.message.parts))
   if (Option.isNone(existingText) || Option.isNone(incomingText)) return incoming
 
   const merged: QueuedTurnItem = {
@@ -129,7 +130,7 @@ const toQueueEntry = (
   tag: "steering" | "follow-up",
   item: QueuedTurnItem,
 ): Option.Option<QueueEntryInfo> => {
-  const content = messageText(item.message)
+  const content = messagePartsTextLines(item.message.parts).join("\n")
   if (content === "") return Option.none()
   const fields = {
     id: item.message.id,
@@ -210,8 +211,6 @@ export const appendFollowUpQueueState = (
     followUp: appendFollowUpItem(queue.followUp, item),
   }
 }
-
-export const clearQueueState = (_queue: LoopQueueState): LoopQueueState => emptyLoopQueueState()
 
 const restampQueuedMessage = (message: Message, createdAt: Date): Message => {
   const fields = {

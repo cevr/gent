@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
 import { BranchId, SessionId } from "../../src/domain/ids"
 import { ProcessGenerationId } from "../../src/domain/process-generation"
 import { dateFromMillis, Session } from "../../src/domain/message"
@@ -11,7 +11,6 @@ import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensio
 import { AllowAllPermission } from "../../src/domain/permission"
 import {
   resolveSessionEnvironment,
-  resolveSessionEnvironmentOrFail,
   type SessionEnvironmentDefaults,
 } from "../../src/runtime/session-runtime-context"
 import {
@@ -224,33 +223,6 @@ describe("resolveSessionEnvironment", () => {
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
           expect(exit.value.session).toBeUndefined()
-        }
-        const strict = yield* Effect.exit(
-          resolveSessionEnvironmentOrFail({
-            sessionId: SessionId.make("session-runtime-context-storage-failure"),
-            branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            defaults: {
-              driverRegistry: yield* DriverRegistry,
-              permission: AllowAllPermission,
-              baseSections: [],
-            },
-          }).pipe(
-            Effect.provideService(ExtensionHostContextProvider, hostProvider),
-            Effect.provideService(SessionStorage, failingSessionStorage),
-          ),
-        )
-        expect(strict._tag).toBe("Failure")
-        if (strict._tag === "Failure") {
-          const error = Cause.findErrorOption(strict.cause)
-          expect(Option.isSome(error)).toBe(true)
-          if (Option.isSome(error)) {
-            expect(Schema.is(StorageError)(error.value)).toBe(true)
-            if (Schema.is(StorageError)(error.value)) {
-              expect(error.value.message).toBe("lookup failed")
-            } else {
-              expect(Schema.is(StorageError)(error.value)).toBe(true)
-            }
-          }
         }
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))

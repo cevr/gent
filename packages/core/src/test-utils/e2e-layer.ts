@@ -179,7 +179,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       branchTools: config.branchTools ?? noBranchTools,
       overrides: {
         ...testOverrides(),
-        eventStoreMode: "storage-backed",
         authLayer: config.authLayer ?? Auth.Test(),
         approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
         configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),

@@ -185,19 +185,6 @@ export const resolveSessionEnvironment = (
     })
   })
 
-export const resolveSessionEnvironmentOrFail = (
-  params: ResolveSessionEnvironmentParams,
-): Effect.Effect<
-  ResolvedSessionEnvironment,
-  StorageError,
-  ExtensionHostContextProvider | SessionStorage
-> =>
-  Effect.gen(function* () {
-    const sessionStorage = yield* SessionStorage
-    const session = yield* sessionStorage.getSession(params.sessionId)
-    return yield* buildResolvedSessionEnvironment({ ...params, session })
-  })
-
 export const resolveExistingSessionBranch = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId

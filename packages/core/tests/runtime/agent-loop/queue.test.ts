@@ -240,7 +240,6 @@ describe("queue drain regression", () => {
                   )
                 }
               }),
-            clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
           }),
         )
         const makeLayer = () => {
@@ -412,7 +411,6 @@ describe("queue drain regression", () => {
               }
               return Ref.set(storedQueueRef, queue)
             },
-            clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
           }),
         )
         const deps = Layer.mergeAll(

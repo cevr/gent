@@ -40,10 +40,6 @@ interface AgentLoopQueueStorageService {
     branchId: BranchId,
     queue: LoopQueueStateType,
   ) => Effect.Effect<void, StorageError>
-  readonly clearQueueState: (
-    sessionId: SessionId,
-    branchId: BranchId,
-  ) => Effect.Effect<void, StorageError>
 }
 
 export class AgentLoopQueueStorage extends Context.Service<
@@ -84,18 +80,6 @@ export class AgentLoopQueueStorage extends Context.Service<
                 updated_at = excluded.updated_at`
           },
           Effect.mapError(mapError("Failed to put agent loop queue")),
-        ),
-
-        clearQueueState: Effect.fn("AgentLoopQueueStorage.clearQueueState")(
-          function* (sessionId, branchId) {
-            const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`DELETE FROM agent_loop_queues
-              WHERE workspace_id = ${workspaceId}
-                AND session_id = ${sessionId}
-                AND branch_id = ${branchId}
-              `
-          },
-          Effect.mapError(mapError("Failed to clear agent loop queue")),
         ),
       } satisfies AgentLoopQueueStorageService
     }),

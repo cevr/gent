@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   messagePartsImages,
   messagePartsReasoning,
-  messagePartsReasoningLines,
   messagePartsSearchText,
   messagePartsText,
   messagePartsTextLines,
@@ -68,7 +67,6 @@ describe("message part projection", () => {
     expect(messagePartsTextLines(parts)).toEqual(["hello"])
     expect(messageSingleText(parts)).toBeUndefined()
     expect(messagePartsReasoning(parts)).toBe("")
-    expect(messagePartsReasoningLines(parts)).toEqual([])
     expect(messagePartsImages(parts)).toEqual([
       { image: "data:image/png;base64,abc", mediaType: "image/png", rawMediaType: "image/png" },
     ])
@@ -86,7 +84,6 @@ describe("message part projection", () => {
     expect(messagePartsText(parts)).toBe("onetwo")
     expect(messagePartsTextLines(parts)).toEqual(["one", "two"])
     expect(messagePartsReasoning(parts)).toBe("think")
-    expect(messagePartsReasoningLines(parts)).toEqual(["think"])
   })
 
   test("pairs duplicate provider tool ids with the result before the next duplicate call", () => {

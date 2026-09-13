@@ -187,9 +187,7 @@ export const messagesToolCalls = (
   })
 }
 
-export const messagePartsReasoningLines = (
-  parts: ReadonlyArray<MessagePart>,
-): ReadonlyArray<string> =>
+const messagePartsReasoningLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
   parts.flatMap((part) => {
     const reasoning = messagePartReasoning(part)
     if (Predicate.isUndefined(reasoning)) return []

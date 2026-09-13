@@ -1278,3 +1278,19 @@ toolSurface` was set by no driver. The codemode prompt slot they were
   queue row now decodes the one column it uses.
 - Deferred: `messages_fts.branch_id`/`role` are write-only but FTS5 cannot
   drop a column; a rebuild costs more than two unread columns.
+
+## Sixth pass, group A: surface nobody calls (2026-09-13)
+
+The sixth explorer pass found nine candidates. This commit takes the dead
+ones. `buildTurnPrompt` had no production caller (both production paths
+already compose `compileSystemPrompt(buildTurnPromptSections(...))`, and
+the prompt test now writes the same line). `getSingleText` and
+`messageText` were `.parts` adapters used only by `agent-loop.state.ts`,
+which now says `.parts` like every other caller. `messagePartsReasoningLines`
+is unexported. `AgentLoopQueueStorage.clearQueueState` was a DELETE no one
+ran (branch cascade clears the row); the pure `clearQueueState` in the
+state module ignored its parameter and had no caller;
+`resolveSessionEnvironmentOrFail` was test-only; `RequestDeduper.invalidate`
+and `invalidateKey` had no reader, so the deduper is a plain function.
+`DependencyOverrides.eventStoreMode` had one writer that wrote the default,
+so the field and `makeBaseEventStoreLayer` are gone.

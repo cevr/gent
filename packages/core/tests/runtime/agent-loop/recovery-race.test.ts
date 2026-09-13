@@ -93,7 +93,6 @@ const gatedQueueStorageLayer = <E>(
             return yield* real.getQueueState(sessionId, branchId)
           }),
         putQueueState: real.putQueueState,
-        clearQueueState: real.clearQueueState,
       })
     }),
   )
@@ -132,7 +131,6 @@ describe("agent-loop recovery race", () => {
                 }
                 yield* Ref.set(storedQueueRef, queue)
               }),
-            clearQueueState: () => Ref.set(storedQueueRef, emptyPersistedQueue()),
           }),
         )
 

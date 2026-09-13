@@ -6,7 +6,7 @@ import {
   sectionPatternFor,
   withSectionMarkers,
 } from "../../src/domain/prompt"
-import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
+import { buildTurnPromptSections } from "../../src/runtime/agent/agent-loop.utils"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 
@@ -114,7 +114,7 @@ describe("turn prompt composition", () => {
       makeTool("read", { description: "Read files", promptSnippet: "Read file contents" }),
       makeTool("bash", { description: "Run commands", promptSnippet: "Execute shell commands" }),
     ]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).toContain("## Available Tools")
     expect(result).toContain("**read**: Read file contents")
     expect(result).toContain("**bash**: Execute shell commands")
@@ -127,7 +127,7 @@ describe("turn prompt composition", () => {
         promptGuidelines: ["Use instead of bash cat"],
       }),
     ]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).toContain("## Tool Guidelines")
     expect(result).toContain("Use instead of bash cat")
   })
@@ -137,20 +137,20 @@ describe("turn prompt composition", () => {
       makeTool("read", { description: "Read", promptGuidelines: ["Shared guideline"] }),
       makeTool("grep", { description: "Grep", promptGuidelines: ["Shared guideline"] }),
     ]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     const count = result.split("Shared guideline").length - 1
     expect(count).toBe(1)
   })
 
   test("includes agent addendum", () => {
-    const result = buildTurnPrompt(baseSections, agent, [])
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, []))
     expect(result).toContain("## Agent: test-agent")
     expect(result).toContain("Be helpful.")
   })
 
   test("omits tool sections when no tools have metadata", () => {
     const tools = [makeTool("plain", { description: "No metadata" })]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).not.toContain("## Available Tools")
     expect(result).not.toContain("## Tool Guidelines")
   })
@@ -165,19 +165,19 @@ describe("turn prompt composition", () => {
       }),
       makeTool("grep", { description: "Search" }),
     ]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).toContain("Prefer grep over bash for file searching")
   })
 
   test("a guideline only reaches the prompt while its tool is active", () => {
     const tools = [makeTool("grep", { description: "Search" })]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).not.toContain("Prefer grep over bash")
   })
 
   test("never renders a delegation roster: children inherit the current agent", () => {
     const tools = [makeTool("delegate", { description: "Delegate work" })]
-    const result = buildTurnPrompt(baseSections, agent, tools)
+    const result = compileSystemPrompt(buildTurnPromptSections(baseSections, agent, tools))
     expect(result).not.toContain("## Delegation Targets")
   })
 })

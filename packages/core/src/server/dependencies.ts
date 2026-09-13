@@ -5,7 +5,7 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { AgentRunnerService } from "../domain/agent.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
-import { EventStore, EventStoreError } from "../domain/event.js"
+import { EventStoreError } from "../domain/event.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { FileLockService } from "../domain/file-lock.js"
@@ -45,7 +45,6 @@ import { ProcessRunnerLive } from "../runtime/run-process.js"
 import { CurrentWorkspaceId, WorkspaceId } from "./workspace-rpc.js"
 
 interface DependencyOverrides {
-  readonly eventStoreMode?: "default" | "storage-backed" | "memory"
   readonly authLayer?: Layer.Layer<Auth>
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
   readonly configServiceLayer?: Layer.Layer<ConfigService>
@@ -106,14 +105,6 @@ export interface DependenciesConfig {
   branchTools: BranchToolFeature<never>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
-}
-
-const makeBaseEventStoreLayer = (
-  eventStoreMode: Option.Option<NonNullable<DependencyOverrides["eventStoreMode"]>>,
-) => {
-  if (Option.isSome(eventStoreMode) && eventStoreMode.value === "memory") return EventStore.Memory
-  // Snapshots and event replay must share a cursor, including in-memory SQLite.
-  return EventStoreLive
 }
 
 const childProcessSpawnerLive = Layer.effect(
@@ -298,10 +289,8 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const storageLive = makeStorageLayer(config, persistenceMode)
   const clusterRunnerLive = makeClusterRunnerLayer(persistenceMode)
-  // Base event store: raw storage-backed publish/subscribe storage
-  const baseEventStoreLive = makeBaseEventStoreLayer(
-    Option.fromUndefinedOr(config.overrides?.eventStoreMode),
-  )
+  // Snapshots and event replay must share a cursor, including in-memory SQLite.
+  const baseEventStoreLive = EventStoreLive
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // The composition root owns FileSystem/Path; this dependency graph only
