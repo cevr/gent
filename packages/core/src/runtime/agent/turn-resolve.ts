@@ -81,7 +81,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
-  hash: (input: string) => string
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
@@ -184,16 +183,11 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     },
     extensionProjections,
   )
-  const bindingContext = {
-    extensions: resolvedExtensions.extensions,
-    hash: params.hash,
+  const entriesByToolId = new Map<string, ResolvedToolCapability>()
+  for (const entry of allToolEntries) {
+    const bound = yield* attachToolBindingIdentity(entry, resolvedExtensions.extensions)
+    entriesByToolId.set(String(getToolId(entry.capability)), bound)
   }
-  const entriesByToolId = new Map(
-    allToolEntries.map((entry) => [
-      String(getToolId(entry.capability)),
-      attachToolBindingIdentity(entry, bindingContext),
-    ]),
-  )
   const hostToolBindings = new Map<string, ResolvedToolCapability>()
   for (const tool of hostTools) {
     const entry = entriesByToolId.get(String(getToolId(tool)))

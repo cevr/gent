@@ -159,6 +159,37 @@ export const isObservableModelOutputPart = (part: Response.AnyPart): boolean => 
   }
 }
 
+/** Close the step on a stream failure: log it, end the stream, and surface the error. */
+const reportStreamFailure = <E>(
+  params: {
+    messageId: MessageId
+    step: number
+    sessionId: SessionId
+    branchId: BranchId
+    formatStreamError: (streamError: E) => string
+  },
+  streamError: E,
+  message: string,
+) =>
+  Effect.gen(function* () {
+    yield* Effect.logWarning(message).pipe(Effect.annotateLogs({ error: String(streamError) }))
+    yield* publishEventOrDie(
+      StreamEnded.make({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messageId: params.messageId,
+        step: params.step,
+      }),
+    )
+    yield* publishEventOrDie(
+      ErrorOccurred.make({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        error: params.formatStreamError(streamError),
+      }),
+    )
+  })
+
 export const collectModelTurnResponse = (params: {
   messageId: MessageId
   step: number
@@ -168,7 +199,6 @@ export const collectModelTurnResponse = (params: {
   modelId: string
   activeStream: ActiveStreamHandle
   formatStreamError: (streamError: ProviderError) => string
-  retryPreOutputFailures?: boolean
 }) =>
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
@@ -203,27 +233,9 @@ export const collectModelTurnResponse = (params: {
         Effect.gen(function* () {
           const interrupted = yield* wasInterrupted(params.activeStream)
           if (interrupted) return false
-          if (params.retryPreOutputFailures === true && !hasObservableOutput) {
-            return yield* streamError
-          }
-          yield* Effect.logWarning("stream error, persisting partial output").pipe(
-            Effect.annotateLogs({ error: String(streamError) }),
-          )
-          yield* publishEventOrDie(
-            StreamEnded.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              messageId: params.messageId,
-              step: params.step,
-            }),
-          )
-          yield* publishEventOrDie(
-            ErrorOccurred.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              error: params.formatStreamError(streamError),
-            }),
-          )
+          // Nothing observable was produced yet: let the caller's retry policy try again.
+          if (!hasObservableOutput) return yield* streamError
+          yield* reportStreamFailure(params, streamError, "stream error, persisting partial output")
           return true
         }),
       ),
@@ -250,23 +262,10 @@ export const collectFailedModelTurnResponse = (params: {
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
     if (!interrupted) {
-      yield* Effect.logWarning("stream error before output, retries exhausted").pipe(
-        Effect.annotateLogs({ error: String(params.streamError) }),
-      )
-      yield* publishEventOrDie(
-        StreamEnded.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          messageId: params.messageId,
-          step: params.step,
-        }),
-      )
-      yield* publishEventOrDie(
-        ErrorOccurred.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: params.formatStreamError(params.streamError),
-        }),
+      yield* reportStreamFailure(
+        params,
+        params.streamError,
+        "stream error before output, retries exhausted",
       )
     }
 
@@ -397,24 +396,7 @@ export const collectExternalTurnResponse = <R>(params: {
         Effect.gen(function* () {
           const interrupted = yield* wasInterrupted(params.activeStream)
           if (interrupted) return false
-          yield* Effect.logWarning("stream error, persisting partial output").pipe(
-            Effect.annotateLogs({ error: String(streamError) }),
-          )
-          yield* publishEventOrDie(
-            StreamEnded.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              messageId: params.messageId,
-              step: params.step,
-            }),
-          )
-          yield* publishEventOrDie(
-            ErrorOccurred.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              error: params.formatStreamError(streamError),
-            }),
-          )
+          yield* reportStreamFailure(params, streamError, "stream error, persisting partial output")
           return true
         }),
       ),

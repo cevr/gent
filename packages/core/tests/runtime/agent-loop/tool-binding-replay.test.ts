@@ -147,10 +147,7 @@ describe("tool binding replay", () => {
         const context = yield* Layer.build(layer)
         yield* Effect.gen(function* () {
           const sessionId = SessionId.make("inner-operation-session")
-          const current = yield* captureCurrentToolBinding({
-            sessionId,
-            toolName: "@test/replay-tool",
-          })
+          const current = yield* captureCurrentToolBinding("@test/replay-tool")
           if (Option.isNone(current) || Predicate.isUndefined(current.value.binding))
             return yield* Effect.die("Missing fixture binding")
           const binding = current.value.binding
@@ -237,10 +234,7 @@ describe("tool binding replay", () => {
           )
           const cache = yield* SessionProfileCache
           const profile = yield* cache.resolve("/tmp")
-          const current = yield* captureCurrentToolBinding({
-            sessionId,
-            toolName: toolCall.name,
-          })
+          const current = yield* captureCurrentToolBinding(toolCall.name)
           if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
           const replay = yield* ProcessLocalToolReplay
           const key = processLocalReplayBindingKey(address)
@@ -312,10 +306,7 @@ describe("tool binding replay", () => {
         const cache = yield* SessionProfileCache
         const profile = yield* cache.resolve("/tmp")
         const generationId = profile.generationId
-        const current = yield* captureCurrentToolBinding({
-          sessionId,
-          toolName: "@test/replay-tool",
-        })
+        const current = yield* captureCurrentToolBinding("@test/replay-tool")
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()

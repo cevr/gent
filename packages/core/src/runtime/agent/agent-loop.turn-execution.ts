@@ -380,7 +380,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
         randomId: platform.randomId,
-        hash: (input) => platform.hash("sha256", input),
         persistExternalToolCall: (toolCall) => {
           const step = nextExternalStep
           if (step > MAX_TURN_STEPS) {
@@ -450,7 +449,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             modelId: params.resolved.modelId,
             activeStream: params.activeStream,
             formatStreamError: source.formatStreamError,
-            retryPreOutputFailures: true,
           }),
         )
       } else {
@@ -699,7 +697,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           sessionId: scope.sessionId,
           baseSections: params.turnProfile.turnBaseSections,
           interactive: params.state.interactive,
-          hash: (input) => platform.hash("sha256", input),
         })
         if (Predicate.isUndefined(resolved)) {
           return yield* new AgentLoopError({ message: "Recovery requires a selected agent" })
@@ -921,7 +918,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         baseSections: params.turnProfile.turnBaseSections,
         interactive: params.state.interactive,
-        hash: (input) => platform.hash("sha256", input),
       })
       if (Predicate.isUndefined(resolved)) {
         return {

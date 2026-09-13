@@ -64,6 +64,7 @@ import {
   type ActiveStreamHandle,
   type CollectedTurnResponse,
 } from "./turn-response.js"
+import { GentPlatform } from "../gent-platform.js"
 import type { ResolvedTurnContext } from "./turn-resolve.js"
 import type { ResolveModelRequest } from "../../providers/model-resolver.js"
 
@@ -157,7 +158,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   branchId: BranchId
   activeStream: ActiveStreamHandle
   randomId: Effect.Effect<string>
-  hash: (input: string) => string
   persistExternalToolCall: (
     toolCall: Prompt.ToolCallPart,
   ) => Effect.Effect<
@@ -432,13 +432,14 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   const compact = (forced: Option.Option<CompactionRequest>) =>
     Effect.gen(function* () {
       if (Option.isNone(compactor)) return yield* plainProjection
+      const platform = yield* GentPlatform
       return yield* compactor.value.compact({
         modelId: contextModelId,
         sessionId: params.sessionId,
         branchId: params.branchId,
         messages: windowed,
         budget,
-        hash: params.hash,
+        hash: (input) => platform.hash("sha256", input),
         persistSummary: persistDurableMessage,
         force: Option.getOrUndefined(forced),
         summaryModel: (maxTokens) =>

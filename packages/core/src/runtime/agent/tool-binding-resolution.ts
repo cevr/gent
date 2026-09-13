@@ -10,7 +10,6 @@ import {
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import type { ToolBindingIdentity } from "../../domain/tool-binding.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
-import { GentPlatform } from "../gent-platform.js"
 import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import {
   ProcessLocalToolReplay,
@@ -27,20 +26,17 @@ import {
 import { ToolRunner, type ResolvedToolCapability } from "./tool-runner.js"
 
 /** Capture the loaded capability and its durable identity. */
-export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")(
-  function* (params: { readonly sessionId: SessionId; readonly toolName: string }) {
-    const runner = yield* ToolRunner
-    const registry = yield* ExtensionRegistry
-    const platform = yield* GentPlatform
-    const captured = yield* runner.capture(params)
-    return Option.map(captured, (entry) =>
-      attachToolBindingIdentity(entry, {
-        extensions: registry.getResolved().extensions,
-        hash: (input: string) => platform.hash("sha256", input),
-      }),
-    )
-  },
-)
+export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")(function* (
+  toolName: string,
+) {
+  const runner = yield* ToolRunner
+  const registry = yield* ExtensionRegistry
+  const captured = yield* runner.capture({ toolName })
+  if (Option.isNone(captured)) return Option.none<ResolvedToolCapability>()
+  return Option.some(
+    yield* attachToolBindingIdentity(captured.value, registry.getResolved().extensions),
+  )
+})
 
 /**
  * The identity a dispatching tool records for one inner host operation. A
@@ -52,11 +48,7 @@ export const innerOperationBindingIdentity = Effect.fn("ToolBinding.innerOperati
   function* (entry: ResolvedToolCapability, generationId?: ProcessGenerationId) {
     if (Predicate.isNotUndefined(entry.binding)) return Option.some(entry.binding)
     if (Predicate.isUndefined(generationId)) return Option.none<ToolBindingIdentity>()
-    const platform = yield* GentPlatform
-    return processLocalToolBindingIdentity(entry, {
-      generationId,
-      hash: (input: string) => platform.hash("sha256", input),
-    })
+    return yield* processLocalToolBindingIdentity(entry, generationId)
   },
 )
 
@@ -79,7 +71,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
       reason,
       message,
     })
-  const current = yield* captureCurrentToolBinding({ sessionId: params.sessionId, toolName })
+  const current = yield* captureCurrentToolBinding(toolName)
   if (Option.isNone(current)) {
     return yield* fail(
       "ToolUnavailable",
@@ -94,11 +86,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
         `Tool ${toolName} was bound to a process that is no longer live`,
       )
     }
-    const platform = yield* GentPlatform
-    const live = processLocalToolBindingIdentity(current.value, {
-      generationId: generationId.value,
-      hash: (input: string) => platform.hash("sha256", input),
-    })
+    const live = yield* processLocalToolBindingIdentity(current.value, generationId.value)
     if (Option.isNone(live)) {
       return yield* fail(
         "SourceMismatch",
@@ -163,7 +151,7 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
     if (Option.isNone(local) || Predicate.isNotUndefined(local.value.entry.binding)) {
       return yield* fail("MissingBinding", `No durable binding was recorded for tool ${toolName}`)
     }
-    const current = yield* captureCurrentToolBinding({ sessionId: params.sessionId, toolName })
+    const current = yield* captureCurrentToolBinding(toolName)
     if (Option.isNone(current)) {
       return yield* fail(
         "ToolUnavailable",

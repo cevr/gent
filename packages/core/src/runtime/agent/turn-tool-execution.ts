@@ -198,10 +198,7 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       )
       toolBindings.set(toolCall.name, binding)
     } else {
-      current = yield* captureCurrentToolBinding({
-        sessionId: params.sessionId,
-        toolName: toolCall.name,
-      })
+      current = yield* captureCurrentToolBinding(toolCall.name)
       if (Option.isSome(current)) toolBindings.set(toolCall.name, current.value)
     }
     const toolCalls = [toolCall]

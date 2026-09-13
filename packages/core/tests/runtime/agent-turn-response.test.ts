@@ -150,7 +150,6 @@ describe("agent turn response collectors", () => {
         modelId: "test/model",
         activeStream,
         formatStreamError: (error) => error.message,
-        retryPreOutputFailures: true,
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.flip, Effect.provide(layer))
 
@@ -320,7 +319,6 @@ describe("agent turn response collectors", () => {
         modelId: "test/model",
         activeStream,
         formatStreamError: (error) => error.message,
-        retryPreOutputFailures: true,
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 

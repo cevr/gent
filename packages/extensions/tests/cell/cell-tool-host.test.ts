@@ -102,10 +102,7 @@ const currentHostParams = Effect.gen(function* () {
     Effect.gen(function* () {
       const bindings = new Map<string, ResolvedToolCapability>()
       for (const name of profile.registryService.getResolved().modelCapabilities.keys()) {
-        const binding = yield* captureCurrentToolBinding({
-          sessionId: cell.sessionId,
-          toolName: name,
-        })
+        const binding = yield* captureCurrentToolBinding(name)
         if (Option.isSome(binding)) bindings.set(name, binding.value)
       }
       return bindings

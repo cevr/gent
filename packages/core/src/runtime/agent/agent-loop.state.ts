@@ -330,7 +330,7 @@ export const LoopState = Schema.TaggedUnion({
 export type LoopState = Schema.Schema.Type<typeof LoopState>
 type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
-type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
+export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
 
 interface QueuedTurnTake {
   readonly queue: LoopQueueState

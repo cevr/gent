@@ -1,5 +1,5 @@
 import { canonicalJsonString } from "effect-encore"
-import { Option, Predicate, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type { LoadedExtension } from "../../domain/extension.js"
 import type { ProcessGenerationId } from "../../domain/process-generation.js"
@@ -13,6 +13,7 @@ import {
 import type { MessageId, ToolCallId, ToolId } from "../../domain/ids.js"
 import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import type { ResolvedToolCapability } from "./tool-runner.js"
+import { GentPlatform } from "../gent-platform.js"
 
 export type ToolBindingReplayReason =
   | "MissingBinding"
@@ -38,22 +39,19 @@ export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplay
   },
 ) {}
 
-interface ToolBindingIdentityContext {
-  readonly extensions: ReadonlyArray<LoadedExtension>
-  readonly hash: (input: string) => string
-}
+const advertisedSchemaJson = (tool: ToolCapability): string =>
+  canonicalJsonString(
+    Schema.decodeUnknownSync(Schema.Json)({
+      name: String(getToolId(tool)),
+      description: tool.description,
+      parameters: AiTool.getJsonSchema(tool),
+    }),
+  )
 
-const schemaRevisionFor = (
-  tool: ToolCapability,
-  hash: (input: string) => string,
-): ToolSchemaRevision => {
-  const advertisedSchema = Schema.decodeUnknownSync(Schema.Json)({
-    name: String(getToolId(tool)),
-    description: tool.description,
-    parameters: AiTool.getJsonSchema(tool),
-  })
-  return ToolSchemaRevision.make(`schema:${hash(canonicalJsonString(advertisedSchema))}`)
-}
+const schemaRevisionFor = (tool: ToolCapability) =>
+  Effect.map(GentPlatform, (platform) =>
+    ToolSchemaRevision.make(`schema:${platform.hash("sha256", advertisedSchemaJson(tool))}`),
+  )
 
 const sourceRevisionFor = (extension: LoadedExtension): Option.Option<ToolSourceRevision> => {
   if (Predicate.isUndefined(extension.artifactIdentity)) return Option.none()
@@ -68,13 +66,11 @@ const sourceRevisionFor = (extension: LoadedExtension): Option.Option<ToolSource
 }
 
 /** Attach the durable identity available for one freshly selected capability. */
-export const attachToolBindingIdentity = (
+export const attachToolBindingIdentity = Effect.fn("ToolBinding.attachIdentity")(function* (
   entry: ResolvedToolCapability,
-  context: ToolBindingIdentityContext,
-): ResolvedToolCapability => {
-  const extension = context.extensions.find(
-    (candidate) => candidate.manifest.id === entry.extensionId,
-  )
+  extensions: ReadonlyArray<LoadedExtension>,
+) {
+  const extension = extensions.find((candidate) => candidate.manifest.id === entry.extensionId)
   let sourceRevision = Option.none<ToolSourceRevision>()
   if (Predicate.isNotUndefined(extension)) {
     const revision = sourceRevisionFor(extension)
@@ -87,31 +83,27 @@ export const attachToolBindingIdentity = (
     toolId: getToolId(entry.capability),
     extensionId: entry.extensionId,
     source,
-    schemaRevision: schemaRevisionFor(entry.capability, context.hash),
+    schemaRevision: yield* schemaRevisionFor(entry.capability),
   })
   return { ...entry, binding }
-}
+})
 
 /** Identity for a static tool without a build artifact. It names one process generation. */
-export const processLocalToolBindingIdentity = (
-  entry: ResolvedToolCapability,
-  context: {
-    readonly generationId: ProcessGenerationId
-    readonly hash: (input: string) => string
-  },
-): Option.Option<ToolBindingIdentity> => {
-  if (Predicate.isNotUndefined(entry.binding)) return Option.none()
-  return Option.some(
-    makeToolBindingIdentity({
-      toolId: getToolId(entry.capability),
-      extensionId: entry.extensionId,
-      source: ToolBindingSource.cases.ProcessLocal.make({
-        sourceRevision: ToolSourceRevision.make(`process:${context.generationId}`),
+export const processLocalToolBindingIdentity = Effect.fn("ToolBinding.processLocalIdentity")(
+  function* (entry: ResolvedToolCapability, generationId: ProcessGenerationId) {
+    if (Predicate.isNotUndefined(entry.binding)) return Option.none<ToolBindingIdentity>()
+    return Option.some(
+      makeToolBindingIdentity({
+        toolId: getToolId(entry.capability),
+        extensionId: entry.extensionId,
+        source: ToolBindingSource.cases.ProcessLocal.make({
+          sourceRevision: ToolSourceRevision.make(`process:${generationId}`),
+        }),
+        schemaRevision: yield* schemaRevisionFor(entry.capability),
       }),
-      schemaRevision: schemaRevisionFor(entry.capability, context.hash),
-    }),
-  )
-}
+    )
+  },
+)
 
 export const sameToolBindingIdentity = (
   left: ToolBindingIdentity,

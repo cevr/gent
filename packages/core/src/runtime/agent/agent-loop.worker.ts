@@ -10,6 +10,7 @@ import {
   type LoopState,
   type QueuedTurnItem,
   type RunningState,
+  type WaitingForInteractionState,
 } from "./agent-loop.state.js"
 import { signalActiveStreamInterrupt, type ActiveStreamHandle } from "./turn-response.js"
 import type { TurnOutcome } from "./agent-loop.turn-execution.js"
@@ -86,6 +87,27 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   const enqueueTurnWorker = (state: RunningState): Effect.Effect<void> =>
     TxQueue.offer(scope.turnWorkerQueue, state).pipe(Effect.asVoid)
 
+  /** Start the next admitted turn on this loop, or park it idle. */
+  const advanceOrIdle = (
+    base: { currentAgent?: AgentNameType },
+    nextItem: Option.Option<QueuedTurnItem>,
+  ): Effect.Effect<void, AgentLoopError> =>
+    Effect.gen(function* () {
+      if (Option.isNone(nextItem)) return yield* scope.saveCheckpoint(buildIdleState(base))
+      const startedAtMs = yield* Clock.currentTimeMillis
+      const nextRunning = buildRunningState(base, nextItem.value, { startedAtMs })
+      yield* scope.saveCheckpoint(nextRunning)
+      yield* enqueueTurnWorker(nextRunning)
+    })
+
+  /** Resume a turn parked on an interaction under its original admission. */
+  const resumeWaiting = (state: WaitingForInteractionState): Effect.Effect<void, AgentLoopError> =>
+    Effect.gen(function* () {
+      const resumed = buildRunningState(state, state, { startedAtMs: state.startedAtMs })
+      yield* scope.saveCheckpoint(resumed)
+      yield* enqueueTurnWorker(resumed)
+    })
+
   const finishTurnWorker = (
     startState: RunningState,
     outcome: TurnOutcome,
@@ -104,20 +126,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
       const nextItem = yield* scope.takeNextQueuedTurn
       yield* scope.turnInterruption.beginTurn
-      if (Option.isSome(nextItem)) {
-        const startedAtMs = yield* Clock.currentTimeMillis
-        const nextRunning = buildRunningState(
-          { currentAgent: startState.currentAgent },
-          nextItem.value,
-          {
-            startedAtMs,
-          },
-        )
-        yield* scope.saveCheckpoint(nextRunning)
-        yield* enqueueTurnWorker(nextRunning)
-        return
-      }
-      yield* scope.saveCheckpoint(buildIdleState({ currentAgent: startState.currentAgent }))
+      yield* advanceOrIdle(startState, nextItem)
     })
 
   const failTurnWorker = (
@@ -130,19 +139,9 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       const nextItem = yield* scope.takeNextQueuedTurn
       const current = yield* scope.currentLoopState
       yield* scope.turnInterruption.beginTurn
-      if (Option.isSome(nextItem)) {
-        const startedAtMs = yield* Clock.currentTimeMillis
-        const nextRunning = buildRunningState(
-          { currentAgent: current.currentAgent ?? startState.currentAgent },
-          nextItem.value,
-          { startedAtMs },
-        )
-        yield* scope.saveCheckpoint(nextRunning)
-        yield* enqueueTurnWorker(nextRunning)
-        return
-      }
-      yield* scope.saveCheckpoint(
-        buildIdleState({ currentAgent: current.currentAgent ?? startState.currentAgent }),
+      yield* advanceOrIdle(
+        { currentAgent: current.currentAgent ?? startState.currentAgent },
+        nextItem,
       )
     })
 
@@ -213,19 +212,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         yield* Ref.update(scope.admissionGateRef, (gate) => ({ ...gate, withdrawn: Option.none() }))
         return false
       }
-      const nextItem = yield* scope.takeNextQueuedTurn
-      if (Option.isSome(nextItem)) {
-        const startedAtMs = yield* Clock.currentTimeMillis
-        const nextRunning = buildRunningState(
-          { currentAgent: state.currentAgent },
-          nextItem.value,
-          { startedAtMs },
-        )
-        yield* scope.saveCheckpoint(nextRunning)
-        yield* enqueueTurnWorker(nextRunning)
-        return true
-      }
-      yield* scope.saveCheckpoint(buildIdleState({ currentAgent: state.currentAgent }))
+      yield* advanceOrIdle(state, yield* scope.takeNextQueuedTurn)
       return true
     }),
   )
@@ -253,18 +240,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       if (state._tag !== "WaitingForInteraction") return
       if (Predicate.isNotUndefined(messageId) && state.message.id !== messageId) return
       yield* scope.turnInterruption.interrupt
-      const resumed = buildRunningState(
-        { currentAgent: state.currentAgent },
-        {
-          message: state.message,
-          agentOverride: state.agentOverride,
-          runSpec: state.runSpec,
-          interactive: state.interactive,
-        },
-        { startedAtMs: state.startedAtMs },
-      )
-      yield* scope.saveCheckpoint(resumed)
-      yield* enqueueTurnWorker(resumed)
+      yield* resumeWaiting(state)
     }).pipe(scope.sideMutationSemaphore.withPermits(1))
   })
 
@@ -273,10 +249,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       const state = yield* scope.currentLoopState
       if (state._tag !== "Idle") return
       yield* scope.turnInterruption.beginTurn
-      const startedAtMs = yield* Clock.currentTimeMillis
-      const next = buildRunningState(state, item, { startedAtMs })
-      yield* scope.saveCheckpoint(next)
-      yield* enqueueTurnWorker(next)
+      yield* advanceOrIdle(state, Option.some(item))
     }).pipe(scope.sideMutationSemaphore.withPermits(1)),
   )
 
@@ -308,18 +281,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           return
         }
         yield* scope.turnInterruption.beginTurn
-        const resumed = buildRunningState(
-          { currentAgent: state.currentAgent },
-          {
-            message: state.message,
-            agentOverride: state.agentOverride,
-            runSpec: state.runSpec,
-            interactive: state.interactive,
-          },
-          { startedAtMs: state.startedAtMs },
-        )
-        yield* scope.saveCheckpoint(resumed)
-        yield* enqueueTurnWorker(resumed)
+        yield* resumeWaiting(state)
       }).pipe(scope.sideMutationSemaphore.withPermits(1)),
   )
 

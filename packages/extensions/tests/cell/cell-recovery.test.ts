@@ -233,10 +233,7 @@ it.scopedLive(
           if (state === "completed") yield* cells.complete(cell, savedResult)
           const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
           if (state === "unknown-child") {
-            const selected = yield* captureCurrentToolBinding({
-              sessionId,
-              toolName: "delegate",
-            })
+            const selected = yield* captureCurrentToolBinding("delegate")
             const identity = Option.flatMap(selected, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
@@ -263,10 +260,7 @@ it.scopedLive(
             })
           }
           if (state === "unadmitted" || state === "revoked") {
-            const captured = yield* captureCurrentToolBinding({
-              sessionId,
-              toolName: "cell",
-            })
+            const captured = yield* captureCurrentToolBinding("cell")
             const identity = Option.flatMap(captured, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
@@ -278,10 +272,7 @@ it.scopedLive(
               host: testHostFacts().host,
               extensionRegistry: profile.registryService,
             })
-            const selected = yield* captureCurrentToolBinding({
-              sessionId,
-              toolName: "approve",
-            })
+            const selected = yield* captureCurrentToolBinding("approve")
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
             const suspendedHost = yield* makeCellToolHost({
               cell,
@@ -308,10 +299,7 @@ it.scopedLive(
               .pipe(Effect.flip)
             expect(suspended._tag).toBe("CellToolCallSuspended")
           }
-          const binding = yield* captureCurrentToolBinding({
-            sessionId,
-            toolName: "sibling",
-          })
+          const binding = yield* captureCurrentToolBinding("sibling")
           const identity = Option.flatMap(binding, (entry) => Option.fromUndefinedOr(entry.binding))
           if (Option.isNone(identity)) return yield* Effect.die("Missing sibling binding")
           yield* (yield* ToolCallBindingStorage).save({
