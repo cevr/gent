@@ -1516,3 +1516,22 @@ fix), `RuntimeEnvironment.Test` (same reasoning as `Permission.Live`), the
 small domain files (each states a layering rule), `request-dedup` tuning
 knobs (the LRU proof), storage methods (all traced to shipped callers). Core
 is 27940 LOC at 09d3290d.
+
+## Sixteenth pass: one queue advance, one failure report (2026-09-13)
+
+`agent-loop.worker.ts`: the five copies of "take the next admitted turn
+or park idle" and "resume the parked interaction turn" are `advanceOrIdle`
+and `resumeWaiting`; callers keep their own take/beginTurn ordering. The
+three response collectors share `reportStreamFailure`; the pre-output
+retry guard is unconditional (its only caller always set it), so
+`retryPreOutputFailures` is gone. Tool-binding identity yields
+`GentPlatform` for its hash instead of six closures threaded through
+`resolveTurnContext`/`resolveTurnSource`; `captureCurrentToolBinding`
+takes the tool name it reads (`8ec4a87a`). `ProjectionTurnContext`
+deleted (hooks take `ExtensionTurnContext`; the cwd/home/ids wrapper had
+no reader); `compileToolPolicy` takes the turn's `interactive` flag, not
+a `RunContext` copy; `setStartingState` and the exported
+`persistRuntimeState` dropped from the queue; `requireAgent` folded into
+`requireCurrentAgent`; `makeRunSpec` is `omitUndefined` (`d3b3f3ff`).
+Sixteenth-pass NO FINDING: the compactor's `hash` parameter stays (it
+crosses the extension seam). Core is 27,790 LOC at `d3b3f3ff`.
