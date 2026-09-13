@@ -85,13 +85,36 @@ import { makeAgentLoopQueue } from "./agent-loop.queue.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
-import {
-  captureAgentLoopRuntimeContext,
-  provideAgentLoopRuntimeContext,
-} from "./agent-loop.runtime-context.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"
 import type { ProcessRunner } from "../../runtime/run-process.js"
+
+type AgentLoopRuntimeServices =
+  | SessionStorage
+  | SessionOperationStorage
+  | MessageStorage
+  | EventStorage
+  | SqlClient.SqlClient
+  | ModelResolver
+  | ModelRegistry
+  | ToolRunner
+  | EventPublisher
+  | InteractionStorage
+
+type AgentLoopRuntimeContext = Context.Context<AgentLoopRuntimeServices>
+
+const captureAgentLoopRuntimeContext: Effect.Effect<
+  AgentLoopRuntimeContext,
+  never,
+  AgentLoopRuntimeServices
+> = Effect.context<AgentLoopRuntimeServices>()
+
+const provideAgentLoopRuntimeContext =
+  (ctx: AgentLoopRuntimeContext) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, Exclude<R, AgentLoopRuntimeServices>> =>
+    Effect.provideContext(effect, ctx)
 
 const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId

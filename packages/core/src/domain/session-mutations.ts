@@ -1,11 +1,16 @@
 import { Context, type Effect } from "effect"
 import type { ReasoningEffort } from "./agent.js"
 import type { EventStoreError } from "./event.js"
-import type { BranchId, MessageId, RequestId, SessionId } from "./ids.js"
+import type { BranchId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
 import type { StorageError } from "./storage-error.js"
 import type { SessionRuntimeError } from "../runtime/session-runtime.js"
-import type { CreateSessionInput } from "../server/transport-contract.js"
+import type {
+  CreateBranchInput,
+  CreateSessionInput,
+  ForkBranchInput,
+  SwitchBranchInput,
+} from "../server/transport-contract.js"
 
 type SessionMutationError = StorageError | EventStoreError | InvalidStateError | NotFoundError
 
@@ -20,25 +25,15 @@ export interface SessionMutationsService {
     readonly sessionId: SessionId
     readonly name: string
   }) => Effect.Effect<{ renamed: boolean; name?: string }, SessionMutationError>
-  readonly createSessionBranch: (input: {
-    readonly sessionId: SessionId
-    readonly parentBranchId?: BranchId
-    readonly name?: string
-    readonly requestId?: RequestId
-  }) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
-  readonly forkSessionBranch: (input: {
-    readonly sessionId: SessionId
-    readonly fromBranchId: BranchId
-    readonly atMessageId: MessageId
-    readonly name?: string
-    readonly requestId?: RequestId
-  }) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
-  readonly switchActiveBranch: (input: {
-    readonly sessionId: SessionId
-    readonly fromBranchId: BranchId
-    readonly toBranchId: BranchId
-    readonly requestId?: RequestId
-  }) => Effect.Effect<void, SessionMutationError>
+  readonly createSessionBranch: (
+    input: CreateBranchInput,
+  ) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
+  readonly forkSessionBranch: (
+    input: ForkBranchInput,
+  ) => Effect.Effect<{ branchId: BranchId }, SessionMutationError>
+  readonly switchActiveBranch: (
+    input: SwitchBranchInput,
+  ) => Effect.Effect<void, SessionMutationError>
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionMutationError>
   readonly updateReasoningLevel: (input: {
     readonly sessionId: SessionId

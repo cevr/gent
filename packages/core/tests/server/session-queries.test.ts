@@ -12,7 +12,7 @@ import { SessionStorage } from "../../src/storage/session-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { getSessionSnapshot } from "../../src/server/session-queries"
+import { getSessionSnapshot } from "../../src/server/rpc-handlers"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { sessionRuntimeLayer } from "./session-mutations/helpers"
 

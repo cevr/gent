@@ -27,15 +27,6 @@ export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocol
   },
 ) {}
 
-// Schema-compatible wrapper for PlatformError (Data.TaggedError, not Schema-based)
-export class PlatformErrorSchema extends Schema.TaggedError<PlatformErrorSchema>()(
-  "PlatformError",
-  {
-    message: Schema.String,
-    reason: Schema.Unknown,
-  },
-) {}
-
 export const GentRpcError = Schema.Union([
   StorageError,
   SessionRuntimeErrorSchema,
@@ -43,7 +34,6 @@ export const GentRpcError = Schema.Union([
   ProviderAuthError,
   DriverError,
   ExtensionProtocolError,
-  PlatformErrorSchema,
   EventStoreError,
   InteractionRequestMismatchError,
   NotFoundError,

@@ -4,7 +4,7 @@ import { StorageError } from "@gent/core-internal/domain/storage-error"
 import { EventStoreError } from "@gent/core-internal/domain/event"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"
 import { DriverError, DriverFailureId, ProviderAuthError } from "@gent/core-internal/domain/driver"
-import { NotFoundError, PlatformErrorSchema } from "@gent/core-internal/server/errors"
+import { NotFoundError } from "@gent/core-internal/server/errors"
 import { SessionRuntimeError } from "@gent/core-internal/runtime/session-runtime"
 
 describe("formatError", () => {
@@ -35,11 +35,6 @@ describe("formatError", () => {
   test("NotFoundError → prefixed", () => {
     const err = new NotFoundError({ message: "session abc" })
     expect(formatError(err)).toBe("Not found: session abc")
-  })
-
-  test("PlatformError → prefixed", () => {
-    const err = new PlatformErrorSchema({ message: "file not found", reason: "not found" })
-    expect(formatError(err)).toBe("Platform: file not found")
   })
 
   test("ProviderAuthError → prefixed", () => {

@@ -328,7 +328,6 @@ const makeSessionMutationsService: Effect.Effect<
         const branch = new Branch({
           id: BranchId.make(yield* platform.randomId),
           sessionId: input.sessionId,
-          parentBranchId: input.parentBranchId,
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })

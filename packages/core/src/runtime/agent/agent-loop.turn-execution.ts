@@ -14,6 +14,8 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { Message, assistantMessageIdForTurn } from "../../domain/message.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+import { calculateCost, type ModelId } from "../../domain/model.js"
+import { ModelRegistry } from "../model-registry.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -49,7 +51,6 @@ import {
   type AssistantResponsePart,
   type ToolResponsePart,
 } from "./turn-persistence.js"
-import { computeStreamEndedCost } from "./turn-pricing.js"
 import { resolveTurnContext, type ResolvedTurnContext } from "./turn-resolve.js"
 import {
   resolveTurnSource,
@@ -68,6 +69,29 @@ import {
 import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { resolveReplayToolBinding } from "./tool-binding-resolution.js"
 import type { TurnInterruption } from "./turn-interruption.js"
+
+// Freeze pricing into the StreamEnded event at emit time. Returns None
+// when usage is absent or pricing is missing; the reducer treats that as a
+// zero contribution. Storing the computed cost on the event makes the
+// transcript authoritative: replaying the same events always sums to the
+// same cost, even if ModelRegistry pricing later refreshes.
+const computeStreamEndedCost: (params: {
+  modelId: ModelId
+  usage: Option.Option<{ inputTokens: number; outputTokens: number }>
+}) => Effect.Effect<Option.Option<number>, never, ModelRegistry> = Effect.fn(
+  "TurnHelpers.computeStreamEndedCost",
+)(function* (params) {
+  if (Option.isNone(params.usage)) return Option.none()
+  const modelRegistry = yield* ModelRegistry
+  const pricing = yield* modelRegistry.list.pipe(
+    Effect.map((models) =>
+      Option.fromUndefinedOr(models.find((m) => m.id === params.modelId)?.pricing),
+    ),
+    Effect.catchEager(() => Effect.succeedNone),
+  )
+  if (Option.isNone(pricing)) return Option.none()
+  return Option.some(calculateCost(params.usage.value, pricing))
+})
 
 interface CollectedResult<A> {
   readonly _tag: "collected"

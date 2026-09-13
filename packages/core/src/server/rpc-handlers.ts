@@ -3,7 +3,7 @@ import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
-import { EventId, EventStore } from "../domain/event.js"
+import { EventId, EventStore, InteractionResolved } from "../domain/event.js"
 import { SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -20,20 +20,27 @@ import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-run
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
+import { EventStorage } from "../storage/event-storage.js"
+import { makeStorageTransaction } from "../storage/sqlite-storage.js"
+import { projectMessagesWithToolInteractions } from "../domain/message-part-display.js"
+import { EventPublisher } from "../domain/event-publisher.js"
+import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
+import { omitUndefined } from "../domain/guards.js"
+import { ApprovalService } from "../runtime/approval-service.js"
+import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ConnectionTracker } from "./connection-tracker.js"
-import { ExtensionProtocolError, NotFoundError } from "./errors.js"
+import { ExtensionProtocolError, InvalidStateError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
-import { respondInteraction } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionMutations } from "../domain/session-mutations.js"
-import { getSessionSnapshot } from "./session-queries.js"
 import { getBranchTree } from "./session-utils.js"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   DriverInfo,
   DriverListResult,
+  SessionSnapshot,
   SlashCommandInfo,
   type AuthorizeAuthInput,
   type CallbackAuthInput,
@@ -57,6 +64,137 @@ import {
   type SwitchBranchInput,
   type UpdateSessionReasoningLevelInput,
 } from "./transport-contract.js"
+
+/** The one read the client hydrates from: persisted conversation plus live runtime state. */
+export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
+  input: GetSessionSnapshotInput,
+) {
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
+  const messageStorage = yield* MessageStorage
+  const eventStorage = yield* EventStorage
+  const storageTransaction = yield* makeStorageTransaction
+  const sessionRuntime = yield* SessionRuntime
+  const session = yield* sessionStorage.getSession(input.sessionId)
+  if (Predicate.isUndefined(session)) {
+    return yield* new NotFoundError({ message: "Session not found" })
+  }
+  const branch = yield* branchStorage.getBranch(input.branchId)
+  if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
+    return yield* new NotFoundError({ message: "Branch not found" })
+  }
+
+  const snapshotState = yield* storageTransaction(
+    Effect.gen(function* () {
+      const messages = yield* messageStorage.listMessages(input.branchId)
+      const lastEventId = yield* eventStorage.getLatestEventId({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+      })
+      return {
+        projectedMessages: projectMessagesWithToolInteractions(messages),
+        lastEventId,
+      }
+    }),
+  )
+
+  const runtime = yield* sessionRuntime.getState(input).pipe(
+    Effect.mapError(
+      (cause) =>
+        new InvalidStateError({
+          message: `Failed to read session runtime state: ${cause.message}`,
+        }),
+    ),
+  )
+
+  // Cumulative metrics (turns, cost, last-model) are the authority for
+  // client HUD displays. Keeping them on the snapshot means the TUI
+  // hydrates cost/tokens from here instead of re-deriving by joining
+  // streamed events against a client-side model registry.
+  const metrics = yield* sessionRuntime
+    .getMetrics({ sessionId: input.sessionId, branchId: input.branchId })
+    .pipe(
+      Effect.catchEager(() =>
+        Effect.succeed({
+          turns: 0,
+          durationMs: 0,
+          costUsd: 0,
+          lastInputTokens: 0,
+        }),
+      ),
+    )
+
+  // Extension state is no longer hydrated through the session snapshot —
+  // clients call the extension's typed `client.extension.request(...)` on
+  // mount and subscribe to `ExtensionStateChanged` events for refetch
+  // signals. The privileged out-of-band UI snapshot channel is gone.
+
+  return new SessionSnapshot({
+    sessionId: input.sessionId,
+    branchId: input.branchId,
+    name: session.name,
+    messages: snapshotState.projectedMessages,
+    lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
+    reasoningLevel: session.reasoningLevel,
+    activeBranchId: session.activeBranchId,
+    runtime,
+    metrics,
+  })
+})
+
+/** Resolve the pending interaction on a branch and wake its loop. */
+const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
+  input: RespondInteractionInput,
+) {
+  const approvalService = yield* ApprovalService
+  const sessionRuntime = yield* SessionRuntime
+  const eventPublisher = yield* EventPublisher
+  yield* resolveExistingSessionBranch({
+    sessionId: input.sessionId,
+    branchId: input.branchId,
+  })
+
+  const pendingRequestId = yield* approvalService.pendingRequestId(input)
+  if (pendingRequestId !== input.requestId) {
+    let message = "Interaction response requestId does not match the pending request"
+    if (Predicate.isUndefined(pendingRequestId)) {
+      message = "No pending interaction request exists for this session branch"
+    }
+    return yield* new InteractionRequestMismatchError({
+      message,
+      expectedRequestId: pendingRequestId,
+      actualRequestId: input.requestId,
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+    })
+  }
+
+  const decision = {
+    approved: input.approved,
+    notes: input.notes,
+    ...omitUndefined({ editedContent: input.editedContent }),
+  }
+  // 1. Store resolution durably so re-entering present() finds it
+  yield* approvalService.storeResolution(input.requestId, decision)
+  // 2. Wake the machine. present() marks the row resolved only when the
+  //    tool consumes the durable decision.
+  yield* sessionRuntime.respondInteraction({
+    sessionId: input.sessionId,
+    branchId: input.branchId,
+    requestId: input.requestId,
+  })
+  // 3. Publish resolution event
+  yield* eventPublisher
+    .publish(
+      InteractionResolved.make({
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        requestId: input.requestId,
+        ...decision,
+      }),
+    )
+    .pipe(Effect.catchEager(() => Effect.void))
+})
 
 // ============================================================================
 // Handler helpers (yield Tags inside; no service-bag threading)
@@ -205,24 +343,14 @@ const RpcHandlers = GentRpcs.toLayer(
       // Session / branch / message / queue / interaction
       // ----------------------------------------------------------------------
       "session.create": (input: CreateSessionInput) =>
-        mutations
-          .createSession({
-            name: input.name,
-            cwd: input.cwd,
-            parentSessionId: input.parentSessionId,
-            parentBranchId: input.parentBranchId,
-            initialPrompt: input.initialPrompt,
-            agentOverride: input.agentOverride,
-            requestId: input.requestId,
-          })
-          .pipe(
-            Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
-            withWideEvent(
-              WideEventBoundary.rpc("session.create", {
-                requestId: input.requestId,
-              }),
-            ),
+        mutations.createSession(input).pipe(
+          Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
+          withWideEvent(
+            WideEventBoundary.rpc("session.create", {
+              requestId: input.requestId,
+            }),
           ),
+        ),
 
       "session.list": () => sessionStorage.listSessions,
 
@@ -263,60 +391,39 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
-      "branch.create": ({ sessionId, name, requestId }: CreateBranchInput) =>
-        mutations
-          .createSessionBranch({
-            sessionId,
-            name,
-            requestId,
-          })
-          .pipe(
-            Effect.tap((result) => WideEvent.set({ sessionId, branchId: result.branchId })),
-            withWideEvent(
-              WideEventBoundary.rpc("branch.create", {
-                requestId,
-              }),
-            ),
+      "branch.create": (input: CreateBranchInput) =>
+        mutations.createSessionBranch(input).pipe(
+          Effect.tap((result) =>
+            WideEvent.set({ sessionId: input.sessionId, branchId: result.branchId }),
           ),
+          withWideEvent(WideEventBoundary.rpc("branch.create", { requestId: input.requestId })),
+        ),
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
-      "branch.switch": ({ sessionId, fromBranchId, toBranchId, requestId }: SwitchBranchInput) =>
-        mutations
-          .switchActiveBranch({
-            sessionId,
-            fromBranchId,
-            toBranchId,
-            requestId,
-          })
-          .pipe(
-            Effect.tap(() => WideEvent.set({ sessionId, fromBranchId, toBranchId })),
-            withWideEvent(
-              WideEventBoundary.rpc("branch.switch", {
-                requestId,
-              }),
-            ),
+      "branch.switch": (input: SwitchBranchInput) =>
+        mutations.switchActiveBranch(input).pipe(
+          Effect.tap(() =>
+            WideEvent.set({
+              sessionId: input.sessionId,
+              fromBranchId: input.fromBranchId,
+              toBranchId: input.toBranchId,
+            }),
           ),
+          withWideEvent(WideEventBoundary.rpc("branch.switch", { requestId: input.requestId })),
+        ),
 
-      "branch.fork": ({ sessionId, fromBranchId, atMessageId, name, requestId }: ForkBranchInput) =>
-        mutations
-          .forkSessionBranch({
-            sessionId,
-            fromBranchId,
-            atMessageId,
-            name,
-            requestId,
-          })
-          .pipe(
-            Effect.tap((result) =>
-              WideEvent.set({ sessionId, fromBranchId, branchId: result.branchId }),
-            ),
-            withWideEvent(
-              WideEventBoundary.rpc("branch.fork", {
-                requestId,
-              }),
-            ),
+      "branch.fork": (input: ForkBranchInput) =>
+        mutations.forkSessionBranch(input).pipe(
+          Effect.tap((result) =>
+            WideEvent.set({
+              sessionId: input.sessionId,
+              fromBranchId: input.fromBranchId,
+              branchId: result.branchId,
+            }),
           ),
+          withWideEvent(WideEventBoundary.rpc("branch.fork", { requestId: input.requestId })),
+        ),
 
       "message.send": ({
         sessionId,
