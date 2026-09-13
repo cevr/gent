@@ -1608,3 +1608,29 @@ before the effect runs; the helper sets them after). Explorer verdict:
 user (test-vehicle-only): the `session.delete` chain (~120 LOC, no
 client), `DependencyOverrides.modelRegistryLayer`, `makeServerRootLayer`.
 Core is 27,495 LOC.
+
+## Cell prompt, cell labels, and the agents pane (2026-09-13)
+
+The user asked whether Bun subsumes any builtin extension and whether
+the prompt teaches the cell well. An explorer audit found no tool that
+raw Bun replaces cleanly: `read` owns line numbers, `write`/`edit` own
+the FileLock and the diff render, `bash` owns 25 guardrail patterns and
+the session trailer, `webfetch` owns HTML→markdown, `grep` owns the
+gitignore-aware FileIndex. The real gaps were in the prompt: it never
+said the cell is unsandboxed, steered shell to `Bun.$` (which bypasses
+the bash guardrails), never asked for small results, and dropped the
+delegate guidelines (the catalog prints descriptions only). `6de94c57`
+fixes the prompt and adds `describeCellCode`, a static classifier
+(host tools, `Bun.$`/`Bun.spawn` commands, `Bun.file`/`Bun.write`
+paths, globs, fetch hosts) so a cell with no receipts reads
+"$ bun test · read package.json" instead of "1 cell". `Bun.Glob` stays
+out of the prompt because a guardrail greps for it; the prompt points
+at the grep tool instead. A prime-agent study (cloned to the
+scratchpad) showed the same approach: a scored code-preview picker,
+`✓ python · preview · ↑ 1 ↓ 1 lines · 12ms`, `◇◈◆◈` for running, and
+an agents view with `Running (n)` headings, `•` dots, and a
+`Session · Model · Activity · Cost · Age` grid. The transcript glyphs
+and the docked agents pane now follow that language (this commit).
+Not done: per-cell durations (the TUI `ToolCall` carries no timing),
+a persistent subagent tray above the composer, and a model column on
+every row (the listing deliberately avoids per-row detail reads).
