@@ -11,6 +11,7 @@ import {
 import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import { CellExtension } from "./cell/cell-extension.js"
 import { CompactionExtension, ModelContextCompactorResource } from "./compaction/index.js"
+import { InstructionsExtension } from "./instructions/index.js"
 import { CellBranchTools } from "./cell/cell-storage.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
@@ -108,6 +109,7 @@ export const InteractionToolsExtension = defineExtension({
 export {
   CompactionExtension,
   ModelContextCompactorResource,
+  InstructionsExtension,
   ExecToolsExtension,
   DelegateExtension,
   AgentsExtension,
@@ -131,6 +133,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner 
   [
     CellExtension,
     CompactionExtension,
+    InstructionsExtension,
     HandoffExtension,
     GoalExtension,
     BtwExtension,

@@ -66,7 +66,6 @@ export interface SessionProfile {
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
-  readonly instructions: string
   /**
    * Identity of the process that built this profile. A process-local tool
    * binding is replayable only inside it.
@@ -247,7 +246,6 @@ export class SessionProfileCache extends Context.Service<
                   resolved,
                   coreSections: declarations.coreSections,
                   extensionSectionInputs: [...resolved.promptSections.values()],
-                  instructions: declarations.instructions,
                 },
                 configService,
                 resourceContext: started.context,
@@ -321,7 +319,6 @@ export class SessionProfileCache extends Context.Service<
               registryService: Context.get(layerContext, ExtensionRegistry),
               driverRegistryService: Context.get(layerContext, DriverRegistry),
               baseSections: [],
-              instructions: "",
               generationId: ProcessGenerationId.make("test"),
             }
             cache.set(cwd, profile)
@@ -343,6 +340,5 @@ const sessionProfileFromCatalog = (
   registryService: catalog.registryService,
   driverRegistryService: catalog.driverRegistryService,
   baseSections: catalog.baseSections,
-  instructions: catalog.profile.instructions,
   generationId,
 })

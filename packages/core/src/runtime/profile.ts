@@ -56,7 +56,7 @@ export interface RuntimeProfileInputs {
  * Output of the resolver — everything a downstream composer needs to wire layers.
  *
  * `coreSections` are the static, environment-derived sections (cwd, platform,
- * git state, custom instructions). `extensionSectionInputs` are static
+ * git state). `extensionSectionInputs` are static
  * extension-contributed sections in scope-precedence order (project > user >
  * builtin).
  *
@@ -68,7 +68,6 @@ interface RuntimeProfile {
   readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly extensionSectionInputs: ReadonlyArray<PromptSection>
-  readonly instructions: string
 }
 
 /**
@@ -104,7 +103,6 @@ interface RuntimeProfileDeclarations {
   readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly extensionSectionInputs: ReadonlyArray<PromptSection>
-  readonly instructions: string
 }
 
 const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
@@ -222,7 +220,6 @@ export const loadRuntimeProfileDeclarations = (
     const resolved = resolveExtensions(declarations.active, declarations.failed)
 
     // 5. Build base prompt sections (core + extension, extensions shadow by id)
-    const instructions = yield* configService.loadInstructions(canonicalCwd)
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
@@ -234,7 +231,6 @@ export const loadRuntimeProfileDeclarations = (
       shell: inputs.shell,
       osVersion: inputs.osVersion,
       isGitRepo,
-      customInstructions: instructions,
     })
 
     // Extension prompt sections come pre-merged in scope-precedence order from
@@ -249,7 +245,6 @@ export const loadRuntimeProfileDeclarations = (
       resolved,
       coreSections,
       extensionSectionInputs,
-      instructions,
     }
   })
 

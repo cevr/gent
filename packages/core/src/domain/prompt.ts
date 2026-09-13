@@ -65,9 +65,8 @@ export function buildBasePromptSections(options: {
   date: string
   shell?: string
   osVersion?: string
-  customInstructions?: string
 }): ReadonlyArray<PromptSection> {
-  const { cwd, platform, isGitRepo, date, shell, osVersion, customInstructions } = options
+  const { cwd, platform, isGitRepo, date, shell, osVersion } = options
   let platformDisplay = platform
   if (!Predicate.isUndefined(osVersion)) platformDisplay = `${platform} (${osVersion})`
   let shellDisplay = "unknown"
@@ -87,14 +86,6 @@ export function buildBasePromptSections(options: {
     },
   ]
 
-  if (!Predicate.isUndefined(customInstructions) && customInstructions !== "") {
-    sections.push({
-      id: "project-instructions",
-      content: `# Project Instructions\n\n${customInstructions}`,
-      priority: 70,
-    })
-  }
-
   return sections
 }
 
@@ -105,7 +96,6 @@ export function buildSystemPrompt(options: {
   date: string
   shell?: string
   osVersion?: string
-  customInstructions?: string
 }): string {
   return compileSystemPrompt(buildBasePromptSections(options))
 }

@@ -146,7 +146,6 @@ export interface ConfigServiceService {
   readonly setDriverOverride: (agent: AgentName, driver: DriverRef) => Effect.Effect<void>
   /** Remove a per-agent driver override. No-op when the agent has none. */
   readonly clearDriverOverride: (agent: AgentName) => Effect.Effect<void>
-  readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
 
 class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
@@ -416,52 +415,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             return { updated, save: true }
           })
         }),
-
-        loadInstructions: Effect.fn("ConfigService.loadInstructions")(function* (cwd) {
-          const readIfExists = (filePath: string): Effect.Effect<string> =>
-            fs.exists(filePath).pipe(
-              Effect.flatMap((exists) => {
-                if (exists) return fs.readFileString(filePath)
-                return Effect.succeed("")
-              }),
-              Effect.map((content) => content.trim()),
-              Effect.catchEager(() => Effect.succeed("")),
-            )
-
-          const readWithFallback = (primary: string, fallback: string): Effect.Effect<string> =>
-            readIfExists(primary).pipe(
-              Effect.filterOrElse(
-                (content) => content.length > 0,
-                () => readIfExists(fallback),
-              ),
-            )
-
-          const locations = [
-            {
-              primary: path.join(home, ".gent", "AGENTS.md"),
-              fallback: path.join(home, ".gent", "CLAUDE.md"),
-            },
-            { primary: path.join(cwd, "AGENTS.md"), fallback: path.join(cwd, "CLAUDE.md") },
-            {
-              primary: path.join(cwd, ".gent", "AGENTS.md"),
-              fallback: path.join(cwd, ".gent", "CLAUDE.md"),
-            },
-          ]
-
-          const contents: string[] = []
-          for (const loc of locations) {
-            const content = yield* readWithFallback(loc.primary, loc.fallback)
-            if (content.length > 0) contents.push(content)
-          }
-
-          if (contents.length === 0) {
-            const globalFallback = path.join(home, ".claude", "CLAUDE.md")
-            const content = yield* readIfExists(globalFallback)
-            if (content.length > 0) contents.push(content)
-          }
-
-          return contents.join("\n---\n")
-        }),
       }
 
       return service
@@ -564,7 +517,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 Option.fromUndefinedOr(current.trustedProjects),
               )
             }).pipe(Effect.asVoid),
-          loadInstructions: () => Effect.succeed(""),
         })
       }),
     )

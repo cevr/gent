@@ -741,3 +741,19 @@ Commit `92b6aefa`, 14 files, +245/−411.
 
 TUI check: cell turn counted files, `ctx.Session.renameCurrent` renamed the
 session to `warehouse-count` (verified in `sessions`), clean exit.
+
+## Project instructions moved into an extension (2026-09-13)
+
+- `ConfigService.loadInstructions`, `RuntimeProfile.instructions`,
+  `SessionProfile.instructions` and the `customInstructions` prompt option are
+  gone from core (−96 lines). Core never reads `AGENTS.md`.
+- `packages/extensions/src/instructions/index.ts` is a `turnProjection` hook:
+  it reads the same six locations plus the `~/.claude/CLAUDE.md` fallback through
+  `ctx.Files` and returns the `project-instructions` section at priority 70, so
+  its place after `# Environment` is unchanged.
+- Behaviour change: instructions are read per turn instead of once per profile.
+  The RPC acceptance test edits `AGENTS.md` between two turns and asserts the
+  second system prompt carries the new text and the first did not.
+- Tests moved: three `prompt.test.ts` cases about custom instructions became
+  five extension tests (order, empty-file fallback, Claude user fallback, no
+  section, per-turn reload through the shipped preset).

@@ -129,7 +129,6 @@ describe("extension command RPCs", () => {
         registryService: Context.get(layerContext, ExtensionRegistry),
         driverRegistryService: Context.get(layerContext, DriverRegistry),
         baseSections: [],
-        instructions: "",
         generationId: ProcessGenerationId.make("test"),
       } satisfies SessionProfile
     })

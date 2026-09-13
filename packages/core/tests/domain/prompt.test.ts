@@ -72,25 +72,6 @@ describe("system prompt composition", () => {
     expect(result).toContain("Git repository: no")
   })
 
-  test("includes custom instructions when provided", () => {
-    const result = buildSystemPrompt({
-      ...base,
-      customInstructions: "Always use TypeScript strict mode",
-    })
-    expect(result).toContain("# Project Instructions")
-    expect(result).toContain("Always use TypeScript strict mode")
-  })
-
-  test("omits custom instructions when empty", () => {
-    const result = buildSystemPrompt({ ...base, customInstructions: "" })
-    expect(result).not.toContain("# Project Instructions")
-  })
-
-  test("omits custom instructions when undefined", () => {
-    const result = buildSystemPrompt(base)
-    expect(result).not.toContain("# Project Instructions")
-  })
-
   test("includes date in ISO format", () => {
     const result = buildSystemPrompt(base)
     expect(result).toMatch(/Date: \d{4}-\d{2}-\d{2}/)
@@ -109,12 +90,6 @@ describe("base prompt sections", () => {
     const sections = buildBasePromptSections(base)
     const ids = sections.map((s) => s.id)
     expect(ids).toEqual(["identity", "work", "communication", "boundaries", "environment"])
-  })
-
-  test("appends project-instructions section when custom instructions are present", () => {
-    const sections = buildBasePromptSections({ ...base, customInstructions: "Use Bun." })
-    const ids = sections.map((s) => s.id)
-    expect(ids.at(-1)).toBe("project-instructions")
   })
 
   test("lower priority sections appear first in compiled output", () => {

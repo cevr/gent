@@ -318,7 +318,6 @@ describe("resolveSessionEnvironment", () => {
           registryService: extensionRegistry,
           driverRegistryService: profileDriverRegistry,
           baseSections: [],
-          instructions: "",
           generationId: ProcessGenerationId.make("test"),
         }
         const fakeProfileCache: SessionProfileCacheService = {
