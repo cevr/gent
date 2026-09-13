@@ -11,28 +11,27 @@
 import { Predicate, Effect, Layer, Option, Ref } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import {
-  AgentRunnerService,
-  AgentRunResult,
-  type AgentDefinition,
-  type AgentRunner,
-  DEFAULT_AGENT_NAME,
-} from "../domain/agent.js"
+import type { AgentDefinition, AgentRunner, AgentRunnerService } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
-import { SessionId, type ExtensionId } from "../domain/ids.js"
-import { Permission } from "../domain/permission.js"
+import type { ExtensionId } from "../domain/ids.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
-import { defineExtension, ExtensionHost } from "../extensions/api.js"
+import { ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
 import { makeServerRootLayer } from "../server/server-root.js"
+import {
+  stubAgentRunnerLayer,
+  testAgentsExtension,
+  testEnvironment,
+  testIdentity,
+  testOverrides,
+} from "./test-root.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 export interface E2ELayerConfig {
@@ -73,17 +72,6 @@ export interface E2ELayerConfig {
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
 
-const defaultSubagentRunner: Pick<AgentRunner, "run"> = {
-  run: () =>
-    Effect.succeed(
-      AgentRunResult.cases.success.make({
-        text: "",
-        sessionId: SessionId.make("test-subagent-session"),
-        agentName: DEFAULT_AGENT_NAME,
-      }),
-    ),
-}
-
 const applyLayerOverride = (
   contributions: ExtensionContributions,
   extensionId: ExtensionId,
@@ -113,15 +101,6 @@ const applyLayerOverride = (
     resources: [...otherResources, layerOverride],
   }
 }
-
-const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
-  defineExtension({
-    id: "test-agents",
-    setup: Effect.gen(function* () {
-      const host = yield* ExtensionHost
-      yield* host.register("agent", ...agents)
-    }),
-  })
 
 const fromLoadedExtension = (
   extension: LoadedExtension,
@@ -178,25 +157,12 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
 export const createE2ELayer = (config: E2ELayerConfig) => {
   let subagentRunnerLayer = Option.none<Layer.Layer<AgentRunnerService>>()
   if (config.subagentRunner !== "live") {
-    subagentRunnerLayer = Option.some(
-      Layer.succeed(
-        AgentRunnerService,
-        AgentRunnerService.of({
-          start: () => Effect.die("AgentRunner.start not configured in test"),
-          inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
-          list: () => Effect.die("AgentRunner.list not configured in test"),
-          cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
-          ...(config.subagentRunner ?? defaultSubagentRunner),
-        }),
-      ),
-    )
+    subagentRunnerLayer = Option.some(stubAgentRunnerLayer(config.subagentRunner))
   }
 
   return makeServerRootLayer({
     dependencies: {
-      cwd: "/tmp",
-      home: "/tmp",
-      platform: "test",
+      ...testEnvironment,
       persistenceMode: Option.fromUndefinedOr(config.storagePath).pipe(
         Option.match({ onNone: () => "memory", onSome: () => "disk" }),
       ),
@@ -205,25 +171,17 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       extensions: extensionInputsForConfig(config),
       branchTools: config.branchTools ?? noBranchTools,
       overrides: {
+        ...testOverrides(),
         eventStoreMode: "storage-backed",
         authLayer: config.authLayer ?? Auth.Test(),
         approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
         configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
-        modelRegistryLayer: ModelRegistry.Test(),
-        permissionLayer: Permission.Test(),
         sessionProfileCacheLayer: config.sessionProfileCacheLayer,
         agentRunnerLayer: Option.getOrUndefined(subagentRunnerLayer),
         extraLayers: config.extraLayers,
       },
     },
-    identity: {
-      serverId: "test-server",
-      pid: 0,
-      hostname: "test-host",
-      dbPath: config.storagePath ?? ":memory:",
-      buildFingerprint: "test-fingerprint",
-      startedAt: 0,
-    },
+    identity: testIdentity(config.storagePath),
   }).pipe(Layer.provide(BunServices.layer))
 }
 

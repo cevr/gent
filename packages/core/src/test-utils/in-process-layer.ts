@@ -7,18 +7,13 @@
 
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Layer } from "effect"
+import { Layer } from "effect"
 import type { AgentDefinition } from "../domain/agent.js"
-import { Auth } from "../domain/auth.js"
-import { Permission } from "../domain/permission.js"
-import { ApprovalService } from "../runtime/approval-service.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "./language-model.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
-import { ConfigService } from "../runtime/config-service.js"
-import { ModelRegistry } from "../runtime/model-registry.js"
-import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeServerRootLayer } from "../server/server-root.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
+import { testAgentsExtension, testEnvironment, testIdentity, testOverrides } from "./test-root.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
@@ -35,46 +30,24 @@ export interface InProcessLayerConfig {
 const buildLayer = (
   languageModelLive: Layer.Layer<LanguageModel.LanguageModel, never, never>,
   config: InProcessLayerConfig,
-) => {
-  const testAgentsExtension = defineExtension({
-    id: "test-agents",
-    setup: Effect.gen(function* () {
-      const host = yield* ExtensionHost
-      yield* host.register("agent", ...config.agents)
-    }),
-  })
-
-  return makeServerRootLayer({
+) =>
+  makeServerRootLayer({
     dependencies: {
-      cwd: "/tmp",
-      home: "/tmp",
-      platform: "test",
+      ...testEnvironment,
       persistenceMode: "memory",
       providerMode: "debug-scripted",
       languageModelLayerOverride: languageModelLive,
-      extensions: [testAgentsExtension],
+      extensions: [testAgentsExtension(config.agents)],
       branchTools: config.branchTools ?? noBranchTools,
       overrides: {
+        ...testOverrides(),
         eventStoreMode: "storage-backed",
-        authLayer: Auth.Test(),
-        approvalLayer: ApprovalService.Test(),
-        configServiceLayer: ConfigService.Test(),
-        modelRegistryLayer: ModelRegistry.Test(),
-        permissionLayer: Permission.Test(),
         toolRunnerLayer: ToolRunner.Test(),
         extraLayers: config.extraLayers,
       },
     },
-    identity: {
-      serverId: "test-server",
-      pid: 0,
-      hostname: "test-host",
-      dbPath: ":memory:",
-      buildFingerprint: "test-fingerprint",
-      startedAt: 0,
-    },
+    identity: testIdentity(),
   }).pipe(Layer.provide(BunServices.layer))
-}
 
 /** Build a complete in-process test layer with a standard debug provider mode. */
 export const baseLocalLayer = (

@@ -5,13 +5,7 @@ import { makeFileWriter } from "../domain/file-writer.js"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- The synchronous test host implements the platform path adapter.
 import * as nodePath from "node:path"
 import { Effect, FileSystem, Layer, Option } from "effect"
-import {
-  AgentRunnerService,
-  AgentRunResult,
-  type AgentDefinition,
-  type AgentRunner,
-  DEFAULT_AGENT_NAME,
-} from "../domain/agent.js"
+import type { AgentDefinition, AgentRunner } from "../domain/agent.js"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
@@ -22,17 +16,17 @@ import {
 } from "../domain/extension-services.js"
 import { getToolEffect } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
-import { Permission } from "../domain/permission.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
-import { ConfigService } from "../runtime/config-service.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
-import { ModelRegistry } from "../runtime/model-registry.js"
 import { LanguageModelLayers } from "./language-model.js"
 import { testExtensionHostContext } from "./extension-host-context.js"
-import { Auth } from "../domain/auth.js"
-import { ApprovalService } from "../runtime/approval-service.js"
-import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { createDependencies } from "../server/dependencies.js"
+import {
+  stubAgentRunnerLayer,
+  testAgentsExtension,
+  testEnvironment,
+  testOverrides,
+} from "./test-root.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 export interface ToolTestLayerConfig {
@@ -61,49 +55,15 @@ export interface ToolTestLayerConfig {
  */
 export const createToolTestLayer = (config: ToolTestLayerConfig) =>
   createDependencies({
-    cwd: "/tmp",
-    home: "/tmp",
-    platform: "test",
+    ...testEnvironment,
     persistenceMode: "memory",
     languageModelLayerOverride: LanguageModelLayers.debug(),
-    extensions: [
-      defineExtension({
-        id: "test-agents",
-        setup: Effect.gen(function* () {
-          const host = yield* ExtensionHost
-          yield* host.register("agent", ...config.agents)
-          yield* host.register("tool", ...(config.tools ?? []))
-        }),
-      }),
-      ...(config.extensions ?? []),
-    ],
+    extensions: [testAgentsExtension(config.agents, config.tools), ...(config.extensions ?? [])],
     branchTools: config.branchTools ?? noBranchTools,
     overrides: {
-      authLayer: Auth.Test(),
-      approvalLayer: ApprovalService.Test(),
-      configServiceLayer: ConfigService.Test(),
-      modelRegistryLayer: ModelRegistry.Test(),
-      permissionLayer: Permission.Test(),
+      ...testOverrides(),
       toolRunnerLayer: ToolRunner.Test(),
-      agentRunnerLayer: Layer.succeed(
-        AgentRunnerService,
-        AgentRunnerService.of({
-          start: () => Effect.die("AgentRunner.start not configured in test"),
-          inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
-          list: () => Effect.die("AgentRunner.list not configured in test"),
-          cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
-          ...(config.subagentRunner ?? {
-            run: () =>
-              Effect.succeed(
-                AgentRunResult.cases.success.make({
-                  text: "",
-                  sessionId: SessionId.make("test-subagent-session"),
-                  agentName: DEFAULT_AGENT_NAME,
-                }),
-              ),
-          }),
-        }),
-      ),
+      agentRunnerLayer: stubAgentRunnerLayer(config.subagentRunner),
       extraLayers: config.extraLayers,
     },
   }).pipe(Layer.provide(BunPlatformLive), Layer.orDie)

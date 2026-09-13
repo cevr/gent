@@ -1067,3 +1067,15 @@ messageId)` returns when the loop no longer holds the message (not starting,
   46 importers name the new paths and the `debug/` exemption is gone.
 - `ApprovalService.LiveAutoResolve` had no caller anywhere in the repo
   (22 lines, a fourth way to build the one service). Deleted.
+
+## One test root preset (2026-09-13)
+
+- `in-process-layer.ts`, `e2e-layer.ts`, and `extension-harness.ts` each
+  restated the `/tmp` environment, the five stub layers (`Auth`,
+  `ApprovalService`, `ConfigService`, `ModelRegistry`, `Permission`), the
+  deterministic server identity, a `test-agents` extension, and a
+  dies-except-run agent runner stub.
+- `test-utils/test-root.ts` now owns `testEnvironment`, `testIdentity`,
+  `testOverrides()` (fresh layers per call, since the approval stub carries a
+  decision queue), `testAgentsExtension`, and `stubAgentRunnerLayer`; the
+  three roots are deltas over it.
