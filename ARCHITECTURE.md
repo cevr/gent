@@ -735,22 +735,9 @@ Explicit platform/runtime seams:
 - tracer/logger services
 - file system / path / OS services
 
-### FileIndex
+### FileIndex (fs-tools)
 
-`FileIndex` — indexed file discovery backed by native Rust file finder (`@ff-labs/fff-bun`).
-
-Production stack: `NativeFileIndexLive` (FFF, per-cwd cached finders, `.gitignore`-aware) → fallback `FallbackFileIndexLive` (Effect `FileSystem` walk + `picomatch` filtering). Native failure (missing binary, unsupported platform) silently degrades to fallback. Layer always succeeds.
-
-GlobTool and GrepTool reach the index through `ctx.Files.listFiles()` on `ExtensionContext`, then filter with `picomatch` for pattern correctness. This replaces per-invocation directory walks with indexed lookups. Shipped extensions never import the `FileIndex` Tag directly — the runtime resolves it once and exposes it on the public `Files` facade.
-
-Files:
-
-| File                                                       | Purpose                                           |
-| ---------------------------------------------------------- | ------------------------------------------------- |
-| `packages/core/src/domain/file-index.ts`                   | Service tag, `IndexedFile`, `FileIndexError`      |
-| `packages/core/src/runtime/file-index/native-adapter.ts`   | FFF-backed adapter (dynamic import, polling scan) |
-| `packages/core/src/runtime/file-index/fallback-adapter.ts` | Effect FileSystem + picomatch fallback            |
-| `packages/core/src/runtime/file-index/index.ts`            | `FileIndexLive` (native-first, catch-to-fallback) |
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools/file-index.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept and `ExtensionContext.Files` has no `listFiles`.
 
 App entrypoints bind concrete Bun/OS behavior:
 

@@ -29,7 +29,6 @@ import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
-import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
@@ -213,7 +212,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         modelRegistryLayer: ModelRegistry.Test(),
         permissionLayer: Permission.Test(),
         sessionProfileCacheLayer: config.sessionProfileCacheLayer,
-        fileIndexLayer: Layer.provide(FallbackFileIndexLive, BunServices.layer),
         agentRunnerLayer: Option.getOrUndefined(subagentRunnerLayer),
         extraLayers: config.extraLayers,
       },

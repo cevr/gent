@@ -1042,3 +1042,17 @@ messageId)` returns when the loop no longer holds the message (not starting,
   now has a runtime test in `ambient-host-context.test.ts`.
 - Six test stubs lost their `confirm`/`review` lines; the prompt-tool tests
   now exercise the real file write under `.gent/prompts/`.
+
+## File discovery is a grep-tool concern (2026-09-13)
+
+- `domain/file-index.ts` plus `runtime/file-index/{index,native-adapter,fallback-adapter}.ts`
+  (418 lines) sat behind a one-method Tag whose only production caller was
+  `fs-tools/grep.ts`, reached through a `Files.listFiles` facet. Core wired the
+  layer in `dependencies.ts`, exposed a `fileIndexLayer` override, and every test
+  composition root restated the fallback layer.
+- Now `packages/extensions/src/fs-tools/file-index.ts` owns the Tag, both
+  adapters, and `FileIndexLive({ home })`; the extension registers it as a
+  process-scoped resource and `GrepTool` yields the Tag. `Files.listFiles`, the
+  override, the three root restatements, and the `@ff-labs/fff-bun` dependency
+  leave core. Tests moved to `packages/extensions/tests/fs-tools/file-index.test.ts`;
+  the grep test provides the fallback layer directly.

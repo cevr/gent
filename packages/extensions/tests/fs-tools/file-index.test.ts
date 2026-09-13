@@ -6,25 +6,19 @@ import {
   FileIndexError,
   FallbackFileIndexLive,
   FileIndexLive,
-} from "../../../src/runtime/file-index/index"
-import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
+} from "../../src/fs-tools/file-index.js"
 
 const PlatformLayer = BunServices.layer
-const TestRuntimeEnvironment = RuntimeEnvironment.Test({
-  cwd: process.cwd(),
-  home: "/tmp",
-  platform: "test",
-})
 const FallbackLayer = Layer.merge(
   PlatformLayer,
   Layer.provide(FallbackFileIndexLive, PlatformLayer),
 )
+const LiveLayer = Layer.merge(
+  PlatformLayer,
+  Layer.provide(FileIndexLive({ home: "/tmp" }), PlatformLayer),
+)
 
-// ---------------------------------------------------------------------------
-// Fallback adapter
-// ---------------------------------------------------------------------------
-
-describe("FileIndex.Fallback", () => {
+describe("FileIndex fallback walk", () => {
   it.scopedLive("listFiles returns files in a directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -93,16 +87,11 @@ describe("FileIndex.Fallback", () => {
 
   it.scopedLive("gitignore cache is scoped per layer instance (no cross-instance bleed)", () =>
     Effect.gen(function* () {
-      // Each FallbackFileIndexLive build allocates a fresh cache Ref.
-      // If the cache were module-level (the pre-C13.5 shape), instance B
-      // below would inherit instance A's "ignore foo.txt" mapping for the
-      // same cwd, and the assertion at the bottom would fail.
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/foo.txt`, "x")
       yield* fs.writeFileString(`${tmpDir}/bar.txt`, "y")
 
-      // Instance A: .gitignore excludes foo.txt; populate the per-instance cache.
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "foo.txt")
       yield* Effect.gen(function* () {
         const idx = yield* FileIndex
@@ -110,8 +99,6 @@ describe("FileIndex.Fallback", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
 
-      // Instance B: same cwd, but .gitignore now excludes bar.txt instead.
-      // A module-level cache would short-circuit and still drop foo.txt.
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "bar.txt")
       const filesB = yield* Effect.gen(function* () {
         const idx = yield* FileIndex
@@ -126,24 +113,13 @@ describe("FileIndex.Fallback", () => {
   )
 })
 
-// ---------------------------------------------------------------------------
-// FileIndex.Live (composite: native with per-method fallback)
-// ---------------------------------------------------------------------------
-
-describe("FileIndex.Live", () => {
+describe("FileIndex native-first layer", () => {
   it.scopedLive("constructs without error (always succeeds)", () =>
     Effect.gen(function* () {
       const fileIndex = yield* FileIndex
       expect(fileIndex).toBeDefined()
       expect(Predicate.isFunction(fileIndex.listFiles)).toBe(true)
-    }).pipe(
-      Effect.provide(
-        Layer.merge(
-          PlatformLayer,
-          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimeEnvironment)),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(LiveLayer)),
   )
 
   it.scopedLive("listFiles returns results for cwd", () =>
@@ -159,54 +135,31 @@ describe("FileIndex.Live", () => {
       expect(files[0]!.path.length).toBeGreaterThan(0)
       expect(files[0]!.relativePath).toBe("indexed.txt")
       expect(files[0]!.modifiedMs).toBeGreaterThan(0)
-    }).pipe(
-      Effect.provide(
-        Layer.merge(
-          PlatformLayer,
-          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimeEnvironment)),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(LiveLayer)),
   )
 
-  it.scopedLive("per-method fallback: invalid cwd yields FileIndexError", () =>
+  it.scopedLive("per-method fallback: invalid cwd yields FileIndexError or an empty list", () =>
     Effect.gen(function* () {
       const fileIndex = yield* FileIndex
       const result = yield* fileIndex
         .listFiles({ cwd: "/nonexistent-path-that-does-not-exist" })
         .pipe(Effect.catchTag("FileIndexError", (e) => Effect.succeed({ caught: e.message })))
 
-      // Either succeeded via fallback (empty list) or caught the error
       if ("caught" in result) {
         expect(result.caught).toBeDefined()
       } else {
         expect(result.length).toBe(0)
       }
-    }).pipe(
-      Effect.provide(
-        Layer.merge(
-          PlatformLayer,
-          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimeEnvironment)),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(LiveLayer)),
   )
-})
 
-// ---------------------------------------------------------------------------
-// Per-method fallback behavior (mock native that always fails)
-// ---------------------------------------------------------------------------
-
-describe("withFallback composite", () => {
-  it.scopedLive("falls back to fallback when native listFiles fails", () =>
+  it.scopedLive("a failing primary falls back to the walk", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/hello.txt`, "hi")
 
       const fallbackIndex = yield* FileIndex
-
-      // Simulate: native fails → fallback succeeds
       const files = yield* Effect.fail(
         new FileIndexError({ message: "native boom", cwd: tmpDir }),
       ).pipe(Effect.catchTag("FileIndexError", () => fallbackIndex.listFiles({ cwd: tmpDir })))

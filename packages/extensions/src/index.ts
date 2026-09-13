@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
+  defineResource,
   type GentExtension,
   defineExtension,
   ExtensionContext,
@@ -30,6 +31,7 @@ import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
 import { GrepTool } from "./fs-tools/grep.js"
+import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
 import { WebFetchTool } from "./network-tools/webfetch.js"
 import { WebSearchTool } from "./network-tools/websearch.js"
 import { SearchSessionsTool } from "./session-tools/search-sessions.js"
@@ -71,6 +73,15 @@ export const FsToolsExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "@gent/fs-tools/file-index",
+        tag: FileIndex,
+        scope: "process",
+        layer: FileIndexLive({ home: host.home }),
+      }),
+    )
   }),
 })
 

@@ -31,7 +31,6 @@ import { LanguageModelLayers } from "./language-model.js"
 import { testExtensionHostContext } from "./extension-host-context.js"
 import { Auth } from "../domain/auth.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { createDependencies } from "../server/dependencies.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
@@ -105,7 +104,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
           }),
         }),
       ),
-      fileIndexLayer: Layer.provide(FallbackFileIndexLive, BunPlatformLive),
       extraLayers: config.extraLayers,
     },
   }).pipe(Layer.provide(BunPlatformLive), Layer.orDie)
@@ -201,14 +199,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
       }),
     )
   const files: ExtensionContextService["Files"] = {
-    listFiles: () =>
-      Effect.fail(
-        new ExtensionServiceError({
-          service: "ExtensionFiles",
-          operation: "listFiles",
-          message: "File index service unavailable",
-        }),
-      ),
     read: (path) => filesFs("read", (fs) => fs.readFileString(path)),
     write: (path, content, options) =>
       filesFs("write", (fs) => makeFileWriter(fs, nodePath.dirname)(path, content, options)),

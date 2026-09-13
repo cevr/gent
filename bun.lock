@@ -85,10 +85,6 @@
         "effect-encore": "catalog:",
         "effect-machine": "catalog:",
         "effect-wide-event": "catalog:",
-        "picomatch": "catalog:",
-      },
-      "optionalDependencies": {
-        "@ff-labs/fff-bun": "catalog:",
       },
       "peerDependencies": {
         "@effect/platform-bun": "catalog:",
@@ -101,9 +97,6 @@
     "packages/core-internal": {
       "name": "@gent/core-internal",
       "version": "0.0.0",
-      "optionalDependencies": {
-        "@ff-labs/fff-bun": "catalog:",
-      },
       "peerDependencies": {
         "@effect/platform-bun": "catalog:",
         "@effect/sql-pg": "catalog:",
@@ -138,6 +131,7 @@
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/ai-openai-compat": "catalog:",
+        "@ff-labs/fff-bun": "catalog:",
         "@gent/core": "workspace:*",
         "@gent/core-internal": "workspace:*",
         "@types/turndown": "^5.0.6",

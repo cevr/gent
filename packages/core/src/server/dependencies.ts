@@ -42,7 +42,6 @@ import { SessionCommands } from "./session-commands.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { FileIndexLive, type FileIndex } from "../runtime/file-index/index.js"
 import { ProcessRunnerLive } from "../utils/run-process.js"
 import { CurrentWorkspaceId, WorkspaceId } from "./workspace-rpc.js"
 
@@ -56,7 +55,6 @@ interface DependencyOverrides {
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
   readonly agentRunnerLayer?: Layer.Layer<AgentRunnerService>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
-  readonly fileIndexLayer?: Layer.Layer<FileIndex>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
@@ -207,11 +205,6 @@ const optionalPermissionLayer = (
     onNone: () => [],
     onSome: (value) => [value],
   })
-
-const makeFileIndexLayer = (
-  override: Option.Option<NonNullable<DependencyOverrides["fileIndexLayer"]>>,
-  runtimeEnvironmentLive: Layer.Layer<RuntimeEnvironment>,
-) => Option.getOrElse(override, () => Layer.provide(FileIndexLive, runtimeEnvironmentLive))
 
 const makeApprovalServiceLayer = <A, E, R>(
   override: Option.Option<NonNullable<DependencyOverrides["approvalLayer"]>>,
@@ -398,10 +391,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       AgentLoopSessionGovernance.Live,
       modelResolverLive,
       ...optionalPermissionLayer(Option.fromUndefinedOr(config.overrides?.permissionLayer)),
-      makeFileIndexLayer(
-        Option.fromUndefinedOr(config.overrides?.fileIndexLayer),
-        runtimeEnvironmentLive,
-      ),
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
       FetchHttpClient.layer,
     ),

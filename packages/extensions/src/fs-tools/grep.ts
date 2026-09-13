@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import picomatch from "picomatch"
+import { FileIndex } from "./file-index.js"
 
 // Grep Tool Error
 
@@ -148,8 +149,17 @@ export const GrepTool = tool({
     if (baseStat.value.type === "File") {
       yield* searchFile(basePath)
     } else {
-      // Use FileIndex for directory file discovery
-      const allFiles = yield* ctx.Files.listFiles({ cwd: basePath })
+      const index = yield* FileIndex
+      const allFiles = yield* index.listFiles({ cwd: basePath }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GrepError({
+              message: `File index failed: ${cause.message}`,
+              pattern: params.pattern,
+              cause,
+            }),
+        ),
+      )
       const globPattern = params.glob ?? "**/*"
       const matchesGlob = yield* Effect.try({
         try: () => picomatch(globPattern, { dot: true }),

@@ -16,7 +16,6 @@ import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "./language-m
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { makeServerRootLayer } from "../server/server-root.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
@@ -63,7 +62,6 @@ const buildLayer = (
         modelRegistryLayer: ModelRegistry.Test(),
         permissionLayer: Permission.Test(),
         toolRunnerLayer: ToolRunner.Test(),
-        fileIndexLayer: Layer.provide(FallbackFileIndexLive, BunServices.layer),
         extraLayers: config.extraLayers,
       },
     },

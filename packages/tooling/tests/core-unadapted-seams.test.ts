@@ -20,7 +20,7 @@ describe("unadapted seam guard", () => {
     const seams = adaptedSeamsIn(
       "packages/extensions/src/notes/index.ts",
       `const ctx = yield* ExtensionContext
-       yield* ctx.Files.listFiles()
+       yield* ctx.Files.read("notes.md")
        defineResource({ id: "notes", scope: "process", layer })`,
     )
     expect([...seams].sort()).toEqual(["Files", "process"])

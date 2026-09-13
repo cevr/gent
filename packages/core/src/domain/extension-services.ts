@@ -17,7 +17,6 @@ import type {
   ExtensionHostSignal,
   ExtensionTurnContext,
 } from "./extension.js"
-import { FileIndex, type IndexedFile } from "./file-index.js"
 import { makeFileWriter } from "./file-writer.js"
 import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
@@ -242,10 +241,6 @@ interface ExtensionFileStat {
 }
 
 export interface ExtensionFilesService {
-  readonly listFiles: (params: {
-    readonly cwd: string
-    readonly waitForScanMs?: number
-  }) => Effect.Effect<ReadonlyArray<IndexedFile>, ExtensionServiceError>
   readonly read: (path: string) => Effect.Effect<string, ExtensionServiceError>
   readonly write: (
     path: string,
@@ -361,29 +356,14 @@ const extensionServicesFromHostContext = (
     }
     const Process = extensionProcessFromHostContext(ctx.host)
 
-    const fileIndexOption = yield* Effect.serviceOption(FileIndex)
     const fileLockOption = yield* Effect.serviceOption(FileLockService)
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
     const currentExtensionId = ctx.extensionId
     const fs = yield* FileSystem.FileSystem
     const pathSvc = yield* Path.Path
 
-    const listFiles: ExtensionFilesService["listFiles"] = Option.match(fileIndexOption, {
-      onNone: () => () =>
-        Effect.fail(
-          new ExtensionServiceError({
-            service: "ExtensionFiles",
-            operation: "listFiles",
-            message: "File index service unavailable",
-          }),
-        ),
-      onSome: (fileIndex) => (params) =>
-        mapError("ExtensionFiles", "listFiles", fileIndex.listFiles(params)),
-    })
-
     const writeFile = makeFileWriter(fs, pathSvc.dirname)
     const Files: ExtensionFilesService = {
-      listFiles,
       read: (path) => mapError("ExtensionFiles", "read", fs.readFileString(path)),
       write: (path, content, options) =>
         mapError("ExtensionFiles", "write", writeFile(path, content, options)),

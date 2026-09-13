@@ -544,8 +544,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
     // @ts-expect-error — raw process errors are mapped through ExtensionServiceError in public facades
     type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
-    // @ts-expect-error — host file index Tag is private; extensions reach files through ExtensionContext.Files
-    type _BadFileIndex = typeof PublicExtensionApi.FileIndex
     // @ts-expect-error — host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock
     type _BadFileLockService = typeof PublicExtensionApi.FileLockService
     // @ts-expect-error — extension state publisher is private; extensions publish through ExtensionContext.State
