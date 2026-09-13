@@ -1174,3 +1174,15 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   stub tool runner and a debug model. `E2ELayerConfig.toolRunner: "test"`
   carries the first; `baseLocalLayer` and `baseLocalLayerWithProvider` are
   now adapters over `createE2ELayer` and their eight callers are unchanged.
+
+## The persona is the agents extension's (2026-09-13)
+
+- `domain/prompt.ts` held the IDENTITY, WORK, COMMUNICATION, and BOUNDARIES
+  prose that says what a Gent agent is. Core states how a turn ends and
+  nothing about who is taking it; the `@gent/agents` extension, which already
+  ships the one `main` agent, now contributes the four sections through a
+  `turnProjection` hook. Core writes only the `environment` section.
+  `buildSystemPrompt` had no production caller and is gone. A deployment
+  that ships no agents extension gets no persona, which is the rule.
+- `extensions/branch-tools.ts` re-exported `CurrentBranchToolFeature` and
+  `noBranchTools`; no file outside named either.

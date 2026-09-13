@@ -32,40 +32,15 @@ export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): str
     .map((s) => s.content)
     .join("\n\n")
 
-// Core states how a turn ends and nothing about how work gets done: the tools a
-// deployment ships decide that, and they say so in their own prompt sections.
-const IDENTITY = `You are Gent, a general purpose agent.
-You solve tasks by breaking problems into sub-tasks, using the tools available to you, observing results, and iterating one step at a time.
-When you are done, stop calling tools and state your final answer.`
-
-const WORK = `# Work
-
-- Evaluate an external project through its own interface (its build, tests, and commands). Your tools coordinate and analyze; they are not the target's runtime.
-- Read before you edit. Match the existing style. Fix root causes. Touch only what the task needs. Verify with the project's checks before you report.
-- For slow or independent work, start it, keep the handle, and end the turn. Do not keep a turn open by sleeping or polling.
-- Delegate independent, self-contained work to children. A child inherits your agent and model and has no conversation history, so give it a complete task. Do a single lookup, edit, or command inline.
-- When work spans many steps or children, give short progress updates: what is done, what is blocked, what is next.`
-
-const COMMUNICATION = `# Communication
-
-- Short sentences. Common words. One action or fact per sentence. Lists for steps and conditions.
-- Keep commands, code, paths, names, and quoted text exact. State uncertainty directly.
-- Reference code as \`file:line\`. No preamble. No emoji unless asked.`
-
-const BOUNDARIES = `# Boundaries
-
-- Never revert changes you did not make.
-- Never run destructive git commands without explicit permission.
-- Never expose secrets, API keys, or credentials in code or output.`
-
-export function buildBasePromptSections(options: {
+/** The one section core writes: where the loop is running. Everything an agent *is* comes from extensions. */
+export function environmentSection(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
   date: string
   shell?: string
   osVersion?: string
-}): ReadonlyArray<PromptSection> {
+}): PromptSection {
   const { cwd, platform, isGitRepo, date, shell, osVersion } = options
   let platformDisplay = platform
   if (!Predicate.isUndefined(osVersion)) platformDisplay = `${platform} (${osVersion})`
@@ -73,29 +48,9 @@ export function buildBasePromptSections(options: {
   if (!Predicate.isUndefined(shell)) shellDisplay = shell
   let gitRepository = "no"
   if (isGitRepo) gitRepository = "yes"
-
-  const sections: PromptSection[] = [
-    { id: "identity", content: IDENTITY, priority: 0 },
-    { id: "work", content: WORK, priority: 10 },
-    { id: "communication", content: COMMUNICATION, priority: 20 },
-    { id: "boundaries", content: BOUNDARIES, priority: 50 },
-    {
-      id: "environment",
-      content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}\nGit repository: ${gitRepository}\nDate: ${date}`,
-      priority: 60,
-    },
-  ]
-
-  return sections
-}
-
-export function buildSystemPrompt(options: {
-  cwd: string
-  platform: string
-  isGitRepo: boolean
-  date: string
-  shell?: string
-  osVersion?: string
-}): string {
-  return compileSystemPrompt(buildBasePromptSections(options))
+  return {
+    id: "environment",
+    content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}\nGit repository: ${gitRepository}\nDate: ${date}`,
+    priority: 60,
+  }
 }

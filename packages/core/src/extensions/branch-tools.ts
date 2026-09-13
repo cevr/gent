@@ -37,8 +37,6 @@ export {
   type BranchToolFeature,
   type BranchToolLayerFactory,
   BranchToolWork,
-  CurrentBranchToolFeature,
-  noBranchTools,
 } from "../runtime/agent/branch-tool-feature.js"
 export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
 

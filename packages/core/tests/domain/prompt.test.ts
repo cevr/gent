@@ -1,9 +1,8 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import {
-  buildSystemPrompt,
-  buildBasePromptSections,
   compileSystemPrompt,
+  environmentSection,
   sectionPatternFor,
   withSectionMarkers,
 } from "../../src/domain/prompt"
@@ -11,7 +10,7 @@ import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 
-describe("system prompt composition", () => {
+describe("environment section", () => {
   const base = {
     cwd: "/home/user/project",
     platform: "linux",
@@ -19,77 +18,23 @@ describe("system prompt composition", () => {
     date: "2026-01-01",
   }
 
-  test("includes identity as a general purpose agent", () => {
-    const result = buildSystemPrompt(base)
-    expect(result).toContain("You are Gent, a general purpose agent.")
-  })
-
-  test("includes work section with delegation guidance", () => {
-    const result = buildSystemPrompt(base)
-    expect(result).toContain("# Work")
-    expect(result).toContain("A child inherits your agent and model")
-  })
-
-  test("names no specific tool, so a deployment without one reads correctly", () => {
-    // The base prompt is the loop's, not a feature's. A tool that needs the
-    // model to know how to use it says so in its own prompt section.
-    const result = buildSystemPrompt(base)
-    for (const name of ["cell", "bash", "grep"]) {
-      expect(result.toLowerCase()).not.toContain(name)
-    }
-  })
-
-  test("includes environment section", () => {
-    const result = buildSystemPrompt(base)
+  test("names the working directory, platform, git state, and date", () => {
+    const result = compileSystemPrompt([environmentSection(base)])
     expect(result).toContain("Working directory: /home/user/project")
     expect(result).toContain("Platform: linux")
     expect(result).toContain("Git repository: yes")
-  })
-
-  test("includes shell when provided", () => {
-    const result = buildSystemPrompt({ ...base, shell: "/bin/zsh" })
-    expect(result).toContain("Shell: /bin/zsh")
-  })
-
-  test("defaults shell to unknown when not provided", () => {
-    const result = buildSystemPrompt(base)
-    expect(result).toContain("Shell: unknown")
-  })
-
-  test("includes OS version when provided", () => {
-    const result = buildSystemPrompt({ ...base, osVersion: "24.6.0" })
-    expect(result).toContain("Platform: linux (24.6.0)")
-  })
-
-  test("omits OS version parenthetical when not provided", () => {
-    const result = buildSystemPrompt(base)
-    expect(result).toContain("Platform: linux\n")
-    expect(result).not.toContain("Platform: linux (")
-  })
-
-  test("isGitRepo false → 'no'", () => {
-    const result = buildSystemPrompt({ ...base, isGitRepo: false })
-    expect(result).toContain("Git repository: no")
-  })
-
-  test("includes date in ISO format", () => {
-    const result = buildSystemPrompt(base)
     expect(result).toMatch(/Date: \d{4}-\d{2}-\d{2}/)
   })
-})
 
-describe("base prompt sections", () => {
-  const base = {
-    cwd: "/test",
-    platform: "darwin",
-    isGitRepo: false,
-    date: "2026-01-01",
-  }
-
-  test("produces identity, work, communication, boundaries, and environment sections", () => {
-    const sections = buildBasePromptSections(base)
-    const ids = sections.map((s) => s.id)
-    expect(ids).toEqual(["identity", "work", "communication", "boundaries", "environment"])
+  test("shell and OS version appear when known", () => {
+    expect(environmentSection(base).content).toContain("Shell: unknown")
+    expect(environmentSection({ ...base, shell: "/bin/zsh" }).content).toContain("Shell: /bin/zsh")
+    expect(environmentSection({ ...base, osVersion: "24.6.0" }).content).toContain(
+      "Platform: linux (24.6.0)",
+    )
+    expect(environmentSection({ ...base, isGitRepo: false }).content).toContain(
+      "Git repository: no",
+    )
   })
 
   test("lower priority sections appear first in compiled output", () => {

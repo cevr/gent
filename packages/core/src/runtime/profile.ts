@@ -30,7 +30,7 @@ import {
 } from "./extensions/activation.js"
 import { discoverExtensions } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
-import { buildBasePromptSections } from "../domain/prompt.js"
+import { environmentSection } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 import type { ProcessRunner } from "./run-process.js"
 
@@ -219,19 +219,21 @@ export const loadRuntimeProfileDeclarations = (
     }
     const resolved = resolveExtensions(declarations.active, declarations.failed)
 
-    // 5. Build base prompt sections (core + extension, extensions shadow by id)
+    // 5. Build base prompt sections (core writes the environment; extensions shadow by id)
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     const date = DateTime.formatIsoDateUtc(yield* DateTime.now)
-    const coreSections = buildBasePromptSections({
-      cwd: canonicalCwd,
-      platform: inputs.platform,
-      date,
-      shell: inputs.shell,
-      osVersion: inputs.osVersion,
-      isGitRepo,
-    })
+    const coreSections = [
+      environmentSection({
+        cwd: canonicalCwd,
+        platform: inputs.platform,
+        date,
+        shell: inputs.shell,
+        osVersion: inputs.osVersion,
+        isGitRepo,
+      }),
+    ]
 
     // Extension prompt sections come pre-merged in scope-precedence order from
     // `resolveExtensions` (project > user > builtin). Dynamic sections are
