@@ -701,3 +701,43 @@ Net: 494 files, +15723/−19637 versus `main` at `ff1cc573`.
   stubs the seam with a compactor that fails `SummaryGenerationFailed`; the
   provider is called once and the notice still names the omission.
 - `runtime/model-compaction.ts` (913 lines) left core.
+
+## Dead surface and a binary source file (2026-09-13)
+
+Commit `a99e19c5`.
+
+- `SessionMutations` lost `createChildSession`, `deleteBranch`, `deleteMessages`,
+  their validators and host stubs. Zero shipped callers; the extension surface
+  had already dropped them (`extension-surface-locks.test.ts` pins that).
+  Subject tests went with them; `session-delete.test.ts` creates its child
+  sessions through `SessionCommands.createSession` and the storage fixture.
+- `AgentRestarted` event tag removed: no producer, no consumer.
+- `runtime/session-profile.ts` held a literal NUL byte as the cache key
+  separator. `grep` treats such a file as binary and prints nothing for it, so
+  every audit grep this session silently skipped the file (the explorer even
+  reported `sortExtensionsByScope` as unused while the file imports it). The
+  separator is now the `\u0000` escape.
+- Storage-level `BranchStorage.deleteBranch` and `MessageStorage.deleteMessages`
+  now have no shipped caller either. Left for a later pass: restart tests use
+  them as vehicles and their cascade semantics have their own storage tests.
+
+## Host context collapsed into the extension facets (2026-09-13)
+
+Commit `92b6aefa`, 14 files, +245/−411.
+
+- `domain/extension-host-context.ts` and `ExtensionHostError` are gone.
+  `ExtensionHostContext` is now the host-side precursor in
+  `domain/extension-services.ts`: identity fields plus the same `Agent`,
+  `Session`, `Interaction` facets an extension sees. The host builds them with
+  `ExtensionServiceError` directly; the forwarding table that renamed
+  `ctx.session.x` to `Session.x` and swapped error types is deleted.
+- `extensionServicesFromHostContext` keeps three things: the tool call id on
+  `Agent.start`, workspace pinning on `Session` calls, and the ambient `Files`,
+  `FileLock`, `State` services. The pinning is load-bearing: the background
+  shell test failed without it, because a completion notice queued from a
+  background fiber after the turn landed in the wrong workspace.
+- `ExtensionHostAgentService` is the one residual host-only shape: `start`
+  takes the owning tool call. The test harness no longer builds both spellings.
+
+TUI check: cell turn counted files, `ctx.Session.renameCurrent` renamed the
+session to `warehouse-count` (verified in `sessions`), clean exit.
