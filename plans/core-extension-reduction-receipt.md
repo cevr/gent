@@ -969,3 +969,35 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   "ephemeral runs are not persisted" hint: every run is a session now.
 - Tests: the timeout case is gone with the config; three admission tests
   call `admitChildSession` and `AgentRunnerService` directly.
+
+## A child run is a user message (2026-09-13)
+
+- `AgentRunner.run` sent its prompt through a private path: `SessionRuntime.runPrompt` →
+  the `Run` actor op → `reserveRunStartOrQueueFollowUp` → `awaitTurnCompletion`, a
+  second admission and a second wait beside the one every other caller used
+  (`sendUserMessage` → `SubmitAndWait`). Now `run` admits the child and sends
+  its prompt as a user message with command id `agent-run:<sessionId>`; the
+  receipt is read back by that message id. Deleted: `runPrompt`,
+  `RunPromptInput`/`RunPromptPayload`, `runPromptThroughActor`, the `Run` op,
+  `runTurn`, `reserveRunStartOrQueueFollowUp` (a copy of
+  `reserveStartOrQueueFollowUp` without the queue cap).
+- `SubmitAndWait` waited on an event-store subscription opened after the turn
+  started; a test store with an empty `subscribe` could never satisfy it, and a
+  batched follow-up whose id was absorbed never produced its `TurnCompleted`.
+  The one wait is now state-based: `awaitTurnCompletion(handle, baseline,
+messageId)` returns when the loop no longer holds the message (not starting,
+  running, waiting, or queued), or when the turn or persistence fails.
+  `RespondInteraction` shares it. `waitForMessageTurnCompleted`,
+  `waitForIdleAfterEpoch`, `TurnBaseline`, and `AgentLoopState.stateEpoch`
+  are gone; the failure epoch is the only counter left. The actor no longer
+  needs `EventStore`.
+- Found on the way: a retried submit of a message whose turn had already
+  run was re-admitted and streamed a duplicate reply; the old wait only
+  hid it by returning at the receipt, while the retry was still deduped as
+  in flight. `admitTurn` now refuses a message with `turnDurationMs` set, for
+  every submit op.
+- Tests: eight `runPrompt` sites send user messages with a command id; the
+  agent-loop `runAgentLoop` helper submits through `SubmitAndWait`; the six
+  queue tests that relied on `Run` returning early for a busy loop now
+  `submitAgentLoop` the queued message and wait for `Idle` before asserting
+  on the drained queue.

@@ -236,15 +236,6 @@ export const AgentLoop = Actor.fromEntity(
         primaryKey: p.message.id,
       }),
     },
-    Run: {
-      payload: TurnSubmissionFields,
-      success: Schema.Void,
-      error: AgentLoopError,
-      id: (p: TurnSubmissionInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-        primaryKey: p.message.id,
-      }),
-    },
     QueueFollowUp: {
       payload: QueueFollowUpFields,
       success: Schema.Void,

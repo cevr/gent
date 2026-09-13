@@ -17,7 +17,7 @@ import { Actor } from "effect-encore"
 import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
-import { AgentName, AgentRunError, RunSpecSchema, type RunSpec } from "../domain/agent.js"
+import { AgentName, RunSpecSchema } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { EventStore } from "../domain/event.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
@@ -140,16 +140,6 @@ const InterruptPayload = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type InterruptPayload = typeof InterruptPayload.Type
 
-const RunPromptPayload = Schema.Struct({
-  sessionId: SessionId,
-  branchId: BranchId,
-  agentName: AgentName,
-  prompt: Schema.String,
-  interactive: Schema.optional(Schema.Boolean),
-  runSpec: Schema.optional(RunSpecSchema),
-})
-type RunPromptPayload = typeof RunPromptPayload.Type
-
 const QueueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
@@ -237,7 +227,6 @@ export interface SessionRuntimeService {
   readonly respondInteraction: (
     input: SessionRuntimeTarget & { readonly requestId: InteractionRequestId },
   ) => Effect.Effect<void, SessionRuntimeError>
-  readonly runPrompt: (input: RunPromptPayload) => Effect.Effect<void, AgentRunError>
   readonly queueFollowUp: (input: QueueFollowUpPayload) => Effect.Effect<void, SessionRuntimeError>
   /** True when the follow-up left the queue; false when it was absent or already running. */
   readonly dequeueFollowUp: (
@@ -298,15 +287,6 @@ const wrapStreamSessionRuntimeError = (
   })
 }
 
-interface RunPromptInput {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName: AgentName
-  readonly prompt: string
-  readonly interactive?: boolean
-  readonly runSpec?: RunSpec
-}
-
 const makeLiveSessionRuntime = Effect.gen(function* () {
   // Resolve the actor client factory once at construction time. Per-method
   // dispatch uses `ActorRef.execute(op)`, which carries no requirement,
@@ -346,43 +326,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       cause: error,
     })
   }
-  const runPromptThroughActor = Effect.fn("SessionRuntime.runPromptThroughActor")(function* (
-    input: RunPromptInput,
-  ) {
-    const userMessage = Message.cases.regular.make({
-      id: MessageId.make(yield* platform.randomId),
-      sessionId: input.sessionId,
-      branchId: input.branchId,
-      role: "user",
-      parts: [Prompt.textPart({ text: input.prompt })],
-      createdAt: yield* DateTime.nowAsDate,
-    })
-
-    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    let payload = {
-      workspaceId: yield* CurrentWorkspaceId,
-      message: userMessage,
-      agentOverride: input.agentName,
-      // Actor operation payloads map optional schema fields to required
-      // `T | undefined` properties. Keep the fields explicit at this wire
-      // boundary so the operation encoder receives the expected shape.
-      runSpec: input.runSpec,
-      interactive: input.interactive,
-    }
-    if (Predicate.isNotUndefined(input.runSpec)) payload = { ...payload, runSpec: input.runSpec }
-    if (Predicate.isNotUndefined(input.interactive))
-      payload = { ...payload, interactive: input.interactive }
-    return yield* ref.execute(AgentLoopActor.Run.make(payload)).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AgentRunError({
-            message: cause.message,
-            cause,
-          }),
-      ),
-    )
-  })
-
   const watchRuntimeState = Effect.fn("SessionRuntime.watchRuntimeState")(function* (
     input: SessionRuntimeTarget,
   ) {
@@ -581,8 +524,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         ),
         Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
       ),
-
-    runPrompt: (input: RunPromptInput) => runPromptThroughActor(input),
 
     queueFollowUp: (input) =>
       requireSessionBranch(input).pipe(

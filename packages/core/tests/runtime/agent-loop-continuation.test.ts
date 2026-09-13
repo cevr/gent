@@ -14,6 +14,7 @@ import {
   makeLayer,
   makeLayerWithEvents,
   runAgentLoop,
+  submitAgentLoop,
   steerAgentLoop,
   waitForPhase,
 } from "./agent-loop/helpers"
@@ -265,7 +266,7 @@ describe("continuation", () => {
         // Wait for the gated step (second stream call) to start
         yield* controls.waitForCall(1)
         // Queue a follow-up while step 1 is gated
-        yield* runAgentLoop(agentLoop, followUp)
+        yield* submitAgentLoop(agentLoop, followUp)
         // Interrupt the current turn. `agentLoop.steer` issues
         // `actor.call(Interrupt)` which is serialized request-reply — by the
         // time it returns, the actor has already set `interruptedRef = true`

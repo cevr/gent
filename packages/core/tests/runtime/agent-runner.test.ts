@@ -40,7 +40,6 @@ import {
   type AgentRunner,
   AgentDefinition,
   DEFAULT_AGENT_NAME,
-  AgentRunError,
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   makeRunSpec,
@@ -83,6 +82,7 @@ import { Permission } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,
+  SessionRuntimeError,
   SessionRuntimeStateSchema,
   type SessionRuntimeService,
   type SessionRuntimeState,
@@ -245,7 +245,9 @@ const parentServices = Layer.mergeAll(
   ConfigService.Test(),
   ModelRegistry.Test(),
 )
-const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () => Effect.void) =>
+const sessionRuntimeStub = (
+  onSubmit: SessionRuntimeService["sendUserMessage"] = () => Effect.void,
+) =>
   Layer.effect(
     SessionRuntime,
     Effect.gen(function* () {
@@ -256,30 +258,30 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
         }),
       )
       return {
-        sendUserMessage: () => Effect.void,
-        steer: () => Effect.void,
-        respondInteraction: () => Effect.void,
-        runPrompt: (input) =>
+        sendUserMessage: (input) =>
           Effect.gen(function* () {
+            const agent = Option.getOrElse(
+              Option.fromUndefinedOr(input.agentOverride),
+              () => DEFAULT_AGENT_NAME,
+            )
             yield* SubscriptionRef.set(
               runtimeState,
               SessionRuntimeStateSchema.cases.Running.make({
-                agent: input.agentName,
+                agent,
                 queue: emptyQueueSnapshot(),
               }),
             )
-            yield* runPrompt(input).pipe(
+            yield* onSubmit(input).pipe(
               Effect.ensuring(
                 SubscriptionRef.set(
                   runtimeState,
-                  SessionRuntimeStateSchema.cases.Idle.make({
-                    agent: input.agentName,
-                    queue: emptyQueueSnapshot(),
-                  }),
+                  SessionRuntimeStateSchema.cases.Idle.make({ agent, queue: emptyQueueSnapshot() }),
                 ),
               ),
             )
           }),
+        steer: () => Effect.void,
+        respondInteraction: () => Effect.void,
         queueFollowUp: () => Effect.void,
         dequeueFollowUp: () => Effect.succeed(false),
         requestExtension: () => Effect.void,
@@ -1409,7 +1411,9 @@ describe("AgentRunner", () => {
         ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
         ToolRunner.Test(),
         ApprovalService.Test(),
-        sessionRuntimeStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
+        sessionRuntimeStub(() =>
+          Effect.fail(new SessionRuntimeError({ message: "permanent failure" })),
+        ),
         recorderLayer,
         eventStoreLayer,
         eventPublisherLayer,

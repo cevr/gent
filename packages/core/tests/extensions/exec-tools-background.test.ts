@@ -6,7 +6,7 @@ import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { ensureStorageParents } from "../../src/test-utils"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
-import { BranchId, SessionId } from "../../src/domain/ids"
+import { ActorCommandId, BranchId, SessionId } from "../../src/domain/ids"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
@@ -40,11 +40,12 @@ describe("exec-tools background runtime", () => {
 
         yield* fs.remove(markerPath).pipe(Effect.catchEager(() => Effect.void))
         yield* ensureStorageParents({ sessionId, branchId })
-        yield* runtime.runPrompt({
+        yield* runtime.sendUserMessage({
           sessionId,
           branchId,
-          agentName: DEFAULT_AGENT_NAME,
-          prompt: "start background command",
+          commandId: ActorCommandId.make("turn:start background command"),
+          content: "start background command",
+          agentOverride: DEFAULT_AGENT_NAME,
         })
         yield* sessions.deleteSession(sessionId)
 

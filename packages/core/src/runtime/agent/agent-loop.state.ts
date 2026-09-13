@@ -499,7 +499,6 @@ const runtimeStateFromLoopState = (
 export interface AgentLoopState {
   readonly state: LoopState
   readonly queue: LoopQueueState
-  readonly stateEpoch: number
   readonly turnFailure?: {
     readonly epoch: number
     readonly error: unknown
@@ -513,7 +512,6 @@ export const buildInitialAgentLoopState = (params: {
 }): AgentLoopState => ({
   state: params.state,
   queue: Option.getOrElse(Option.fromUndefinedOr(params.queue), emptyLoopQueueState),
-  stateEpoch: 0,
 })
 
 export const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState =>
@@ -525,14 +523,3 @@ export const turnFailureEpoch = (state: AgentLoopState): number =>
     Option.fromUndefinedOr(state.turnFailure).pipe(Option.map(({ epoch }) => epoch)),
     () => 0,
   )
-
-/**
- * Where the loop's counters stood before a turn was started.
- *
- * Both are needed: a turn ends either by reaching Idle or by failing, and the
- * two are counted separately.
- */
-export interface TurnBaseline {
-  readonly stateEpoch: number
-  readonly turnFailure: number
-}

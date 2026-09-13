@@ -25,7 +25,7 @@ import {
 } from "../../src/domain/event"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
-import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
+import { ActorCommandId, BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
 import { Permission, PermissionRule } from "../../src/domain/permission"
 import { tool } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents.js"
@@ -58,11 +58,12 @@ const runAgentMessage = (message: Message) =>
         return ""
       })
       .join("")
-    yield* sessionRuntime.runPrompt({
+    yield* sessionRuntime.sendUserMessage({
       sessionId: message.sessionId,
       branchId: message.branchId,
-      agentName: DEFAULT_AGENT_NAME,
-      prompt: text,
+      commandId: ActorCommandId.make(`turn:${message.id}`),
+      content: text,
+      agentOverride: DEFAULT_AGENT_NAME,
     })
   })
 

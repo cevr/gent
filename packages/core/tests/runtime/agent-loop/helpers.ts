@@ -178,7 +178,7 @@ export const makeAgentLoopService = Effect.gen(function* () {
           payload = { ...payload, runSpec: input.runSpec }
         if (Predicate.isNotUndefined(input.interactive))
           payload = { ...payload, interactive: input.interactive }
-        yield* ref.execute(AgentLoopActor.Run.make(payload))
+        yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
       }),
     getQueue: (input) =>
       Effect.gen(function* () {
@@ -233,7 +233,7 @@ export const runAgentLoop = (
           // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           interactive: options?.interactive,
         }
-        yield* ref.execute(AgentLoopActor.Run.make(payload))
+        yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
       }),
     ),
   )

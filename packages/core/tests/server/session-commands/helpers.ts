@@ -70,7 +70,6 @@ export const sessionRuntimeLayer = (
       sendUserMessage: () => Effect.void,
       steer: () => Effect.void,
       respondInteraction: () => Effect.void,
-      runPrompt: () => Effect.void,
       queueFollowUp: () => Effect.void,
       dequeueFollowUp: () => Effect.succeed(false),
       requestExtension: () => Effect.void,

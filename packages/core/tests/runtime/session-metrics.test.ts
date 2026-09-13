@@ -3,7 +3,7 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { Effect, type Layer, Option } from "effect"
 import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
-import { BranchId, SessionId } from "../../src/domain/ids"
+import { ActorCommandId, BranchId, SessionId } from "../../src/domain/ids"
 import { Model, ModelId, ProviderId } from "../../src/domain/model"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message"
 import { textStep } from "../../src/debug/provider"
@@ -72,17 +72,19 @@ describe("SessionRuntime metrics", () => {
           const runtime = yield* SessionRuntime
           const events = yield* EventStorage
           const { sessionId, branchId } = yield* createSessionBranch()
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork"),
-            prompt: "first",
+            commandId: ActorCommandId.make("turn:first"),
+            content: "first",
+            agentOverride: AgentName.make("cowork"),
           })
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork"),
-            prompt: "second",
+            commandId: ActorCommandId.make("turn:second"),
+            content: "second",
+            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           const streamEndeds = envelopes
@@ -135,11 +137,12 @@ describe("SessionRuntime metrics", () => {
           const runtime = yield* SessionRuntime
           const events = yield* EventStorage
           const { sessionId, branchId } = yield* createSessionBranch()
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork"),
-            prompt: "first",
+            commandId: ActorCommandId.make("turn:first"),
+            content: "first",
+            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           return envelopes
@@ -162,11 +165,12 @@ describe("SessionRuntime metrics", () => {
           const runtime = yield* SessionRuntime
           const events = yield* EventStorage
           const { sessionId, branchId } = yield* createSessionBranch()
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork"),
-            prompt: "one",
+            commandId: ActorCommandId.make("turn:one"),
+            content: "one",
+            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           const projected = envelopes
@@ -193,11 +197,12 @@ describe("SessionRuntime metrics", () => {
         Effect.gen(function* () {
           const runtime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createSessionBranch()
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork"),
-            prompt: "one",
+            commandId: ActorCommandId.make("turn:one"),
+            content: "one",
+            agentOverride: AgentName.make("cowork"),
           })
           const first = yield* runtime.getMetrics({ sessionId, branchId })
           const second = yield* runtime.getMetrics({ sessionId, branchId })
@@ -226,11 +231,12 @@ describe("SessionRuntime metrics", () => {
           const runtime = yield* SessionRuntime
           const events = yield* EventStorage
           const { sessionId, branchId } = yield* createSessionBranch()
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: AgentName.make("cowork"),
-            prompt: "one",
+            commandId: ActorCommandId.make("turn:one"),
+            content: "one",
+            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           const streamEndeds = envelopes

@@ -78,7 +78,6 @@ import {
   type RunningState,
   type SessionRuntimeState,
   turnFailureEpoch,
-  type TurnBaseline,
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
 import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
@@ -124,9 +123,6 @@ export type AgentLoopBehavior = {
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
-  reserveRunStartOrQueueFollowUp: (
-    item: QueuedTurnItem,
-  ) => Effect.Effect<Option.Option<TurnBaseline>, AgentLoopError>
   takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
@@ -376,7 +372,6 @@ export const makeAgentLoopBehavior = (
       currentLoopState,
       refreshRuntimeState,
       reserveStartOrQueueFollowUp,
-      reserveRunStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       clearInFlightTurn,
@@ -483,7 +478,6 @@ export const makeAgentLoopBehavior = (
       runtimeState,
       queueSnapshot,
       reserveStartOrQueueFollowUp,
-      reserveRunStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle,
       appendSteering,
       drainQueue,

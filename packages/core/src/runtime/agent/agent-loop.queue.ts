@@ -32,8 +32,6 @@ import {
   type QueuedTurnItem,
   type RunningState,
   type SessionRuntimeState,
-  turnFailureEpoch,
-  type TurnBaseline,
 } from "./agent-loop.state.js"
 
 const FOLLOW_UP_QUEUE_MAX = 10
@@ -60,9 +58,6 @@ type AgentLoopQueue = {
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
-  readonly reserveRunStartOrQueueFollowUp: (
-    item: QueuedTurnItem,
-  ) => Effect.Effect<Option.Option<TurnBaseline>, AgentLoopError>
   readonly takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   readonly clearInFlightTurn: (
@@ -132,14 +127,7 @@ export const makeAgentLoopQueue = (
       Effect.gen(function* () {
         const base = yield* TxSubscriptionRef.get(scope.loopRef)
         const next = decide(base)
-        let committed = next.next
-        if (next.persist) {
-          committed = {
-            ...next.next,
-            stateEpoch: next.next.stateEpoch + 1,
-          }
-        }
-        const decision = { ...next, next: committed }
+        const decision = next
         if (decision.persist) {
           yield* persistCommittedQueue(decision.next.queue, operation).pipe(
             Effect.tapError(recordPersistenceFailure),
@@ -168,7 +156,6 @@ export const makeAgentLoopQueue = (
                   const next: AgentLoopState = {
                     state,
                     queue: current.queue,
-                    stateEpoch: current.stateEpoch + 1,
                   }
                   if (!Predicate.isUndefined(current.turnFailure)) {
                     return Object.assign(next, { turnFailure: current.turnFailure })
@@ -259,40 +246,6 @@ export const makeAgentLoopQueue = (
               return new AgentLoopError({ message: "Queue transaction returned an invalid value" })
             },
           ),
-        )
-      },
-    )
-
-    const reserveRunStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveRunStartOrQueueFollowUp")(
-      function* (item: QueuedTurnItem) {
-        const startedAtMs = yield* Clock.currentTimeMillis
-        return yield* commitQueueTransaction<Option.Option<TurnBaseline>>(
-          "run start reservation",
-          (current) => {
-            if (current.state._tag !== "Idle" || !Predicate.isUndefined(current.startingState)) {
-              const state = Option.getOrElse(
-                Option.fromUndefinedOr(current.startingState),
-                () => current.state,
-              )
-              return {
-                value: Option.none(),
-                next: { ...current, state, queue: appendFollowUpQueueState(current.queue, item) },
-                persist: true,
-              }
-            }
-
-            return {
-              value: Option.some({
-                stateEpoch: current.stateEpoch,
-                turnFailure: turnFailureEpoch(current),
-              } satisfies TurnBaseline),
-              next: {
-                ...current,
-                startingState: buildRunningState(current.state, item, { startedAtMs }),
-              },
-              persist: false,
-            }
-          },
         )
       },
     )
@@ -394,7 +347,6 @@ export const makeAgentLoopQueue = (
       refreshRuntimeState,
       setStartingState,
       reserveStartOrQueueFollowUp,
-      reserveRunStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle: takeNextQueuedTurnFromState({ onlyIfIdle: true }),
       takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),
       clearInFlightTurn,

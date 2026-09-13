@@ -1,15 +1,12 @@
 /**
  * When a turn is finished, told from the outside.
  *
- * The loop reports its progress as two monotonic counters -- `stateEpoch` for
- * every state change, `turnFailure.epoch` for every failure -- so a caller
- * waiting on a turn must first record where those counters stood, then watch
- * for one to pass that mark. Getting the mark wrong is invisible: read it too
- * late and the wait hangs, too early and a previous turn's failure is
- * reported as this one's.
- *
- * `TurnBaseline` is that mark, taken once by `turnBaseline`. Nothing outside
- * this module reads an epoch off the state, and no caller compares one.
+ * A turn is over when the loop no longer holds its message: not starting it,
+ * not running it, not waiting on it, and not keeping it queued. That is read
+ * off the loop's own state, so no event subscription can miss it. Failure is
+ * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
+ * before starting the turn (`turnFailureBaseline`) and a later mark is this
+ * turn's failure.
  *
  * @module
  */
@@ -21,8 +18,8 @@ import {
   AgentLoopError,
   turnFailureEpoch,
   type AgentLoopState,
+  type LoopState,
   type QueuedTurnItem,
-  type TurnBaseline,
 } from "./agent-loop.state.js"
 import type { MessageType } from "./agent-loop.protocol.js"
 
@@ -40,15 +37,32 @@ export const buildQueuedTurnItem = (operation: {
   wake: operation.wake,
 })
 
-const waitForIdleAfterEpoch = (
+type MessageId = QueuedTurnItem["message"]["id"]
+
+const stateHoldsMessage = (state: LoopState, messageId: MessageId) =>
+  state._tag !== "Idle" && state.message.id === messageId
+
+/** The loop still owns this message: starting, running, waiting, or queued. */
+const holdsMessage = (s: AgentLoopState, messageId: MessageId): boolean => {
+  const item = (queued: QueuedTurnItem) => queued.message.id === messageId
+  return (
+    stateHoldsMessage(s.state, messageId) ||
+    (Predicate.isNotUndefined(s.startingState) && stateHoldsMessage(s.startingState, messageId)) ||
+    (Predicate.isNotUndefined(s.queue.inFlight) && item(s.queue.inFlight)) ||
+    s.queue.followUp.some(item) ||
+    s.queue.steering.some(item)
+  )
+}
+
+const waitForMessageReleased = (
   behavior: AgentLoopBehavior,
-  baseline: number,
+  messageId: MessageId,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const current = yield* behavior.readState
-    if (current.stateEpoch > baseline && current.state._tag === "Idle") return
+    if (!holdsMessage(current, messageId)) return
     yield* behavior.stateChanges.pipe(
-      Stream.filter((state) => state.stateEpoch > baseline && state.state._tag === "Idle"),
+      Stream.filter((state) => !holdsMessage(state, messageId)),
       Stream.runHead,
     )
   })
@@ -60,7 +74,7 @@ const failTurnFailureState = (failure: NonNullable<AgentLoopState["turnFailure"]
   )
 }
 
-export const waitForTurnFailureAfterEpoch = (
+const waitForTurnFailureAfterEpoch = (
   behavior: AgentLoopBehavior,
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
@@ -92,31 +106,30 @@ const failIfTurnFailedAfterEpoch = (
     }
   })
 
-/** Record the mark to wait from. Take this *before* starting the turn. */
-export const turnBaseline = (behavior: AgentLoopBehavior): Effect.Effect<TurnBaseline> =>
-  Effect.map(behavior.readState, (state) => ({
-    stateEpoch: state.stateEpoch,
-    turnFailure: turnFailureEpoch(state),
-  }))
+/** Record the failure mark to wait from. Take this *before* starting the turn. */
+export const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number> =>
+  Effect.map(behavior.readState, turnFailureEpoch)
 
 /**
- * Wait until the turn started after `baseline` is over.
+ * Wait until the loop has released `messageId`, started after `baseline`.
  *
- * It ends three ways, and all three end the wait: the loop goes Idle, the turn
- * fails, or persistence fails. The last two fail the effect.
+ * It ends three ways, and all three end the wait: the loop lets the message
+ * go (the turn ran, or a batch absorbed it), the turn fails, or persistence
+ * fails. The last two fail the effect.
  */
 export const awaitTurnCompletion = (
   behavior: AgentLoopBehavior,
-  baseline: TurnBaseline,
+  baseline: number,
+  messageId: MessageId,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.raceFirst(
     Effect.raceFirst(
-      waitForIdleAfterEpoch(behavior, baseline.stateEpoch),
-      waitForTurnFailureAfterEpoch(behavior, baseline.turnFailure),
+      waitForMessageReleased(behavior, messageId),
+      waitForTurnFailureAfterEpoch(behavior, baseline),
     ),
     behavior.persistenceFailure,
   ).pipe(
-    // Reaching Idle wins the race even when the turn failed on its way there,
+    // Release wins the race even when the turn failed on its way there,
     // so the failure is checked once more after the race settles.
-    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline.turnFailure)),
+    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline)),
   )

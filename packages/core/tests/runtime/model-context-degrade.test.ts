@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
-import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
+import { ActorCommandId, BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { Model, ModelId, ProviderId } from "../../src/domain/model"
 import { dateFromMillis, Branch, Message, Session } from "../../src/domain/message"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
@@ -91,11 +91,12 @@ describe("context compaction degrade path", () => {
         Effect.gen(function* () {
           yield* seedOverflowingHistory
           const runtime = yield* SessionRuntime
-          yield* runtime.runPrompt({
+          yield* runtime.sendUserMessage({
             sessionId,
             branchId,
-            agentName: agent.name,
-            prompt: "continue",
+            commandId: ActorCommandId.make("turn:continue"),
+            content: "continue",
+            agentOverride: agent.name,
           })
           const events = (yield* (yield* EventStorage).listEvents({ sessionId, branchId })).map(
             (envelope) => envelope.event,

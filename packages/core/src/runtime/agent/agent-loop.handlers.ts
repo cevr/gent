@@ -26,7 +26,7 @@
  * **Execution id key** per op:
  * - `Submit` — `message.id` (live-only)
  * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
- * - `Run` / `QueueFollowUp` — `message.id` (live-only)
+ * - `QueueFollowUp` — `message.id` (live-only)
  * - `Steer` — `commandId` (persisted; actor owns request idempotency)
  * - `Interrupt` / `RespondInteraction` — durable persisted command key
  *
@@ -55,7 +55,6 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
-import { EventStore } from "../../domain/event.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 
 const isActiveLoopState = Predicate.or(
@@ -100,8 +99,7 @@ import type { CurrentExtensionHostContext } from "./current-extension-host-conte
 import {
   buildQueuedTurnItem,
   awaitTurnCompletion,
-  turnBaseline,
-  waitForTurnFailureAfterEpoch,
+  turnFailureBaseline,
 } from "./agent-loop.actor-state.js"
 import {
   AgentLoop,
@@ -162,7 +160,6 @@ export const buildAgentLoopActorHandlers = (config: {
     const queueStorage = yield* AgentLoopQueueStorage
     const eventStorage = yield* EventStorage
     const operations = yield* SessionOperationStorage
-    const eventStore = yield* EventStore
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
     const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
@@ -617,6 +614,15 @@ export const buildAgentLoopActorHandlers = (config: {
     )
     yield* Actor.registerState(registeredState)
 
+    /** A message whose turn already ran is not a new turn; a retried submit sees it done. */
+    const turnAlreadyCompleted = (messageId: MessageId) =>
+      messageStorage.getMessage(messageId).pipe(
+        Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
+        Effect.mapError(
+          (cause) => new AgentLoopError({ message: "Cannot read submitted message", cause }),
+        ),
+      )
+
     /**
      * Admit one submitted turn: target check, warm mark, reservation, and the
      * start when the reservation grants it. Returns the reservation so the
@@ -630,6 +636,7 @@ export const buildAgentLoopActorHandlers = (config: {
       Effect.gen(function* () {
         yield* ensureTarget(operation.message)
         yield* markWrite
+        if (yield* turnAlreadyCompleted(operation.message.id)) return Option.none<Reserved>()
         const item = buildQueuedTurnItem(operation)
         const reserved = yield* reserve(item)
         if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
@@ -646,57 +653,15 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* admitTurn(handle, operation, reserveStart(handle))
     })
 
-    const waitForMessageTurnCompleted = Effect.fn("AgentLoopActor.waitForMessageTurnCompleted")(
-      function* (messageId: MessageId) {
-        const existingMessage = yield* messageStorage
-          .getMessage(messageId)
-          .pipe(Effect.catchEager(() => Effect.undefined))
-        if (!Predicate.isUndefined(existingMessage?.turnDurationMs)) return
-
-        const completed = yield* eventStore.subscribe({ sessionId, branchId }).pipe(
-          Stream.filter(
-            (envelope) =>
-              envelope.event._tag === "TurnCompleted" && envelope.event.messageId === messageId,
-          ),
-          Stream.runHead,
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: `Failed to wait for turn completion: ${sessionId}/${branchId}/${messageId}`,
-                cause,
-              }),
-          ),
-        )
-        if (Option.isSome(completed)) return
-        return yield* new AgentLoopError({
-          message: `Turn completion stream ended: ${sessionId}/${branchId}/${messageId}`,
-        })
-      },
-    )
-
     const submitTurnAndWait = Effect.fn("AgentLoopActor.submitTurnAndWait")(function* (
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      const baseline = yield* turnBaseline(handle)
+      const baseline = yield* turnFailureBaseline(handle)
       yield* admitTurn(handle, operation, reserveStart(handle))
-      // This turn is done when *its* message is completed, which can happen
-      // while the loop stays busy with a follow-up, so Idle is not the signal
-      // here -- only failure is shared with `awaitTurnCompletion`.
-      yield* Effect.raceFirst(
-        waitForMessageTurnCompleted(operation.message.id),
-        Effect.raceFirst(
-          waitForTurnFailureAfterEpoch(handle, baseline.turnFailure),
-          handle.persistenceFailure,
-        ),
-      ).pipe(orCleanup(handle))
-    })
-
-    const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (operation: TurnSubmissionInput) {
-      const handle = yield* ensureStarted
-      const start = yield* admitTurn(handle, operation, handle.reserveRunStartOrQueueFollowUp)
-      if (Option.isNone(start)) return
-      yield* awaitTurnCompletion(handle, start.value).pipe(orCleanup(handle))
+      // This turn is done when the loop lets *its* message go, which can
+      // happen while the loop stays busy with a follow-up.
+      yield* awaitTurnCompletion(handle, baseline, operation.message.id).pipe(orCleanup(handle))
     })
 
     const isCancellation = Predicate.or(
@@ -777,9 +742,6 @@ export const buildAgentLoopActorHandlers = (config: {
         ({ operation }: HandlerRequest<TurnSubmissionInput>) =>
           submitTurn(operation).pipe(provideActorWorkspace),
       ),
-      Run: Effect.fn("AgentLoop.Run")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
-        runTurn(operation).pipe(provideActorWorkspace),
-      ),
       QueueFollowUp: Effect.fn("AgentLoop.QueueFollowUp")(
         ({ operation }: HandlerRequest<QueueFollowUpInput>) =>
           Effect.gen(function* () {
@@ -806,9 +768,9 @@ export const buildAgentLoopActorHandlers = (config: {
                 if (state._tag !== "Idle") return
                 const message = yield* latestIncompleteUserTurn
                 if (Option.isNone(message)) return
-                const baseline = yield* turnBaseline(handle)
+                const baseline = yield* turnFailureBaseline(handle)
                 yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
-                yield* awaitTurnCompletion(handle, baseline)
+                yield* awaitTurnCompletion(handle, baseline, message.value.id)
                 return
               }
             }

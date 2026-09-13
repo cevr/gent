@@ -45,8 +45,10 @@ import {
   makeRecordingLayer,
   retryableStreamError,
   runAgentLoop,
+  submitAgentLoop,
   scriptedProvider,
   steerAgentLoop,
+  waitForPhase,
 } from "./helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../../src/utils/run-process"
@@ -269,7 +271,7 @@ describe("streaming", () => {
           )
           yield* Deferred.await(firstStarted)
           const fiberB = yield* Effect.forkChild(
-            runAgentLoop(
+            submitAgentLoop(
               agentLoop,
               makeMessage(SessionId.make("s1"), BranchId.make("b1"), "second"),
             ),
@@ -280,6 +282,11 @@ describe("streaming", () => {
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiberA)
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
+            "Idle",
+          )
           expect(calls).toBe(2)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
@@ -383,11 +390,16 @@ describe("streaming", () => {
           const third = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "third")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* runAgentLoop(agentLoop, second)
-          yield* runAgentLoop(agentLoop, third)
+          yield* submitAgentLoop(agentLoop, second)
+          yield* submitAgentLoop(agentLoop, third)
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
+            "Idle",
+          )
           const messages = yield* messageStorage.listMessages(BranchId.make("b1"))
           const userTexts = messages
             .filter((message) => message.role === "user")
@@ -593,7 +605,7 @@ describe("streaming", () => {
           const queued = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* runAgentLoop(agentLoop, queued)
+          yield* submitAgentLoop(agentLoop, queued)
           yield* steerAgentLoop({
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
@@ -605,6 +617,11 @@ describe("streaming", () => {
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
+            "Idle",
+          )
           expect(providerCalls.length).toBe(3)
           expect(providerCalls[0]!.latestUserText).toBe("first")
           expect(providerCalls[1]!.latestUserText).toBe("steer now")
@@ -650,8 +667,8 @@ describe("streaming", () => {
           const queuedB = makeMessage(SessionId.make("s1"), BranchId.make("b1"), "queued b")
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* runAgentLoop(agentLoop, queuedA)
-          yield* runAgentLoop(agentLoop, queuedB)
+          yield* submitAgentLoop(agentLoop, queuedA)
+          yield* submitAgentLoop(agentLoop, queuedB)
           yield* steerAgentLoop({
             _tag: "Interject",
             sessionId: SessionId.make("s1"),
@@ -740,7 +757,7 @@ describe("streaming", () => {
           )
           const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* runAgentLoop(agentLoop, queued)
+          yield* submitAgentLoop(agentLoop, queued)
           const snapshotWhileRunning = yield* agentLoop.getQueue({
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
@@ -751,6 +768,11 @@ describe("streaming", () => {
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber).pipe(Effect.exit)
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
+            "Idle",
+          )
           expect(providerCalls).toEqual(["first", "queued after failure"])
           const snapshotAfterFailure = yield* agentLoop.getQueue({
             sessionId: SessionId.make("s1"),

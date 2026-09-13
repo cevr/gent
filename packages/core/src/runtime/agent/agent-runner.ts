@@ -478,12 +478,14 @@ export const InProcessRunner: Layer.Layer<
                 Effect.asSome,
               ),
           })
+          const messageId = MessageId.make(`agent-run:${sessionId}`)
           yield* sessionRuntime
-            .runPrompt({
+            .sendUserMessage({
               sessionId,
               branchId,
-              agentName,
-              prompt: params.prompt,
+              commandId: ActorCommandId.make(messageId),
+              content: params.prompt,
+              agentOverride: agentName,
               interactive: false,
               runSpec: makeRunSpec({ ...runSpec, parentToolCallId: toolCallId }),
             })
@@ -496,7 +498,7 @@ export const InProcessRunner: Layer.Layer<
           // The answer is the branch's last assistant message; the totals are
           // on the turn receipt. Neither needs an event scan.
           const completion = yield* eventStorage
-            .getLatestEvent({ sessionId, branchId, tags: ["TurnCompleted"] })
+            .getLatestEvent({ sessionId, branchId, tags: ["TurnCompleted"], messageId })
             .pipe(
               Effect.map(Option.fromUndefinedOr),
               Effect.catchEager(() => Effect.succeedNone),

@@ -131,7 +131,7 @@ const makeAgentLoopService = Effect.gen(function* () {
           // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           interactive: input.interactive,
         }
-        yield* ref.execute(AgentLoopActor.Run.make(payload))
+        yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
       }),
   } satisfies AgentLoopService
 })
@@ -152,7 +152,7 @@ const runAgentLoop = (
           entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
         )
         yield* ref.execute(
-          AgentLoopActor.Run.make({
+          AgentLoopActor.SubmitAndWait.make({
             workspaceId: DefaultWorkspaceId,
             message,
             // Actor operation payloads require optional fields explicitly.
