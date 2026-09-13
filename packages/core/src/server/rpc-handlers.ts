@@ -1,4 +1,4 @@
-import { Predicate, Clock, Effect, Layer, Option, Stream, type Context } from "effect"
+import { Predicate, Clock, Effect, Layer, Option, Stream } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
@@ -61,11 +61,6 @@ import {
 // ============================================================================
 // Handler helpers (yield Tags inside; no service-bag threading)
 // ============================================================================
-
-interface ResolvedSessionServices {
-  readonly registry: ExtensionRegistryService
-  readonly capabilityContext?: Context.Context<never>
-}
 
 const invalidateExternalDriversFor = (
   prev: Option.Option<DriverRef>,
@@ -186,30 +181,23 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.orElseSucceed(() => Option.none()),
       )
 
-    const resolveProfileServices = (
+    const resolveProfileRegistry = (
       cwd: Option.Option<string>,
-    ): Effect.Effect<ResolvedSessionServices> =>
+    ): Effect.Effect<ExtensionRegistryService> =>
       Effect.gen(function* () {
-        if (Option.isNone(cwd) || Option.isNone(profileCacheOpt)) {
-          return {
-            registry: extensionRegistry,
-          }
-        }
+        if (Option.isNone(cwd) || Option.isNone(profileCacheOpt)) return extensionRegistry
         const profile = yield* profileCacheOpt.value.resolve(cwd.value)
-        return {
-          registry: profile.registryService,
-          capabilityContext: profile.layerContext,
-        }
+        return profile.registryService
       })
 
-    const resolveSessionServices = (
+    const resolveSessionRegistry = (
       sessionId: Option.Option<string>,
-    ): Effect.Effect<ResolvedSessionServices> =>
+    ): Effect.Effect<ExtensionRegistryService> =>
       Effect.gen(function* () {
-        if (Option.isNone(sessionId)) return yield* resolveProfileServices(Option.none())
+        if (Option.isNone(sessionId)) return yield* resolveProfileRegistry(Option.none())
         const session = yield* loadSession(sessionId.value)
         const cwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
-        return yield* resolveProfileServices(cwd)
+        return yield* resolveProfileRegistry(cwd)
       })
 
     return {
@@ -534,7 +522,7 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
-          const { registry } = yield* resolveSessionServices(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           const activationStatuses = registry.getResolved().extensionStatuses
           return buildExtensionHealthSnapshot(activationStatuses)
         }),
@@ -574,7 +562,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
-          const { registry } = yield* resolveSessionServices(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           return listSlashCommands(registry.getResolved()).map(
             (command) =>
               new SlashCommandInfo({

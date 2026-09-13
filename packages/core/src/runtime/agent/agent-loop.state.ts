@@ -19,7 +19,6 @@ import {
   SteeringQueueEntryInfo,
   type QueueEntryInfo,
 } from "../../domain/queue.js"
-import { UsageSchema } from "../../domain/event.js"
 import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
@@ -293,15 +292,6 @@ const RunningTurnFields = {
 
 // ── Turn types (not persisted in machine state) ──
 
-const AssistantDraftSchema = Schema.Struct({
-  text: Schema.String,
-  reasoning: Schema.String,
-  toolCalls: Schema.Array(Prompt.ToolCallPart),
-  usage: Schema.optional(UsageSchema),
-})
-
-export type AssistantDraft = typeof AssistantDraftSchema.Type
-
 export type ResolvedTurn = {
   currentTurnAgent: AgentNameType
   messages: ReadonlyArray<Message>
@@ -383,9 +373,6 @@ export type ModelContextMetrics = typeof ModelContextMetrics.Type
 
 export const SessionRuntimeMetrics = Schema.Struct({
   turns: Schema.Finite,
-  tokens: Schema.Finite,
-  toolCalls: Schema.Finite,
-  retries: Schema.Finite,
   durationMs: Schema.Finite,
   /** Cumulative USD cost: sum of `StreamEnded.costUsd` across the session's
    * event log. Cost is frozen into each event at emit time against the

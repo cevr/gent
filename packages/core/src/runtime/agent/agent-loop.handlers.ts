@@ -819,9 +819,6 @@ export const buildAgentLoopActorHandlers = (config: {
               .listEvents({ sessionId: operation.sessionId, branchId: operation.branchId })
               .pipe(Effect.catchEager(() => Effect.succeed([])))
             let turns = 0
-            let tokens = 0
-            let toolCalls = 0
-            let retries = 0
             let durationMs = 0
             let costUsd = 0
             let lastInputTokens = 0
@@ -847,7 +844,6 @@ export const buildAgentLoopActorHandlers = (config: {
                   break
                 case "StreamEnded":
                   if (!Predicate.isUndefined(event.usage)) {
-                    tokens += event.usage.inputTokens + event.usage.outputTokens
                     lastInputTokens = event.usage.inputTokens
                   }
                   if (!Predicate.isUndefined(event.costUsd)) {
@@ -857,19 +853,10 @@ export const buildAgentLoopActorHandlers = (config: {
                     lastModelId = Option.some(event.model)
                   }
                   break
-                case "ToolCallStarted":
-                  toolCalls++
-                  break
-                case "ProviderRetrying":
-                  retries++
-                  break
               }
             }
             const metrics = {
               turns,
-              tokens,
-              toolCalls,
-              retries,
               durationMs,
               costUsd,
               lastInputTokens,
@@ -888,11 +875,8 @@ export const buildAgentLoopActorHandlers = (config: {
             return yield* Effect.gen(function* () {
               const environment = yield* handle.resolveTurnProfile
               const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
-              let inputOption = Option.none<unknown>()
-              if (operation.input._tag === "Present") {
-                inputOption = Option.some(operation.input.value)
-              }
-              const input = Option.getOrUndefined(inputOption)
+              let input: unknown = Option.getOrUndefined(Option.none())
+              if (operation.input._tag === "Present") input = operation.input.value
               const staticRequest = rpcRegistry.run(
                 operation.extensionId,
                 RpcId.make(operation.capabilityId),

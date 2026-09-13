@@ -10,12 +10,12 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   type AgentEvent,
+  type Usage,
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { hasMessage } from "../../domain/guards.js"
-import type { AssistantDraft } from "./agent-loop.state.js"
 import { normalizeResponseParts } from "../../domain/response-part-normalization.js"
 import {
   projectResponsePartsToMessageParts,
@@ -87,7 +87,7 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
 interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>
   readonly tool: ReadonlyArray<ToolResponsePart>
-  readonly usage?: AssistantDraft["usage"]
+  readonly usage?: Usage
 }
 
 export interface CollectedTurnResponse {
@@ -123,10 +123,7 @@ export const collectNormalizedResponse = (params: {
     .filter((part): part is Response.FinishPart => part.type === "finish")
     .map((part) => responseUsage(part.usage))
     .find(Option.isSome)
-  const usage = Option.fromUndefinedOr(usageOption).pipe(
-    Option.flatMap((value) => value),
-    Option.getOrUndefined,
-  )
+  const usage = Option.getOrUndefined(usageOption ?? Option.none())
 
   return {
     responseParts: normalized,

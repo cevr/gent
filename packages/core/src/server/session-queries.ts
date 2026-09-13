@@ -62,9 +62,6 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
       Effect.catchEager(() =>
         Effect.succeed({
           turns: 0,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,

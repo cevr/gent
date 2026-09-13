@@ -24,7 +24,7 @@ import {
   ToolCallRecoveryService,
 } from "../../domain/tool-call-recovery.js"
 import {
-  assistantDraftFromMessage,
+  toolCallsFromMessage,
   continuationMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
@@ -502,14 +502,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       )
       const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
-      const inputTokens = Option.getOrElse(usage, () => ({
+      const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
         inputTokens: 0,
         outputTokens: 0,
-      })).inputTokens
-      const outputTokens = Option.getOrElse(usage, () => ({
-        inputTokens: 0,
-        outputTokens: 0,
-      })).outputTokens
+      }))
       yield* Effect.logInfo("stream.end").pipe(
         Effect.annotateLogs({
           driverKind: source.driverKind,
@@ -732,7 +728,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           assistantMessageIdForTurn(params.messageId, step),
         )
         if (Predicate.isUndefined(existingAssistant)) break
-        const toolCalls = assistantDraftFromMessage(existingAssistant).toolCalls
+        const toolCalls = toolCallsFromMessage(existingAssistant)
         if (toolCalls.length === 0) {
           lastCompletedStep = step
           continue

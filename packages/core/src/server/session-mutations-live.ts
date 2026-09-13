@@ -189,25 +189,12 @@ const makeSessionMutationsService: Effect.Effect<
     return sessionIds
   })
 
-  const cleanupSessionRuntimeStateForMutation = Effect.fn(
-    "SessionMutations.cleanupSessionRuntimeState",
-  )(function* (sessionId: SessionId) {
-    yield* cleanupSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
-  })
-
-  const restoreSessionRuntimeStateForMutation = Effect.fn(
-    "SessionMutations.restoreSessionRuntimeState",
-  )(function* (sessionId: SessionId) {
-    yield* restoreSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
-  })
-
-  const forgetDeletedSessionRuntimeStateForMutation = Effect.fn(
-    "SessionMutations.forgetDeletedSessionRuntimeState",
-  )(function* (sessionId: SessionId) {
-    yield* forgetDeletedSessionRuntimeState(sessionId).pipe(
-      Effect.provideContext(sessionRuntimeContext),
-    )
-  })
+  const cleanupSessionRuntimeStateForMutation = (sessionId: SessionId) =>
+    cleanupSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
+  const restoreSessionRuntimeStateForMutation = (sessionId: SessionId) =>
+    restoreSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
+  const forgetDeletedSessionRuntimeStateForMutation = (sessionId: SessionId) =>
+    forgetDeletedSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
 
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,

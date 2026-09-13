@@ -92,9 +92,6 @@ describe("ClientProvider session lifecycle", () => {
         runtime: { _tag: "Running", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
         metrics: {
           turns: 1,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,
@@ -205,9 +202,6 @@ describe("ClientProvider session lifecycle", () => {
         },
         metrics: {
           turns: 1,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,
@@ -254,9 +248,6 @@ describe("ClientProvider session lifecycle", () => {
         },
         metrics: {
           turns: 0,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,
@@ -318,9 +309,6 @@ describe("ClientProvider session lifecycle", () => {
         },
         metrics: {
           turns: 9,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 123,
           lastInputTokens: 456,
@@ -384,9 +372,6 @@ describe("ClientProvider session lifecycle", () => {
         },
         metrics: {
           turns: 1,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 12,
           lastInputTokens: 34,
@@ -443,9 +428,6 @@ describe("ClientProvider session lifecycle", () => {
         },
         metrics: {
           turns: 1,
-          tokens: 0,
-          toolCalls: 0,
-          retries: 0,
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,

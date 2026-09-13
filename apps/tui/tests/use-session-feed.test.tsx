@@ -65,9 +65,6 @@ const snapshotFor = (
   },
   metrics: {
     turns: 0,
-    tokens: 0,
-    toolCalls: 0,
-    retries: 0,
     durationMs: 0,
     costUsd: 0,
     lastInputTokens: 0,

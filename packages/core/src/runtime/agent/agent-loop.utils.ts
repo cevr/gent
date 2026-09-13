@@ -5,15 +5,10 @@ import {
 } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import type { Message } from "../../domain/message.js"
-import {
-  messagePartsReasoning,
-  messagePartsText,
-  messagePartsToolCallParts,
-} from "../../domain/message-part-display.js"
+import { messagePartsToolCallParts } from "../../domain/message-part-display.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Option, Predicate } from "effect"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { AssistantDraft } from "./agent-loop.state.js"
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
@@ -99,8 +94,4 @@ export const continuationMessageIdForTurn = (messageId: MessageId, step: number)
 export const interjectionMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:interjection`)
 
-export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
-  text: messagePartsText(message.parts),
-  reasoning: messagePartsReasoning(message.parts),
-  toolCalls: messagePartsToolCallParts(message.parts),
-})
+export const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)

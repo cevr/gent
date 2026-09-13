@@ -6,7 +6,11 @@ import { AgentName } from "../../src/domain/agent"
 import { BranchId, SessionId } from "../../src/domain/ids"
 import { assistantMessageIdForTurn } from "../../src/domain/message"
 import { MessageStorage } from "../../src/storage/message-storage"
-import { assistantDraftFromMessage } from "../../src/runtime/agent/agent-loop.utils"
+import {
+  messagePartsReasoning,
+  messagePartsText,
+  messagePartsToolCallParts,
+} from "../../src/domain/message-part-display"
 import {
   makeAgentLoopService,
   makeExternalLayerWithEvents,
@@ -40,7 +44,11 @@ describe("turn stream parity", () => {
         yield* runAgentLoop(agentLoop, message)
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
-        return assistantDraftFromMessage(assistant!)
+        return {
+          text: messagePartsText(assistant!.parts),
+          reasoning: messagePartsReasoning(assistant!.parts),
+          toolCalls: messagePartsToolCallParts(assistant!.parts),
+        }
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
@@ -72,7 +80,11 @@ describe("turn stream parity", () => {
         })
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
-        return assistantDraftFromMessage(assistant!)
+        return {
+          text: messagePartsText(assistant!.parts),
+          reasoning: messagePartsReasoning(assistant!.parts),
+          toolCalls: messagePartsToolCallParts(assistant!.parts),
+        }
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
