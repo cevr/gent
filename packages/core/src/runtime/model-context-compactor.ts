@@ -5,18 +5,17 @@
  * older history is summarised, with what prompt, and what the summary records
  * belongs to whichever extension installs a `ModelContextCompactor` as a
  * process resource. With none installed, an overflowing transcript is simply
- * truncated. Core still owns the shape of a durable summary record, because
- * status reporting and the TUI read it.
+ * truncated. The shape of the durable summary record belongs to the
+ * extension; the loop reads only the result and the error's `recoverable` flag.
  *
  * @module
  */
 
-import { Context, type Effect, Option, Predicate, Schema, type Scope } from "effect"
+import { Context, type Effect, Schema, type Scope } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
-import type * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderAuthError } from "../domain/driver.js"
-import { UsageSchema, type EventStoreError } from "../domain/event.js"
-import { type BranchId, MessageId, type SessionId } from "../domain/ids.js"
+import type { EventStoreError } from "../domain/event.js"
+import type { BranchId, SessionId } from "../domain/ids.js"
 import { Message } from "../domain/message.js"
 import { ModelId } from "../domain/model.js"
 import type { ProviderError } from "../domain/provider-error.js"
@@ -28,56 +27,13 @@ import {
   type ModelContextProjectionError,
 } from "./model-context.js"
 
-/** `metadata.customType` of a durable summary record. */
-export const MODEL_COMPACTION_MESSAGE_TYPE = "model-compaction"
-
-/** Files the summarized history touched, carried forward across revisions. */
-export const CompactionPaths = Schema.Struct({
-  read: Schema.Array(Schema.String),
-  modified: Schema.Array(Schema.String),
-})
-export type CompactionPaths = typeof CompactionPaths.Type
-
-export const ModelCompactionDetails = Schema.TaggedStruct(MODEL_COMPACTION_MESSAGE_TYPE, {
-  sourceMessageIds: Schema.Array(MessageId),
-  sourceRevision: Schema.NonEmptyString,
-  modelId: Schema.optional(ModelId),
-  usage: Schema.optional(UsageSchema),
-  paths: Schema.optional(CompactionPaths),
-})
-export type ModelCompactionDetails = typeof ModelCompactionDetails.Type
-
-export const ModelCompactionFailure = Schema.TaggedUnion({
-  SourceChanged: {
-    expectedRevision: Schema.String,
-    actualRevision: Schema.String,
-  },
-  SummaryGenerationFailed: {
-    message: Schema.String,
-  },
-  SummaryEmpty: {},
-  SummaryOversize: {
-    estimatedTokens: Schema.Natural,
-    maxTokens: Schema.Natural,
-  },
-  SummaryDidNotFit: {
-    messageIds: Schema.Array(MessageId),
-  },
-  SummaryConflict: {
-    messageId: MessageId,
-  },
-})
-export type ModelCompactionFailure = typeof ModelCompactionFailure.Type
-
-/** A summary the model could not produce is recoverable; a moved source or a conflicting summary is not. */
-export const isRecoverableCompactionFailure = (failure: ModelCompactionFailure): boolean =>
-  failure._tag !== "SourceChanged" && failure._tag !== "SummaryConflict"
-
+/** Why a summary was not produced; `recoverable` says whether the loop may go on without it. */
 export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
   "ModelCompactionError",
   {
     modelId: ModelId,
-    failure: ModelCompactionFailure,
+    reason: Schema.NonEmptyString,
+    recoverable: Schema.Boolean,
   },
 ) {}
 
@@ -85,40 +41,10 @@ export const ModelCompactionResult = Schema.Struct({
   messages: Schema.Array(Message),
   projection: ModelContextProjection,
   compacted: Schema.Boolean,
+  /** Newest summary revision left in the window, for status reporting. */
+  revision: Schema.optional(Schema.String),
 })
 export type ModelCompactionResult = typeof ModelCompactionResult.Type
-
-export const isCompactionDetails = Schema.is(ModelCompactionDetails)
-
-export const isCompactionMessage = (message: Message): boolean =>
-  Predicate.isNotUndefined(message.metadata) &&
-  message.metadata.customType === MODEL_COMPACTION_MESSAGE_TYPE
-
-export const summaryText = (message: Message): string =>
-  message.parts
-    .filter((part): part is Prompt.TextPart => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim()
-
-/** A durable assistant record carrying valid details and a non-empty summary. */
-export const isSummaryMessage = (message: Message): boolean => {
-  if (!isCompactionMessage(message) || message.role !== "assistant") return false
-  return isCompactionDetails(message.metadata?.details) && summaryText(message).length > 0
-}
-
-/** Newest summary revision in a projection, for status reporting. */
-export const latestCompactionRevision = (
-  messages: ReadonlyArray<Message>,
-): Option.Option<string> => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (Predicate.isUndefined(message) || !isSummaryMessage(message)) continue
-    const details = message.metadata?.details
-    if (isCompactionDetails(details)) return Option.some(details.sourceRevision)
-  }
-  return Option.none()
-}
 
 /** Stable digest of a message range; the loop supplies the platform hash. */
 export type RevisionHash = (input: string) => string

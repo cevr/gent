@@ -1094,3 +1094,16 @@ messageId)` returns when the loop no longer holds the message (not starting,
 - Regression probes: handler dedup off fails two tests, durable replay off
   fails two, log-on-failure fails one. Test fixture dir renamed to
   `tests/server/session-mutations/`.
+
+## The summary record belongs to the compaction extension (2026-09-13)
+
+- `runtime/model-context-compactor.ts` carried the durable summary record
+  (`ModelCompactionDetails`, `CompactionPaths`, the `model-compaction`
+  customType, four predicates, `latestCompactionRevision`) and the six-case
+  `ModelCompactionFailure` union. The loop used two of them: "is this failure
+  recoverable" and "which revision is newest", both derivable by the compactor.
+- The seam now says it: `ModelCompactionError` is `{ modelId, reason,
+recoverable }` and `ModelCompactionResult` carries `revision`. Everything
+  else lives in `packages/extensions/src/compaction/summary-record.ts`; the
+  branch-tools barrel drops nine names and gains `UsageSchema`. The TUI never
+  imported the core names; it matches the customType string.

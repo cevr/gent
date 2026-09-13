@@ -15,12 +15,12 @@ import { ensureStorageParents } from "@gent/core-internal/test-utils"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { ModelCompactionError } from "@gent/core-internal/runtime/model-context-compactor.js"
 import {
   isRecoverableCompactionFailure,
   ModelCompactionDetails,
-  ModelCompactionError,
   ModelCompactionFailure,
-} from "@gent/core-internal/runtime/model-context-compactor.js"
+} from "../../src/compaction/summary-record.js"
 import {
   compactModelContext,
   MODEL_COMPACTION_OUTPUT_TOKENS,

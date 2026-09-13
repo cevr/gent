@@ -36,8 +36,6 @@ import {
   projectModelContext,
 } from "../model-context.js"
 import {
-  isRecoverableCompactionFailure,
-  latestCompactionRevision,
   type ModelCompactionError,
   ModelCompactionResult,
   ModelContextCompactor,
@@ -434,13 +432,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     Effect.gen(function* () {
       // Integrity failures (the source moved, a conflicting summary) still stop
       // the turn; only a summary the model could not produce degrades.
-      if (!isRecoverableCompactionFailure(error.failure)) return yield* error
+      if (!error.recoverable) return yield* error
       const plain = yield* plainProjection
       yield* eventPublisher.publish(
         ErrorOccurred.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
-          error: `Context compaction failed (${error.failure._tag}); continuing with ${plain.projection.omittedMessageIds.length} older messages omitted`,
+          error: `Context compaction failed (${error.reason}); continuing with ${plain.projection.omittedMessageIds.length} older messages omitted`,
         }),
       )
       return plain
@@ -457,9 +455,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         )
     }),
   )
-  const compactedRevision = Option.getOrUndefined(
-    latestCompactionRevision(compacted.projection.messages),
-  )
+  const compactedRevision = compacted.revision
   yield* ledger.recordProjection({
     estimatedTokens: compacted.projection.estimatedTokens,
     availableInputTokens: compacted.projection.availableInputTokens,

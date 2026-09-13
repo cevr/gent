@@ -94,20 +94,12 @@ export { partToText } from "../domain/message-part-display.js"
 
 // Implementing the context compaction seam.
 export {
-  type CompactionPaths,
   type CompactionRequest,
-  isCompactionDetails,
-  isCompactionMessage,
-  isSummaryMessage,
-  MODEL_COMPACTION_MESSAGE_TYPE,
-  ModelCompactionDetails,
   ModelCompactionError,
-  ModelCompactionFailure,
   ModelCompactionResult,
   ModelContextCompactor,
   type RevisionHash,
   type SummaryPersister,
-  summaryText,
 } from "../runtime/model-context-compactor.js"
 export {
   ModelContextBudget,
@@ -117,7 +109,7 @@ export {
   projectModelContext,
 } from "../runtime/model-context.js"
 export { Message } from "../domain/message.js"
-export { type Usage } from "../domain/event.js"
+export { type Usage, UsageSchema } from "../domain/event.js"
 export { type ProviderAuthError } from "../domain/driver.js"
 export { type ProviderError } from "../domain/provider-error.js"
 export { type InnerOperation } from "../domain/inner-operation-receipts.js"

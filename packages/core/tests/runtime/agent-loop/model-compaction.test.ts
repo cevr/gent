@@ -10,7 +10,7 @@ import {
 } from "../../../src/test-utils/language-model"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { ModelCompactionDetails } from "../../../src/runtime/model-context-compactor"
+import { ModelCompactionDetails } from "../../../../extensions/src/compaction/summary-record"
 import { ModelContextCompactorLive } from "../../../../extensions/tests/helpers/test-preset"
 import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "./helpers"
 

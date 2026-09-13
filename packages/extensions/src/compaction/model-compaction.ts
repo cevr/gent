@@ -27,20 +27,13 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { BranchId, MessageId, type ModelId, SessionId, ToolCallId } from "@gent/core/extensions/api"
 import {
-  type CompactionPaths,
   type CompactionRequest,
   type EventStoreError,
   type InnerOperation,
   InnerOperationReceipts,
-  isCompactionDetails,
-  isCompactionMessage,
-  isSummaryMessage,
   Message,
   MessageStorage,
-  MODEL_COMPACTION_MESSAGE_TYPE,
-  ModelCompactionDetails,
   ModelCompactionError,
-  ModelCompactionFailure,
   ModelCompactionResult,
   ModelContextBudget,
   type ModelContextError,
@@ -55,11 +48,22 @@ import {
   RetainedBindings,
   type RevisionHash,
   type StorageError,
-  summaryText,
   type SummaryPersister,
   toPrompt,
   type Usage,
 } from "@gent/core/extensions/branch-tools"
+import {
+  type CompactionPaths,
+  isCompactionDetails,
+  isCompactionMessage,
+  isRecoverableCompactionFailure,
+  isSummaryMessage,
+  latestCompactionRevision,
+  MODEL_COMPACTION_MESSAGE_TYPE,
+  ModelCompactionDetails,
+  ModelCompactionFailure,
+  summaryText,
+} from "./summary-record.js"
 
 /** Maximum estimated input tokens for one summary request. */
 const MODEL_COMPACTION_INPUT_TOKENS = 16_384
@@ -437,7 +441,11 @@ const projectionFailure = (modelId: ModelId, failure: ModelContextError) =>
   new ModelContextProjectionError({ modelId, failure })
 
 const compactionFailure = (modelId: ModelId, failure: ModelCompactionFailure) =>
-  new ModelCompactionError({ modelId, failure })
+  new ModelCompactionError({
+    modelId,
+    reason: failure._tag,
+    recoverable: isRecoverableCompactionFailure(failure),
+  })
 
 const summaryBudget = (
   budget: ModelContextBudget,
@@ -735,6 +743,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
         messages: [...normalized.messages],
         projection: initial.success,
         compacted: false,
+        revision: Option.getOrUndefined(latestCompactionRevision(initial.success.messages)),
       })
     }
 
@@ -758,6 +767,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
         messages: [...normalized.messages],
         projection: initial.success,
         compacted: false,
+        revision: Option.getOrUndefined(latestCompactionRevision(initial.success.messages)),
       })
     }
     const sourceMessages = sourceOption.value
@@ -830,6 +840,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
       messages: [...compacted.messages],
       projection: compacted.projection,
       compacted: true,
+      revision: Option.getOrUndefined(latestCompactionRevision(compacted.projection.messages)),
     })
   },
 )

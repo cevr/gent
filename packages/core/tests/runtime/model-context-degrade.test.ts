@@ -10,7 +10,6 @@ import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep } from "../../src/test-utils/sequence-steps"
 import {
   ModelCompactionError,
-  ModelCompactionFailure,
   ModelContextCompactor,
 } from "../../src/runtime/model-context-compactor"
 import { ModelRegistry } from "../../src/runtime/model-registry"
@@ -69,9 +68,8 @@ const failingCompactor = Layer.succeed(
       Effect.fail(
         new ModelCompactionError({
           modelId: request.modelId,
-          failure: ModelCompactionFailure.cases.SummaryGenerationFailed.make({
-            message: "summary provider down",
-          }),
+          reason: "SummaryGenerationFailed",
+          recoverable: true,
         }),
       ),
   }),
