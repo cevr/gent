@@ -5,28 +5,13 @@
  * all focused storage Tags from one SQLite client.
  */
 
-import { Context, Effect, Layer, Predicate, Schema } from "effect"
-import { Model } from "effect/unstable/schema"
+import { Context, Effect, Layer, Predicate } from "effect"
 import type { Session } from "../domain/message.js"
-import { BranchId, SessionId } from "../domain/ids.js"
-import { ReasoningEffort } from "../domain/agent.js"
-import { StorageError } from "../domain/storage-error.js"
-import { SqlClient, SqlModel } from "effect/unstable/sql"
+import type { BranchId, SessionId } from "../domain/ids.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
+import { SqlClient } from "effect/unstable/sql"
 import { sessionFromRow, toSqlNull, type SessionRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
-
-class SessionTable extends Model.Class<SessionTable>("SessionTable")({
-  id: Model.GeneratedByApp(SessionId),
-  workspace_id: Schema.String,
-  name: Schema.NullOr(Schema.String),
-  cwd: Schema.NullOr(Schema.String),
-  reasoning_level: Schema.NullOr(ReasoningEffort),
-  active_branch_id: Schema.NullOr(BranchId),
-  parent_session_id: Schema.NullOr(SessionId),
-  parent_branch_id: Schema.NullOr(BranchId),
-  created_at: Schema.Finite,
-  updated_at: Schema.Finite,
-}) {}
 
 export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
@@ -50,12 +35,6 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
     SessionStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const sessionRepository = yield* SqlModel.makeRepository(SessionTable, {
-        tableName: "sessions",
-        spanPrefix: "SessionStorage",
-        idColumn: "id",
-      })
-      const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       return {
         createSession: Effect.fn("SessionStorage.createSession")(
@@ -87,7 +66,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 })
               }
             }
-            yield* sessionRepository.insertVoid({
+            yield* sql`INSERT INTO sessions ${sql.insert({
               id: session.id,
               workspace_id: workspaceId,
               name: toSqlNull(session.name),
@@ -98,10 +77,10 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               parent_branch_id: toSqlNull(session.parentBranchId),
               created_at: session.createdAt.getTime(),
               updated_at: session.updatedAt.getTime(),
-            })
+            })}`
             return session
           },
-          Effect.mapError(mapError("Failed to create session")),
+          Effect.mapError(storageError("Failed to create session")),
         ),
 
         getSession: Effect.fn("SessionStorage.getSession")(
@@ -114,7 +93,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             if (Predicate.isUndefined(row)) return undefined
             return yield* sessionFromRow(row)
           },
-          Effect.mapError(mapError("Failed to get session")),
+          Effect.mapError(storageError("Failed to get session")),
         ),
 
         listSessions: Effect.suspend(
@@ -124,7 +103,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE workspace_id = ${workspaceId} ORDER BY updated_at DESC`
             return yield* Effect.forEach(rows, sessionFromRow)
           }),
-        ).pipe(Effect.mapError(mapError("Failed to list sessions"))),
+        ).pipe(Effect.mapError(storageError("Failed to list sessions"))),
 
         updateSession: Effect.fn("SessionStorage.updateSession")(
           function* (session) {
@@ -132,7 +111,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             yield* sql`UPDATE sessions SET name = ${toSqlNull(session.name)}, reasoning_level = ${toSqlNull(session.reasoningLevel)}, active_branch_id = ${toSqlNull(session.activeBranchId)}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
             return session
           },
-          Effect.mapError(mapError("Failed to update session")),
+          Effect.mapError(storageError("Failed to update session")),
         ),
 
         deleteSession: Effect.fn("SessionStorage.deleteSession")(
@@ -159,7 +138,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               return cascadedIds
             }).pipe(sql.withTransaction)
           },
-          Effect.mapError(mapError("Failed to delete session")),
+          Effect.mapError(storageError("Failed to delete session")),
         ),
       } satisfies SessionStorageService
     }),

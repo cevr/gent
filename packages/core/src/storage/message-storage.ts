@@ -4,13 +4,12 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Predicate, Context, Effect, Layer, Option, Schema } from "effect"
-import { Model } from "effect/unstable/schema"
-import { MessageRole, type Message } from "../domain/message.js"
+import { Predicate, Context, Effect, Layer, Option } from "effect"
+import type { Message } from "../domain/message.js"
 import { messagePartsSearchText } from "../domain/message-part-display.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
-import { SqlClient, SqlModel } from "effect/unstable/sql"
+import type { BranchId, MessageId } from "../domain/ids.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
+import { SqlClient } from "effect/unstable/sql"
 import {
   decodeMessageChunkRow,
   decodeStoredMessage,
@@ -20,17 +19,6 @@ import {
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
-
-class MessageTable extends Model.Class<MessageTable>("MessageTable")({
-  id: Model.GeneratedByApp(MessageId),
-  session_id: SessionId,
-  branch_id: BranchId,
-  kind: Schema.Literals(["regular", "interjection"]),
-  role: MessageRole,
-  created_at: Schema.Finite,
-  turn_duration_ms: Schema.NullOr(Schema.Finite),
-  metadata: Schema.NullOr(Schema.String),
-}) {}
 
 /**
  * Sanitize user input for safe FTS5 MATCH queries.
@@ -89,13 +77,6 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
         const platform = yield* GentPlatform
-        const messageRepository = yield* SqlModel.makeRepository(MessageTable, {
-          tableName: "messages",
-          spanPrefix: "MessageStorage",
-          idColumn: "id",
-        })
-        const mapError = (message: string) => (cause: unknown) =>
-          new StorageError({ message, cause })
         const insertContent = Effect.fn("MessageStorage.insertContent")(function* (
           messageId: MessageId,
           partJsons: ReadonlyArray<string>,
@@ -143,7 +124,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               yield* ensureMessageWorkspace(message)
               const { partJsons, metadataJson } = yield* encodeStoredMessage(message)
               yield* Effect.gen(function* () {
-                yield* messageRepository.insertVoid({
+                yield* sql`INSERT INTO messages ${sql.insert({
                   id: message.id,
                   session_id: message.sessionId,
                   branch_id: message.branchId,
@@ -152,14 +133,14 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                   created_at: message.createdAt.getTime(),
                   turn_duration_ms: toSqlNull(message.turnDurationMs),
                   metadata: metadataJson,
-                })
+                })}`
                 yield* insertContent(message.id, partJsons)
                 yield* indexSearch(message)
                 yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId} AND workspace_id = ${yield* CurrentWorkspaceId}`
               }).pipe(sql.withTransaction)
               return message
             },
-            Effect.mapError(mapError("Failed to create message")),
+            Effect.mapError(storageError("Failed to create message")),
           ),
 
           createMessageIfAbsent: Effect.fn("MessageStorage.createMessageIfAbsent")(
@@ -179,7 +160,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               }).pipe(sql.withTransaction)
               return message
             },
-            Effect.mapError(mapError("Failed to create message if absent")),
+            Effect.mapError(storageError("Failed to create message if absent")),
           ),
 
           getMessage: Effect.fn("MessageStorage.getMessage")(
@@ -209,7 +190,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               if (Predicate.isUndefined(entry)) return undefined
               return yield* decodeStoredMessage(entry.row, entry.partJsons)
             },
-            Effect.mapError(mapError("Failed to get message")),
+            Effect.mapError(storageError("Failed to get message")),
           ),
 
           searchMessages: Effect.fn("MessageStorage.searchMessages")(
@@ -256,7 +237,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                 createdAt: row.created_at,
               }))
             },
-            Effect.mapError(mapError("Failed to search messages")),
+            Effect.mapError(storageError("Failed to search messages")),
           ),
 
           listMessages: Effect.fn("MessageStorage.listMessages")(
@@ -284,7 +265,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                 decodeStoredMessage(row, partJsons),
               )
             },
-            Effect.mapError(mapError("Failed to list messages")),
+            Effect.mapError(storageError("Failed to list messages")),
           ),
 
           updateMessageTurnDuration: Effect.fn("MessageStorage.updateMessageTurnDuration")(
@@ -296,7 +277,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
                 AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
             },
             Effect.asVoid,
-            Effect.mapError(mapError("Failed to update message turn duration")),
+            Effect.mapError(storageError("Failed to update message turn duration")),
           ),
         } satisfies MessageStorageService
       }),

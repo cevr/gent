@@ -6,7 +6,7 @@ import {
 } from "../domain/interaction-request.js"
 import { SessionId, BranchId } from "../domain/ids.js"
 import type { InteractionRequestId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import { toSqlNull } from "./sqlite/rows.js"
 
@@ -63,7 +63,6 @@ const RowToRecord = InteractionRequestRow.pipe(
 const decodeRow = Schema.decodeUnknownEffect(RowToRecord)
 
 // oxlint-disable-next-line effect/noUnknownParameters -- SQL and schema effects expose unknown failure causes at this storage boundary.
-const mapError = (message: string) => (e: unknown) => new StorageError({ message, cause: e })
 
 export interface InteractionStorageService {
   /** Startup recovery enumerates owners, then reads each workspace under its own scope. */
@@ -106,7 +105,7 @@ export class InteractionStorage extends Context.Service<
           return yield* Schema.decodeEffect(Schema.Array(WorkspaceId))(
             rows.map((row) => row.workspace_id),
           )
-        }).pipe(Effect.mapError(mapError("Failed to list pending interaction workspaces"))),
+        }).pipe(Effect.mapError(storageError("Failed to list pending interaction workspaces"))),
         persist: Effect.fn("InteractionStorage.persist")(
           function* (record) {
             const workspaceId = yield* CurrentWorkspaceId
@@ -124,7 +123,7 @@ export class InteractionStorage extends Context.Service<
             yield* sql`INSERT INTO interaction_requests (request_id, session_id, branch_id, params_json, decision_json, status, created_at) VALUES (${record.requestId}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${toSqlNull(record.decisionJson)}, ${record.status}, ${record.createdAt})`
             return record
           },
-          Effect.mapError(mapError("Failed to persist interaction request")),
+          Effect.mapError(storageError("Failed to persist interaction request")),
         ),
 
         decide: Effect.fn("InteractionStorage.decide")(
@@ -136,7 +135,7 @@ export class InteractionStorage extends Context.Service<
                 AND status = 'pending'
                 AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
           },
-          Effect.mapError(mapError("Failed to store interaction decision")),
+          Effect.mapError(storageError("Failed to store interaction decision")),
         ),
 
         resolve: Effect.fn("InteractionStorage.resolve")(
@@ -147,7 +146,7 @@ export class InteractionStorage extends Context.Service<
               WHERE request_id = ${requestId}
                 AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
           },
-          Effect.mapError(mapError("Failed to resolve interaction request")),
+          Effect.mapError(storageError("Failed to resolve interaction request")),
         ),
 
         listPending: Effect.fn("InteractionStorage.listPending")(
@@ -174,7 +173,7 @@ export class InteractionStorage extends Context.Service<
             })
             return yield* Effect.forEach(rows, (row) => decodeRow(row))
           },
-          Effect.mapError(mapError("Failed to list pending interaction requests")),
+          Effect.mapError(storageError("Failed to list pending interaction requests")),
         ),
       })
     }),

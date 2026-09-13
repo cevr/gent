@@ -13,7 +13,7 @@ import {
   type LoopQueueState as LoopQueueStateType,
 } from "../runtime/agent/agent-loop.state.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
+import { type StorageError, storageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const LoopQueueStateJson = Schema.fromJsonString(LoopQueueState)
@@ -27,8 +27,6 @@ const emptyLoopQueueState = (): LoopQueueStateType => ({
   steering: [],
   followUp: [],
 })
-
-const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
 interface AgentLoopQueueStorageService {
   readonly getQueueState: (
@@ -65,7 +63,7 @@ export class AgentLoopQueueStorage extends Context.Service<
             const row = yield* decodeQueueRow(rawRows[0])
             return yield* decodeLoopQueueState(row.queue_json)
           },
-          Effect.mapError(mapError("Failed to get agent loop queue")),
+          Effect.mapError(storageError("Failed to get agent loop queue")),
         ),
 
         putQueueState: Effect.fn("AgentLoopQueueStorage.putQueueState")(
@@ -79,7 +77,7 @@ export class AgentLoopQueueStorage extends Context.Service<
                 queue_json = excluded.queue_json,
                 updated_at = excluded.updated_at`
           },
-          Effect.mapError(mapError("Failed to put agent loop queue")),
+          Effect.mapError(storageError("Failed to put agent loop queue")),
         ),
       } satisfies AgentLoopQueueStorageService
     }),

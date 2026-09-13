@@ -5,7 +5,6 @@
  */
 
 import { Clock, Context, Effect, Layer, Option, Predicate, Schema } from "effect"
-import { Model } from "effect/unstable/schema"
 import {
   EventEnvelope,
   EventId,
@@ -14,9 +13,9 @@ import {
   type AgentEvent,
   type AgentEventTag,
 } from "../domain/event.js"
-import { BranchId, SessionId, type MessageId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
-import { SqlClient, SqlModel } from "effect/unstable/sql"
+import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
+import { SqlClient } from "effect/unstable/sql"
 import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
@@ -63,20 +62,6 @@ const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(func
   )
 })
 
-class EventTable extends Model.Class<EventTable>("EventTable")({
-  id: Model.Field({
-    select: EventId,
-    update: EventId,
-    json: EventId,
-  }),
-  session_id: SessionId,
-  branch_id: Schema.NullOr(BranchId),
-  event_tag: Schema.String,
-  event_json: Schema.String,
-  created_at: Schema.Finite,
-  trace_id: Schema.NullOr(Schema.String),
-}) {}
-
 interface EventStorageService {
   readonly appendEvent: (
     event: AgentEvent,
@@ -108,17 +93,11 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
     EventStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const eventRepository = yield* SqlModel.makeRepository(EventTable, {
-        tableName: "events",
-        spanPrefix: "EventStorage",
-        idColumn: "id",
-      })
-      const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
       const mapEventStorageError = (message: string) => (cause: unknown) => {
         if (isEventDecodeError(cause)) {
           return cause
         }
-        return mapError(message)(cause)
+        return storageError(message)(cause)
       }
 
       return {
@@ -142,22 +121,26 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             const createdAt = yield* Clock.currentTimeMillis
             const traceId = options?.traceId
             const eventJson = yield* encodeEvent(event)
-            const row = yield* eventRepository.insert({
+            const inserted = yield* sql<{ id: number }>`INSERT INTO events ${sql.insert({
               session_id: sessionId,
               branch_id: toSqlNull(branchId),
               event_tag: event._tag,
               event_json: eventJson,
               created_at: createdAt,
               trace_id: toSqlNull(traceId),
-            })
+            })} RETURNING id`
+            const row = inserted[0]
+            if (Predicate.isUndefined(row)) {
+              return yield* new StorageError({ message: "Event insert returned no id" })
+            }
             return EventEnvelope.make({
-              id: row.id,
+              id: EventId.make(row.id),
               event,
               createdAt,
               traceId,
             })
           },
-          Effect.mapError(mapError("Failed to append event")),
+          Effect.mapError(storageError("Failed to append event")),
         ),
         listEvents: Effect.fn("EventStorage.listEvents")(
           function* ({ sessionId, branchId, afterId }) {
@@ -226,7 +209,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             const row = yield* decodeLatestEventIdRow(rawRows[0])
             return row.id
           },
-          Effect.mapError(mapError("Failed to get latest event id")),
+          Effect.mapError(storageError("Failed to get latest event id")),
         ),
 
         getLatestEvent: Effect.fn("EventStorage.getLatestEvent")(

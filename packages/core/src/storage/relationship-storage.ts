@@ -7,7 +7,7 @@
 import { Predicate, Context, Effect, Layer } from "effect"
 import type { Session, Branch, Message } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
 import {
   branchFromRow,
@@ -51,7 +51,6 @@ export class RelationshipStorage extends Context.Service<
     RelationshipStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       return {
         getChildSessions: Effect.fn("RelationshipStorage.getChildSessions")(
@@ -61,7 +60,7 @@ export class RelationshipStorage extends Context.Service<
               yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} AND workspace_id = ${workspaceId} ORDER BY created_at ASC`
             return yield* Effect.forEach(rows, sessionFromRow)
           },
-          Effect.mapError(mapError("Failed to get child sessions")),
+          Effect.mapError(storageError("Failed to get child sessions")),
         ),
 
         getSessionAncestors: Effect.fn("RelationshipStorage.getSessionAncestors")(
@@ -82,7 +81,7 @@ export class RelationshipStorage extends Context.Service<
           ORDER BY depth ASC`
             return yield* Effect.forEach(rows, sessionFromRow)
           },
-          Effect.mapError(mapError("Failed to get session ancestors")),
+          Effect.mapError(storageError("Failed to get session ancestors")),
         ),
 
         getSessionDetail: Effect.fn("RelationshipStorage.getSessionDetail")(
@@ -151,7 +150,7 @@ export class RelationshipStorage extends Context.Service<
 
             return { session, branches: result }
           },
-          Effect.mapError(mapError("Failed to get session detail")),
+          Effect.mapError(storageError("Failed to get session detail")),
         ),
       } satisfies RelationshipStorageService
     }),

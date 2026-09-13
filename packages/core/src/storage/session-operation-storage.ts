@@ -2,7 +2,7 @@ import { Predicate, Context, DateTime, Effect, Layer, Option, Schema } from "eff
 import { SqlClient } from "effect/unstable/sql"
 import { AgentName, RunSpecSchema, DEFAULT_MAX_CHILD_MODEL_ATTEMPTS } from "../domain/agent.js"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const START_AGENT_OPERATION = "agent.start"
@@ -134,7 +134,6 @@ export class SessionOperationStorage extends Context.Service<
     SessionOperationStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       const getOperation = Effect.fn("SessionOperationStorage.getOperation")(function* <A>(
         operation: string,
@@ -247,7 +246,7 @@ export class SessionOperationStorage extends Context.Service<
               RETURNING request_id`
             return Option.some(reserved.length === 1)
           },
-          Effect.mapError(mapError("Failed to reserve child model attempt")),
+          Effect.mapError(storageError("Failed to reserve child model attempt")),
         ),
         countPendingAgentStarts: Effect.fn("SessionOperationStorage.countPendingAgentStarts")(
           function* (parent) {
@@ -269,7 +268,7 @@ export class SessionOperationStorage extends Context.Service<
             )
             return row.pending
           },
-          Effect.mapError(mapError("Failed to count pending agent starts")),
+          Effect.mapError(storageError("Failed to count pending agent starts")),
         ),
         cancelTurn: Effect.fn("SessionOperationStorage.cancelTurn")(
           function* (address) {
@@ -300,7 +299,7 @@ export class SessionOperationStorage extends Context.Service<
               })
             }
           },
-          Effect.mapError(mapError("Failed to record turn cancellation")),
+          Effect.mapError(storageError("Failed to record turn cancellation")),
         ),
         isTurnCancelled: Effect.fn("SessionOperationStorage.isTurnCancelled")(
           function* (address) {
@@ -314,7 +313,7 @@ export class SessionOperationStorage extends Context.Service<
               LIMIT 1`
             return rows.length > 0
           },
-          Effect.mapError(mapError("Failed to read turn cancellation")),
+          Effect.mapError(storageError("Failed to read turn cancellation")),
         ),
         listAgentStarts: Effect.fn("SessionOperationStorage.listAgentStarts")(
           function* (parent) {
@@ -354,7 +353,7 @@ export class SessionOperationStorage extends Context.Service<
               ),
             )
           },
-          Effect.mapError(mapError("Failed to list agent-start receipts")),
+          Effect.mapError(storageError("Failed to list agent-start receipts")),
         ),
         getAgentStart: Effect.fn("SessionOperationStorage.getAgentStart")(
           (requestId) =>
@@ -363,7 +362,7 @@ export class SessionOperationStorage extends Context.Service<
               requestId,
               Schema.decodeUnknownEffect(StoredAgentStartResultJson),
             ).pipe(Effect.map(Option.fromUndefinedOr)),
-          Effect.mapError(mapError("Failed to get agent-start receipt")),
+          Effect.mapError(storageError("Failed to get agent-start receipt")),
         ),
         saveAgentStart: Effect.fn("SessionOperationStorage.saveAgentStart")(
           (requestId, result) =>
@@ -374,7 +373,7 @@ export class SessionOperationStorage extends Context.Service<
               Schema.encodeEffect(StoredAgentStartResultJson),
               { sessionId: result.input.parentSessionId, branchId: result.input.parentBranchId },
             ),
-          Effect.mapError(mapError("Failed to save agent-start receipt")),
+          Effect.mapError(storageError("Failed to save agent-start receipt")),
         ),
         getReceipt: Effect.fn("SessionOperationStorage.getReceipt")(
           function* <A>(operation: DurableOperation<A>, requestId: RequestId) {
@@ -384,7 +383,7 @@ export class SessionOperationStorage extends Context.Service<
               Schema.decodeUnknownEffect(operation.json),
             )
           },
-          Effect.mapError(mapError("Failed to get operation receipt")),
+          Effect.mapError(storageError("Failed to get operation receipt")),
         ),
 
         saveReceipt: Effect.fn("SessionOperationStorage.saveReceipt")(
@@ -402,7 +401,7 @@ export class SessionOperationStorage extends Context.Service<
               subject,
             )
           },
-          Effect.mapError(mapError("Failed to save operation receipt")),
+          Effect.mapError(storageError("Failed to save operation receipt")),
         ),
       } satisfies SessionOperationStorageService
     }),

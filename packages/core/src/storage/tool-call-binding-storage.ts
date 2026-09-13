@@ -10,7 +10,7 @@ import {
   type ToolCallBindingKey,
 } from "../domain/tool-binding.js"
 import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const ToolCallBindingRow = Schema.Struct({
@@ -42,17 +42,9 @@ interface ToolCallBindingStorageService {
 }
 
 const mapStorageError = (message: string) => (cause: unknown) => {
-  if (Schema.is(StorageError)(cause)) return cause
   if (Schema.is(ToolCallBindingConflictError)(cause)) return cause
-  return new StorageError({ message, cause })
+  return storageError(message)(cause)
 }
-
-const mapReadError =
-  (message: string) =>
-  (cause: unknown): StorageError => {
-    if (Schema.is(StorageError)(cause)) return cause
-    return new StorageError({ message, cause })
-  }
 
 export class ToolCallBindingStorage extends Context.Service<
   ToolCallBindingStorage,
@@ -176,10 +168,10 @@ export class ToolCallBindingStorage extends Context.Service<
           // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
           if (Predicate.isUndefined(row)) return undefined
           const decoded = yield* Schema.decodeEffect(ToolCallBindingRow)(row).pipe(
-            Effect.mapError(mapReadError("Failed to decode stored tool call binding row")),
+            Effect.mapError(storageError("Failed to decode stored tool call binding row")),
           )
           const binding = yield* decodeToolBindingIdentity(decoded.binding_json).pipe(
-            Effect.mapError(mapReadError("Failed to decode stored tool binding identity")),
+            Effect.mapError(storageError("Failed to decode stored tool binding identity")),
           )
           const toolName = yield* loadOwnedCall(params)
           if (Predicate.isUndefined(toolName) || toolName !== binding.toolId) {
@@ -188,7 +180,7 @@ export class ToolCallBindingStorage extends Context.Service<
             })
           }
           return binding
-        }).pipe(Effect.mapError(mapReadError("Failed to load tool call binding")))
+        }).pipe(Effect.mapError(storageError("Failed to load tool call binding")))
       })
 
       return ToolCallBindingStorage.of({ save, get })

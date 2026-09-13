@@ -4,23 +4,13 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Context, Effect, Layer, Predicate, Schema } from "effect"
-import { Model } from "effect/unstable/schema"
+import { Context, Effect, Layer, Predicate } from "effect"
 import type { Branch } from "../domain/message.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { StorageError } from "../domain/storage-error.js"
-import { SqlClient, SqlModel } from "effect/unstable/sql"
+import type { BranchId, SessionId } from "../domain/ids.js"
+import { StorageError, storageError } from "../domain/storage-error.js"
+import { SqlClient } from "effect/unstable/sql"
 import { branchFromRow, toSqlNull, type BranchRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
-
-class BranchTable extends Model.Class<BranchTable>("BranchTable")({
-  id: Model.GeneratedByApp(BranchId),
-  session_id: SessionId,
-  parent_branch_id: Schema.NullOr(BranchId),
-  parent_message_id: Schema.NullOr(MessageId),
-  name: Schema.NullOr(Schema.String),
-  created_at: Schema.Finite,
-}) {}
 
 export interface BranchStorageService {
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
@@ -41,12 +31,6 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
     BranchStorage,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const branchRepository = yield* SqlModel.makeRepository(BranchTable, {
-        tableName: "branches",
-        spanPrefix: "BranchStorage",
-        idColumn: "id",
-      })
-      const mapError = (message: string) => (cause: unknown) => new StorageError({ message, cause })
 
       return {
         createBranch: Effect.fn("BranchStorage.createBranch")(
@@ -76,17 +60,17 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
                 })
               }
             }
-            yield* branchRepository.insertVoid({
+            yield* sql`INSERT INTO branches ${sql.insert({
               id: branch.id,
               session_id: branch.sessionId,
               parent_branch_id: toSqlNull(branch.parentBranchId),
               parent_message_id: toSqlNull(branch.parentMessageId),
               name: toSqlNull(branch.name),
               created_at: branch.createdAt.getTime(),
-            })
+            })}`
             return branch
           },
-          Effect.mapError(mapError("Failed to create branch")),
+          Effect.mapError(storageError("Failed to create branch")),
         ),
 
         getBranch: Effect.fn("BranchStorage.getBranch")(
@@ -102,7 +86,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             if (Predicate.isUndefined(row)) return undefined
             return yield* branchFromRow(row)
           },
-          Effect.mapError(mapError("Failed to get branch")),
+          Effect.mapError(storageError("Failed to get branch")),
         ),
 
         listBranches: Effect.fn("BranchStorage.listBranches")(
@@ -116,7 +100,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
               ORDER BY b.created_at ASC`
             return yield* Effect.forEach(rows, branchFromRow)
           },
-          Effect.mapError(mapError("Failed to list branches")),
+          Effect.mapError(storageError("Failed to list branches")),
         ),
 
         countMessagesByBranches: Effect.fn("BranchStorage.countMessagesByBranches")(
@@ -138,7 +122,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             }
             return result
           },
-          Effect.mapError(mapError("Failed to count messages by branches")),
+          Effect.mapError(storageError("Failed to count messages by branches")),
         ),
       } satisfies BranchStorageService
     }),

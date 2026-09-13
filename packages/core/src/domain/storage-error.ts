@@ -18,3 +18,9 @@ export class StorageError extends Schema.TaggedError<StorageError>()("StorageErr
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
+
+/** Wrap a raw failure as a StorageError; a StorageError passes through unchanged. */
+export const storageError = (message: string) => (cause: unknown) => {
+  if (Schema.is(StorageError)(cause)) return cause
+  return new StorageError({ message, cause })
+}
