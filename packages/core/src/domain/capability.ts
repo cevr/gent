@@ -101,6 +101,8 @@ export interface RequestCapability {
   readonly effect: unknown
   readonly slash?: unknown
   readonly description?: string
+  /** Answers during a turn: runs without the loop's mutation permit. Must not change loop state. */
+  readonly readonly?: boolean
   readonly ref: unknown
 }
 

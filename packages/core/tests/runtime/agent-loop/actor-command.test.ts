@@ -303,6 +303,59 @@ describe("agent-loop actor commands", () => {
     }),
   )
 
+  it.live("a read-only request answers while the turn holds the mutation permit", () =>
+    Effect.gen(function* () {
+      const streamStarted = yield* Deferred.make<void>()
+      const streamReleased = yield* Deferred.make<void>()
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.gen(function* () {
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(streamStarted, undefined)
+          yield* Deferred.await(streamReleased)
+          return Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies LanguageModelStreamPart[])
+        }),
+      )
+      const readProbe = request({
+        id: "read-probe",
+        readonly: true,
+        input: Schema.String,
+        output: Schema.String,
+        execute: (value: string) => Effect.succeed(`read ${value}`),
+      })
+      const layer = makeRuntimeLayer(providerLayer, [], [readProbe])
+      yield* narrowR(
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createSessionBranch
+          const submitFiber = yield* Effect.forkChild(
+            sessionRuntime.sendUserMessage({
+              sessionId,
+              branchId,
+              content: "hold the turn open",
+            }),
+          )
+          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
+          // The turn still owns the permit, and the read does not need it.
+          const result = yield* requestExtensionViaActor({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("request-read-during-turn"),
+            capabilityId: "read-probe",
+            input: "mid-turn",
+          }).pipe(Effect.timeout("2 seconds"))
+          expect(result).toEqual("read mid-turn")
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(streamReleased, undefined)
+          yield* Fiber.join(submitFiber)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
+      )
+    }),
+  )
+
   it.live("TerminateBranch interrupts an active turn while a side mutation is waiting", () =>
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()

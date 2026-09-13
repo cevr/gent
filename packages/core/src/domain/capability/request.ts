@@ -70,6 +70,12 @@ export interface RequestInput<Input = unknown, Output = unknown, R = never> {
   readonly prompt?: PromptSection
   /** Human-readable description for registry/listing surfaces. */
   readonly description?: string
+  /**
+   * A read-only request answers while a turn is running: it skips the loop's
+   * mutation permit, which the running turn otherwise holds until it ends. It
+   * must not change loop state. Default: the request waits for the turn.
+   */
+  readonly readonly?: boolean
   /** Optional slash-command presentation for public transport clients. */
   readonly slash?: {
     /** Slash trigger without the leading `/`. Defaults to `id`. */
@@ -98,6 +104,7 @@ export function request(input: {
   readonly output: Schema.Codec<unknown, unknown, never, never>
   readonly prompt?: PromptSection
   readonly description?: string
+  readonly readonly?: boolean
   readonly slash?: RequestInput<unknown, unknown>["slash"]
   // oxlint-disable-next-line effect/noUnknownParameters -- Implementation overload accepts the erased runtime payload before schema dispatch.
   readonly execute: (input: unknown) => Effect.Effect<unknown, CapabilityError, unknown>
@@ -134,6 +141,7 @@ export function request(input: {
     id: rpcId,
     slash: input.slash,
     description: input.description,
+    readonly: input.readonly,
     input: input.input,
     output: input.output,
     prompt: input.prompt,

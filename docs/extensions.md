@@ -239,6 +239,11 @@ export default defineExtension({
 })
 ```
 
+A request waits for the session's running turn: the turn holds the loop's
+mutation permit until it ends, and a request is a side mutation until it says
+otherwise. A request that only reads declares `readonly: true` and answers
+mid-turn; it must not change loop state.
+
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect
 services; authors import the smallest service Tag they need rather than

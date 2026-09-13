@@ -867,23 +867,24 @@ export const buildAgentLoopActorHandlers = (config: {
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             const handle = yield* ensureStarted
-            return yield* Effect.gen(function* () {
-              const environment = yield* handle.resolveTurnProfile
-              const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
-              let input: unknown = Option.getOrUndefined(Option.none())
-              if (operation.input._tag === "Present") input = operation.input.value
-              const staticRequest = rpcRegistry.run(
-                operation.extensionId,
-                RpcId.make(operation.capabilityId),
-                input,
-              )
-              return yield* runExtensionRequest(environment, staticRequest).pipe(
-                // Branch Resources live on the loop scope, not on the turn
-                // profile. Without this an extension leaf reached over RPC
-                // cannot see a `scope: "branch"` service.
-                Effect.provideContext(handle.branchContext),
-              )
-            }).pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
+            const environment = yield* handle.resolveTurnProfile
+            const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
+            const capabilityId = RpcId.make(operation.capabilityId)
+            let input: unknown = Option.getOrUndefined(Option.none())
+            if (operation.input._tag === "Present") input = operation.input.value
+            const run = runExtensionRequest(
+              environment,
+              rpcRegistry.run(operation.extensionId, capabilityId, input),
+            ).pipe(
+              // Branch Resources live on the loop scope, not on the turn
+              // profile. Without this an extension leaf reached over RPC
+              // cannot see a `scope: "branch"` service.
+              Effect.provideContext(handle.branchContext),
+            )
+            // A read-only request answers while a turn runs; anything else is
+            // a side mutation and waits for the permit the turn holds.
+            if (rpcRegistry.isReadonly(operation.extensionId, capabilityId)) return yield* run
+            return yield* run.pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
