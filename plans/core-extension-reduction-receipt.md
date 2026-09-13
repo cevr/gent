@@ -776,3 +776,13 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   the orchestrator in `.gent/config.json` and writes the worker and reviewer
   roster into `AGENTS.md`, which the orchestrator must pass as `delegate`
   overrides.
+- Gamut run (sol-luna, 2026-09-13): orchestrator on `openai/gpt-5.6-sol`,
+  six workers on `openai/gpt-5.6-luna` plus two follow-ups, all six README
+  tasks landed: 18 tests pass, typecheck clean, orchestrator report per task.
+  The first attempt fanned out to 20 children: `@gent/instructions` puts the
+  same `AGENTS.md` in front of every child, and "you are the orchestrator"
+  made each worker delegate again. The testbed now defines the role by tool
+  presence and every roster entry passes `overrides.deniedTools` for the
+  delegation tools. Harness candidate: a delegated child should lose the
+  delegation tools by default (prime-agent gives subagents no spawn tool),
+  so a project prompt cannot recurse.
