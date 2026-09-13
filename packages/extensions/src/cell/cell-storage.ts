@@ -11,12 +11,11 @@ import {
   type BranchToolFeature,
   type BranchToolLayerFactory,
   type FeatureMigrations,
-  InnerOperationReceipts,
   type InteractionStorage,
-  RetainedBindings,
   type ToolCallRecoveryService,
   eraseResourceLayer,
 } from "@gent/core/extensions/branch-tools"
+import { InnerOperationReceipts, RetainedBindings } from "../compaction/tool-contracts.js"
 import { Effect, Layer, Option } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { CellExecution } from "./cell-execution.js"

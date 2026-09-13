@@ -3,7 +3,7 @@
  *
  * Core is the loop. A feature such as the code cell is an extension of the
  * loop, so core carries it through agnostic seams -- `BranchToolFeature`,
- * `InnerOperationReceipts`, `ToolCallRecoveryService` -- and never imports it.
+ * `ToolCallRecoveryService`, `ModelContextCompactor` -- and never imports it.
  *
  * No site is exempt. Core takes a `BranchToolFeature` as input, and every
  * composition root that names a concrete one -- `apps/server`, the SDK, the

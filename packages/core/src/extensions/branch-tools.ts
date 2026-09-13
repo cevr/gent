@@ -54,8 +54,6 @@ export { StorageError } from "../domain/storage-error.js"
 export { EventStoreError } from "../domain/event.js"
 
 // The questions core asks a dispatching feature.
-export { InnerOperationReceipts } from "../domain/inner-operation-receipts.js"
-export { RetainedBindings } from "../domain/retained-bindings.js"
 export {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
@@ -110,7 +108,6 @@ export { Message } from "../domain/message.js"
 export { type Usage, UsageSchema } from "../domain/event.js"
 export { type ProviderAuthError } from "../domain/driver.js"
 export { type ProviderError } from "../domain/provider-error.js"
-export { type InnerOperation } from "../domain/inner-operation-receipts.js"
 export { responseUsage } from "../domain/response-to-prompt.js"
 export { toPrompt } from "../providers/ai-transcript.js"
 

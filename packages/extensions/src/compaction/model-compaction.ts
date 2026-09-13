@@ -29,8 +29,6 @@ import { BranchId, MessageId, type ModelId, SessionId, ToolCallId } from "@gent/
 import {
   type CompactionRequest,
   type EventStoreError,
-  type InnerOperation,
-  InnerOperationReceipts,
   Message,
   MessageStorage,
   ModelCompactionError,
@@ -45,13 +43,13 @@ import {
   type ProviderAuthError,
   type ProviderError,
   responseUsage,
-  RetainedBindings,
   type RevisionHash,
   type StorageError,
   type SummaryPersister,
   toPrompt,
   type Usage,
 } from "@gent/core/extensions/branch-tools"
+import { type InnerOperation, InnerOperationReceipts, RetainedBindings } from "./tool-contracts.js"
 import {
   type CompactionPaths,
   isCompactionDetails,

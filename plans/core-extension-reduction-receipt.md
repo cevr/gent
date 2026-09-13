@@ -1193,3 +1193,12 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   owned server and `apps/server` both seeded it for `--debug`. Both roots
   already import `@gent/sdk`, so the seeder lives there and the SDK exports
   `seedDebugSession`. Core loses a debug scenario it never ran.
+
+## Compaction's questions to tools are the extension's (2026-09-13)
+
+- `domain/inner-operation-receipts.ts` and `domain/retained-bindings.ts`
+  declared two Tags no core file yields. The cell extension provides them
+  from its branch layer and the compaction extension reads them by
+  `serviceOption`. The seam is between two extensions, so the contract lives
+  with the asker: `extensions/src/compaction/tool-contracts.ts`. Core loses
+  66 lines and two names from the `branch-tools` barrel.
