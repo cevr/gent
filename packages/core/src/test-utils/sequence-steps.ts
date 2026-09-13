@@ -1,22 +1,16 @@
 /**
  * Test step builders for scripted language-model sequences.
  *
- * `test-utils/language-model` owns the low-level Effect AI stream-part
- * helpers and language-model layers. This module only defines the
- * higher-level scripting helpers that compose those parts into a single
- * `SequenceStep`.
+ * `language-model` owns the low-level Effect AI stream-part helpers and
+ * language-model layers. This module composes those parts into single
+ * `SequenceStep`s.
  *
  * @module
  */
 
 import { ToolCallId } from "../domain/ids.js"
 import type { Schema } from "effect"
-import {
-  finishPart,
-  type SequenceStep,
-  textDeltaPart,
-  toolCallPart,
-} from "../test-utils/language-model.js"
+import { finishPart, type SequenceStep, textDeltaPart, toolCallPart } from "./language-model.js"
 
 let _stepCallIdCounter = 0
 const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import { ToolCallId } from "../../src/domain/ids"
 import { ModelId } from "../../src/domain/model"
 import { AgentName } from "../../src/domain/agent"

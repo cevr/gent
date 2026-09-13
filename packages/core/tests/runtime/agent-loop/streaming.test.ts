@@ -18,7 +18,7 @@ import {
   textDeltaPart,
 } from "../../../src/test-utils/language-model"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { textStep } from "../../../src/debug/provider"
+import { textStep } from "../../../src/test-utils/sequence-steps"
 import {
   AgentEvent,
   EventEnvelope,

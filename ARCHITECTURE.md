@@ -974,7 +974,6 @@ tests/
 ├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
 ├── storage/       # sqlite-storage, search-storage
-├── debug/         # sequence-provider
 └── test-utils/    # sequence
 ```
 

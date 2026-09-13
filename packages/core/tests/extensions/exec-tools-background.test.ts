@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { toolCallStep, textStep } from "../../src/debug/provider"
+import { toolCallStep, textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { ensureStorageParents } from "../../src/test-utils"

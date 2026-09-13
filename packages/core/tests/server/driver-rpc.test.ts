@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Effect } from "effect"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   AgentName,

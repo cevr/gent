@@ -50,7 +50,7 @@ import { CurrentToolCall } from "@gent/core-internal/runtime/agent/current-tool-
 import { toolResultMessageIdForTurn } from "@gent/core-internal/runtime/agent/agent-loop.utils.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import { textStep } from "@gent/core-internal/debug/provider.js"
+import { textStep } from "@gent/core-internal/test-utils/sequence-steps.js"
 
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,

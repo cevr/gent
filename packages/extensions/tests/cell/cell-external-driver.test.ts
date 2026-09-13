@@ -10,7 +10,7 @@ import { messageSingleText } from "@gent/core-internal/domain/message-part-displ
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
-import { textStep } from "@gent/core-internal/debug/provider.js"
+import { textStep } from "@gent/core-internal/test-utils/sequence-steps.js"
 import {
   finishPart,
   LanguageModelLayers,

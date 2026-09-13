@@ -7,7 +7,7 @@ import { ActorCommandId, BranchId, MessageId, SessionId } from "../../src/domain
 import { Model, ModelId, ProviderId } from "../../src/domain/model"
 import { dateFromMillis, Branch, Message, Session } from "../../src/domain/message"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import {
   ModelCompactionError,
   ModelCompactionFailure,

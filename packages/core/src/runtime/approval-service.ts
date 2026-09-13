@@ -9,7 +9,6 @@
  */
 
 import { Context, Effect, Layer, Option } from "effect"
-import { isRecord } from "../domain/guards.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { EventStoreError, InteractionPresented } from "../domain/event.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
@@ -36,29 +35,6 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
     storage: InteractionStorageConfig,
   ): Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> =>
     Layer.effect(ApprovalService, makeApprovalInteractionService(storage))
-
-  /** Auto-resolves all approval requests without human interaction.
-   *  - ask-user requests → cancelled (don't fabricate user answers)
-   *  - all other requests (approval, confirm, review) → approved */
-  static LiveAutoResolve: Layer.Layer<ApprovalService> = Layer.succeed(
-    ApprovalService,
-    ApprovalService.of({
-      present: (params) => {
-        const meta = Option.fromUndefinedOr(params.metadata).pipe(Option.filter(isRecord))
-        const isAskUser = Option.match(meta, {
-          onNone: () => false,
-          onSome: (value) => value["type"] === "ask-user",
-        })
-        if (isAskUser) return Effect.succeed({ approved: false })
-        return Effect.succeed({ approved: true })
-      },
-      pendingRequestId: () =>
-        Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
-      storeResolution: () => Effect.void,
-      respond: () => Effect.void,
-      rehydrate: () => Effect.void,
-    }),
-  )
 
   static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
     const queue = [...(decisions ?? [{ approved: true }])]

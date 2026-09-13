@@ -118,7 +118,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeToolCall({
         id: asToolCallId("dbg-write"),
         name: "write",
-        params: { path: `${cwd}/packages/core/src/debug/session.ts` },
+        params: { path: `${cwd}/packages/core/src/test-utils/debug-session.ts` },
       }),
     ],
     createdAt: nowPlus(-47_000),
@@ -166,7 +166,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         newString: "<ToolFrame />",
       }),
       makeJsonResult(asToolCallId("dbg-write"), "write", {
-        path: `${cwd}/packages/core/src/debug/session.ts`,
+        path: `${cwd}/packages/core/src/test-utils/debug-session.ts`,
         bytesWritten: 7421,
       }),
     ],

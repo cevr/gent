@@ -18,7 +18,7 @@ import {
 import { SingleRunner } from "effect/unstable/cluster"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { ModelResolver } from "../../src/providers/model-resolver"
-import { textStep, toolCallStep } from "../../src/debug/provider"
+import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import {

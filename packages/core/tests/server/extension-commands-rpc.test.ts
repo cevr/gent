@@ -20,7 +20,7 @@ import {
   type GentExtension,
   type LoadedExtension,
 } from "../../src/domain/extension.js"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { messageSingleText } from "../../src/domain/message-part-display"

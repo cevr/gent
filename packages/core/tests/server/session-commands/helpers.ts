@@ -1,6 +1,6 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { ExtensionContext, hook } from "@gent/core/extensions/api"
-import { textStep } from "../../../src/debug/provider"
+import { textStep } from "../../../src/test-utils/sequence-steps"
 import { ExtensionRegistry } from "../../../src/runtime/extensions/registry.js"
 import type { BranchId, SessionId } from "../../../src/domain/ids"
 import { ExtensionId } from "../../../src/domain/ids"

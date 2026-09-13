@@ -4,7 +4,7 @@ import { ExtensionHost, defineExtension, defineResource, request } from "@gent/c
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import { ExtensionId } from "../../src/domain/ids"
 
 class BranchCounter extends Context.Service<BranchCounter, { readonly instance: number }>()(

@@ -34,7 +34,6 @@ const EXEMPT_PREFIXES: ReadonlyArray<string> = [
   "packages/core/src/extensions/",
   "packages/core/src/protocol.ts",
   "packages/core/src/test-utils/",
-  "packages/core/src/debug/",
 ]
 
 const DECLARATION =

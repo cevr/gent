@@ -17,7 +17,7 @@ import {
   LanguageModelLayers,
   type SequenceStep,
 } from "@gent/core-internal/test-utils/language-model.js"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider.js"
+import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps.js"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
 import { shippedPreset } from "../helpers/test-preset.js"

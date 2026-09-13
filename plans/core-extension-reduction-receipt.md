@@ -1056,3 +1056,14 @@ messageId)` returns when the loop no longer holds the message (not starting,
   override, the three root restatements, and the `@ff-labs/fff-bun` dependency
   leave core. Tests moved to `packages/extensions/tests/fs-tools/file-index.test.ts`;
   the grep test provides the fallback layer directly.
+
+## Fixtures live in test-utils (2026-09-13)
+
+- `debug/provider.ts` (step builders for `LanguageModelLayers.sequence`) and
+  `debug/session.ts` (`seedDebugSession`, a storage fixture behind
+  `--debug`) were a third top-level core directory that the dead-export
+  guard already exempted as test helpers. They are now
+  `test-utils/sequence-steps.ts` and `test-utils/debug-session.ts`; the
+  46 importers name the new paths and the `debug/` exemption is gone.
+- `ApprovalService.LiveAutoResolve` had no caller anywhere in the repo
+  (22 lines, a fourth way to build the one service). Deleted.

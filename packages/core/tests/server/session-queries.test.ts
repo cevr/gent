@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer, Ref, Stream } from "effect"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { BranchId, SessionId } from "../../src/domain/ids"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"

@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "../../src/debug/provider"
+import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { Gent, extractText } from "@gent/sdk"

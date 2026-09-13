@@ -5,7 +5,7 @@ import {
   toolCallStep,
   textThenToolCallStep,
   multiToolCallStep,
-} from "../../src/debug/provider"
+} from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers, type SequenceStep } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/agent/tool-runner"
 import { LanguageModel } from "effect/unstable/ai"

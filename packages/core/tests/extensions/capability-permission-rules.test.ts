@@ -12,7 +12,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Ref, Stream, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { toolCallStep, textStep } from "../../src/debug/provider"
+import { toolCallStep, textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { ensureStorageParents } from "../../src/test-utils"

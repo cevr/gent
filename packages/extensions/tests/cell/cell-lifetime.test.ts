@@ -24,7 +24,11 @@ import {
   LanguageModelLayers,
   type SequenceStep,
 } from "@gent/core-internal/test-utils/language-model.js"
-import { multiToolCallStep, textStep, toolCallStep } from "@gent/core-internal/debug/provider.js"
+import {
+  multiToolCallStep,
+  textStep,
+  toolCallStep,
+} from "@gent/core-internal/test-utils/sequence-steps.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"

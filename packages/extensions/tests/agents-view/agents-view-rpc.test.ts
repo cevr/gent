@@ -10,7 +10,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { ref } from "@gent/core/extensions/api"
-import { textStep } from "@gent/core-internal/debug/provider"
+import { textStep } from "@gent/core-internal/test-utils/sequence-steps"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { AgentsViewExtension, AgentsViewRpc } from "../../src/agents-view/index.js"

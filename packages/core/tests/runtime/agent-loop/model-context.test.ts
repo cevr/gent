@@ -13,7 +13,7 @@ import {
   LanguageModelLayers,
   textDeltaPart,
 } from "../../../src/test-utils/language-model"
-import { multiToolCallStep, textStep } from "../../../src/debug/provider"
+import { multiToolCallStep, textStep } from "../../../src/test-utils/sequence-steps"
 import { tool } from "@gent/core/extensions/api"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { ensureStorageParents } from "../../../src/test-utils"

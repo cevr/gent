@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Schema, Stream } from "effect"
-import { textStep, toolCallStep } from "@gent/core-internal/debug/provider"
+import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"

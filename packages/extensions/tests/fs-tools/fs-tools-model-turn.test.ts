@@ -5,7 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
-import { toolCallStep } from "@gent/core-internal/debug/provider"
+import { toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { AgentsExtension } from "../../src/agents.js"
