@@ -29,7 +29,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import {
-  estimateSystemPromptTokens,
+  estimateTextTokens,
   estimateToolSchemaTokens,
   MODEL_OUTPUT_RESERVE_TOKENS,
   ModelContextBudget,
@@ -359,7 +359,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   }
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
-    reservedSystemTokens: estimateSystemPromptTokens(resolved.systemPrompt),
+    reservedSystemTokens: estimateTextTokens(resolved.systemPrompt),
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
     reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
   })

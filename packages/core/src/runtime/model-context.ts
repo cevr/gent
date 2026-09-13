@@ -9,7 +9,8 @@ export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
-const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
+/** ~4 chars per token, the estimate every budget in the projection shares. */
+export const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
 
 /** Estimate the tokens occupied by a run of messages: ~4 chars per token. */
 export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
@@ -37,10 +38,6 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
   }
   return Math.ceil(chars / 4)
 }
-
-/** Estimate the tokens occupied by the resolved system prompt. */
-export const estimateSystemPromptTokens = (systemPrompt: string): number =>
-  estimateTextTokens(systemPrompt)
 
 /**
  * Estimate the tokens occupied by the tool definitions sent to the provider.

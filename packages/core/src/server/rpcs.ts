@@ -29,7 +29,7 @@ import {
   SetDriverOverrideInput,
   SlashCommandInfo,
 } from "./transport-contract.js"
-import { WorkspaceHeaderError, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 
 // ============================================================================
 // Runtime status
@@ -90,7 +90,7 @@ class AuthRpcs extends RpcGroup.make(
 // Extension + driver + model + permission
 // ============================================================================
 
-export class ExtensionRpcs extends RpcGroup.make(
+class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("extension.request", {
     payload: ExtensionRpcRequestInput.fields,
     success: Schema.Unknown,
@@ -131,47 +131,6 @@ export class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
 ) {}
-
-// Re-export sub-groups for handler wiring
-export { SessionRpcs, WorkspaceHeaderError, WorkspaceRpcMiddleware }
-
-// Re-export transport contract schemas (consumed by SDK + tests)
-export {
-  CreateSessionInput,
-  Session,
-  Branch,
-  CreateBranchInput,
-  SwitchBranchInput,
-  ForkBranchInput,
-  SendMessageInput,
-  GetSessionSnapshotInput,
-  SessionSnapshot,
-  SteerCommand,
-  QueueTarget,
-  QueueSnapshot,
-  SubscribeEventsInput,
-  RespondInteractionInput,
-  UpdateSessionReasoningLevelInput,
-  DeletePermissionRuleInput,
-  ListAuthProvidersInput,
-  SetAuthKeyInput,
-  DeleteAuthKeyInput,
-  ListAuthMethodsSuccess,
-  AuthorizeAuthInput,
-  AuthorizeAuthSuccess,
-  CallbackAuthInput,
-  AuthProviderInfo,
-  EventEnvelope,
-  DriverInfo,
-  DriverListResult,
-  SetDriverOverrideInput,
-  ClearDriverOverrideInput,
-  ExtensionActivationPhase,
-  ExtensionHealth,
-  ExtensionHealthSnapshot,
-  ExtensionHealthIssue,
-  ExtensionManifestInfo,
-} from "./transport-contract.js"
 
 // ============================================================================
 // Merged RPC Group

@@ -1336,3 +1336,18 @@ and `respondInteraction`, that yield the storage and runtime services they
 need; the handler calls them directly, `AppServicesLive` and its build step
 are gone, and the interaction input is the wire schema's type instead of a
 second interface.
+
+## Seventh pass, group E: names with no reader (2026-09-13)
+
+`server/rpcs.ts` re-exported 37 transport-contract schemas "for the SDK
+and tests"; every importer of the module named only `GentRpcs`, and the
+SDK reaches the same schemas through `protocol.ts`. The block is gone,
+`ExtensionRpcs` is file-private, and the guard immediately found two
+schemas (`ExtensionActivationPhase`, `ExtensionManifestInfo`) the block had
+been keeping alive; both are demoted. `hasAgentOverrides` guarded an early
+return whose slow path computes the same `AgentDefinition` (nine optional
+fields, no transforms), so the guard and the function are gone.
+`estimateSystemPromptTokens` was a rename of `estimateTextTokens`, which
+`estimateToolSchemaTokens` already called directly. The two handler
+aliases `cleanupLoop` and `currentRuntimeState` are inlined; `GetState`
+had already bypassed the second.

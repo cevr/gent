@@ -231,14 +231,12 @@ export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashComma
   capabilityId: Schema.String,
 }) {}
 
-export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
-export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type
+const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
 
-export const ExtensionManifestInfo = Schema.Struct({
+const ExtensionManifestInfo = Schema.Struct({
   id: Schema.String,
   version: Schema.optional(Schema.String),
 })
-export type ExtensionManifestInfo = typeof ExtensionManifestInfo.Type
 
 export const ExtensionHealthIssue = Schema.Union([
   Schema.TaggedStruct("activation-failed", {

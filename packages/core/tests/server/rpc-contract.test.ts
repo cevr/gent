@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Predicate, Effect, Schema } from "effect"
-import { GentRpcs, WorkspaceRpcMiddleware } from "../../src/server/rpcs"
+import { GentRpcs } from "../../src/server/rpcs"
+import { WorkspaceRpcMiddleware } from "../../src/server/workspace-rpc"
 import { SessionRpcs } from "../../src/server/rpcs/session"
 
 const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {

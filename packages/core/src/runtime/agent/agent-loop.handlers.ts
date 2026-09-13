@@ -216,19 +216,15 @@ export const buildAgentLoopActorHandlers = (config: {
     const closeBehavior = (loop: AgentLoopBehavior) =>
       closeBehaviorWithHeldStartupPermit(loop).pipe(startupSemaphore.withPermits(1))
 
-    const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
-
     /** A failed behavior call closes the loop before the error reaches the caller. */
     const orCleanup =
       (handle: AgentLoopBehavior) =>
       <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
         effect.pipe(
           Effect.catchEager((error) =>
-            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+            closeBehavior(handle).pipe(Effect.andThen(Effect.fail(error))),
           ),
         )
-
-    const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
     // Typed reentrant-only handle lookup. The only legitimate caller is the
     // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
@@ -293,7 +289,7 @@ export const buildAgentLoopActorHandlers = (config: {
         if (Option.isSome(start)) {
           yield* handle.startTurn(start.value).pipe(
             Effect.catchEager((error) => {
-              let cleanup = cleanupLoop
+              let cleanup = closeBehavior
               const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
                 Option.map(({ startupPermitHeld: held }) => held),
               )
@@ -564,7 +560,7 @@ export const buildAgentLoopActorHandlers = (config: {
     yield* Effect.addFinalizer(() =>
       Effect.flatMap(Ref.get(handleRef), (loop) => {
         if (Option.isNone(loop)) return Effect.void
-        return cleanupLoop(loop.value)
+        return closeBehavior(loop.value)
       }),
     )
 
@@ -594,7 +590,7 @@ export const buildAgentLoopActorHandlers = (config: {
     const currentRegisteredState = Effect.gen(function* () {
       yield* rejectIfTerminated
       const handle = yield* ensureStarted
-      return yield* currentRuntimeState(handle)
+      return yield* handle.runtimeState
     })
 
     const registeredStateChanges = Stream.unwrap(
@@ -687,7 +683,7 @@ export const buildAgentLoopActorHandlers = (config: {
         )
       }
       const handle = yield* ensureStarted
-      const projectedState = yield* currentRuntimeState(handle)
+      const projectedState = yield* handle.runtimeState
 
       switch (command._tag) {
         case "SwitchAgent":
@@ -761,7 +757,7 @@ export const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            const projectedState = yield* currentRuntimeState(handle)
+            const projectedState = yield* handle.runtimeState
             if (projectedState._tag !== "WaitingForInteraction") {
               const state = yield* handle.snapshot
               if (state._tag !== "WaitingForInteraction") {
@@ -922,7 +918,7 @@ export const buildAgentLoopActorHandlers = (config: {
             // via `ensureStarted`.
             const handle = yield* Ref.get(handleRef)
             if (Option.isSome(handle)) {
-              yield* cleanupLoop(handle.value)
+              yield* closeBehavior(handle.value)
             }
           }).pipe(provideActorWorkspace),
       ),

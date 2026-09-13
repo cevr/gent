@@ -34,17 +34,6 @@ export interface ResolvedTurnContext extends ResolvedTurn {
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
 }
 
-const hasAgentOverrides = (overrides: Option.Option<AgentRunOverrides>) =>
-  Option.match(overrides, {
-    onNone: () => false,
-    onSome: (value) =>
-      !Predicate.isUndefined(value.modelId) ||
-      !Predicate.isUndefined(value.allowedTools) ||
-      !Predicate.isUndefined(value.deniedTools) ||
-      !Predicate.isUndefined(value.reasoningEffort) ||
-      !Predicate.isUndefined(value.systemPromptAddendum),
-  })
-
 const mergeSystemPromptAddendum = (
   base: Option.Option<string>,
   addendum: Option.Option<string>,
@@ -62,10 +51,7 @@ const applyAgentOverrides = (
   agent: AgentDefinition,
   overrides: Option.Option<AgentRunOverrides>,
 ): AgentDefinition => {
-  if (!hasAgentOverrides(overrides)) return agent
-
-  const override = overrides
-  const systemPromptAddendum = Option.match(override, {
+  const systemPromptAddendum = Option.match(overrides, {
     onNone: () => Option.fromUndefinedOr(agent.systemPromptAddendum),
     onSome: (value) =>
       mergeSystemPromptAddendum(
@@ -74,7 +60,7 @@ const applyAgentOverrides = (
       ),
   })
 
-  const value = Option.getOrUndefined(override)
+  const value = Option.getOrUndefined(overrides)
   return AgentDefinition.make({
     ...agent,
     ...omitUndefined({
