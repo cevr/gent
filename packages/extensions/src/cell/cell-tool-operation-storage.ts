@@ -281,7 +281,6 @@ export class CellToolOperationStorage extends Context.Service<
           if (
             request.sessionId !== key.cell.sessionId ||
             request.branchId !== key.cell.branchId ||
-            request.type !== "approval" ||
             request.status !== "pending" ||
             Option.isSome(Option.fromNullishOr(request.decisionJson))
           )

@@ -81,7 +81,6 @@ const fixture = Effect.gen(function* () {
 })
 const request = InteractionRequestRecord.make({
   requestId,
-  type: "approval",
   sessionId: cell.sessionId,
   branchId: cell.branchId,
   paramsJson: '{"text":"Allow write?"}',

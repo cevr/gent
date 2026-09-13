@@ -1266,3 +1266,15 @@ toolSurface` was set by no driver. The codemode prompt slot they were
 - Kept: `session.delete` (a store you cannot delete from is a missing
   capability, and any RPC client can call it) and `runtime.status` (the
   only probe of the connection tracker; the lifecycle tests use it).
+
+## Columns every writer filled with a constant (2026-09-13)
+
+- `interaction_requests.type` was always `"approval"` and no reader
+  selected it; the cell's check that it equalled `"approval"` could never
+  fail. `content_chunks.part_type` was written from a decode of the same
+  JSON it sat beside and never read. Migration 016 drops both, plus
+  `idx_messages_branch` (a prefix of `idx_messages_branch_created`) and
+  `idx_tool_call_bindings_tool_call` (bindings are read by full key). The
+  queue row now decodes the one column it uses.
+- Deferred: `messages_fts.branch_id`/`role` are write-only but FTS5 cannot
+  drop a column; a rebuild costs more than two unread columns.

@@ -68,7 +68,6 @@ export type InteractionRequestStatus = typeof InteractionRequestStatus.Type
 
 export const InteractionRequestRecord = Schema.Struct({
   requestId: InteractionRequestId,
-  type: Schema.String,
   sessionId: SessionId,
   branchId: BranchId,
   paramsJson: Schema.String,
@@ -77,9 +76,6 @@ export const InteractionRequestRecord = Schema.Struct({
   createdAt: Schema.Finite,
 })
 export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
-
-/** All interaction records use this type — the old per-handler types are gone */
-const INTERACTION_TYPE = "approval"
 
 const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
 const decisionJsonCodec = Schema.fromJsonString(ApprovalDecisionSchema)
@@ -296,7 +292,6 @@ export const makeInteractionService = (
           const paramsJson = yield* encodeInteractionParams(params)
           yield* config.storage.persist({
             requestId,
-            type: INTERACTION_TYPE,
             sessionId: ctx.sessionId,
             branchId: ctx.branchId,
             paramsJson,

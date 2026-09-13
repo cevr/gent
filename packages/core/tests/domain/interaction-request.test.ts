@@ -97,7 +97,6 @@ describe("Interaction Request", () => {
       // Manually insert a pending record
       const record: InteractionRequestRecord = {
         requestId: InteractionRequestId.make("req-manual-1"),
-        type: "approval",
         sessionId: SessionId.make("s2"),
         branchId: BranchId.make("b2"),
         paramsJson: "{}",
@@ -125,7 +124,6 @@ describe("Interaction Request", () => {
       const is = yield* InteractionStorage
       const first = {
         requestId: InteractionRequestId.make("req-workspace-a"),
-        type: "approval",
         sessionId: SessionId.make("s-workspace-a"),
         branchId: BranchId.make("b-workspace-a"),
         paramsJson: "{}",
@@ -134,7 +132,6 @@ describe("Interaction Request", () => {
       } satisfies Parameters<typeof is.persist>[0]
       const second = {
         requestId: InteractionRequestId.make("req-workspace-b"),
-        type: "approval",
         sessionId: SessionId.make("s-workspace-b"),
         branchId: BranchId.make("b-workspace-b"),
         paramsJson: "{}",
@@ -188,7 +185,6 @@ describe("Interaction Request", () => {
       yield* ensureStorageParents({ sessionId, branchId })
       yield* is.persist({
         requestId: InteractionRequestId.make("req-singleton-1"),
-        type: "approval",
         sessionId,
         branchId,
         paramsJson: "{}",
@@ -198,7 +194,6 @@ describe("Interaction Request", () => {
       const duplicate = yield* Effect.exit(
         is.persist({
           requestId: InteractionRequestId.make("req-singleton-2"),
-          type: "approval",
           sessionId,
           branchId,
           paramsJson: "{}",
@@ -226,7 +221,6 @@ describe("Interaction Request", () => {
       yield* ensureStorageParents({ sessionId, branchId })
       yield* is.persist({
         requestId: InteractionRequestId.make("req-existing-pending"),
-        type: "approval",
         sessionId,
         branchId,
         paramsJson: "{}",

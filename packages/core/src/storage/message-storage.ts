@@ -13,7 +13,6 @@ import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
 import {
   decodeMessageChunkRow,
-  decodeStoredPromptPart,
   decodeStoredMessage,
   encodeStoredMessage,
   groupMessageChunkRows,
@@ -107,8 +106,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             (partJson, ordinal) =>
               Effect.gen(function* () {
                 const chunkId = platform.hash("sha256", partJson)
-                const part = yield* decodeStoredPromptPart(partJson)
-                yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_type, part_json) VALUES (${chunkId}, ${part.type}, ${partJson})`
+                yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_json) VALUES (${chunkId}, ${partJson})`
                 yield* sql`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (${messageId}, ${ordinal}, ${chunkId})`
               }),
             { discard: true },

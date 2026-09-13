@@ -12,7 +12,7 @@ import {
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
 } from "../runtime/agent/agent-loop.state.js"
-import { BranchId, SessionId } from "../domain/ids.js"
+import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
@@ -20,12 +20,7 @@ const LoopQueueStateJson = Schema.fromJsonString(LoopQueueState)
 const decodeLoopQueueState = Schema.decodeUnknownEffect(LoopQueueStateJson)
 const encodeLoopQueueState = Schema.encodeEffect(LoopQueueStateJson)
 
-const QueueRow = Schema.Struct({
-  session_id: SessionId,
-  branch_id: BranchId,
-  queue_json: Schema.String,
-  updated_at: Schema.Finite,
-})
+const QueueRow = Schema.Struct({ queue_json: Schema.String })
 const decodeQueueRow = Schema.decodeUnknownEffect(QueueRow)
 
 const emptyLoopQueueState = (): LoopQueueStateType => ({
@@ -64,11 +59,7 @@ export class AgentLoopQueueStorage extends Context.Service<
         getQueueState: Effect.fn("AgentLoopQueueStorage.getQueueState")(
           function* (sessionId, branchId) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rawRows = yield* sql`SELECT
-              q.session_id,
-              q.branch_id,
-              q.queue_json,
-              q.updated_at
+            const rawRows = yield* sql`SELECT q.queue_json
             FROM agent_loop_queues q
             WHERE q.session_id = ${sessionId}
               AND q.branch_id = ${branchId}

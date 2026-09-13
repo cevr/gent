@@ -220,6 +220,7 @@ describe("Sessions", () => {
           "resource_graph_state",
           "message_insertion_order",
           "drop_resource_graph_state",
+          "drop_write_only_storage",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -246,6 +247,7 @@ describe("Sessions", () => {
           "resource_graph_state",
           "message_insertion_order",
           "drop_resource_graph_state",
+          "drop_write_only_storage",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))

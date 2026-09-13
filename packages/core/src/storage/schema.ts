@@ -425,6 +425,27 @@ const messageInsertionOrderMigration = Effect.gen(function* () {
   )
 })
 
+// Columns every writer filled with a constant and no reader selected, and
+// indexes no query used: `idx_messages_branch` is a prefix of
+// `idx_messages_branch_created`, and bindings are only read by full key.
+const dropColumnIfPresent = (table: string, column: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<{ readonly name: string }>`
+      SELECT name FROM pragma_table_info(${table}) WHERE name = ${column}
+    `
+    if (rows.length === 0) return
+    yield* sql.unsafe(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+  })
+
+const dropWriteOnlyStorageMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* dropColumnIfPresent("interaction_requests", "type")
+  yield* dropColumnIfPresent("content_chunks", "part_type")
+  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_messages_branch`)
+  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_tool_call_bindings_tool_call`)
+})
+
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
@@ -474,6 +495,7 @@ const makeStorageMigratorLive = (
       "010_resource_graph_state": resourceGraphStateMigration,
       "011_message_insertion_order": messageInsertionOrderMigration,
       "015_drop_resource_graph_state": dropResourceGraphStateMigration,
+      "016_drop_write_only_storage": dropWriteOnlyStorageMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",
