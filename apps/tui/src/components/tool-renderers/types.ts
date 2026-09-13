@@ -13,6 +13,10 @@ export interface ToolCall {
   output: string | undefined
   /** Inner calls a cell admitted. Live feed only; saved results carry receipts. */
   operations?: ToolCall[]
+  /** Envelope time of the started receipt. Live feed only. */
+  startedAt?: number
+  /** Wall time from the started receipt to the terminal receipt. */
+  durationMs?: number
 }
 
 export interface ToolRendererProps {

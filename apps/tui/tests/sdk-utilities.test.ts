@@ -160,6 +160,7 @@ describe("projectMessagesWithToolInteractions", () => {
         input: { path: "/foo" },
         summary: absent,
         output: absent,
+        durationMs: absent,
       },
       {
         id: ToolCallId.make("tc2"),
@@ -168,6 +169,7 @@ describe("projectMessagesWithToolInteractions", () => {
         input: { path: "/bar" },
         summary: absent,
         output: absent,
+        durationMs: absent,
       },
     ])
   })
@@ -200,6 +202,7 @@ describe("projectMessagesWithToolInteractions", () => {
       input: {},
       summary: "file contents here",
       output: "file contents here",
+      durationMs: absent,
     })
   })
 
@@ -224,6 +227,7 @@ describe("projectMessagesWithToolInteractions", () => {
       input: {},
       summary: "File not found",
       output: "File not found",
+      durationMs: absent,
     })
   })
 

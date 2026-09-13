@@ -365,17 +365,22 @@ const applyToolCallResult = (
   call: Option.Option<ToolCall>,
   status: ToolCall["status"],
   toolEvent: ToolResultEvent,
+  completedAt: number,
 ) => {
   if (Option.isNone(call)) return
   call.value.status = status
   call.value.summary = toolEvent.summary
   call.value.output = toolEvent.output
+  if (Predicate.isNotUndefined(call.value.startedAt)) {
+    call.value.durationMs = Math.max(0, completedAt - call.value.startedAt)
+  }
 }
 
 const handleToolCallResult = (
   setStore: SetStoreFunction<SessionFeedStore>,
   setActiveTool: (value: Option.Option<string>) => void,
   toolEvent: ToolResultEvent,
+  completedAt: number,
 ) => {
   let status: "error" | "completed" = "completed"
   if (toolEvent._tag === "ToolCallFailed") status = "error"
@@ -388,6 +393,7 @@ const handleToolCallResult = (
         locateToolCall(Option.fromNullishOr(message.toolCalls), toolEvent.toolCallId),
         status,
         toolEvent,
+        completedAt,
       )
       // Also update the segment's toolCall
       const segments = Option.fromNullishOr(message.segments)
@@ -400,6 +406,7 @@ const handleToolCallResult = (
         locateToolCall(Option.some(segmentCalls), toolEvent.toolCallId),
         status,
         toolEvent,
+        completedAt,
       )
     },
     (message) =>
@@ -702,7 +709,7 @@ export function useSessionFeed(
         return
       }
       client.applySessionEvent(envelope)
-      yield* processEvent(envelope.event, branch, key)
+      yield* processEvent(envelope, branch, key)
     })
 
   const processBufferedEvent = (envelope: EventEnvelope, key: string) => {
@@ -768,8 +775,13 @@ export function useSessionFeed(
     if (Option.isSome(interaction)) callbacks.onInteraction(interaction.value)
   }
 
-  const processEvent = (event: AgentEvent, branch: BranchId, key: string): Effect.Effect<void> =>
+  const processEvent = (
+    envelope: EventEnvelope,
+    branch: BranchId,
+    key: string,
+  ): Effect.Effect<void> =>
     Effect.gen(function* () {
+      const event = envelope.event
       if (Option.isNone(currentKey) || currentKey.value !== key) return
       client.log.debug("feed.event", { key, tag: event._tag })
 
@@ -785,7 +797,7 @@ export function useSessionFeed(
       }
 
       if (isToolResultEvent(event)) {
-        handleToolCallResult(setStore, setActiveTool, event)
+        handleToolCallResult(setStore, setActiveTool, event, envelope.createdAt)
         return
       }
 
@@ -852,6 +864,7 @@ export function useSessionFeed(
             input: event.input,
             summary: Option.getOrUndefined(Option.none<string>()),
             output: Option.getOrUndefined(Option.none<string>()),
+            startedAt: envelope.createdAt,
           } satisfies ToolCall
           const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)
           updateToolMessage(

@@ -3,6 +3,7 @@
 import { createContext, Show, useContext, createEffect, createSignal, type JSX } from "solid-js"
 import { Option } from "effect"
 import { useTheme } from "../theme/index"
+import { formatDuration } from "./message-list-utils"
 
 const ToolCallIdentityContext = createContext<Option.Option<string>>(Option.none())
 
@@ -45,15 +46,6 @@ export interface ToolFrameProps {
   children?: JSX.Element
   /** Collapsed summary (shown when not expanded) */
   collapsedContent?: JSX.Element
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const secs = ms / 1000
-  if (secs < 60) return `${secs.toFixed(1)}s`
-  const mins = Math.floor(secs / 60)
-  const remainingSecs = Math.round(secs % 60)
-  return `${mins}m ${remainingSecs}s`
 }
 
 export function formatToolCallIdentity(identity: string): string {

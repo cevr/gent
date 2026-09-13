@@ -10,14 +10,18 @@ import {
   projectMessagesWithToolInteractions,
   messagePartsToolCallParts,
   messageSingleText,
+  toolCallDurations,
 } from "../../src/domain/message-part-display"
+import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { projectResponsePartsToMessageParts } from "../../src/domain/response-to-prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { dateFromMillis, Message } from "../../src/domain/message"
+import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
 describe("message part projection", () => {
+  const absent = Option.getOrUndefined(Option.none<number>())
   const makeMessage = (
     id: string,
     role: "assistant" | "tool",
@@ -37,6 +41,66 @@ describe("message part projection", () => {
       // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       turnDurationMs: undefined,
     })
+
+  test("a tool call's duration is the gap between its started and terminal receipts", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const done = ToolCallId.make("tc-done")
+    const failed = ToolCallId.make("tc-failed")
+    const open = ToolCallId.make("tc-open")
+    const envelope = (id: number, createdAt: number, event: AgentEvent) =>
+      EventEnvelope.make({ id: EventId.make(id), createdAt, event })
+    const started = (toolCallId: ToolCallId) =>
+      AgentEvent.cases.ToolCallStarted.make({ sessionId, branchId, toolCallId, toolName: "cell" })
+    const events = [
+      envelope(1, 1_000, started(done)),
+      envelope(2, 1_200, started(failed)),
+      envelope(3, 1_300, started(open)),
+      envelope(
+        4,
+        2_250,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: done,
+          toolName: "cell",
+        }),
+      ),
+      envelope(
+        5,
+        1_212,
+        AgentEvent.cases.ToolCallFailed.make({
+          sessionId,
+          branchId,
+          toolCallId: failed,
+          toolName: "cell",
+        }),
+      ),
+    ]
+    const durations = toolCallDurations(events)
+    expect(durations.get(done)).toBe(1_250)
+    expect(durations.get(failed)).toBe(12)
+    expect(durations.has(open)).toBe(false)
+
+    const call = (id: ToolCallId) =>
+      Prompt.toolCallPart({ id, name: "cell", params: { code: "1" }, providerExecuted: false })
+    const result = (id: ToolCallId) =>
+      Prompt.toolResultPart({
+        id,
+        name: "cell",
+        isFailure: false,
+        providerExecuted: false,
+        result: 1,
+      })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [call(done), call(open)]),
+        makeMessage("t", "tool", [result(done)]),
+      ],
+      durations,
+    )
+    expect(projected[0]?.toolInteractions.map((entry) => entry.durationMs)).toEqual([1_250, absent])
+  })
 
   test("projects Gent transcript parts without exposing persisted field names", () => {
     const toolCallId = ToolCallId.make("tc-projection")
@@ -123,6 +187,7 @@ describe("message part projection", () => {
       input: { path: "first.txt" },
       summary: "first result",
       output: "first result",
+      durationMs: absent,
     })
     expect(projected[2]?.toolInteractions[0]).toEqual({
       id: ToolCallId.make("tc-1"),
@@ -131,6 +196,7 @@ describe("message part projection", () => {
       input: { path: "second.txt" },
       summary: "second result",
       output: "second result",
+      durationMs: absent,
     })
   })
 
@@ -176,6 +242,7 @@ describe("message part projection", () => {
         input: { path: "first.txt" },
         summary: "first result",
         output: "first result",
+        durationMs: absent,
       },
       {
         id: ToolCallId.make("tc-1"),
@@ -184,6 +251,7 @@ describe("message part projection", () => {
         input: { path: "second.txt" },
         summary: "second result",
         output: "second result",
+        durationMs: absent,
       },
     ])
   })

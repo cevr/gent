@@ -20,6 +20,7 @@ import {
   type ActivityOperation,
   formatActivityHeader,
   formatCellRowLabel,
+  formatDuration,
   formatCompactionLabel,
   formatPreviewFooter,
   formatRowCounts,
@@ -92,6 +93,7 @@ const toActivityCall = (call: ToolCall): ActivityCall => ({
   status: call.status,
   operations: cellOperations(call),
   code: getString(call.input, "code"),
+  durationMs: call.durationMs,
 })
 
 const cellResultText = (call: ToolCall) =>
@@ -504,6 +506,8 @@ function ToolCallGroup(props: {
               const status = () => {
                 if (call.status === "error") return " · failed"
                 if (call.status === "running") return " · running"
+                if (Predicate.isNotUndefined(call.durationMs))
+                  return ` · ${formatDuration(call.durationMs)}`
                 return ""
               }
               // A cell row names what the cell did; other tools show their leading argument.

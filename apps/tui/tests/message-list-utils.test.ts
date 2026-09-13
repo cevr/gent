@@ -12,6 +12,8 @@ import {
   formatPreviewFooter,
   formatRowCounts,
   formatAge,
+  formatDuration,
+  formatGroupDuration,
   workingIconFrame,
   previewOutput,
   TOOL_SPINNERS,
@@ -224,6 +226,16 @@ const cell = (
   status: ActivityCall["status"] = "completed",
 ): ActivityCall => ({ toolName: "cell", status, operations, code: "" })
 
+describe("formatDuration", () => {
+  test("milliseconds under a second, tenths under a minute, then minutes and seconds", () => {
+    expect(formatDuration(12)).toBe("12ms")
+    expect(formatDuration(999.6)).toBe("1000ms")
+    expect(formatDuration(1_250)).toBe("1.3s")
+    expect(formatDuration(59_940)).toBe("59.9s")
+    expect(formatDuration(65_000)).toBe("1m 5s")
+  })
+})
+
 describe("formatActivityHeader", () => {
   test("a cell-only turn counts cells, ops, children, and failures instead of tool calls", () => {
     expect(formatActivityHeader([cell([op("bash", "pwd"), op("read", "a.ts")])])).toBe(
@@ -237,6 +249,20 @@ describe("formatActivityHeader", () => {
       ]),
     ).toBe("3 cells · 3 ops · 2 children · 2 failed")
     expect(formatActivityHeader([cell([])])).toBe("1 cell")
+  })
+
+  test("a finished group carries the sum of its call durations", () => {
+    expect(formatActivityHeader([{ ...cell([op("bash", "pwd")]), durationMs: 1_250 }])).toBe(
+      "1 cell · 1 op · 1.3s",
+    )
+    expect(
+      formatActivityHeader([
+        { ...cell([]), durationMs: 800 },
+        { ...cell([]), durationMs: 700 },
+        cell([], "running"),
+      ]),
+    ).toBe("3 cells · 1.5s")
+    expect(formatGroupDuration([cell([], "running")])).toBe("")
     expect(formatActivityHeader([{ ...cell([]), code: "await Bun.$`bun test`.text()" }])).toBe(
       "1 cell · $ bun test",
     )

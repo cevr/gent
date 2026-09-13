@@ -22,7 +22,10 @@ import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-eve
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
-import { projectMessagesWithToolInteractions } from "../domain/message-part-display.js"
+import {
+  projectMessagesWithToolInteractions,
+  toolCallDurations,
+} from "../domain/message-part-display.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { omitUndefined } from "../domain/guards.js"
@@ -87,12 +90,21 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
   const snapshotState = yield* storageTransaction(
     Effect.gen(function* () {
       const messages = yield* messageStorage.listMessages(input.branchId)
+      const events = yield* eventStorage
+        .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
+        .pipe(
+          Effect.catchTag(
+            "EventDecodeError",
+            (cause) =>
+              new InvalidStateError({ message: `Failed to read session events: ${cause.message}` }),
+          ),
+        )
       const lastEventId = yield* eventStorage.getLatestEventId({
         sessionId: input.sessionId,
         branchId: input.branchId,
       })
       return {
-        projectedMessages: projectMessagesWithToolInteractions(messages),
+        projectedMessages: projectMessagesWithToolInteractions(messages, toolCallDurations(events)),
         lastEventId,
       }
     }),

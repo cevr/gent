@@ -2,6 +2,7 @@
  * Pure utility functions for message list rendering
  */
 
+import { Predicate } from "effect"
 import { toolArgSummary } from "../utils/format-tool.js"
 import { getString } from "../utils/parse-tool-output.js"
 import type { ToolInput } from "../utils/parse-tool-output.js"
@@ -114,6 +115,30 @@ export interface ActivityCall {
   readonly operations: ReadonlyArray<ActivityOperation>
   /** The cell source; empty for other tools. */
   readonly code: string
+  /** Wall time of the call once it has a terminal receipt. */
+  readonly durationMs?: number
+}
+
+// ── Durations ──
+// prime-agent style: milliseconds under a second, tenths under a minute, then m s.
+
+export const formatDuration = (ms: number): string => {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const secs = ms / 1000
+  if (secs < 60) return `${secs.toFixed(1)}s`
+  const mins = Math.floor(secs / 60)
+  const remainingSecs = Math.round(secs % 60)
+  return `${mins}m ${remainingSecs}s`
+}
+
+/** The group's wall time: the sum of its finished calls, absent until one has a duration. */
+export const formatGroupDuration = (calls: ReadonlyArray<ActivityCall>): string => {
+  const finished = calls.flatMap((call) => {
+    if (Predicate.isUndefined(call.durationMs)) return []
+    return [call.durationMs]
+  })
+  if (finished.length === 0) return ""
+  return formatDuration(finished.reduce((total, ms) => total + ms, 0))
 }
 
 // ── Cell intent ──
@@ -207,6 +232,8 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   if (children > 0) parts.push(plural(children, "child", "children"))
   if (failed > 0) parts.push(`${failed} failed`)
+  const duration = formatGroupDuration(calls)
+  if (duration.length > 0) parts.push(duration)
   return parts.join(" · ")
 }
 

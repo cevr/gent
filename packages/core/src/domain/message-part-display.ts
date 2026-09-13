@@ -2,6 +2,7 @@ import { Option, Predicate, Result, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentRunToolCallSchema, type AgentRunToolCall } from "./agent.js"
 import { ToolCallId } from "./ids.js"
+import type { EventEnvelope } from "./event.js"
 import {
   type Message,
   type MessagePart,
@@ -276,9 +277,30 @@ const findResultForToolCall = (
 ): Option.Option<ToolResultState> =>
   Option.fromUndefinedOr(pairings.get(`${callMessageIndex}:${callPartIndex}`))
 
+/** Wall time per tool call, from its started receipt to its terminal receipt. */
+export const toolCallDurations = (
+  events: ReadonlyArray<EventEnvelope>,
+): ReadonlyMap<ToolCallId, number> => {
+  const started = new Map<ToolCallId, number>()
+  const durations = new Map<ToolCallId, number>()
+  for (const envelope of events) {
+    const event = envelope.event
+    if (event._tag === "ToolCallStarted") {
+      started.set(event.toolCallId, envelope.createdAt)
+      continue
+    }
+    if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
+    const startedAt = started.get(event.toolCallId)
+    if (Predicate.isUndefined(startedAt)) continue
+    durations.set(event.toolCallId, Math.max(0, envelope.createdAt - startedAt))
+  }
+  return durations
+}
+
 const messagePartsToolInteractions = (
   parts: ReadonlyArray<MessagePart>,
   resultForToolCall: (partIndex: number) => Option.Option<ToolResultState>,
+  durations: ReadonlyMap<ToolCallId, number>,
 ): ReadonlyArray<ToolInteraction> => {
   const interactions: ToolInteraction[] = []
   for (const [partIndex, part] of parts.entries()) {
@@ -298,6 +320,7 @@ const messagePartsToolInteractions = (
       input: toolCall.input,
       summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
       output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
+      durationMs: durations.get(id),
     })
   }
   return interactions
@@ -305,14 +328,17 @@ const messagePartsToolInteractions = (
 
 export const projectMessagesWithToolInteractions = (
   messages: ReadonlyArray<Message>,
+  durations: ReadonlyMap<ToolCallId, number> = new Map(),
 ): ReadonlyArray<ProjectedMessage> => {
   const resultMap = buildToolResultMapFromMessages(messages)
   const pairings = buildToolResultPairings(messages, resultMap)
   return messages.map((message, index) =>
     projectMessage(
       message,
-      messagePartsToolInteractions(message.parts, (partIndex) =>
-        findResultForToolCall(index, partIndex, pairings),
+      messagePartsToolInteractions(
+        message.parts,
+        (partIndex) => findResultForToolCall(index, partIndex, pairings),
+        durations,
       ),
     ),
   )

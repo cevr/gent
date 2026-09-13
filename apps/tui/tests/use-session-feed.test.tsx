@@ -77,11 +77,11 @@ const runtimeSnapshot = (): SessionRuntimeState => ({
   queue: emptyQueueSnapshot(),
 })
 
-const makeEnvelope = (id: number, event: AgentEvent): EventEnvelope =>
+const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelope =>
   EventEnvelope.make({
     id: EventId.make(id),
     event,
-    createdAt: 0,
+    createdAt,
   })
 
 const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
@@ -225,6 +225,7 @@ describe("useSessionFeed", () => {
           toolName: "bash",
           input: { command: "printf hi" },
         }),
+        10_000,
       )
       const toolSucceededEnvelope = makeEnvelope(
         6,
@@ -236,6 +237,7 @@ describe("useSessionFeed", () => {
           summary: "printed hi",
           output: "hi",
         }),
+        11_200,
       )
       const turnCompletedEnvelope = makeEnvelope(
         7,
@@ -349,11 +351,14 @@ describe("useSessionFeed", () => {
         expect(assistantMessage?.content).toBe("assistant text")
         expect(assistantMessage?.toolCalls).toHaveLength(1)
         expect(assistantMessage?.toolCalls?.[0]?.status).toBe("completed")
+        // The duration is the gap between the started and terminal envelope times.
+        expect(assistantMessage?.toolCalls?.[0]?.durationMs).toBe(1_200)
         const toolSegments = assistantMessage?.segments?.filter(
           (segment) => segment._tag === "tool-call",
         )
         expect(toolSegments).toHaveLength(1)
         expect(toolSegments?.[0]?.toolCall.status).toBe("completed")
+        expect(toolSegments?.[0]?.toolCall.durationMs).toBe(1_200)
         expect(events?.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
         const retry = events?.find((event) => event._tag === "retrying")
         expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
@@ -659,6 +664,7 @@ describe("useSessionFeed", () => {
                   input: {},
                   summary: "done",
                   output: "result",
+                  durationMs: 1_200,
                 }),
               )
             return projectMessage(
@@ -686,7 +692,9 @@ describe("useSessionFeed", () => {
                 getSnapshot: () => Effect.succeed(snapshot),
                 events: () =>
                   Stream.concat(
-                    Stream.make(...events.map((event, index) => makeEnvelope(index + 1, event))),
+                    Stream.make(
+                      ...events.map((event, index) => makeEnvelope(index + 1, event, index * 300)),
+                    ),
                     Stream.never,
                   ),
                 watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
@@ -743,6 +751,8 @@ describe("useSessionFeed", () => {
                 assistantMessageIdForTurn(nextInputId, 1),
               ])
               expect(messages[0]?.toolCalls?.[0]?.status).toBe("completed")
+              // A saved interaction keeps the duration the snapshot projected from receipts.
+              expect(messages[0]?.toolCalls?.[0]?.durationMs).toBe(1_200)
               expect(messages[1]?.toolCalls).toBeUndefined()
               expect(messages[2]?.toolCalls).toBeUndefined()
             }),

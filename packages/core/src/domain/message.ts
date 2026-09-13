@@ -19,6 +19,8 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
   input: Schema.UndefinedOr(Schema.Unknown),
   summary: Schema.UndefinedOr(Schema.String),
   output: Schema.UndefinedOr(Schema.String),
+  /** Wall time between the started and terminal receipts; absent while running or without receipts. */
+  durationMs: Schema.UndefinedOr(Schema.Finite),
 }) {}
 
 export const MessagePart = Schema.Union([
