@@ -545,7 +545,7 @@ describe("Sessions", () => {
       expect(directInsertExit._tag).toBe("Failure")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
-  it.live("rejects deleting branches that own child branches or child sessions", () =>
+  it.live("protects branches that own child branches or child sessions", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -573,11 +573,6 @@ describe("Sessions", () => {
           createdAt: now,
         }),
       )
-      const childBranchExit = yield* Effect.exit(
-        branches.deleteBranch(BranchId.make("delete-parent-root")),
-      )
-      expect(childBranchExit._tag).toBe("Failure")
-      expect(yield* branches.getBranch(BranchId.make("delete-parent-root"))).toBeDefined()
       const directChildBranchExit = yield* Effect.exit(
         sql`DELETE FROM branches WHERE id = ${"delete-parent-root"}`,
       )
@@ -599,12 +594,6 @@ describe("Sessions", () => {
           createdAt: now,
         }),
       )
-      const childSessionExit = yield* Effect.exit(
-        branches.deleteBranch(BranchId.make("delete-parent-child")),
-      )
-      expect(childSessionExit._tag).toBe("Failure")
-      expect(yield* branches.getBranch(BranchId.make("delete-parent-child"))).toBeDefined()
-      expect(yield* sessions.getSession(SessionId.make("delete-child-session"))).toBeDefined()
       const directChildSessionExit = yield* Effect.exit(
         sql`DELETE FROM branches WHERE id = ${"delete-parent-child"}`,
       )

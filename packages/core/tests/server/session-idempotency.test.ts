@@ -3,6 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunServices } from "@effect/platform-bun"
 import { Predicate, Effect, FileSystem, Layer, Option, Path } from "effect"
 import { TestClock } from "effect/testing"
+import { SqlClient } from "effect/unstable/sql"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry.js"
 import { Branch, Message } from "../../src/domain/message"
@@ -878,8 +879,8 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
-        const branches = yield* BranchStorage
-        yield* branches.deleteBranch(fromBranchId)
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`DELETE FROM branches WHERE id = ${fromBranchId}`
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 
@@ -953,8 +954,8 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
-        const messages = yield* MessageStorage
-        yield* messages.deleteMessages(branchId)
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
 

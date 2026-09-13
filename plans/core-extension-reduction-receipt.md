@@ -857,3 +857,15 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   tests now call `SessionMutations` directly. The five `Effect.fn` wrappers
   whose bodies were `yield* dedupX(input)` added a span over a span; the
   deduped functions are the service. −70 lines, one fewer error alias.
+
+## Callerless storage deletes and the TUI's own output mirror (2026-09-13)
+
+- `BranchStorage.deleteBranch` and `MessageStorage.deleteMessages` had no
+  shipped caller: session deletion cascades through `SessionMutations`, and
+  branch or message deletion never reached a product surface. The two tests
+  that used them as a vehicle for "the row vanished under us" issue the
+  `DELETE` themselves; the two that tested them as a subject are gone, the
+  foreign-key half of the branch test stays. −95 lines.
+- `apps/tui/src/utils/shell.ts` carried its own `saveFullOutput` writing to
+  `~/tool-output`; it now calls the one in `domain/output-buffer.ts` that the
+  bash tool uses, so every truncated output lands in one place.

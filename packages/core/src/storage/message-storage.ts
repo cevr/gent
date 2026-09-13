@@ -39,10 +39,6 @@ interface MessageStorageService {
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
   readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
-  readonly deleteMessages: (
-    branchId: BranchId,
-    afterMessageId?: MessageId,
-  ) => Effect.Effect<void, StorageError>
   readonly updateMessageTurnDuration: (
     messageId: MessageId,
     durationMs: number,
@@ -208,51 +204,6 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               )
             },
             Effect.mapError(mapError("Failed to list messages")),
-          ),
-
-          deleteMessages: Effect.fn("MessageStorage.deleteMessages")(
-            function* (branchId, afterMessageId) {
-              const workspaceId = yield* CurrentWorkspaceId
-              yield* Effect.gen(function* () {
-                const messageIds: MessageId[] = []
-                if (!Predicate.isUndefined(afterMessageId)) {
-                  const msgs = yield* sql<{
-                    id: MessageId
-                    created_at: number
-                    insertion_order: number
-                  }>`SELECT m.id, m.created_at, m.insertion_order
-                    FROM messages m
-                    JOIN sessions s ON s.id = m.session_id
-                    WHERE m.id = ${afterMessageId} AND s.workspace_id = ${workspaceId}`
-                  const msg = msgs[0]
-                  if (!Predicate.isUndefined(msg)) {
-                    const rows = yield* sql<{
-                      id: MessageId
-                    }>`SELECT m.id
-                      FROM messages m
-                      JOIN sessions s ON s.id = m.session_id
-                      WHERE m.branch_id = ${branchId}
-                        AND s.workspace_id = ${workspaceId}
-                        AND (m.created_at > ${msg.created_at} OR (m.created_at = ${msg.created_at} AND m.insertion_order > ${msg.insertion_order}))`
-                    messageIds.push(...rows.map((row) => row.id))
-                  }
-                } else {
-                  const rows = yield* sql<{
-                    id: MessageId
-                  }>`SELECT m.id
-                    FROM messages m
-                    JOIN sessions s ON s.id = m.session_id
-                    WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}`
-                  messageIds.push(...rows.map((row) => row.id))
-                }
-                if (messageIds.length === 0) return
-                yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
-                yield* sql`DELETE FROM message_chunks WHERE message_id IN ${sql.in(messageIds)}`
-                yield* sql`DELETE FROM messages WHERE id IN ${sql.in(messageIds)}`
-                yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-              }).pipe(sql.withTransaction)
-            },
-            Effect.mapError(mapError("Failed to delete messages")),
           ),
 
           updateMessageTurnDuration: Effect.fn("MessageStorage.updateMessageTurnDuration")(

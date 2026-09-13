@@ -275,65 +275,6 @@ describe("Messages", () => {
       expect(messagesResult[1]?.role).toBe("assistant")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
-  it.live("deletes message chunk refs and search projection rows", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const messages = yield* MessageStorage
-      const sql = yield* SqlClient.SqlClient
-      yield* sessions.createSession(
-        new Session({
-          id: SessionId.make("delete-projection-session"),
-          createdAt: FIXED_NOW,
-          updatedAt: FIXED_NOW,
-        }),
-      )
-      yield* branches.createBranch(
-        new Branch({
-          id: BranchId.make("delete-projection-branch"),
-          sessionId: SessionId.make("delete-projection-session"),
-          createdAt: FIXED_NOW,
-        }),
-      )
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: MessageId.make("delete-projection-a"),
-          sessionId: SessionId.make("delete-projection-session"),
-          branchId: BranchId.make("delete-projection-branch"),
-          role: "user",
-          parts: [Prompt.textPart({ text: "delete projection alpha" })],
-          createdAt: dateFromMillis(1000),
-        }),
-      )
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: MessageId.make("delete-projection-b"),
-          sessionId: SessionId.make("delete-projection-session"),
-          branchId: BranchId.make("delete-projection-branch"),
-          role: "assistant",
-          parts: [Prompt.textPart({ text: "delete projection beta" })],
-          createdAt: dateFromMillis(2000),
-        }),
-      )
-      yield* messages.deleteMessages(BranchId.make("delete-projection-branch"))
-      const messagesResult = yield* sql<{
-        count: number
-      }>`SELECT COUNT(*) as count FROM messages`
-      const refs = yield* sql<{
-        count: number
-      }>`SELECT COUNT(*) as count FROM message_chunks`
-      const chunks = yield* sql<{
-        count: number
-      }>`SELECT COUNT(*) as count FROM content_chunks`
-      const fts = yield* sql<{
-        count: number
-      }>`SELECT COUNT(*) as count FROM messages_fts`
-      expect(messagesResult[0]?.count).toBe(0)
-      expect(refs[0]?.count).toBe(0)
-      expect(chunks[0]?.count).toBe(0)
-      expect(fts[0]?.count).toBe(0)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
   it.live("updates session updatedAt when creating message", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
@@ -465,7 +406,7 @@ describe("Messages", () => {
       expect(message?.parts).toEqual([Prompt.textPart({ text: "first" })])
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
-  it.live("preserves insertion order for equal timestamps in history and deletion", () =>
+  it.live("preserves insertion order for equal timestamps in history", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
@@ -521,10 +462,6 @@ describe("Messages", () => {
       expect(
         (yield* messages.listMessages(BranchId.make("order-branch"))).map((message) => message.id),
       ).toEqual([MessageId.make("b"), MessageId.make("a")])
-      yield* messages.deleteMessages(BranchId.make("order-branch"), MessageId.make("b"))
-      expect(
-        (yield* messages.listMessages(BranchId.make("order-branch"))).map((message) => message.id),
-      ).toEqual([MessageId.make("b")])
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
 })

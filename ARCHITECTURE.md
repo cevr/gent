@@ -337,8 +337,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - `ChildCompletionDelivery` is the host's completion path. It watches the
   child's turn receipt and queues one ordinary user message on the parent branch
   (`follow-up:…:child:<requestId>:complete`, metadata `customType:
-"child-completion"`) with the outcome, a bounded preview, and the saved output
-  path, then publishes `AgentRunSucceeded` for the transcript. The follow-up
+"child-completion"`) with the outcome and a bounded preview, then publishes
+  `AgentRunSucceeded` for the transcript. The follow-up
   message id is the idempotency key; delivery is serialized and watchers are
   deduplicated per request. Startup reconciles the registry: finished children
   are delivered, unfinished ones are watched again. No cell or tool waits for a

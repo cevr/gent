@@ -30,7 +30,6 @@ export interface BranchStorageService {
   readonly listBranches: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
-  readonly deleteBranch: (id: BranchId) => Effect.Effect<void, StorageError>
   readonly updateBranchSummary: (
     branchId: BranchId,
     summary: string,
@@ -137,55 +136,6 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
           },
           Effect.asVoid,
           Effect.mapError(mapError("Failed to update branch summary")),
-        ),
-
-        deleteBranch: Effect.fn("BranchStorage.deleteBranch")(
-          function* (id) {
-            const workspaceId = yield* CurrentWorkspaceId
-            yield* Effect.gen(function* () {
-              const childBranches = yield* sql<{
-                count: number
-              }>`SELECT COUNT(*) as count
-                  FROM branches b
-                  JOIN sessions s ON s.id = b.session_id
-                  WHERE b.parent_branch_id = ${id} AND s.workspace_id = ${workspaceId}`
-              if ((childBranches[0]?.count ?? 0) > 0) {
-                return yield* new StorageError({
-                  message: `Cannot delete branch with child branches: ${id}`,
-                })
-              }
-
-              const childSessions = yield* sql<{
-                count: number
-              }>`SELECT COUNT(*) as count
-                  FROM sessions
-                  WHERE parent_branch_id = ${id} AND workspace_id = ${workspaceId}`
-              if ((childSessions[0]?.count ?? 0) > 0) {
-                return yield* new StorageError({
-                  message: `Cannot delete branch with child sessions: ${id}`,
-                })
-              }
-
-              const messageRows = yield* sql<{
-                id: MessageId
-              }>`SELECT m.id
-                  FROM messages m
-                  JOIN sessions s ON s.id = m.session_id
-                  WHERE m.branch_id = ${id} AND s.workspace_id = ${workspaceId}`
-              const messageIds = messageRows.map((row) => row.id)
-              if (messageIds.length > 0) {
-                yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
-              }
-              yield* sql`DELETE FROM agent_loop_queues
-                  WHERE branch_id = ${id}
-                    AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
-              yield* sql`DELETE FROM branches
-                  WHERE id = ${id}
-                    AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
-              yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
-            }).pipe(sql.withTransaction)
-          },
-          Effect.mapError(mapError("Failed to delete branch")),
         ),
 
         countMessages: Effect.fn("BranchStorage.countMessages")(
