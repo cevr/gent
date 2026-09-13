@@ -1186,3 +1186,10 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   that ships no agents extension gets no persona, which is the rule.
 - `extensions/branch-tools.ts` re-exported `CurrentBranchToolFeature` and
   `noBranchTools`; no file outside named either.
+
+## The debug fixture seeds from the composition root (2026-09-13)
+
+- `test-utils/debug-session.ts` (337 lines) was never test-only: the SDK's
+  owned server and `apps/server` both seeded it for `--debug`. Both roots
+  already import `@gent/sdk`, so the seeder lives there and the SDK exports
+  `seedDebugSession`. Core loses a debug scenario it never ran.

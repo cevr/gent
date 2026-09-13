@@ -6,14 +6,14 @@
 import { Clock, Effect, Option } from "effect"
 import type { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Branch, Message, Session, dateFromMillis } from "../domain/message.js"
-import { SessionStorage } from "../storage/session-storage.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
-import { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { GentPlatform } from "../runtime/gent-platform.js"
+import { Branch, Message, Session, dateFromMillis } from "@gent/core-internal/domain/message.js"
+import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
+import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
-export interface DebugSessionInfo {
+interface DebugSessionInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
@@ -118,7 +118,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeToolCall({
         id: asToolCallId("dbg-write"),
         name: "write",
-        params: { path: `${cwd}/packages/core/src/test-utils/debug-session.ts` },
+        params: { path: `${cwd}/packages/sdk/src/debug-session.ts` },
       }),
     ],
     createdAt: nowPlus(-47_000),
@@ -166,7 +166,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         newString: "<ToolFrame />",
       }),
       makeJsonResult(asToolCallId("dbg-write"), "write", {
-        path: `${cwd}/packages/core/src/test-utils/debug-session.ts`,
+        path: `${cwd}/packages/sdk/src/debug-session.ts`,
         bytesWritten: 7421,
       }),
     ],

@@ -50,6 +50,8 @@ export {
 } from "./server-lock.js"
 // Observability for a composition root, and the log paths a client shares with its server
 export { GentObservability } from "./logger.js"
+// The debug fixture a composition root seeds when started with --debug
+export { seedDebugSession } from "./debug-session.js"
 export { buildLogPaths, LOG_DIR } from "./log-paths.js"
 export { ShippedExtensions } from "./shipped-extensions.js"
 

@@ -31,6 +31,7 @@ describe("SDK public surface", () => {
       "probeServerLockEntryIdentity",
       "readServerLock",
       "removeServerLock",
+      "seedDebugSession",
       "signalIfIdentityOwned",
       "validateServerLockEntry",
     ])

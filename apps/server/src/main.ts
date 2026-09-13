@@ -3,10 +3,9 @@ import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Config, Console, Context, Deferred, Effect, Layer, Option } from "effect"
-import { seedDebugSession } from "@gent/core-internal/test-utils/debug-session.js"
 import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import { BuildFingerprint, GentObservability } from "@gent/sdk"
+import { BuildFingerprint, GentObservability, seedDebugSession } from "@gent/sdk"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
