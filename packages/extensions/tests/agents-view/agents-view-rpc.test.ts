@@ -26,6 +26,7 @@ const ReplySchema = Schema.Struct({
       cwd: Schema.optional(Schema.String),
       live: Schema.Boolean,
       depth: Schema.Finite,
+      parentSessionId: Schema.optional(Schema.String),
     }),
   ),
 })
@@ -114,6 +115,9 @@ describe("AgentsViewExtension via RPC", () => {
           const childRow = reply.rows.find((row) => row.sessionId === child.sessionId)
           expect(parentRow?.depth).toBe(0)
           expect(childRow?.depth).toBe(1)
+          // The tray counts a session's subtree client-side, so the link travels.
+          expect(parentRow?.parentSessionId).toBeUndefined()
+          expect(childRow?.parentSessionId).toBe(harness.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

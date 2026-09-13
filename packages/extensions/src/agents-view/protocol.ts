@@ -42,6 +42,8 @@ export const AgentRowEntry = Schema.Struct({
   updatedAt: Schema.optional(Schema.Finite),
   live: Schema.Boolean,
   depth: Schema.Finite,
+  /** The session this loop was delegated from; absent at a tree root. */
+  parentSessionId: Schema.optional(SessionId),
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
@@ -133,6 +135,9 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           updatedAt: Option.getOrUndefined(row.updatedAt),
           live: row.live,
           depth: row.depth,
+          parentSessionId: Option.getOrUndefined(
+            Option.map(row.parent, (parent) => parent.sessionId),
+          ),
         })),
       }
     }),

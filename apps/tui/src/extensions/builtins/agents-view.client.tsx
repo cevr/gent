@@ -13,7 +13,7 @@
  * @module
  */
 
-import { DateTime, Effect, Option } from "effect"
+import { DateTime, Effect, Option, Predicate } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
@@ -38,7 +38,7 @@ import {
   widgetContribution,
   type OverlayProps,
 } from "../client-facets"
-import { ClientShell } from "../client-services"
+import { ClientLifecycle, ClientShell } from "../client-services"
 import { ClientTransport, type ExtensionAgentDetail } from "../client-transport"
 
 export const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
@@ -199,6 +199,103 @@ export const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
   const count = (section: AgentRowEntry["section"]) =>
     rows.filter((row) => row.section === section).length
   return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
+}
+
+// ── Subagent tray ──
+// One line above the composer: how many loops hang off the current session.
+
+export interface SubtreeCounts {
+  readonly total: number
+  readonly running: number
+  readonly idle: number
+  readonly inactive: number
+}
+
+/** Section counts over every row descending from `root`, at any depth; the root itself is not counted. */
+export const subtreeCounts = (
+  rows: ReadonlyArray<AgentRowEntry>,
+  root: Option.Option<{ readonly sessionId: string }>,
+): SubtreeCounts => {
+  const counts = { total: 0, running: 0, idle: 0, inactive: 0 }
+  if (Option.isNone(root)) return counts
+  const known = new Set<string>([root.value.sessionId])
+  let pending = rows.filter((row) => row.sessionId !== root.value.sessionId)
+  for (;;) {
+    const next = pending.filter(
+      (row) => Predicate.isNotUndefined(row.parentSessionId) && known.has(row.parentSessionId),
+    )
+    if (next.length === 0) return counts
+    for (const row of next) {
+      counts.total += 1
+      counts[row.section] += 1
+      known.add(row.sessionId)
+    }
+    pending = pending.filter((row) => !known.has(row.sessionId))
+  }
+}
+
+/** prime-agent's tray line: `● 1 running   ◐ 2 idle   ○ 3 inactive`. */
+export const traySegments = (
+  counts: SubtreeCounts,
+): ReadonlyArray<{
+  readonly section: AgentRowEntry["section"]
+  readonly text: string
+}> => [
+  { section: "running", text: `● ${counts.running} running` },
+  { section: "idle", text: `◐ ${counts.idle} idle` },
+  { section: "inactive", text: `○ ${counts.inactive} inactive` },
+]
+
+const TRAY_HINT = "^t agents"
+
+export function SubagentTray(props: { controller: AgentsController }) {
+  const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const counts = () => subtreeCounts(props.controller.rows(), props.controller.current())
+  // Switching sessions changes whose subtree the tray counts; refetch for it.
+  createEffect(
+    on(
+      () => Option.getOrUndefined(Option.map(props.controller.current(), (row) => row.sessionId)),
+      () => props.controller.refresh(""),
+    ),
+  )
+  const sectionColor = (section: AgentRowEntry["section"]) => {
+    if (section === "running") return theme.success
+    if (section === "idle") return theme.warning
+    return theme.textMuted
+  }
+  const segments = () => traySegments(counts())
+  const gap = () => {
+    const used = segments().reduce((sum, segment) => sum + segment.text.length + 3, 0)
+    // Margins, border, and padding take six columns; the text box is the rest.
+    return " ".repeat(Math.max(1, dimensions().width - 6 - used - TRAY_HINT.length))
+  }
+  return (
+    <Show when={!props.controller.open() && counts().total > 0}>
+      <box
+        alignSelf="stretch"
+        marginLeft={1}
+        marginRight={1}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
+        title="subagents"
+        titleAlignment="left"
+        paddingLeft={1}
+        height={3}
+      >
+        <text wrapMode="none" style={{ fg: theme.textMuted }}>
+          <For each={segments()}>
+            {(segment) => (
+              <span style={{ fg: sectionColor(segment.section) }}>{`${segment.text}   `}</span>
+            )}
+          </For>
+          {gap()}
+          {TRAY_HINT}
+        </text>
+      </box>
+    </Show>
+  )
 }
 
 /** Tree prefix from depth. The server already ordered parents before children. */
@@ -602,6 +699,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell
+    const lifecycle = yield* ClientLifecycle
 
     const controller = makeAgentsController(
       (query) =>
@@ -619,7 +717,23 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         })),
     )
 
+    // A delegate receipt in the current session means its subtree changed.
+    // The pane owns its own query while open, so only a closed pane refetches.
+    lifecycle.addCleanup(
+      transport.onSessionEvent((envelope) => {
+        const tag = envelope.event._tag
+        if (tag !== "AgentRunSpawned" && tag !== "AgentRunSucceeded" && tag !== "AgentRunFailed")
+          return
+        if (!controller.open()) controller.refresh("")
+      }),
+    )
+
     return clientContributions(
+      widgetContribution({
+        id: "agents.tray",
+        slot: "above-input",
+        component: () => <SubagentTray controller={controller} />,
+      }),
       clientCommandContribution({
         id: "agents.view",
         title: "Agents",
