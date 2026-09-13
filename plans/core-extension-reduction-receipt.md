@@ -1478,3 +1478,23 @@ the only proof of the invariant), `selectWithLatestUser`/`selectWithoutUser`
 spellings live), TurnMetrics fields, Submit/SubmitDurable split,
 extension-hooks and turn-persistence single-call helpers (each names a
 real step). Core is 28,326 LOC at `2f15ebf4`.
+
+## Fourteenth pass: one branch command shape, fewer single-importer files (2026-09-13)
+
+`agent-loop.protocol.ts`: five identical field records and eleven
+hand-written mirror types collapsed into `BranchCommandFields` plus types
+derived from the schemas; the five branch-command handlers share one
+`branchCommand` prelude; `executeTools` binds the replay key and assistant
+message id once; `decodeComponent` owns the percent-decode guard
+(`9262996b`). `session-queries.ts` and `interaction-commands.ts` folded
+into `rpc-handlers.ts`, `turn-pricing.ts` into the turn execution, the
+runtime-context capture into the behavior; `SessionMutations` takes the
+transport input types directly and `createSessionBranch.parentBranchId`
+(never set) is gone; `PlatformErrorSchema` deleted, no RPC path produced
+it (`6413ac1f`). Fourteenth-pass NO FINDING: `resolveTurnSource` split
+(line-neutral), `persistAssistantPartsLocal`/`persistToolPartsLocal`
+(different roles and id functions), the three `current-*` context files
+(different lifetimes), Live/Test actor builders, `agent-loop.actor-state.ts`
+and `agent-loop.queue.ts` merges (coherent modules with one importer),
+docblocks (every one states a why), `ExtensionProtocolError` (tests match
+its tag). Core is 28,119 LOC, 4 files fewer.
