@@ -1,6 +1,5 @@
 import { DateTime, Effect, Option, Predicate, Ref, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { SqlClient } from "effect/unstable/sql"
 import {
   AgentName,
   DEFAULT_AGENT_NAME,
@@ -60,7 +59,6 @@ import {
 } from "./turn-source.js"
 import type { ResolvedToolCapability } from "./tool-runner.js"
 import { executeToolCalls, ToolInteractionPending } from "./turn-tool-execution.js"
-import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import { ToolBindingReplayError } from "./tool-binding-replay.js"
 import {
@@ -138,11 +136,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const operations = yield* SessionOperationStorage
     const eventPublisher = yield* EventPublisher
     const storageTransaction = yield* makeStorageTransaction
-    const sql = yield* SqlClient.SqlClient
     const configServiceForRun = yield* ConfigService
     const platform = yield* GentPlatform
     const toolBindingStorage = yield* ToolCallBindingStorage
-    const eventStorage = yield* EventStorage
     const processLocalReplay = yield* ProcessLocalToolReplay
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
@@ -341,33 +337,28 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           storageTransaction,
           createdAt,
           agentName: params.resolved.currentTurnAgent,
-        })
-          .pipe(Effect.provideService(ToolCallBindingStorage, toolBindingStorage))
-          .pipe(Effect.provideService(MessageStorage, messageStorage))
-          .pipe(Effect.provideService(EventPublisher, eventPublisher))
-          .pipe(Effect.provideService(EventStorage, eventStorage))
-          .pipe(
-            Effect.tap((persisted) =>
-              Effect.gen(function* () {
-                if (Option.isNone(persisted) || !persisted.value.inserted) return
-                for (const part of parts) {
-                  if (part.type !== "tool-call") continue
-                  const entry = params.resolved.toolBindings.get(part.name)
-                  if (Predicate.isNotUndefined(entry) && Predicate.isUndefined(entry.binding)) {
-                    yield* processLocalReplay.setBinding(
-                      processLocalReplayBindingKey({
-                        sessionId: scope.sessionId,
-                        branchId: scope.branchId,
-                        assistantMessageId: assistantMessageIdForTurn(params.messageId, step),
-                        toolCallId: part.id,
-                      }),
-                      { entry },
-                    )
-                  }
+        }).pipe(
+          Effect.tap((persisted) =>
+            Effect.gen(function* () {
+              if (Option.isNone(persisted) || !persisted.value.inserted) return
+              for (const part of parts) {
+                if (part.type !== "tool-call") continue
+                const entry = params.resolved.toolBindings.get(part.name)
+                if (Predicate.isNotUndefined(entry) && Predicate.isUndefined(entry.binding)) {
+                  yield* processLocalReplay.setBinding(
+                    processLocalReplayBindingKey({
+                      sessionId: scope.sessionId,
+                      branchId: scope.branchId,
+                      assistantMessageId: assistantMessageIdForTurn(params.messageId, step),
+                      toolCallId: part.id,
+                    }),
+                    { entry },
+                  )
                 }
-              }),
-            ),
-          )
+              }
+            }),
+          ),
+        )
 
       const persistToolPartsLocal = (
         step: number,
@@ -411,18 +402,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             Effect.orDie,
           )
         },
-        persistExternalToolResult: (persistence, result) =>
-          persistToolParts({
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            messageId: persistence.toolResultMessageId,
-            parts: [result],
-          })
-            .pipe(Effect.provideService(MessageStorage, messageStorage))
-            .pipe(Effect.provideService(EventPublisher, eventPublisher))
-            .pipe(Effect.provideService(EventStorage, eventStorage))
-            .pipe(Effect.provideService(SqlClient.SqlClient, sql))
-            .pipe(Effect.asVoid, Effect.orDie),
       })
 
       if (Predicate.isUndefined(source)) {

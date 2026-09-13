@@ -27,6 +27,9 @@ const CompactInput = Schema.Struct({
   instructions: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
 })
 
+const WINDOW_NOTICE =
+  "Earlier context was dropped from the model view by context.newWindow(). It stays durable: use context.read(messageId) or context.read(toolCallId) to recover any of it."
+
 const ContextOperation = Schema.Literals(["status", "read", "compact", "newWindow"])
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
@@ -139,7 +142,7 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
       return { scheduled: "compact" } satisfies Schema.Json
     }
     case "newWindow": {
-      yield* ledger.schedule(ContextDirective.cases.NewWindow.make({}))
+      yield* ledger.schedule(ContextDirective.cases.NewWindow.make({ notice: WINDOW_NOTICE }))
       return { scheduled: "newWindow" } satisfies Schema.Json
     }
   }

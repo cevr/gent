@@ -20,9 +20,12 @@ import { ProviderError } from "../../domain/provider-error.js"
 import { StorageError } from "../../domain/storage-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
+import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
+import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+import { SqlClient } from "effect/unstable/sql"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import {
@@ -54,6 +57,7 @@ import {
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
 import { convertTools, ToolRunner } from "./tool-runner"
+import { persistToolParts } from "./turn-persistence.js"
 import {
   collectFailedModelTurnResponse,
   formatStreamErrorMessage,
@@ -138,6 +142,7 @@ const applyContextDirective = Effect.fn("TurnHelpers.applyContextDirective")(fun
       sessionId: params.sessionId,
       branchId: params.branchId,
       keepFromMessageId: anchor.value,
+      notice: params.directive.value.notice,
       createdAt: yield* DateTime.nowAsDate,
     }),
   )
@@ -155,11 +160,11 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   hash: (input: string) => string
   persistExternalToolCall: (
     toolCall: Prompt.ToolCallPart,
-  ) => Effect.Effect<ExternalToolPersistence, StorageError | TurnError>
-  persistExternalToolResult: (
-    persistence: ExternalToolPersistence,
-    result: Prompt.ToolResultPart,
-  ) => Effect.Effect<void, StorageError>
+  ) => Effect.Effect<
+    ExternalToolPersistence,
+    StorageError | TurnError,
+    EventPublisher | EventStorage | MessageStorage | ToolCallBindingStorage
+  >
 }) {
   const driverRegistry = yield* DriverRegistry
   const hostCtx = yield* CurrentExtensionHostContext
@@ -206,9 +211,15 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       return undefined
     }
 
+    // The executor calls back from its own context, so the tool run and its
+    // persistence carry the services they need from here.
     const toolRunner = yield* ToolRunner
     const extensionRegistry = yield* ExtensionRegistry
     const eventPublisher = yield* EventPublisher
+    const eventStorage = yield* EventStorage
+    const messageStorage = yield* MessageStorage
+    const toolBindingStorage = yield* ToolCallBindingStorage
+    const sql = yield* SqlClient.SqlClient
     const externalToolRunner = ExternalToolRunner.of({
       runTool: (toolName, args) =>
         Effect.gen(function* () {
@@ -240,9 +251,20 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
                 toolCallId,
               }),
             )
-          yield* params.persistExternalToolResult(persistence, result).pipe(Effect.orDie)
+          yield* persistToolParts({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            messageId: persistence.toolResultMessageId,
+            parts: [result],
+          }).pipe(Effect.orDie)
           return result
-        }),
+        }).pipe(
+          Effect.provideService(MessageStorage, messageStorage),
+          Effect.provideService(ToolCallBindingStorage, toolBindingStorage),
+          Effect.provideService(EventPublisher, eventPublisher),
+          Effect.provideService(EventStorage, eventStorage),
+          Effect.provideService(SqlClient.SqlClient, sql),
+        ),
     })
 
     return {

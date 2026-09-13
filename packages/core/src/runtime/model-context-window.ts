@@ -3,7 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { type BranchId, MessageId, type SessionId } from "../domain/ids.js"
 import { Message } from "../domain/message.js"
 
-/** Custom type of the durable marker `context.newWindow()` leaves in the transcript. */
+/** Custom type of the durable marker a NewWindow directive leaves in the transcript. */
 export const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
 
 const ContextWindowDetails = Schema.TaggedStruct(CONTEXT_WINDOW_MESSAGE_TYPE, {
@@ -14,14 +14,12 @@ type ContextWindowDetails = typeof ContextWindowDetails.Type
 
 const isWindowDetails = Schema.is(ContextWindowDetails)
 
-const WINDOW_NOTICE =
-  "Earlier context was dropped from the model view by context.newWindow(). It stays durable: use context.read(messageId) or context.read(toolCallId) to recover any of it."
-
 /** The marker is a user message so every provider accepts it at the head of the window. */
 export const windowMarkerMessage = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly keepFromMessageId: MessageId
+  readonly notice: string
   readonly createdAt: Date
 }) =>
   Message.cases.regular.make({
@@ -29,7 +27,7 @@ export const windowMarkerMessage = (params: {
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "user",
-    parts: [Prompt.textPart({ text: WINDOW_NOTICE })],
+    parts: [Prompt.textPart({ text: params.notice })],
     metadata: {
       customType: CONTEXT_WINDOW_MESSAGE_TYPE,
       details: ContextWindowDetails.make({ keepFromMessageId: params.keepFromMessageId }),

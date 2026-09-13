@@ -33,7 +33,7 @@ describe("model context ledger", () => {
         const ledger = yield* ModelContextLedger.make
         expect(Option.isNone(yield* ledger.pendingDirective)).toBe(true)
         yield* ledger.schedule(ContextDirective.cases.Compact.make({ instructions: "keep paths" }))
-        const newWindow = ContextDirective.cases.NewWindow.make({})
+        const newWindow = ContextDirective.cases.NewWindow.make({ notice: "older context dropped" })
         yield* ledger.schedule(newWindow)
         const pending = yield* ledger.pendingDirective
         expect(Option.map(pending, (directive) => directive._tag)).toEqual(Option.some("NewWindow"))
@@ -49,7 +49,9 @@ describe("model context ledger", () => {
       const ledger = yield* ModelContextLedger.make
       const stale = ContextDirective.cases.Compact.make({})
       yield* ledger.schedule(stale)
-      yield* ledger.schedule(ContextDirective.cases.NewWindow.make({}))
+      yield* ledger.schedule(
+        ContextDirective.cases.NewWindow.make({ notice: "older context dropped" }),
+      )
       yield* ledger.acknowledgeDirective(stale)
       expect(Option.map(yield* ledger.pendingDirective, (d) => d._tag)).toEqual(
         Option.some("NewWindow"),

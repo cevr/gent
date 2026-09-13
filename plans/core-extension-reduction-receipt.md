@@ -1214,3 +1214,21 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   moved inside the guarded work: the replay-after-restart tests pin that a
   receipt wins before any current-state lookup. Net −69 lines.
 - Eight test-utils names no other file named lost their `export`.
+
+## The window notice belongs to whoever opens the window (2026-09-13)
+
+- `runtime/model-context-window.ts` told the model to call
+  `context.newWindow()` and `context.read(...)`, which are cell tools. The
+  feature-independence guard was green only because the coupling was a
+  string. `ContextDirective.NewWindow` now carries a `notice`; the cell's
+  context host fills it and core's marker keeps whatever it was given.
+- `resolveTurnSource` took two persistence callbacks and the call site
+  re-provided four services into one of them. The external tool run now
+  carries its services from resolve time and persists its own result, so
+  the seam has one callback. Line-neutral; one concept fewer at the seam.
+- Rejected from the fourth explorer pass: the session-tree walk in the
+  mutations (a second recursive query costs what the BFS costs); the child
+  completion prose (it states the loop's own contract, and a formatter
+  parameter widens the seam); `ProcessLocalToolReplay` width (every method
+  has a caller); continuation prompts on the turn profile (line-neutral,
+  rejected before).

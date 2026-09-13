@@ -14,7 +14,8 @@ type ModelContextStatus = typeof ModelContextStatus.Type
 /** A request the model made from inside a cell; the next projection consumes it. */
 export const ContextDirective = Schema.TaggedUnion({
   Compact: { instructions: Schema.optional(Schema.String) },
-  NewWindow: {},
+  /** The issuer says how the model recovers what the window dropped; core only keeps it durable. */
+  NewWindow: { notice: Schema.NonEmptyString },
 })
 export type ContextDirective = typeof ContextDirective.Type
 

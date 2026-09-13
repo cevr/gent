@@ -38,6 +38,7 @@ describe("model context window", () => {
       sessionId,
       branchId,
       keepFromMessageId: anchor,
+      notice: "older context dropped",
       createdAt: dateFromMillis(2_000),
     })
     const windowed = messagesInCurrentWindow([...history, marker, message("u3", "user", 5)])
@@ -61,6 +62,7 @@ describe("model context window", () => {
       sessionId,
       branchId,
       keepFromMessageId: MessageId.make("u2"),
+      notice: "older context dropped",
       createdAt: dateFromMillis(2_000),
     })
     const latest = wide("u3", "user", 5)
@@ -88,6 +90,7 @@ describe("model context window", () => {
       sessionId,
       branchId,
       keepFromMessageId: MessageId.make("missing"),
+      notice: "older context dropped",
       createdAt: dateFromMillis(2_000),
     })
     expect(messagesInCurrentWindow([...history, marker])).toEqual([...history, marker])
