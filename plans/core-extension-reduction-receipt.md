@@ -1585,3 +1585,26 @@ single-importer types that cross a layer. Explorer verdict: "this is the
 last broad sweep worth running"; the remaining core is schema
 declarations, actor protocol, and distinct service implementations.
 Core is 27610 LOC.
+
+## Nineteenth pass: repeated blocks across files (2026-09-13)
+
+The confirmation explorer refuted "nothing left" with a cross-file
+repeated-block search, which the directory and concept passes could not
+see. `ExtensionEventSink` re-exposed `EventPublisher.publish` under a
+second Tag nothing yielded; `config-service.ts` carried three copies of
+the exists → read → decode pipeline (now `readConfigFile` plus an
+empty-on-error and an error-typed wrapper); the fifteen-line message
+chunk SELECT and the nine session columns were spelled out at seven sites
+(now `MESSAGE_CHUNK_SELECT` and `SESSION_COLUMNS` in `sqlite/rows.ts`,
+interpolated with `sql.literal`); `agent-loop.protocol.ts` had thirteen
+identical `id` closures (now `branchTarget`/`messageTarget`);
+`makeMemoryEventStore` and `EventStoreLive` shared registry, serialized
+delivery, publish, subscribe and removeSession (now `makeEventStore`
+with an `append`/`load`/`open` backend); `ExtensionHostRunProcessOptions`
+was a byte copy of `RunProcessOptions` (`5bcfab0e`). Skipped: routing
+`extension.request` through the `rpc` helper (it sets wide-event fields
+before the effect runs; the helper sets them after). Explorer verdict:
+"Continue — one final pass, then stop"; this was that pass. Left for the
+user (test-vehicle-only): the `session.delete` chain (~120 LOC, no
+client), `DependencyOverrides.modelRegistryLayer`, `makeServerRootLayer`.
+Core is 27,495 LOC.
