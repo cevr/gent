@@ -9,7 +9,7 @@ import {
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { headTailChars } from "../../domain/head-tail.js"
 import { MessageId, type RequestId } from "../../domain/ids.js"
-import { latestAssistantText } from "../../domain/message-part-projection.js"
+import { latestAssistantText } from "../../domain/message-part-display.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import {
   SessionOperationStorage,

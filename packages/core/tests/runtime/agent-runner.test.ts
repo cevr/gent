@@ -28,7 +28,7 @@ import {
 } from "../../src/runtime/agent/agent-runner"
 import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { waitFor } from "../../src/test-utils/fixtures"
-import { messageSingleText } from "../../src/domain/message-part-projection"
+import { messageSingleText } from "../../src/domain/message-part-display"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"

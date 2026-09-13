@@ -42,7 +42,7 @@ import {
   SessionId,
   type ToolCallId,
 } from "../../domain/ids.js"
-import { latestAssistantText, messagesToolCalls } from "../../domain/message-part-projection.js"
+import { latestAssistantText, messagesToolCalls } from "../../domain/message-part-display.js"
 import { Branch, Session } from "../../domain/message.js"
 import { GentPlatform } from "../gent-platform.js"
 import { BranchStorage } from "../../storage/branch-storage.js"

@@ -6,7 +6,7 @@ import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/
 import { ExtensionHost, defineExtension } from "@gent/core/extensions/api"
 import { DelegateExtension } from "../../src/delegate/delegate-tool.js"
 import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension.js"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection.js"
+import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
 import { CellTool } from "../../src/cell/cell-tool.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"

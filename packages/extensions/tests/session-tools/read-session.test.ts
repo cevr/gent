@@ -6,7 +6,7 @@ import {
   renderMessageParts,
   renderSessionTree,
 } from "../../src/session-tools/read-session.js"
-import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-projection"
+import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-display"
 import {
   dateFromMillis,
   Branch,

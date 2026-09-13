@@ -16,11 +16,11 @@ import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../..
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { hasMessage } from "../../domain/guards.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
+import { normalizeResponseParts } from "../../domain/response-part-normalization.js"
 import {
-  normalizeResponseParts,
   projectResponsePartsToMessageParts,
   responseUsage,
-} from "../../domain/message-part-projection.js"
+} from "../../domain/response-to-prompt.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import { encodeToolOutput, summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
 import type { AssistantResponsePart, ToolResponsePart } from "./turn-persistence.js"

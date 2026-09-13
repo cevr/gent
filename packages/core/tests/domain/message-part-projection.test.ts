@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test"
 import {
   assistantMessagePartToResponsePart,
   messagePartToPromptPart,
+  toolResultPartToResponsePart,
+} from "../../src/domain/prompt-to-response"
+import {
   messagePartsImages,
   messagePartsReasoning,
   messagePartsReasoningLines,
@@ -13,10 +16,11 @@ import {
   projectMessagesWithToolInteractions,
   messagePartsToolCallParts,
   messageSingleText,
+} from "../../src/domain/message-part-display"
+import {
   responsePartToAssistantMessagePart,
   responsePartToToolResultPart,
-  toolResultPartToResponsePart,
-} from "../../src/domain/message-part-projection"
+} from "../../src/domain/response-to-prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import * as Prompt from "effect/unstable/ai/Prompt"

@@ -28,7 +28,7 @@ import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src
 import {
   messagePartsText,
   messagePartsToolCallParts,
-} from "../../../src/domain/message-part-projection"
+} from "../../../src/domain/message-part-display"
 import {
   AgentDefinition,
   AgentName,

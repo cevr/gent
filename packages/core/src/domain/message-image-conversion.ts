@@ -2,7 +2,7 @@ import { Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 
-export class UrlBackedImageNotSupportedError extends Schema.TaggedError<UrlBackedImageNotSupportedError>()(
+class UrlBackedImageNotSupportedError extends Schema.TaggedError<UrlBackedImageNotSupportedError>()(
   "UrlBackedImageNotSupportedError",
   {
     image: Schema.String,
@@ -19,7 +19,7 @@ export const filePartDataToDisplay = (part: Prompt.FilePart): string => {
   return `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`
 }
 
-export const dataUrlToBytes = (value: string): Option.Option<Uint8Array> => {
+const dataUrlToBytes = (value: string): Option.Option<Uint8Array> => {
   const match = /^data:([^;,]+);base64,(.+)$/u.exec(value)
   if (Predicate.isNull(match)) return Option.none()
   const data = match[2]

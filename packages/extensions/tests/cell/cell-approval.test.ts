@@ -9,7 +9,7 @@ import {
   type LoadedExtension,
 } from "@gent/core-internal/domain/extension.js"
 import { ExtensionId } from "@gent/core-internal/domain/ids.js"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection.js"
+import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
 import { CellTool } from "../../src/cell/cell-tool.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"

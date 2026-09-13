@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Option, Predicate } from "effect"
 import type { SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
-import { projectMessagesWithToolInteractions } from "../domain/message-part-projection.js"
+import { projectMessagesWithToolInteractions } from "../domain/message-part-display.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { normalizeResponseParts } from "../../src/domain/response-part-normalization"
 import {
-  normalizeResponseParts,
   promptFromResponseParts,
   projectResponsePartsToMessageParts,
-  responsePartsFromMessages,
-} from "../../src/domain/message-part-projection"
+} from "../../src/domain/response-to-prompt"
+import { responsePartsFromMessages } from "../../src/domain/prompt-to-response"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,

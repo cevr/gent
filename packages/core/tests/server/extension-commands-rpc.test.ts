@@ -23,7 +23,7 @@ import {
 import { textStep } from "../../src/debug/provider"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { waitFor } from "../../src/test-utils/fixtures"
-import { messageSingleText } from "../../src/domain/message-part-projection"
+import { messageSingleText } from "../../src/domain/message-part-display"
 import type { Message } from "../../src/domain/message"
 import {
   ExtensionRegistry,

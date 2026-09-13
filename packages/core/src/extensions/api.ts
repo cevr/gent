@@ -98,7 +98,7 @@ export { Model, ModelId } from "../domain/model.js"
 export { AuthMethod } from "../domain/auth.js"
 export { dateFromMillis, type Message, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
-export { messagePartsDisplayText } from "../domain/message-part-projection.js"
+export { messagePartsDisplayText } from "../domain/message-part-display.js"
 export { PermissionRule } from "../domain/permission.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed

@@ -13,7 +13,7 @@ import {
 } from "@gent/core-internal/domain/extension.js"
 import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids.js"
 import { SteerCommand } from "@gent/core-internal/domain/steer.js"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-projection.js"
+import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
 import { dispatchCell } from "../../src/cell/cell-dispatch.js"
 import { CellTool } from "../../src/cell/cell-tool.js"
 import { CellExtension } from "../../src/cell/cell-extension.js"

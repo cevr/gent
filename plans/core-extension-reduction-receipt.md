@@ -1014,3 +1014,12 @@ messageId)` returns when the loop no longer holds the message (not starting,
   beside its one caller and is no longer public extension API. Its tests
   moved with it.
 
+## No projection barrel (2026-09-13)
+
+- `domain/message-part-projection.ts` re-exported five modules under one
+  name, so 24 importers named a barrel instead of the module that owns the
+  function. The barrel is gone; every importer names the owner
+  (`message-part-display`, `prompt-to-response`, `response-to-prompt`,
+  `response-part-normalization`, `message-image-conversion`). Two exports
+  that only the barrel re-exported (`dataUrlToBytes`,
+  `UrlBackedImageNotSupportedError`) are module-private now.

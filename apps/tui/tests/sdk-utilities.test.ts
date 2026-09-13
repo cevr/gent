@@ -11,7 +11,7 @@ import {
   dateFromMillis,
   type MessagePart,
 } from "@gent/core/protocol"
-import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-projection"
+import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-display"
 
 const absent = Option.getOrUndefined(Option.none())
 let messageIndex = 0

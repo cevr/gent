@@ -11,7 +11,7 @@ import {
   messagePartsTextLines,
   messagePartsToolCallParts,
   messageSingleText,
-} from "../../domain/message-part-projection.js"
+} from "../../domain/message-part-display.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Option, Predicate } from "effect"
 import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"

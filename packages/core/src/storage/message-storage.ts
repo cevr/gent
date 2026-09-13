@@ -7,7 +7,7 @@
 import { Predicate, Context, Effect, Layer, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import { MessageRole, type Message } from "../domain/message.js"
-import { messagePartsSearchText } from "../domain/message-part-projection.js"
+import { messagePartsSearchText } from "../domain/message-part-display.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/storage-error.js"
 import { SqlClient, SqlModel } from "effect/unstable/sql"
