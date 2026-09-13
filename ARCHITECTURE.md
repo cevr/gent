@@ -341,7 +341,10 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   `AgentRunSucceeded` for the transcript. The follow-up
   message id is the idempotency key; delivery is serialized and watchers are
   deduplicated per request. Startup reconciles the registry: finished children
-  are delivered, unfinished ones are watched again. No cell or tool waits for a
+  are delivered, unfinished ones are watched again. Admission and the watcher
+  run as one uninterruptible step: a caller that dies between them (a cell
+  worker that crashed mid-op, a cancelled tool call) still leaves a watched
+  child, never a running one nobody delivers. No cell or tool waits for a
   child; the model reads completion on a later turn.
   `ExtensionContext.Agent` exposes these operations with host-owned parent IDs.
   Start requires a tool context and injects its tool-call ID. Requests can inspect,
@@ -615,6 +618,12 @@ incomplete calls do not reset the worker. A repeated reset call returns its save
 result without clearing newer working state. Cancellation checks run before reset.
 Reset uses the existing worker reset and bounded replacement path; it does not
 replay old source or erase operation receipts.
+
+A cell script can finish before its host calls settle: a rejected
+`Promise.all` leaves the other calls in flight. The worker ends the cell only
+after the last pending call has a reply, then reports the script's own result,
+so the host never sees a cell end with orphaned calls and never tears down
+work those calls admitted.
 
 Fresh cell host calls select only from the supplied turn bindings. They do not
 search the full extension registry by name. Thus an agent-denied tool cannot be

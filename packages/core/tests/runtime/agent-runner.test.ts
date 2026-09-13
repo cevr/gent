@@ -3,6 +3,7 @@ import type { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   Context,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -142,6 +143,7 @@ const withEventPublisher = (baseEventStoreLayer: Layer.Layer<EventStore>) =>
 const makeLiveAgentRunnerLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   delivery: "silent" | "live" = "silent",
+  wrapSessionRuntime: (live: SessionRuntimeService) => SessionRuntimeService = (live) => live,
 ) => {
   const resolved = resolveExtensions([
     {
@@ -191,9 +193,16 @@ const makeLiveAgentRunnerLayer = (
     ephemeralParentServices,
     AgentLoopSessionGovernance.Live,
   )
-  const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+  const sessionRuntimeLayer = Layer.effect(
+    SessionRuntime,
+    Effect.map(SessionRuntime, wrapSessionRuntime),
+  ).pipe(
+    Layer.provide(
+      Layer.provide(
+        SessionRuntime.Live({ baseSections: [] }),
+        Layer.merge(baseDeps, eventPublisherLayer),
+      ),
+    ),
   )
   const sessionMutationsLayer = Layer.provide(
     SessionCommands.SessionMutationsLive,
@@ -715,6 +724,76 @@ describe("AgentRunner", () => {
         }).pipe(Effect.provideContext(context))
       }).pipe(Effect.timeout("6 seconds")),
     8000,
+  )
+
+  it.scopedLive(
+    "a child admitted by an interrupted caller is still delivered to its parent",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("child says hi"), gated: true },
+          textStep("parent noticed"),
+        ])
+        // Admission pauses inside the runtime so the caller can die mid-way:
+        // the tool fiber of a cell worker that crashed during the op.
+        const reached = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const context = yield* Layer.build(
+          makeLiveAgentRunnerLayer(providerLayer, "live", (live) => ({
+            ...live,
+            sendUserMessage: (input) =>
+              Deferred.succeed(reached, void 0).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(live.sendUserMessage(input)),
+              ),
+          })),
+        )
+        yield* Effect.gen(function* () {
+          const runner = yield* AgentRunnerService
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const messages = yield* MessageStorage
+          const parentSessionId = SessionId.make("interrupted-parent")
+          const parentBranchId = BranchId.make("interrupted-parent-branch")
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessions.createSession(
+            new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          )
+          yield* branches.createBranch(
+            new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+          )
+          const requestId = RequestId.make("interrupted-child")
+          const caller = yield* Effect.forkChild(
+            runner.start({
+              agent: builtinAgent,
+              prompt: "Say hi",
+              cwd: "/tmp",
+              parentSessionId,
+              parentBranchId,
+              toolCallId: ToolCallId.make("interrupted-tool"),
+              requestId,
+            }),
+          )
+          yield* Deferred.await(reached)
+          caller.interruptUnsafe()
+          yield* Deferred.succeed(release, void 0)
+          yield* Fiber.await(caller)
+          const admitted = yield* runner.list({ parentSessionId, parentBranchId })
+          expect(admitted.map((entry) => entry.requestId)).toEqual([requestId])
+          yield* controls.waitForCall(0)
+          yield* controls.emitAll(0)
+          const noticed = yield* waitFor(
+            messages.listMessages(parentBranchId),
+            (items) => items.some((item) => item.metadata?.customType === "child-completion"),
+            4000,
+            "child completion after an interrupted caller",
+          )
+          expect(
+            noticed.filter((item) => item.metadata?.customType === "child-completion"),
+          ).toHaveLength(1)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("8 seconds")),
+    10000,
   )
 
   it.scopedLive(

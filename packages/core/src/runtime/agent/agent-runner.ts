@@ -154,7 +154,10 @@ export const InProcessRunner = (
             },
           })
           return child
-        }),
+          // Admission and the completion watcher stand or fall together. A caller
+          // interrupted between them (a dying cell worker, a cancelled tool call)
+          // would leave a running child nobody delivers.
+        }, Effect.uninterruptible),
         inspect: Effect.fn("AgentRunner.inspect")((params) =>
           durableRuntime.inspect(params).pipe(
             Effect.provideService(EventStorage, eventStorage),

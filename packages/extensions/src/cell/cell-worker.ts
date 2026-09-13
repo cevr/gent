@@ -114,15 +114,22 @@ export const runCellWorker = Effect.scoped(
             CellResponse.cases.Evaluated.make({ cellId: request.cellId, result }),
         }),
         Effect.tap(() => transport.endCellOutput(request.outputToken)),
-        Effect.flatMap((response) => {
-          if (pending.size > 0) {
-            return Effect.fail(
-              new CellProtocolError({ message: "Cell ended with pending host calls" }),
-            )
-          }
-          activeCell = Option.none()
-          return transport.send(response)
-        }),
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            // A script can end before its host calls settle: a rejected
+            // Promise.all leaves the others in flight. The cell ends when the
+            // last one does, so the host never sees an orphaned call.
+            while (pending.size > 0) {
+              yield* Effect.forEach(
+                Array.from(pending.values()),
+                (reply) => Effect.ignore(Deferred.await(reply)),
+                { discard: true },
+              )
+            }
+            activeCell = Option.none()
+            yield* transport.send(response)
+          }),
+        ),
         Effect.catchCause((cause) => Deferred.failCause(fatal, cause)),
         Effect.forkScoped,
       )

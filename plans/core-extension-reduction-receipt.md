@@ -869,3 +869,24 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
 - `apps/tui/src/utils/shell.ts` carried its own `saveFullOutput` writing to
   `~/tool-output`; it now calls the one in `domain/output-buffer.ts` that the
   bash tool uses, so every truncated output lands in one place.
+
+## Interrupted admission and early-ending cell scripts (2026-09-13)
+
+- Gamut run 4 (opus-sonnet): the orchestrator issued six background
+  `delegate` calls from one cell op via `Promise.all`; the fifth and sixth
+  hit the four-child cap, the promise rejected, the script ended with four
+  host calls in flight, and the worker died with "Cell ended with pending
+  host calls". The host tore down the cell scope, which interrupted the four
+  admitted `AgentRunner.start` calls between the durable admission and
+  `ChildCompletionDelivery.watch`. Four children ran, nobody delivered them,
+  the parent stayed idle with two tasks queued.
+- `AgentRunner.start` is now `Effect.uninterruptible`: admission and the
+  watcher stand or fall together. Regression test gates admission inside a
+  wrapped `SessionRuntime`, interrupts the caller at that point, and asserts
+  the child completion still lands (fails by timeout without the fix).
+- The cell worker waits for pending host calls to settle before reporting
+  the script's result instead of failing the worker. The 33-call limit test
+  now replies to the 32 in-flight calls and reads the script's own failure.
+- New RPC acceptance test `delegate-background-child.test.ts` drives
+  background delegation through the real runner and waits for the
+  child-completion message and the parent's follow-up turn.

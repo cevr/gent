@@ -204,9 +204,10 @@ describe("cell worker", () => {
     }).pipe(Effect.timeout("3 seconds")),
   )
 
-  it.scopedLive("stops when a cell exceeds the pending host-call limit", () =>
+  it.scopedLive("a script that ends with host calls in flight reports once they settle", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness
+      // The 33rd call fails at once and rejects the Promise.all; 32 stay in flight.
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "one",
@@ -214,8 +215,31 @@ describe("cell worker", () => {
           source: "await Promise.all(Array.from({ length: 33 }, () => tools.call('wait', {})))",
         }),
       )
-      const error = yield* Fiber.join(worker.fiber).pipe(Effect.flip)
-      expect(error.message).toContain("pending host calls")
+      const calls: Array<Extract<CellResponse, { _tag: "HostCall" }>> = []
+      while (calls.length < 32) {
+        const frame = yield* worker.next
+        if (frame._tag !== "HostCall")
+          return yield* new CellProtocolError({ message: `Expected host call, got ${frame._tag}` })
+        calls.push(frame)
+      }
+      for (const call of calls) {
+        yield* worker.send(
+          CellRequest.cases.HostSucceeded.make({
+            cellId: call.cellId,
+            operationId: call.operationId,
+            value: 1,
+          }),
+        )
+      }
+      const result = yield* worker.next
+      if (result._tag !== "Failed")
+        return yield* new CellProtocolError({ message: "Expected failure" })
+      expect(result.error.message).toContain("host-call limit")
+      // The worker is intact and idle for the next cell.
+      yield* worker.send(
+        CellRequest.cases.Evaluate.make({ cellId: "two", outputToken: "two-token", source: "42" }),
+      )
+      expect((yield* worker.next)._tag).toBe("Evaluated")
     }).pipe(Effect.timeout("3 seconds")),
   )
 })
