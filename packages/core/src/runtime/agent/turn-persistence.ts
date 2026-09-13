@@ -13,7 +13,7 @@ import { Message } from "../../domain/message.js"
 import {
   decodeToolOutput,
   encodeToolOutput,
-  summarizeToolOutput,
+  summarizeOutput,
   stringifyOutput,
 } from "../../domain/tool-output.js"
 import { EventStorage } from "../../storage/event-storage.js"
@@ -222,7 +222,7 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
         branchId: params.branchId,
         toolCallId,
         toolName: part.name,
-        summary: summarizeToolOutput(part),
+        summary: summarizeOutput(part.result),
         output: stringifyOutput(part.result),
         resultJson: encodeToolOutput(part.result),
         assistantMessageId: params.assistantMessageId,

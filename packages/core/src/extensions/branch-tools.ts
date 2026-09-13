@@ -70,7 +70,7 @@ export { CurrentDispatchingCall } from "../runtime/agent/current-dispatching-cal
 export { CurrentToolCall } from "../runtime/agent/current-tool-call.js"
 export { type ResolvedToolCapability, ToolRunner } from "../runtime/agent/tool-runner.js"
 export { getToolMetadata } from "../domain/capability/tool.js"
-export { summarizeToolOutput } from "../domain/tool-output.js"
+export { summarizeOutput } from "../domain/tool-output.js"
 
 // Running a turn's worth of work, and stopping when the turn is interrupted.
 export {

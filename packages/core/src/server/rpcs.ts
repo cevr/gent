@@ -24,7 +24,7 @@ import {
   ExtensionRpcRequestInput,
   type GentConnectionError,
   ListAuthMethodsSuccess,
-  ListAuthProvidersInput,
+  ListAuthProvidersPayload,
   SetAuthKeyInput,
   SetDriverOverrideInput,
   SlashCommandInfo,
@@ -59,7 +59,7 @@ class RuntimeRpcs extends RpcGroup.make(
 
 class AuthRpcs extends RpcGroup.make(
   Rpc.make("listProviders", {
-    payload: ListAuthProvidersInput.fields,
+    payload: ListAuthProvidersPayload.fields,
     success: Schema.Array(AuthProviderInfo),
     error: GentRpcError,
   }),

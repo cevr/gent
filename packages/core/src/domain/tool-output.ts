@@ -1,5 +1,4 @@
 import { Option, Predicate, Result, Schema } from "effect"
-import type * as Prompt from "effect/unstable/ai/Prompt"
 
 /** Structured failure data. The runner, not the tool, owns transcript identity. */
 export class ToolResultFailure extends Schema.TaggedError<ToolResultFailure>()(
@@ -57,6 +56,3 @@ export const summarizeOutput = (value: unknown): string => {
   }
   return String(value)
 }
-
-export const summarizeToolOutput = (result: Prompt.ToolResultPart): string =>
-  summarizeOutput(result.result)

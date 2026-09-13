@@ -8,6 +8,7 @@ import {
   SessionSettingsUpdated,
   SessionStarted,
   type AgentEvent,
+  type EventEnvelope,
   type EventStoreError,
 } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -39,10 +40,6 @@ import { NotFoundError } from "./errors.js"
 import type { CreateSessionInput } from "./transport-contract.js"
 import { CurrentWorkspaceId } from "./workspace-rpc.js"
 
-interface CreateBranchResult {
-  readonly branchId: BranchId
-}
-
 interface CreateSessionResult {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -53,10 +50,6 @@ type CreateBranchInput = Parameters<SessionMutationsService["createSessionBranch
 type ForkBranchInput = Parameters<SessionMutationsService["forkSessionBranch"]>[0]
 type SwitchBranchInput = Parameters<SessionMutationsService["switchActiveBranch"]>[0]
 type SessionMutationError = Effect.Error<ReturnType<SessionMutationsService["switchActiveBranch"]>>
-
-const createBranchResult = (operation: StoredBranchResult): CreateBranchResult => ({
-  branchId: operation.branchId,
-})
 
 const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
   sessionId: operation.sessionId,
@@ -91,22 +84,25 @@ const makeSessionMutationsService: Effect.Effect<
    * receipt is written in the same transaction as the work, and checked again
    * inside it so two concurrent retries cannot both do the work.
    */
-  const once = <A, Env, E, R>(
+  const eventPublisher = yield* EventPublisher
+  const once = <A, E, R>(
     operation: DurableOperation<A>,
     { requestId }: { readonly requestId?: RequestId },
     subject: (result: A) => { readonly sessionId: SessionId; readonly branchId: BranchId },
-    work: Effect.Effect<{ readonly envelope: Env; readonly result: A }, E, R>,
-  ): Effect.Effect<{ readonly envelope?: Env; readonly result: A }, E | StorageError, R> =>
+    work: Effect.Effect<{ readonly envelope: EventEnvelope; readonly result: A }, E, R>,
+  ): Effect.Effect<{ readonly result: A; readonly fresh: boolean }, E | StorageError, R> =>
     Effect.gen(function* () {
       if (!Predicate.isUndefined(requestId)) {
         const existing = yield* sessionOperationStorage.getReceipt(operation, requestId)
-        if (!Predicate.isUndefined(existing)) return { result: existing }
+        if (!Predicate.isUndefined(existing)) return { result: existing, fresh: false }
       }
-      return yield* storageTransaction(
+      const committed = yield* storageTransaction(
         Effect.gen(function* () {
           if (!Predicate.isUndefined(requestId)) {
             const existing = yield* sessionOperationStorage.getReceipt(operation, requestId)
-            if (!Predicate.isUndefined(existing)) return { result: existing }
+            if (!Predicate.isUndefined(existing)) {
+              return { result: existing, envelope: Option.none<EventEnvelope>() }
+            }
           }
           const committed = yield* work
           if (!Predicate.isUndefined(requestId)) {
@@ -117,11 +113,13 @@ const makeSessionMutationsService: Effect.Effect<
               subject(committed.result),
             )
           }
-          return committed
+          return { result: committed.result, envelope: Option.some(committed.envelope) }
         }),
       )
+      if (Option.isNone(committed.envelope)) return { result: committed.result, fresh: false }
+      yield* eventPublisher.deliver(committed.envelope.value)
+      return { result: committed.result, fresh: true }
     })
-  const eventPublisher = yield* EventPublisher
   const platform = yield* GentPlatform
   const sessionRuntime = yield* SessionRuntime
   const governance = yield* AgentLoopSessionGovernance
@@ -302,8 +300,7 @@ const makeSessionMutationsService: Effect.Effect<
         return { envelope, result }
       }),
     )
-    if (!Predicate.isUndefined(committed.envelope)) {
-      yield* eventPublisher.deliver(committed.envelope)
+    if (committed.fresh) {
       yield* Effect.logInfo("session.created").pipe(
         Effect.annotateLogs({
           sessionId: committed.result.sessionId,
@@ -343,10 +340,7 @@ const makeSessionMutationsService: Effect.Effect<
         return { envelope, result }
       }),
     )
-    if (!Predicate.isUndefined(committed.envelope)) {
-      yield* eventPublisher.deliver(committed.envelope)
-    }
-    return createBranchResult(committed.result)
+    return committed.result
   })
 
   const forkSessionBranch = Effect.fn("SessionMutations.forkSessionBranch")(function* (
@@ -399,16 +393,13 @@ const makeSessionMutationsService: Effect.Effect<
         return { envelope, result }
       }),
     )
-    if (!Predicate.isUndefined(committed.envelope)) {
-      yield* eventPublisher.deliver(committed.envelope)
-    }
-    return createBranchResult(committed.result)
+    return committed.result
   })
 
   const switchActiveBranch = Effect.fn("SessionMutations.switchActiveBranch")(function* (
     input: SwitchBranchInput,
   ) {
-    const committed = yield* once(
+    yield* once(
       DurableOperations.switchBranch,
       input,
       (result) => ({ sessionId: result.sessionId, branchId: result.toBranchId }),
@@ -453,9 +444,6 @@ const makeSessionMutationsService: Effect.Effect<
         return { envelope, result }
       }),
     )
-    if (!Predicate.isUndefined(committed.envelope)) {
-      yield* eventPublisher.deliver(committed.envelope)
-    }
   })
 
   // ── requestId dedup ──
@@ -478,12 +466,12 @@ const makeSessionMutationsService: Effect.Effect<
   >({ body: createSession, keyOf })
   const dedupCreateSessionBranch = yield* makeRequestDeduper<
     CreateBranchInput,
-    CreateBranchResult,
+    StoredBranchResult,
     SessionMutationError
   >({ body: createSessionBranch, keyOf })
   const dedupForkSessionBranch = yield* makeRequestDeduper<
     ForkBranchInput,
-    CreateBranchResult,
+    StoredBranchResult,
     SessionMutationError
   >({ body: forkSessionBranch, keyOf })
   const dedupSwitchActiveBranch = yield* makeRequestDeduper<

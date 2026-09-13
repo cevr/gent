@@ -111,6 +111,8 @@ export type AuthProviderInfo = typeof AuthProviderInfo.Type
  * agents skip model auth). Excludes `driverOverrides`: those are
  * server-derived from config and never trusted from the wire.
  */
+// Public RPC payload — the server re-derives `driverOverrides` from session-cwd
+// config, so callers cannot smuggle in an override that bypasses model auth.
 export const ListAuthProvidersPayload = Schema.Struct({
   agentName: Schema.optional(AgentName),
   sessionId: Schema.optional(SessionId),

@@ -1,5 +1,5 @@
 import { ToolCallId } from "@gent/core/extensions/api"
-import { type OwnedToolCallAddress, summarizeToolOutput } from "@gent/core/extensions/branch-tools"
+import { type OwnedToolCallAddress, summarizeOutput } from "@gent/core/extensions/branch-tools"
 import { Effect, Option, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { CellToolOperationStorage, type CellToolOperation } from "./cell-tool-operation-storage.js"
@@ -33,7 +33,7 @@ const receiptFor = (operation: CellToolOperation): CellOperationReceipt => {
     toolCallId: operation.toolCallId,
     tool: operation.binding.toolId,
     outcome,
-    summary: summarizeToolOutput(operation.state.result),
+    summary: summarizeOutput(operation.state.result.result),
   }
 }
 

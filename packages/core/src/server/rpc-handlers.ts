@@ -4,7 +4,7 @@ import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { EventId, EventStore, InteractionResolved } from "../domain/event.js"
-import { SessionId, type BranchId, type ExtensionId } from "../domain/ids.js"
+import { SessionId, type BranchId, type ExtensionId, type RequestId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
@@ -52,7 +52,7 @@ import {
   type ExtensionRpcRequestInput,
   type ForkBranchInput,
   type GetSessionSnapshotInput,
-  type ListAuthProvidersInput,
+  type ListAuthProvidersPayload,
   type QueueDrainInput,
   type QueueTarget,
   type RespondInteractionInput,
@@ -243,6 +243,18 @@ const authPersistenceError = (
     cause,
   })
 
+/** Run one RPC inside its wide-event boundary and record the fields its result names. */
+const rpc = <A, E, R>(
+  method: string,
+  effect: Effect.Effect<A, E, R>,
+  fields: (result: A) => Parameters<typeof WideEvent.set>[0],
+  requestId?: RequestId,
+) =>
+  effect.pipe(
+    Effect.tap((result) => WideEvent.set(fields(result))),
+    withWideEvent(WideEventBoundary.rpc(method, { requestId })),
+  )
+
 const extensionRequestError = (params: {
   readonly extensionId: ExtensionId
   readonly capabilityId: string
@@ -343,13 +355,11 @@ const RpcHandlers = GentRpcs.toLayer(
       // Session / branch / message / queue / interaction
       // ----------------------------------------------------------------------
       "session.create": (input: CreateSessionInput) =>
-        mutations.createSession(input).pipe(
-          Effect.tap((result) => WideEvent.set({ sessionId: result.sessionId })),
-          withWideEvent(
-            WideEventBoundary.rpc("session.create", {
-              requestId: input.requestId,
-            }),
-          ),
+        rpc(
+          "session.create",
+          mutations.createSession(input),
+          (result) => ({ sessionId: result.sessionId }),
+          input.requestId,
         ),
 
       "session.list": () => sessionStorage.listSessions,
@@ -360,25 +370,13 @@ const RpcHandlers = GentRpcs.toLayer(
           .pipe(Effect.map(Option.fromUndefinedOr), Effect.map(Option.getOrNull)),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
-        mutations.deleteSession(sessionId).pipe(
-          Effect.tap(() => WideEvent.set({ sessionId })),
-          withWideEvent(WideEventBoundary.rpc("session.delete")),
-        ),
+        rpc("session.delete", mutations.deleteSession(sessionId), () => ({ sessionId })),
 
-      "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>
-        getSessionSnapshot({ sessionId, branchId }).pipe(
-          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(WideEventBoundary.rpc("session.getSnapshot")),
-        ),
+      "session.getSnapshot": (input: GetSessionSnapshotInput) =>
+        rpc("session.getSnapshot", getSessionSnapshot(input), () => input),
 
-      "session.updateReasoningLevel": ({
-        sessionId,
-        reasoningLevel,
-      }: UpdateSessionReasoningLevelInput) =>
-        mutations.updateReasoningLevel({ sessionId, reasoningLevel }).pipe(
-          Effect.tap(() => WideEvent.set({ sessionId, reasoningLevel })),
-          withWideEvent(WideEventBoundary.rpc("session.updateReasoningLevel")),
-        ),
+      "session.updateReasoningLevel": (input: UpdateSessionReasoningLevelInput) =>
+        rpc("session.updateReasoningLevel", mutations.updateReasoningLevel(input), () => input),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
         const subscription = { sessionId, branchId, synchronize: true }
@@ -392,107 +390,82 @@ const RpcHandlers = GentRpcs.toLayer(
       "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
       "branch.create": (input: CreateBranchInput) =>
-        mutations.createSessionBranch(input).pipe(
-          Effect.tap((result) =>
-            WideEvent.set({ sessionId: input.sessionId, branchId: result.branchId }),
-          ),
-          withWideEvent(WideEventBoundary.rpc("branch.create", { requestId: input.requestId })),
+        rpc(
+          "branch.create",
+          mutations.createSessionBranch(input),
+          (result) => ({ sessionId: input.sessionId, branchId: result.branchId }),
+          input.requestId,
         ),
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
       "branch.switch": (input: SwitchBranchInput) =>
-        mutations.switchActiveBranch(input).pipe(
-          Effect.tap(() =>
-            WideEvent.set({
-              sessionId: input.sessionId,
-              fromBranchId: input.fromBranchId,
-              toBranchId: input.toBranchId,
-            }),
-          ),
-          withWideEvent(WideEventBoundary.rpc("branch.switch", { requestId: input.requestId })),
+        rpc(
+          "branch.switch",
+          mutations.switchActiveBranch(input),
+          () => ({
+            sessionId: input.sessionId,
+            fromBranchId: input.fromBranchId,
+            toBranchId: input.toBranchId,
+          }),
+          input.requestId,
         ),
 
       "branch.fork": (input: ForkBranchInput) =>
-        mutations.forkSessionBranch(input).pipe(
-          Effect.tap((result) =>
-            WideEvent.set({
-              sessionId: input.sessionId,
-              fromBranchId: input.fromBranchId,
-              branchId: result.branchId,
-            }),
-          ),
-          withWideEvent(WideEventBoundary.rpc("branch.fork", { requestId: input.requestId })),
+        rpc(
+          "branch.fork",
+          mutations.forkSessionBranch(input),
+          (result) => ({
+            sessionId: input.sessionId,
+            fromBranchId: input.fromBranchId,
+            branchId: result.branchId,
+          }),
+          input.requestId,
         ),
 
-      "message.send": ({
-        sessionId,
-        branchId,
-        content,
-        agentOverride,
-        runSpec,
-        requestId,
-      }: SendMessageInput) =>
-        sendMessage({
-          sessionId,
-          branchId,
-          content,
-          agentOverride,
-          runSpec,
-          requestId,
-        }).pipe(
-          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(
-            WideEventBoundary.rpc("message.send", {
-              requestId,
-            }),
-          ),
+      "message.send": (input: SendMessageInput) =>
+        rpc(
+          "message.send",
+          sendMessage(input),
+          () => ({ sessionId: input.sessionId, branchId: input.branchId }),
+          input.requestId,
         ),
 
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
-        sessionRuntime.steer(command).pipe(
-          Effect.tap(() =>
-            WideEvent.set({
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              steerTag: command._tag,
-            }),
-          ),
-          withWideEvent(WideEventBoundary.rpc("steer.command")),
-        ),
+        rpc("steer.command", sessionRuntime.steer(command), () => ({
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          steerTag: command._tag,
+        })),
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
-        sessionRuntime.drainQueuedMessages({ sessionId, branchId, requestId }).pipe(
-          Effect.withSpan("SessionRuntime.drainQueuedMessages"),
-          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(
-            WideEventBoundary.rpc("queue.drain", {
-              requestId,
-            }),
-          ),
+        rpc(
+          "queue.drain",
+          sessionRuntime
+            .drainQueuedMessages({ sessionId, branchId, requestId })
+            .pipe(Effect.withSpan("SessionRuntime.drainQueuedMessages")),
+          () => ({ sessionId, branchId }),
+          requestId,
         ),
 
-      "queue.get": ({ sessionId, branchId }: QueueTarget) =>
-        sessionRuntime.getQueuedMessages({ sessionId, branchId }).pipe(
-          Effect.withSpan("SessionQueries.getQueuedMessages"),
-          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-          withWideEvent(WideEventBoundary.rpc("queue.get")),
+      "queue.get": (input: QueueTarget) =>
+        rpc(
+          "queue.get",
+          sessionRuntime
+            .getQueuedMessages(input)
+            .pipe(Effect.withSpan("SessionQueries.getQueuedMessages")),
+          () => input,
         ),
 
       "interaction.respondInteraction": (input: RespondInteractionInput) =>
-        respondInteraction(input).pipe(
-          Effect.tap(() =>
-            WideEvent.set({
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              requestId: input.requestId,
-              approved: input.approved,
-            }),
-          ),
-          withWideEvent(WideEventBoundary.rpc("interaction.respondInteraction")),
-        ),
+        rpc("interaction.respondInteraction", respondInteraction(input), () => ({
+          sessionId: input.sessionId,
+          branchId: input.branchId,
+          requestId: input.requestId,
+          approved: input.approved,
+        })),
 
       // ----------------------------------------------------------------------
       // Config / driver / model / auth / permission
@@ -577,7 +550,7 @@ const RpcHandlers = GentRpcs.toLayer(
           yield* invalidateExternalDriversFor(Option.fromUndefinedOr(prevOverride), Option.none())
         }),
 
-      "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersInput) =>
+      "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
           let cwd = Option.none<string>()
           if (!Predicate.isUndefined(sessionId)) {

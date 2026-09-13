@@ -34,14 +34,6 @@ import {
 export { Branch, BranchTreeNode, Session }
 export type { SessionRuntimeState } from "../runtime/agent/agent-loop.state.js"
 
-/**
- * Client-generated request ID for end-to-end correlation and transport-retry
- * dedup. Bounded to 128 chars so a malicious/buggy client cannot bloat the
- * per-server dedup cache with arbitrary-length keys. Callers in this repo
- * use `crypto.randomUUID()` which fits comfortably.
- */
-const RequestIdSchema = RequestId
-
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
@@ -51,16 +43,14 @@ export const CreateSessionInput = Schema.Struct({
   initialPrompt: Schema.optional(Schema.String),
   /** Agent override for the initial prompt (turn-scoped, not persistent) */
   agentOverride: Schema.optional(AgentName),
-  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
-  requestId: Schema.optional(RequestIdSchema),
+  requestId: Schema.optional(RequestId),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
 
 export const CreateBranchInput = Schema.Struct({
   sessionId: SessionId,
   name: Schema.optional(Schema.String),
-  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
-  requestId: Schema.optional(RequestIdSchema),
+  requestId: Schema.optional(RequestId),
 })
 export type CreateBranchInput = typeof CreateBranchInput.Type
 
@@ -68,8 +58,7 @@ export const SwitchBranchInput = Schema.Struct({
   sessionId: SessionId,
   fromBranchId: BranchId,
   toBranchId: BranchId,
-  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
-  requestId: Schema.optional(RequestIdSchema),
+  requestId: Schema.optional(RequestId),
 })
 export type SwitchBranchInput = typeof SwitchBranchInput.Type
 
@@ -78,8 +67,7 @@ export const ForkBranchInput = Schema.Struct({
   fromBranchId: BranchId,
   atMessageId: MessageId,
   name: Schema.optional(Schema.String),
-  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
-  requestId: Schema.optional(RequestIdSchema),
+  requestId: Schema.optional(RequestId),
 })
 export type ForkBranchInput = typeof ForkBranchInput.Type
 
@@ -91,8 +79,7 @@ export const SendMessageInput = Schema.Struct({
   agentOverride: Schema.optional(AgentName),
   /** Per-run dispatch config — forwarded to the agent loop for this turn only. */
   runSpec: Schema.optional(RunSpecSchema),
-  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
-  requestId: Schema.optional(RequestIdSchema),
+  requestId: Schema.optional(RequestId),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 
@@ -172,12 +159,6 @@ export const DeleteAuthKeyInput = Schema.Struct({
   provider: Schema.String,
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
-
-// Public RPC payload — server re-derives `driverOverrides` from
-// session-cwd config, so callers cannot smuggle in an override
-// that bypasses model auth.
-export const ListAuthProvidersInput = ListAuthProvidersPayload
-export type ListAuthProvidersInput = typeof ListAuthProvidersInput.Type
 
 export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 

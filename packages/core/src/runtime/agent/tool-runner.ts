@@ -19,7 +19,7 @@ import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain
 import { EventPublisher } from "../../domain/event-publisher.js"
 import {
   encodeToolOutput,
-  summarizeToolOutput,
+  summarizeOutput,
   stringifyOutput,
   ToolResultFailure,
 } from "../../domain/tool-output.js"
@@ -136,7 +136,7 @@ const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall
 const publishCompleted = (params: { ctx: ToolCapabilityContext; result: Prompt.ToolResultPart }) =>
   Effect.gen(function* () {
     const eventPublisher = yield* EventPublisher
-    const outputSummary = summarizeToolOutput(params.result)
+    const outputSummary = summarizeOutput(params.result.result)
     const fields = {
       sessionId: params.ctx.sessionId,
       branchId: params.ctx.branchId,
