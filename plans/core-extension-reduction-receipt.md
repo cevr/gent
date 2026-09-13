@@ -1430,3 +1430,18 @@ methods share `actorCommand`; `buildProfileCatalog` +
 `truncated`, in the compaction extension, reads `omittedMessageIds`).
 Kept `Usage.cacheReadTokens`/`cacheWriteTokens`: a product metric on
 every receipt, not a dead field. Core is 28,719 LOC at this commit.
+
+## Eleventh pass: snapshot fields with no reader (2026-09-13)
+
+`SessionRuntimeMetrics.tokens`/`toolCalls`/`retries` deleted with the two
+fold arms that fed them (the TUI reads `costUsd`, `lastInputTokens`,
+`turns`, `durationMs`); `ResolvedSessionServices` collapsed to the
+registry; the three `*ForMutation` `Effect.fn` wrappers became arrows;
+`AssistantDraft` deleted in favour of `toolCallsFromMessage`; the
+`usageOption` and `inputOption` double wraps and the twice-built usage
+default folded. Eleventh-pass NO FINDING: migration squash (010 is a
+recorded no-op, an anti-squash policy), ToolCallSucceeded/Failed tags
+(persisted wire), ModelContextError role pairs (diagnostics),
+compileCapabilityWinners/Entries (different keys), AgentLoopBehavior
+members, AgentLoopTurnProfile fields, ChildCompletionDelivery.deliver,
+TurnStepResult stop literals, initialQueueFailure. Core is 28,646 LOC.
