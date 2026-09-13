@@ -58,47 +58,14 @@ describe("defineResource", () => {
       layer: layerA,
     })
     expect(String(r.id)).toBe("test/resource-host/declared-scope")
-    expect(String(r.revision)).toBe("1")
-    expect(r.requires).toEqual([])
-    expect(r.required).toBe(false)
     expect(r.scope).toBe("process")
     expect(r.tag).toBe(TestServiceA)
   })
 
-  test("normalizes and snapshots resource metadata", () => {
-    const dependency = defineResource({
-      id: "test/resource-host/metadata/dependency",
-      scope: "process",
-      layer: Layer.empty,
-    })
-    const requires = [dependency.id]
-    const r = defineResource({
-      id: "test/resource-host/metadata/consumer",
-      revision: "2",
-      requires,
-      required: true,
-      scope: "process",
-      layer: Layer.empty,
-    })
-    requires.push(dependency.id)
-    expect(String(r.id)).toBe("test/resource-host/metadata/consumer")
-    expect(String(r.revision)).toBe("2")
-    expect(r.requires).toEqual([dependency.id])
-    expect(r.required).toBe(true)
-  })
-
-  test("rejects empty resource metadata", () => {
+  test("rejects an empty resource id", () => {
     expect(() =>
       defineResource({
         id: "",
-        scope: "process",
-        layer: Layer.empty,
-      }),
-    ).toThrow()
-    expect(() =>
-      defineResource({
-        id: "test/resource-host/metadata/invalid-revision",
-        revision: "",
         scope: "process",
         layer: Layer.empty,
       }),

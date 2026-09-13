@@ -8,7 +8,7 @@ import {
 import type { ExtensionManifest } from "./extension.js"
 import { ExtensionLoadError } from "./extension.js"
 import type { ExtensionContributions } from "./contribution.js"
-import { ResourceDescriptor } from "./resource-graph.js"
+import { ResourceId } from "./resource.js"
 
 /**
  * Cross-bucket validation shared by `defineExtension` and runtime-loaded
@@ -80,10 +80,8 @@ const validateAgents = (contribs: ExtensionContributions): Option.Option<string>
 
 const validateResources = (contribs: ExtensionContributions): Option.Option<string> => {
   for (const [i, resource] of (contribs.resources ?? []).entries()) {
-    if (Schema.is(ResourceDescriptor)(resource)) continue
-    return Option.some(
-      `resources[${i}]: resource requires non-empty id and revision, a requires array, and a boolean required flag`,
-    )
+    if (Schema.is(ResourceId)(resource.id)) continue
+    return Option.some(`resources[${i}]: resource requires a non-empty id`)
   }
   return Option.none()
 }

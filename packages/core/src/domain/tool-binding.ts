@@ -1,6 +1,5 @@
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 import { ExtensionId, MessageId, ToolCallId, ToolId } from "./ids.js"
-import { ResourceId, ResourceRevision } from "./resource-graph.js"
 
 /** Revision of the loaded source snapshot that produced a tool binding. */
 export const ToolSourceRevision = Schema.NonEmptyString.pipe(Schema.brand("ToolSourceRevision"))
@@ -9,29 +8,6 @@ export type ToolSourceRevision = typeof ToolSourceRevision.Type
 /** Revision of the schema advertised for a tool binding. */
 export const ToolSchemaRevision = Schema.NonEmptyString.pipe(Schema.brand("ToolSchemaRevision"))
 export type ToolSchemaRevision = typeof ToolSchemaRevision.Type
-
-/** A resource revision captured by one tool binding. */
-const ToolBindingResource = Schema.Struct({
-  id: ResourceId,
-  revision: ResourceRevision,
-})
-type ToolBindingResource = typeof ToolBindingResource.Type
-
-const canonicalResourceVector = Schema.Array(ToolBindingResource).pipe(
-  Schema.check(
-    Schema.makeFilter((resources: ReadonlyArray<ToolBindingResource>) => {
-      let previous = Option.none<ToolBindingResource>()
-      for (const resource of resources) {
-        if (Option.isSome(previous) && String(previous.value.id) >= String(resource.id)) {
-          return "resource revisions must be sorted by unique resource ID"
-        }
-        previous = Option.some(resource)
-      }
-      // oxlint-disable-next-line effect/noNullish -- Schema.makeFilter uses undefined for a valid value.
-      return undefined
-    }),
-  ),
-)
 
 /** The source identity for a tool binding.
  *
@@ -63,7 +39,6 @@ export const ToolBindingIdentity = Schema.Struct({
   extensionId: ExtensionId,
   source: ToolBindingSource,
   schemaRevision: ToolSchemaRevision,
-  resources: canonicalResourceVector,
 })
 export type ToolBindingIdentity = typeof ToolBindingIdentity.Type
 
@@ -75,27 +50,9 @@ const ToolBindingIdentityJson = Schema.fromJsonString(ToolBindingIdentity)
 export const encodeToolBindingIdentity = Schema.encodeEffect(ToolBindingIdentityJson)
 export const decodeToolBindingIdentity = Schema.decodeUnknownEffect(ToolBindingIdentityJson)
 
-const compareResources = (left: ToolBindingResource, right: ToolBindingResource): number => {
-  if (left.id < right.id) return -1
-  if (left.id > right.id) return 1
-  return 0
-}
-
-export const canonicalizeToolBindingIdentity = (
-  input: Omit<ToolBindingIdentity, "resources"> & {
-    readonly resources: ReadonlyArray<ToolBindingResource>
-  },
-) => ({
-  ...input,
-  resources: [...input.resources].sort(compareResources),
-})
-
-/** Build an identity with an immutable, canonical resource vector. */
-export const makeToolBindingIdentity = (
-  input: Omit<ToolBindingIdentity, "resources"> & {
-    readonly resources: ReadonlyArray<ToolBindingResource>
-  },
-): ToolBindingIdentity => ToolBindingIdentity.make(canonicalizeToolBindingIdentity(input))
+/** Build a validated identity. */
+export const makeToolBindingIdentity = (input: ToolBindingIdentity): ToolBindingIdentity =>
+  ToolBindingIdentity.make(input)
 
 /** Key for one assistant tool call binding row. */
 export const ToolCallBindingKey = Schema.Struct({

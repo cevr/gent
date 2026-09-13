@@ -5,7 +5,6 @@ import {
   InteractionStorage,
   StorageError,
   ToolBindingIdentity,
-  canonicalizeToolBindingIdentity,
   makeOwnedToolCallReader,
   type InteractionRequestRecord,
   type OwnedToolCallAddress,
@@ -186,7 +185,7 @@ export class CellToolOperationStorage extends Context.Service<
           const toolCallId = callIdFor(params)
           const operation = yield* Schema.decodeEffect(Operation)({
             toolCallId,
-            binding: canonicalizeToolBindingIdentity(params.binding),
+            binding: params.binding,
             input: params.input,
             state: CellToolOperationState.cases.Started.make({}),
           })

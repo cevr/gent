@@ -389,7 +389,7 @@ describe("defineExtension", () => {
       }
     }))
 
-  test("runtime-loaded resources require valid identity metadata", () =>
+  test("runtime-loaded resources require a non-empty id", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         validateExtensionPackage(
@@ -409,7 +409,7 @@ describe("defineExtension", () => {
       if (exit._tag === "Failure") {
         const rendered = Cause.pretty(exit.cause)
         expect(rendered).toContain("ExtensionLoadError")
-        expect(rendered).toContain("resources[0]: resource requires non-empty id and revision")
+        expect(rendered).toContain("resources[0]: resource requires a non-empty id")
       }
     }))
 

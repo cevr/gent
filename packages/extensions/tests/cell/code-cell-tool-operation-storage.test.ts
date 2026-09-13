@@ -55,7 +55,6 @@ const binding = makeToolBindingIdentity({
     sourceRevision: ToolSourceRevision.make("source-1"),
   }),
   schemaRevision: ToolSchemaRevision.make("schema-1"),
-  resources: [],
 })
 const params = { ...key, binding, input: { path: "file.txt", content: "once" } }
 const requestId = InteractionRequestId.make("cell-request")

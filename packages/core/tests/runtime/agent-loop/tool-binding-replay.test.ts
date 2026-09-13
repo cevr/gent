@@ -146,7 +146,6 @@ const makeBinding = () =>
       sourceRevision: ToolSourceRevision.make("source/legacy"),
     }),
     schemaRevision: ToolSchemaRevision.make("schema/legacy"),
-    resources: [],
   })
 
 describe("tool binding replay", () => {
@@ -278,7 +277,6 @@ describe("tool binding replay", () => {
             let binding = current.value.binding
             if (Predicate.isUndefined(binding))
               return yield* Effect.die("Expected durable identity")
-            expect(binding.resources).toEqual([])
             if (scenario.changed)
               binding = makeToolBindingIdentity({
                 ...binding,

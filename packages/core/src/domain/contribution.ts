@@ -92,4 +92,3 @@ export const rpcCapabilities = (
 // `{ layer: Layer.empty, stop: ... }`.
 export { defineResource, defineStateResource } from "./resource.js"
 export type { ExtensionState, StateInitializer, StateResourceSpec } from "./resource.js"
-export { ResourceId, ResourceRevision } from "./resource-graph.js"

@@ -18,7 +18,6 @@ import {
   ToolCallId,
   ToolId,
 } from "../../src/domain/ids"
-import { ResourceId, ResourceRevision } from "../../src/domain/resource-graph"
 import { StorageError } from "../../src/domain/storage-error"
 import { CurrentWorkspaceId, DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { MessageStorage } from "../../src/storage/message-storage"
@@ -39,16 +38,6 @@ const makeBinding = (schemaRevision = "schema/1") =>
       sourceRevision: ToolSourceRevision.make("source/1"),
     }),
     schemaRevision: ToolSchemaRevision.make(schemaRevision),
-    resources: [
-      {
-        id: ResourceId.make("@test/z-resource"),
-        revision: ResourceRevision.make("resource/1"),
-      },
-      {
-        id: ResourceId.make("@test/a-resource"),
-        revision: ResourceRevision.make("resource/1"),
-      },
-    ],
   })
 
 const makeFixture = (suffix: string, workspaceId: WorkspaceId = DefaultWorkspaceId) =>
@@ -134,10 +123,6 @@ describe("ToolCallBindingStorage", () => {
 
       expect(saved).toEqual(binding)
       expect(loaded).toEqual(binding)
-      expect(loaded?.resources.map((resource) => String(resource.id))).toEqual([
-        "@test/a-resource",
-        "@test/z-resource",
-      ])
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
 
@@ -206,23 +191,6 @@ describe("ToolCallBindingStorage", () => {
       expect(Exit.isFailure(mismatchedName)).toBe(true)
       if (Exit.isFailure(mismatchedName)) {
         expect(Schema.is(StorageError)(Cause.squash(mismatchedName.cause))).toBe(true)
-      }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
-
-  it.live("rejects a non-canonical resource vector at the persistence boundary", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture("invalid-resource-vector")
-      const storage = yield* ToolCallBindingStorage
-      const binding = makeBinding()
-      const invalid = {
-        ...binding,
-        resources: [...binding.resources, ...binding.resources],
-      }
-      const result = yield* storage.save(saveParams(fixture, invalid)).pipe(Effect.exit)
-      expect(Exit.isFailure(result)).toBe(true)
-      if (Exit.isFailure(result)) {
-        expect(Schema.is(StorageError)(Cause.squash(result.cause))).toBe(true)
       }
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )

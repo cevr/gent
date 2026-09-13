@@ -19,9 +19,12 @@
  * @module
  */
 
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, Schema } from "effect"
 import type { Context } from "effect"
-import { ResourceDescriptor, ResourceId, ResourceRevision } from "./resource-graph.js"
+
+/** Stable identity for a declared resource. */
+export const ResourceId = Schema.NonEmptyString.pipe(Schema.brand("ResourceId"))
+export type ResourceId = typeof ResourceId.Type
 
 // ── Scope discriminator + brand mapping ──
 
@@ -60,8 +63,7 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
 /**
  * One Resource carries:
  *
- * - `id` / `revision` / `requires` / `required` — stable graph metadata used
- *   by planning and later lifecycle reconciliation.
+ * - `id` — stable identity, reported when the resource fails to build.
  * - `tag` + `layer` — the canonical Layer providing one or more services.
  *   The `R` channel must include `ScopeOf<S>` so the typed scope brand
  *   gates instantiation.
@@ -77,13 +79,8 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
  * `defineResource(...)`. The `tag` is the canonical entry into the service
  * the Resource provides; consumers depend on the tag, not on Resource.
  */
-interface ResourceContribution<
-  A,
-  S extends ResourceScope,
-  R = never,
-  E = never,
-  StartR = never,
-> extends ResourceDescriptor {
+interface ResourceContribution<A, S extends ResourceScope, R = never, E = never, StartR = never> {
+  readonly id: ResourceId
   /**
    * Optional canonical service tag. When present, consumers may depend on the
    * tag without knowing about Resource. The `start`/`stop` effects get `A`
@@ -116,12 +113,6 @@ export type AnyResourceContribution = ResourceContribution<any, ResourceScope, a
 interface ResourceIdentitySpec {
   /** Stable resource identity. */
   readonly id: string
-  /** Desired semantic revision. Defaults to `"1"`. */
-  readonly revision?: string
-  /** Stable resource identities required before activation. */
-  readonly requires?: ReadonlyArray<ResourceId>
-  /** Host policy marker for a required root resource. */
-  readonly required?: boolean
 }
 
 // ── Smart constructor ──
@@ -157,8 +148,7 @@ interface ResourceSpec<
  * Author-facing factory for a {@link ResourceContribution}.
  *
  * The factory infers the generics from the inputs (so authors don't write
- * `<MyService, "process", never, never>`) and validates the authored resource
- * metadata through the resource descriptor schema.
+ * `<MyService, "process", never, never>`) and brands the resource id.
  *
  * Identity `A` is inferred from `layer`. The `tag` field, if present, is
  * typed as `Context.Key<NoInfer<A>, unknown>` — it must match the layer's
@@ -167,17 +157,8 @@ interface ResourceSpec<
 export const defineResource = <A, S extends ResourceScope, R = never, E = never, StartR = never>(
   spec: ResourceSpec<A, S, R, E, StartR>,
 ): ResourceContribution<A, S, R, E, StartR> => {
-  const { id, revision, requires, required, ...resource } = spec
-  const descriptor = ResourceDescriptor.make({
-    id: ResourceId.make(id),
-    revision: ResourceRevision.make(revision ?? "1"),
-    requires: [...(requires ?? [])],
-    required: required ?? false,
-  })
-  return {
-    ...resource,
-    ...descriptor,
-  }
+  const { id, ...resource } = spec
+  return { ...resource, id: ResourceId.make(id) }
 }
 
 export interface ExtensionState<Value> {
@@ -204,13 +185,9 @@ const resolveStateInitial = <Value, E, R>(
 
 export const defineStateResource = <A, Value, R = never, E = never>(
   spec: StateResourceSpec<A, Value, R, E>,
-): ResourceContribution<A, "process", R, E> => {
-  const { id, revision, requires, required } = spec
-  return defineResource<A, "process", R, E>({
-    id,
-    revision,
-    requires,
-    required,
+): ResourceContribution<A, "process", R, E> =>
+  defineResource<A, "process", R, E>({
+    id: spec.id,
     tag: spec.tag,
     // State resources are deliberately process-only. The explicit generic above
     // pins the literal now that `ResourceScope` also admits `"branch"`.
@@ -229,4 +206,3 @@ export const defineStateResource = <A, Value, R = never, E = never>(
       }),
     ),
   })
-}

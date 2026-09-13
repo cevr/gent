@@ -135,7 +135,6 @@ describe("compaction over dispatched operations", () => {
         sourceRevision: ToolSourceRevision.make("source-1"),
       }),
       schemaRevision: ToolSchemaRevision.make("schema-1"),
-      resources: [],
     })
     const providerLayer = LanguageModelLayers.testStream(() =>
       Effect.succeed(

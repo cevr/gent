@@ -65,7 +65,7 @@ export {
 } from "../domain/tool-call-recovery.js"
 
 // Identifying and resolving the calls a feature dispatches.
-export { canonicalizeToolBindingIdentity, ToolBindingIdentity } from "../domain/tool-binding.js"
+export { ToolBindingIdentity } from "../domain/tool-binding.js"
 export {
   innerOperationBindingIdentity,
   resolveStoredToolBinding,

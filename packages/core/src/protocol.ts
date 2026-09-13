@@ -43,7 +43,6 @@ export {
 export { Model, ModelId, ProviderId } from "./domain/model.js"
 export { PermissionRule } from "./domain/permission.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/queue.js"
-export { ResourceDescriptor, ResourceId, ResourceRevision } from "./domain/resource-graph.js"
 export { type ModelContextMetrics } from "./runtime/agent/agent-loop.state.js"
 export { GentRpcError } from "./server/errors.js"
 export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpcs.js"

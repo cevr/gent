@@ -83,10 +83,10 @@ Public authoring surface:
 | --------------- | ---------------------------------------------------------------------------- |
 | Extension shape | `defineExtension`, `GentExtension`, `ExtensionHost`                          |
 | Capabilities    | `tool`, `request`, `ref`                                                     |
-| Resources       | `defineResource`, `defineStateResource`, `ResourceId`, `ResourceRevision`    |
+| Resources       | `defineResource`, `defineStateResource`                                      |
 | Hooks           | `host.on(kind, handler)` and hook input/output types                         |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
-| Stable ids      | `ExtensionId`, `ToolCallId`, `ResourceId`, `ResourceRevision`                |
+| Stable ids      | `ExtensionId`, `ToolCallId`                                                  |
 | Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
 | Host facts      | `ExtensionHost.host` and `ExtensionHost.Process`                             |
 | Serialization   | Message/output projection helpers safe to expose across extension boundaries |
@@ -284,12 +284,10 @@ Each `host.on` call is typed by the kind's input and output.
 
 ## Resource (long-lived state)
 
-A Resource declares a stable `id`, an optional semantic `revision`, its scope
-(lifetime), and a service Layer plus optional schedule and lifecycle hooks.
-Declare `requires` with stable resource IDs when activation needs other
-resources. `required` marks a root policy resource and defaults to `false`.
-The revision records resource semantics, including configuration changes, and
-defaults to `"1"`. Extension-owned state should live in scoped
+A Resource declares a stable `id`, its scope (lifetime), and a service Layer
+plus optional `start` and `stop` effects. Resources build in extension
+resolution order, so a resource may depend on services from extensions that
+resolve before its own. Extension-owned state should live in scoped
 services/resources; `defineStateResource(...)` is the low-ceremony state cell
 helper for that case. True actor protocols belong at their owning runtime
 boundary through Effect Entity/RPC, not in extension registrations.

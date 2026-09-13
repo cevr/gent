@@ -21,7 +21,6 @@ export type ToolBindingReplayReason =
   | "MissingSourceIdentity"
   | "SourceMismatch"
   | "SchemaMismatch"
-  | "ResourceMismatch"
 
 export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplayError>()(
   "ToolBindingReplayError",
@@ -36,7 +35,6 @@ export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplay
       "MissingSourceIdentity",
       "SourceMismatch",
       "SchemaMismatch",
-      "ResourceMismatch",
     ]),
     message: Schema.String,
   },
@@ -92,7 +90,6 @@ export const attachToolBindingIdentity = (
     extensionId: entry.extensionId,
     source,
     schemaRevision: schemaRevisionFor(entry.capability, context.hash),
-    resources: [],
   })
   return { ...entry, binding }
 }
@@ -114,35 +111,19 @@ export const processLocalToolBindingIdentity = (
         sourceRevision: ToolSourceRevision.make(`process:${context.generationId}`),
       }),
       schemaRevision: schemaRevisionFor(entry.capability, context.hash),
-      resources: [],
     }),
   )
 }
 
-const sameResource = (
-  left: ToolBindingIdentity["resources"][number],
-  right: ToolBindingIdentity["resources"][number],
-): boolean => left.id === right.id && left.revision === right.revision
-
 export const sameToolBindingIdentity = (
   left: ToolBindingIdentity,
   right: ToolBindingIdentity,
-): boolean => {
-  if (
-    left.toolId !== right.toolId ||
-    left.extensionId !== right.extensionId ||
-    left.schemaRevision !== right.schemaRevision ||
-    left.source._tag !== right.source._tag ||
-    left.source.sourceRevision !== right.source.sourceRevision ||
-    left.resources.length !== right.resources.length
-  ) {
-    return false
-  }
-  return left.resources.every((resource, index) => {
-    const other = right.resources[index]
-    return Predicate.isNotUndefined(other) && sameResource(resource, other)
-  })
-}
+): boolean =>
+  left.toolId === right.toolId &&
+  left.extensionId === right.extensionId &&
+  left.schemaRevision === right.schemaRevision &&
+  left.source._tag === right.source._tag &&
+  left.source.sourceRevision === right.source.sourceRevision
 
 export const bindingMismatchReason = (
   stored: ToolBindingIdentity,
@@ -153,13 +134,6 @@ export const bindingMismatchReason = (
 > => {
   if (stored.source.sourceRevision !== current.source.sourceRevision) return "SourceMismatch"
   if (stored.schemaRevision !== current.schemaRevision) return "SchemaMismatch"
-  if (stored.resources.length !== current.resources.length) return "ResourceMismatch"
-  for (const [index, resource] of stored.resources.entries()) {
-    const other = current.resources[index]
-    if (Predicate.isUndefined(other) || !sameResource(resource, other)) {
-      return "ResourceMismatch"
-    }
-  }
   return "SourceMismatch"
 }
 

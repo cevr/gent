@@ -4,7 +4,6 @@ import { makeOwnedToolCallReader } from "./sqlite/owned-tool-call.js"
 import {
   decodeToolBindingIdentity,
   encodeToolBindingIdentity,
-  canonicalizeToolBindingIdentity,
   ToolCallBindingConflictError,
   validateToolBindingIdentity,
   type ToolBindingIdentity,
@@ -95,8 +94,7 @@ export class ToolCallBindingStorage extends Context.Service<
       const save = Effect.fn("ToolCallBindingStorage.save")(function* (
         params: ToolCallBindingStorageWrite,
       ) {
-        const binding = canonicalizeToolBindingIdentity(params.binding)
-        const validatedBinding = yield* validateToolBindingIdentity(binding).pipe(
+        const validatedBinding = yield* validateToolBindingIdentity(params.binding).pipe(
           Effect.mapError(mapStorageError("Invalid tool call binding identity")),
         )
         const bindingJson = yield* encodeToolBindingIdentity(validatedBinding).pipe(
