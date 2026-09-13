@@ -1416,3 +1416,17 @@ writers, 0 production) deleted, tests bind through `defineRequests` or
 `bindRequestCapabilityExtension`. `Permission.Live(rules)` stays: it is
 the rules-only adapter and the user asked for test variants as statics on
 the Tag. Core is 28,887 LOC at `082ed5ed`.
+
+## Tenth pass: one loop, one dispatch, one profile (2026-09-13)
+
+`setupBuiltinExtensions`/`setupDiscoveredExtensions` collapsed into
+`setupExtensions` over a single `DiscoveredExtension` shape
+(`DiscoveredBuiltinExtension` deleted); the five `SessionRuntime` actor
+methods share `actorCommand`; `buildProfileCatalog` +
+`RuntimeProfileCatalog` + `sessionProfileFromCatalog` + `RuntimeProfile` +
+`compileBaseSections` became `buildSessionProfile` returning
+`SessionProfile` (now declared in `profile.ts`); `RunSpec.tags` and
+`ModelContextProjection.truncated` deleted (the one production reader of
+`truncated`, in the compaction extension, reads `omittedMessageIds`).
+Kept `Usage.cacheReadTokens`/`cacheWriteTokens`: a product metric on
+every receipt, not a dead field. Core is 28,719 LOC at this commit.
