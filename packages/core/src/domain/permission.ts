@@ -48,7 +48,6 @@ export const evaluatePermissionRules = (
   rules: ReadonlyArray<StoredRule>,
   tool: string,
   args: Schema.Schema.Type<typeof Schema.Unknown>,
-  defaultAction: PermissionRule["action"] = "allow",
 ): PermissionResult => {
   const argsStr = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(args)
   for (const entry of rules) {
@@ -58,7 +57,6 @@ export const evaluatePermissionRules = (
     if (rule.action === "allow") return "allowed"
     if (rule.action === "deny") return "denied"
   }
-  if (defaultAction === "deny") return "denied"
   return "allowed"
 }
 
@@ -86,15 +84,12 @@ export const AllowAllPermission: PermissionService = {
 export class Permission extends Context.Service<Permission, PermissionService>()(
   "@gent/core/src/domain/permission",
 ) {
-  static Live = (
-    initialRules: ReadonlyArray<PermissionRule> = [],
-    defaultAction: PermissionRule["action"] = "allow",
-  ): Layer.Layer<Permission> =>
+  /** Rules-only service: deny by default is a `{ tool: "*", action: "deny" }` rule. */
+  static Live = (initialRules: ReadonlyArray<PermissionRule> = []): Layer.Layer<Permission> =>
     Layer.sync(Permission, () => {
       const rules = compilePermissionRules(initialRules)
       return Permission.of({
-        check: (tool, args) =>
-          Effect.succeed(evaluatePermissionRules(rules, tool, args, defaultAction)),
+        check: (tool, args) => Effect.succeed(evaluatePermissionRules(rules, tool, args)),
       })
     })
 }

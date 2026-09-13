@@ -15,6 +15,7 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { getToolMetadata } from "../../src/domain/capability/tool"
+import { bindRequestCapabilityExtension } from "../../src/domain/capability/request"
 import {
   compileToolPolicy,
   ExtensionRegistry,
@@ -108,40 +109,31 @@ const makeSlashRequest = (
   id: string,
   options?: {
     readonly description?: string
-    readonly extensionId?: ExtensionId
   },
 ): RequestCapability => {
-  let extensionId = ExtensionId.make(`@test/${id}-slash`)
-  if (!Predicate.isUndefined(options?.extensionId)) extensionId = options.extensionId
   let description = `${id} command`
   if (!Predicate.isUndefined(options?.description)) description = options.description
   let optionalDescription: Pick<RequestCapability, "description"> = {}
   if (!Predicate.isUndefined(options?.description)) optionalDescription = { description }
-  return request({
-    id,
-    extensionId,
-    slash: { name: id, description },
-    ...optionalDescription,
-    input: Schema.String,
-    output: Schema.Void,
-    execute: () => Effect.void,
-  })
+  return bindRequestCapabilityExtension(
+    request({
+      id,
+      slash: { name: id, description },
+      ...optionalDescription,
+      input: Schema.String,
+      output: Schema.Void,
+      execute: () => Effect.void,
+    }),
+    ExtensionId.make(`@test/${id}-slash`),
+  )
 }
-const makeRequest = (
-  id: string,
-  options?: {
-    readonly extensionId?: ExtensionId
-  },
-): RequestCapability => {
-  const extensionId = options?.extensionId ?? ExtensionId.make("@test/rpc")
-  return request({
+const makeRequest = (id: string): RequestCapability =>
+  request({
     id,
-    extensionId,
     input: Schema.Unknown,
     output: Schema.Unknown,
     execute: () => Effect.void,
   })
-}
 const runCtx: RunContext = {
   sessionId: SessionId.make("test-session"),
   branchId: BranchId.make("test-branch"),
@@ -581,7 +573,6 @@ describe("resolveExtensions — slash command discovery", () => {
   test("slash request keeps registry description separate from slash metadata", () => {
     const cap = request({
       id: "inspect",
-      extensionId: ExtensionId.make("@test/request"),
       description: "Registry description.",
       slash: {
         name: "Inspect",
@@ -604,14 +595,14 @@ describe("resolveExtensions — slash command discovery", () => {
   test("higher-scope plain request shadows lower-scope slash request from the command list", () => {
     const builtinCap = makeSlashRequest("act")
     const builtin = makeExt("@test/shadow", "builtin", { requests: [builtinCap] })
-    const projectCap = makeRequest("act", { extensionId: ExtensionId.make("@test/shadow") })
+    const projectCap = makeRequest("act")
     const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).not.toContain("act")
   })
   test("request without slash metadata does not appear in the slash-backed command list", () => {
-    const cap = makeRequest("rpc-only", { extensionId: ExtensionId.make("@test/rpc-only") })
+    const cap = makeRequest("rpc-only")
     const resolved = resolveExtensions([makeExt("@test/rpc-only", "builtin", { requests: [cap] })])
     const commands = listSlashCommands(resolved)
     expect(commands.map((c) => c.name)).not.toContain("rpc-only")
@@ -638,9 +629,7 @@ describe("resolveExtensions — slash command discovery", () => {
   })
   test("project slash request shadows builtin tool", () => {
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("look")] })
-    const projectCap = makeSlashRequest("look", {
-      extensionId: ExtensionId.make("@test/shadow"),
-    })
+    const projectCap = makeSlashRequest("look")
     const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("look")).toBe(false)

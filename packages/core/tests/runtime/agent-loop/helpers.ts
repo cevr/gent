@@ -381,7 +381,7 @@ export const makeLiveToolLayer = (
     ConfigService.Test(),
     EventStore.Memory,
     ApprovalService.Test(),
-    Permission.Live([], "allow"),
+    Permission.Live(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),

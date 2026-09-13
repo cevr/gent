@@ -63,9 +63,6 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
 export interface RequestInput<Input = unknown, Output = unknown, R = never> {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
-  /** Optional legacy override. Omit inside `defineExtension({ id, requests })`;
-   *  the extension factory binds refs to the enclosing extension id. */
-  readonly extensionId?: ExtensionIdType
   /** Schema for validating `input` at the boundary. */
   readonly input: Schema.Codec<Input, unknown, never, never>
   /** Schema for validating `output` at the boundary. */
@@ -98,7 +95,6 @@ export function request<Input, Output, R = never>(
 ): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
-  readonly extensionId?: ExtensionIdType
   readonly input: Schema.Codec<unknown, unknown, never, never>
   readonly output: Schema.Codec<unknown, unknown, never, never>
   readonly prompt?: PromptSection
@@ -109,7 +105,7 @@ export function request(input: {
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
   const refState: RequestRefState = {
-    extensionId: Option.fromUndefinedOr(input.extensionId),
+    extensionId: Option.none(),
     capabilityId: rpcId,
     input: input.input,
     output: input.output,

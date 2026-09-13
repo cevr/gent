@@ -28,7 +28,6 @@ describe("ref(capability)", () => {
     })
     const requestCapability = request({
       id: "test.read",
-      extensionId: ExtensionId.make("ext-test"),
       input: Schema.Struct({ q: Schema.String }),
       output: Schema.Struct({ n: Schema.Finite }),
       execute: () => Effect.succeed({ n: 1 }),
@@ -89,12 +88,13 @@ describe("ref(capability)", () => {
   test("returns the typed ref for a request capability, preserving id + schema identity", () => {
     const inputSchema = Schema.Struct({ q: Schema.String })
     const outputSchema = Schema.Struct({ n: Schema.Finite })
-    const capability = request({
-      id: "test.read",
-      extensionId: ExtensionId.make("ext-test"),
-      input: inputSchema,
-      output: outputSchema,
-      execute: () => Effect.succeed({ n: 1 }),
+    const { capability } = defineRequests(ExtensionId.make("ext-test"), {
+      capability: request({
+        id: "test.read",
+        input: inputSchema,
+        output: outputSchema,
+        execute: () => Effect.succeed({ n: 1 }),
+      }),
     })
 
     const r = ref(capability)

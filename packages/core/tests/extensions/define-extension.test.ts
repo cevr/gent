@@ -418,7 +418,6 @@ describe("defineExtension", () => {
       const duplicate = (id: string) =>
         request({
           id,
-          extensionId: ExtensionId.make("duplicate-requests"),
           input: Schema.Struct({}),
           output: Schema.String,
           execute: () => Effect.succeed("ok"),
@@ -443,7 +442,6 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const readSnapshot = request({
         id: "read-snapshot",
-        extensionId: ExtensionId.make("helper-state"),
         input: Schema.Struct({}),
         output: Schema.Finite,
         execute: () => Effect.succeed(1),

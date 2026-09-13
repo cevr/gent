@@ -92,7 +92,7 @@ const makeRuntimeLayer = (
     eventStoreLayer,
     recorderLayer,
     toolRunnerLayer,
-    Permission.Live([], "allow"),
+    Permission.Live(),
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,

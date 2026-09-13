@@ -12,20 +12,6 @@ export interface PromptSection {
   readonly priority: number
 }
 
-/** Sentinel pair marking the bounds of a swappable section. */
-export const sectionStartMarker = (id: string): string => `<!-- @section:${id}:start -->`
-export const sectionEndMarker = (id: string): string => `<!-- @section:${id}:end -->`
-
-export const withSectionMarkers = (id: string, content: string): string =>
-  `${sectionStartMarker(id)}\n${content}\n${sectionEndMarker(id)}`
-
-const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")
-
-export const sectionPatternFor = (id: string): RegExp =>
-  new RegExp(
-    `${escapeRegExp(sectionStartMarker(id))}\\n([\\s\\S]*?)\\n${escapeRegExp(sectionEndMarker(id))}`,
-  )
-
 export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): string =>
   [...sections]
     .sort((a, b) => a.priority - b.priority)

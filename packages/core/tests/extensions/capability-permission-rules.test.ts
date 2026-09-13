@@ -121,10 +121,9 @@ describe("capability permissionRules E2E", () => {
         ])
 
         // Override Permission.Live() with a live instance seeded with the deny rule
-        const permissionLive = Permission.Live(
-          [new PermissionRule({ tool: "bash", action: "deny" })],
-          "allow",
-        )
+        const permissionLive = Permission.Live([
+          new PermissionRule({ tool: "bash", action: "deny" }),
+        ])
 
         const e2eLayer = createE2ELayer({
           agents: AllBuiltinAgents,

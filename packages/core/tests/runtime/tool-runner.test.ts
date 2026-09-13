@@ -391,10 +391,7 @@ describe("tool execution", () => {
         output: Schema.Struct({ ok: Schema.Boolean }),
         execute: () => Effect.succeed({ ok: true }),
       })
-      const denyAllPermission = Permission.Live(
-        [new PermissionRule({ tool: "*", action: "deny" })],
-        "allow",
-      )
+      const denyAllPermission = Permission.Live([new PermissionRule({ tool: "*", action: "deny" })])
       const deps = Layer.mergeAll(
         ExtensionRegistry.fromResolved(
           resolveExtensions([

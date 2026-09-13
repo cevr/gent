@@ -74,7 +74,6 @@ export {
   type TurnAfterInput,
   hook,
 } from "../domain/extension.js"
-export { withSectionMarkers } from "../domain/prompt.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { ProviderAuthError, TurnError } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction-request.js"

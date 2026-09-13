@@ -128,7 +128,6 @@ const makeProfilePermissionService = (params: {
         [...compiledExtensionRules, ...compiledConfigRules],
         tool,
         args,
-        "allow",
       )
     }),
   }

@@ -8,23 +8,16 @@ import { Permission, PermissionRule } from "../../src/domain/permission"
 
 describe("Permission", () => {
   describe("permission decisions", () => {
-    it.live("missing rule allows when default is allow", () =>
+    it.live("missing rule allows", () =>
       Permission.use((p) => p.check("TestTool", {})).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("allowed"))),
-        Effect.provide(Permission.Live([], "allow")),
-      ),
-    )
-
-    it.live("missing rule denies when default is deny", () =>
-      Permission.use((p) => p.check("TestTool", {})).pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))),
-        Effect.provide(Permission.Live([], "deny")),
+        Effect.provide(Permission.Live()),
       ),
     )
 
     it.live("matching allow rule allows", () => {
       const rules = [new PermissionRule({ tool: "ReadFile", action: "allow" })]
-      const layer = Permission.Live(rules, "deny")
+      const layer = Permission.Live(rules)
       return Permission.use((p) => p.check("ReadFile", { path: "/tmp/test" })).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("allowed"))),
         Effect.provide(layer),
@@ -33,7 +26,7 @@ describe("Permission", () => {
 
     it.live("matching deny rule denies", () => {
       const rules = [new PermissionRule({ tool: "Bash", action: "deny" })]
-      const layer = Permission.Live(rules, "allow")
+      const layer = Permission.Live(rules)
       return Permission.use((p) => p.check("Bash", { command: "rm -rf /" })).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))),
         Effect.provide(layer),
@@ -42,7 +35,7 @@ describe("Permission", () => {
 
     it.live("wildcard tool rule applies", () => {
       const rules = [new PermissionRule({ tool: "*", action: "deny" })]
-      const layer = Permission.Live(rules, "allow")
+      const layer = Permission.Live(rules)
       return Permission.use((p) => p.check("AnyTool", {})).pipe(
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("denied"))),
         Effect.provide(layer),
@@ -51,7 +44,7 @@ describe("Permission", () => {
 
     it.live("argument pattern gates matching tool", () => {
       const rules = [new PermissionRule({ tool: "Bash", pattern: "rm.*-rf", action: "deny" })]
-      const layer = Permission.Live(rules, "allow")
+      const layer = Permission.Live(rules)
       return Effect.gen(function* () {
         // Should match pattern
         const result1 = yield* Permission.use((p) => p.check("Bash", { command: "rm -rf /tmp" }))
@@ -68,7 +61,7 @@ describe("Permission", () => {
         new PermissionRule({ tool: "Bash", pattern: "git", action: "allow" }),
         new PermissionRule({ tool: "Bash", action: "deny" }),
       ]
-      const layer = Permission.Live(rules, "allow")
+      const layer = Permission.Live(rules)
       return Effect.gen(function* () {
         // First rule matches
         const result1 = yield* Permission.use((p) => p.check("Bash", { command: "git status" }))
@@ -88,7 +81,7 @@ describe("Permission", () => {
           action: "deny",
         }),
       ]
-      const layer = Permission.Live(rules, "allow")
+      const layer = Permission.Live(rules)
       return Effect.gen(function* () {
         const denied = yield* Permission.use((p) =>
           p.check("bash", { command: "git push --force origin main" }),
@@ -100,15 +93,17 @@ describe("Permission", () => {
       }).pipe(Effect.provide(layer))
     })
 
-    it.live("explicit allow rule overrides default deny", () => {
-      const rules = [new PermissionRule({ tool: "ReadFile", action: "allow" })]
-      const layer = Permission.Live(rules, "deny")
+    it.live("an earlier allow rule wins over a later deny-all rule", () => {
+      const rules = [
+        new PermissionRule({ tool: "ReadFile", action: "allow" }),
+        new PermissionRule({ tool: "*", action: "deny" }),
+      ]
+      const layer = Permission.Live(rules)
       return Effect.gen(function* () {
-        // Explicit allow overrides default deny
         const result = yield* Permission.use((p) => p.check("ReadFile", { path: "/tmp/x" }))
         expect(result).toBe("allowed")
 
-        // Unknown tool still falls through to default deny
+        // Unknown tool falls through to the deny-all rule
         const other = yield* Permission.use((p) => p.check("UnknownTool", {}))
         expect(other).toBe("denied")
       }).pipe(Effect.provide(layer))

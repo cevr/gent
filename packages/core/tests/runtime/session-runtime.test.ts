@@ -165,7 +165,7 @@ const makeLiveToolRuntimeLayer = (
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     ApprovalService.Test(),
-    Permission.Live([], "allow"),
+    Permission.Live(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),

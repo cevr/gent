@@ -39,7 +39,6 @@ const extWith = (
 const echoRequest = (params?: { readonly id?: string; readonly value?: string }) =>
   request({
     id: params?.id ?? "echo",
-    extensionId,
     input: Schema.Struct({ value: Schema.String }),
     output: Schema.Struct({ value: Schema.String }),
     execute: (input) => Effect.succeed({ value: params?.value ?? input.value }),
@@ -48,7 +47,6 @@ const echoRequest = (params?: { readonly id?: string; readonly value?: string })
 const pingRequest = (params?: { readonly id?: string; readonly value?: string }) =>
   request({
     id: params?.id ?? "ping",
-    extensionId,
     slash: { name: "Ping", description: "Ping request" },
     input: Schema.Struct({ value: Schema.String }),
     output: Schema.Struct({ value: Schema.String }),
@@ -102,7 +100,6 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = request({
         id: "context-facade",
-        extensionId,
         input: Schema.Struct({}),
         output: Schema.Struct({
           parentEnvValue: Schema.String,
@@ -153,7 +150,6 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = request({
         id: "ping",
-        extensionId,
         slash: { name: "Ping", description: "Ping request" },
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
@@ -174,7 +170,6 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = request({
         id: "context-request",
-        extensionId,
         slash: { name: "Context Request", description: "Request with host context service" },
         input: Schema.Struct({}),
         output: Schema.Struct({ hasRunProcess: Schema.Boolean }),
@@ -207,7 +202,6 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const builtin = request({
         id: "shadowed",
-        extensionId,
         slash: { name: "Shadowed", description: "Shadowed request" },
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
@@ -215,7 +209,6 @@ describe("extension capability registries", () => {
       })
       const project = request({
         id: "shadowed",
-        extensionId,
         slash: { name: "Project Override", description: "Project override request" },
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
@@ -325,14 +318,12 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const lowerCap = request({
         id: "thing",
-        extensionId,
         input: Schema.Unknown,
         output: Schema.Unknown,
         execute: () => Effect.succeed("builtin-write"),
       })
       const higherCap = request({
         id: "thing",
-        extensionId,
         input: Schema.Unknown,
         output: Schema.Unknown,
         execute: () => Effect.succeed("project-read"),
@@ -360,7 +351,6 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = request({
         id: "bad",
-        extensionId,
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
         // oxlint-disable-next-line effect/noAs, effect/noKnownValueWidening, effect/noChainedTypeAssertions -- Deliberately malformed output exercises the registry's output-boundary validation.
@@ -377,7 +367,6 @@ describe("extension capability registries", () => {
     Effect.gen(function* () {
       const cap = request({
         id: "boom",
-        extensionId,
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
         execute: () => Effect.die("boom"),

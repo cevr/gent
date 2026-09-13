@@ -322,7 +322,7 @@ const makeLayerWithEvents = (
     toolRunnerLayer,
     RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ApprovalService.Test(),
-    Permission.Live([], "allow"),
+    Permission.Live(),
     BunServices.layer,
     ModelRegistry.Test(),
     ConfigService.Test(),

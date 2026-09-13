@@ -120,7 +120,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) — happy path compiles with ordinary Effect services", () => {
     const ok = request({
       id: "ok-read",
-      extensionId: ExtensionId.make("test-ext"),
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -137,7 +136,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) may yield ExtensionContext", () => {
     const ok = request({
       id: "read-context",
-      extensionId: ExtensionId.make("test-ext"),
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -154,7 +152,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) — write-capable Tag in R is allowed", () => {
     const ok = request({
       id: "ok-write",
-      extensionId: ExtensionId.make("test-ext"),
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -172,7 +169,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request handlers receive params only", () => {
     const bad: RequestInput<{}, string> = {
       id: "write-core-context",
-      extensionId: ExtensionId.make("surface-locks"),
       input: NoInput,
       output: StringOutput,
       // @ts-expect-error — request handlers receive decoded params only; host access comes from ExtensionContext
@@ -185,7 +181,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("write request host authority is imported as ExtensionContext service", () => {
     request({
       id: "write-privileged-context",
-      extensionId: ExtensionId.make("surface-locks"),
       input: NoInput,
       output: StringOutput,
       execute: () =>
@@ -210,7 +205,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) accepts slash presentation metadata", () => {
     const ok = request({
       id: "ok-slash-request",
-      extensionId: ExtensionId.make("test-ext"),
       slash: {
         name: "Ok Slash",
         description: "Visible over transport command listing",
@@ -229,7 +223,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) rejects `params` field (tool-only)", () => {
     const badInput = {
       id: "bad-request",
-      extensionId: ExtensionId.make("test-ext"),
       // @ts-expect-error — `params` belongs to tool(), not request()
       params: NoInput,
       input: NoInput,
@@ -284,7 +277,6 @@ describe("Effect-purity locks (compile-time)", () => {
   test("request handlers receive decoded input only", () => {
     const bad: RequestInput<{}, void, never> = {
       id: "default-request-context",
-      extensionId: ExtensionId.make("default-request-context-ext"),
       input: Schema.Struct({}),
       output: Schema.Void,
       // @ts-expect-error — request handlers receive decoded input only; host access comes from ExtensionContext
@@ -303,7 +295,6 @@ describe("Effect-purity locks (compile-time)", () => {
           "request",
           request({
             id: "queue-follow-up",
-            extensionId: ExtensionId.make("queue-follow-up-compile-lock"),
             slash: { name: "Queue Follow Up", description: "ok" },
             input: Schema.Struct({}),
             output: Schema.Void,
@@ -468,8 +459,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadGetToolMetadata = typeof PublicExtensionApi.getToolMetadata
     // @ts-expect-error — raw tool metadata is internal lowering detail
     type _BadIsToolCapability = typeof PublicExtensionApi.isToolCapability
-    // @ts-expect-error — direct tool-effect extraction is a test helper, not authoring API
-    type _BadGetToolEffect = typeof PublicExtensionApi.getToolEffect
     // @ts-expect-error — package shape validation is host loader plumbing, not authoring API
     type _BadValidateExtensionPackage = typeof PublicExtensionApi.validateExtensionPackage
     // @ts-expect-error — request refs are read via ref(...); the symbol stays private
@@ -520,16 +509,10 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadSignalError = typeof PublicExtensionApi.SignalError
     // @ts-expect-error — durable message metadata schema is storage/runtime internals
     type _BadMessageMetadata = typeof PublicExtensionApi.MessageMetadata
-    // @ts-expect-error — raw marker helpers are prompt internals; use withSectionMarkers
-    type _BadSectionStartMarker = typeof PublicExtensionApi.sectionStartMarker
-    // @ts-expect-error — raw marker helpers are prompt internals; use withSectionMarkers
-    type _BadSectionEndMarker = typeof PublicExtensionApi.sectionEndMarker
     // @ts-expect-error — turn context internals are expressed through hook input shapes
     type _BadExtensionTurnContext = PublicExtensionApi.ExtensionTurnContext
     // @ts-expect-error — host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
-    // @ts-expect-error — raw host search result shape is runtime internals, not authoring API
-    type _BadExtensionHostSearchResult = typeof PublicExtensionApi.ExtensionHostSearchResult
     // @ts-expect-error — raw runtime events can forge product state
     type _BadAgentEvent = typeof PublicExtensionApi.AgentEvent
     // @ts-expect-error — transport event envelopes are SDK/TUI plumbing, not authoring API
@@ -553,7 +536,6 @@ describe("Effect-purity locks (compile-time)", () => {
   test("read request handlers do not receive host facts by parameter", () => {
     const bad: RequestInput<{}, string> = {
       id: "facts-only-read",
-      extensionId: ExtensionId.make("surface-locks"),
       input: Schema.Struct({}),
       output: Schema.String,
       // @ts-expect-error — request handlers receive decoded params only; facts come from ExtensionContext/setup context

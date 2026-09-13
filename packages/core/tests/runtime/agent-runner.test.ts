@@ -233,14 +233,14 @@ const probeBranchTools: BranchToolFeature<never> = {
 const runnerDeps = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   BunPlatformLive,
-  Permission.Live([], "allow"),
+  Permission.Live(),
   RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),
 )
 const parentServices = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
-  Permission.Live([], "allow"),
+  Permission.Live(),
   RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),

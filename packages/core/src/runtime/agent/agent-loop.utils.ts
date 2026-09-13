@@ -12,7 +12,7 @@ import {
 } from "../../domain/message-part-display.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Option, Predicate } from "effect"
-import { withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
 /**
@@ -49,13 +49,9 @@ export const buildTurnPromptSections = (
     .filter((tool) => !Predicate.isUndefined(tool.metadata.promptSnippet))
     .map((tool) => `- **${tool.id}**: ${tool.metadata.promptSnippet}`)
   if (snippets.length > 0) {
-    // Wrap with section sentinels so the ACP codemode prompt slot can swap
-    // this block atomically. Other sections don't need markers because
-    // nothing downstream rewrites them — markers cost tokens, only spend
-    // them where a slot needs the anchor.
     sections.push({
       id: "tool-list",
-      content: withSectionMarkers("tool-list", `## Available Tools\n\n${snippets.join("\n")}`),
+      content: `## Available Tools\n\n${snippets.join("\n")}`,
       priority: 42,
     })
   }
@@ -69,10 +65,7 @@ export const buildTurnPromptSections = (
     const deduped = [...new Set(guidelines)]
     sections.push({
       id: "tool-guidelines",
-      content: withSectionMarkers(
-        "tool-guidelines",
-        `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
-      ),
+      content: `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
       priority: 44,
     })
   }

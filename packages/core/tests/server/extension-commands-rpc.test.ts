@@ -82,7 +82,6 @@ describe("extension command RPCs", () => {
       requests: [
         request({
           id: "greet",
-          extensionId: ExtensionId.make("@test/commands"),
           slash: { name: "greet", description: "Say hello" },
           description: "Say hello",
           input: Schema.String,
@@ -95,7 +94,6 @@ describe("extension command RPCs", () => {
         }),
         request({
           id: "noop",
-          extensionId: ExtensionId.make("@test/commands"),
           slash: { name: "noop", description: "noop" },
           description: "noop",
           input: Schema.String,
@@ -140,7 +138,6 @@ describe("extension command RPCs", () => {
       requests: [
         request({
           id: commandId,
-          extensionId: ExtensionId.make(extensionId),
           slash: { name: commandId, description: commandId },
           input: Schema.String,
           output: Schema.Void,
@@ -251,7 +248,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "queue-follow-up",
-              extensionId,
               input: Schema.String,
               output: Schema.Void,
               execute: (input) =>
@@ -366,7 +362,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "queue-follow-up",
-              extensionId,
               input: Schema.String,
               output: Schema.Void,
               execute: (input) =>
@@ -457,7 +452,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "queue-follow-up-slash",
-              extensionId,
               slash: {
                 trigger: "queue-follow-up",
                 name: "Queue Follow Up",
@@ -648,7 +642,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "read-profile-token",
-              extensionId: ExtensionId.make("@test/profile-service-request"),
               input: Schema.String,
               output: Schema.String,
               execute: () =>
@@ -715,7 +708,6 @@ describe("extension command RPCs", () => {
             "request",
             request({
               id: "read-live-profile-token",
-              extensionId: ExtensionId.make("@test/live-profile-service-request"),
               input: Schema.String,
               output: Schema.String,
               execute: () =>
@@ -820,7 +812,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "visible",
-              extensionId,
               slash: { name: "visible", description: "visible" },
               input: Schema.String,
               output: Schema.Void,
@@ -853,7 +844,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "inspect",
-              extensionId,
               input: Schema.Void,
               output: Schema.Struct({
                 hasSessionMutations: Schema.Boolean,
@@ -927,7 +917,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "shadowed",
-              extensionId,
               slash: { name: "shadowed private", description: "shadowed private" },
               description: "shadowed private",
               input: Schema.Struct({ value: Schema.String }),
@@ -971,7 +960,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "shadowed",
-              extensionId,
               slash: { name: "shadowed", description: "shadowed" },
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),
@@ -988,7 +976,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "shadowed",
-              extensionId,
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),
               execute: (input) => Effect.succeed({ value: input.value }),
@@ -1022,7 +1009,6 @@ describe("extension command RPCs", () => {
           requests: [
             request({
               id: "shadowed",
-              extensionId,
               slash: { name: "shadowed", description: "shadowed" },
               input: Schema.Struct({ value: Schema.String }),
               output: Schema.Struct({ value: Schema.String }),

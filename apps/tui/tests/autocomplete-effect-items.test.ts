@@ -11,7 +11,7 @@
  */
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
-import { ExtensionId, ref, request } from "@gent/core/extensions/api"
+import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
 import type { AutocompleteContribution, AutocompleteItem } from "../src/extensions/client-facets.js"
 import {
   ClientTransport,
@@ -34,12 +34,13 @@ class AutocompleteTestError extends Schema.TaggedError<AutocompleteTestError>()(
   "AutocompleteTestError",
   { message: Schema.String },
 ) {}
-const ListThingsRpc = request({
-  id: "list-things",
-  extensionId: ExtensionId.make("@test/autocomplete"),
-  input: Schema.Struct({}),
-  output: Schema.Array(Schema.String),
-  execute: () => Effect.succeed([]),
+const { ListThingsRpc } = defineRequests(ExtensionId.make("@test/autocomplete"), {
+  ListThingsRpc: request({
+    id: "list-things",
+    input: Schema.Struct({}),
+    output: Schema.Array(Schema.String),
+    execute: () => Effect.succeed([]),
+  }),
 })
 // eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
 type FakeSession =

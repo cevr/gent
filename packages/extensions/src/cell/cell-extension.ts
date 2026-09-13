@@ -6,7 +6,6 @@ import {
   ExtensionContext,
   getToolId,
   getToolPrompt,
-  withSectionMarkers,
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { CellTool } from "./cell-tool.js"
@@ -54,10 +53,7 @@ export const CellExtension = defineExtension({
               `- **${getToolId(tool)}**${describeInputKeys(tool)}: ${getToolPrompt(tool).promptSnippet ?? tool.description}`,
           )
         if (entries.length === 0) return `${input.basePrompt}\n\n${CELL_WORK}`
-        const catalog = withSectionMarkers(
-          "cell-catalog",
-          `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${entries.join("\n")}`,
-        )
+        const catalog = `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${entries.join("\n")}`
         return `${input.basePrompt}\n\n${CELL_WORK}\n\n${catalog}`
       }),
     )
