@@ -7,7 +7,7 @@ import { BranchId, SessionId } from "../../src/domain/ids"
 import { Model, ModelId, ProviderId } from "../../src/domain/model"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message"
 import { textStep } from "../../src/debug/provider"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
 import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStorage } from "../../src/storage/event-storage"
@@ -98,11 +98,20 @@ describe("SessionRuntime metrics", () => {
               > => e._tag === "StreamEnded",
             )
           const metrics = yield* runtime.getMetrics({ sessionId, branchId })
-          return { streamEndeds, metrics }
+          const receipts = envelopes
+            .map((e) => e.event)
+            .filter(
+              (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
+            )
+          return { streamEndeds, metrics, receipts }
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
       )
       expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
+      // Each turn receipt carries that turn's totals, summed over its steps.
+      expect(result.receipts.map((receipt) => receipt.usage)).toEqual(
+        result.streamEndeds.map((ev) => ev.usage),
+      )
       for (const ev of result.streamEndeds) {
         expect(ev.model).toBe(ModelId.make("test/priced"))
         expect(ev.costUsd).toBeDefined()
@@ -112,6 +121,37 @@ describe("SessionRuntime metrics", () => {
       expect(result.metrics.costUsd).toBeCloseTo(expected, 10)
       expect(result.metrics.lastModelId).toBe(ModelId.make("test/priced"))
       expect(result.metrics.lastInputTokens).toBeGreaterThan(0)
+    }),
+  )
+  it.live("a turn with one step that reports no usage leaves the receipt's usage absent", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        {
+          parts: [textDeltaPart("reply without usage"), finishPart({ finishReason: "stop" })],
+        },
+      ])
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranch()
+          yield* runtime.runPrompt({
+            sessionId,
+            branchId,
+            agentName: AgentName.make("cowork"),
+            prompt: "first",
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          return envelopes
+            .map((e) => e.event)
+            .filter(
+              (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
+            )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      expect(result).toHaveLength(1)
+      expect(result[0]?.usage).toBeUndefined()
     }),
   )
   it.live("a completed turn reports what the model saw as context metrics", () =>

@@ -68,6 +68,10 @@ export type TurnMetrics = {
   inputTokens: number
   outputTokens: number
   toolCallCount: number
+  /** Model steps seen this turn; zero means no usage can be reported. */
+  steps: number
+  /** False once any step reported no usage or an unusable count. */
+  usageKnown: boolean
 }
 
 export const emptyTurnMetrics = (): TurnMetrics => ({
@@ -76,6 +80,8 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
   inputTokens: 0,
   outputTokens: 0,
   toolCallCount: 0,
+  steps: 0,
+  usageKnown: true,
 })
 
 interface TurnResponseMessages {

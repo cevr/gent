@@ -548,14 +548,28 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       )
 
-      yield* Ref.update(scope.turnMetricsRef, (m) => ({
-        ...m,
-        agent: params.resolved.currentTurnAgent,
-        model: params.resolved.modelId,
-        inputTokens: m.inputTokens + inputTokens,
-        outputTokens: m.outputTokens + outputTokens,
-        toolCallCount: m.toolCallCount + toolCallsFromResponseParts(collected.responseParts).length,
-      }))
+      const usableCount = (count: number) => Number.isSafeInteger(count) && count >= 0
+      yield* Ref.update(scope.turnMetricsRef, (m) => {
+        const totalInput = m.inputTokens + inputTokens
+        const totalOutput = m.outputTokens + outputTokens
+        return {
+          ...m,
+          agent: params.resolved.currentTurnAgent,
+          model: params.resolved.modelId,
+          inputTokens: totalInput,
+          outputTokens: totalOutput,
+          toolCallCount:
+            m.toolCallCount + toolCallsFromResponseParts(collected.responseParts).length,
+          steps: m.steps + 1,
+          usageKnown:
+            m.usageKnown &&
+            Option.isSome(usage) &&
+            usableCount(inputTokens) &&
+            usableCount(outputTokens) &&
+            usableCount(totalInput) &&
+            usableCount(totalOutput),
+        }
+      })
 
       yield* persistAssistantPartsWithBindingsAt(
         responseStep,
@@ -619,6 +633,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
+      const metrics = yield* Ref.get(scope.turnMetricsRef)
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
@@ -636,13 +651,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           if (params.unanswered) {
             Object.assign(completionFields, { unanswered: true })
           }
+          if (metrics.steps > 0 && metrics.usageKnown) {
+            Object.assign(completionFields, {
+              usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+            })
+          }
           return yield* eventPublisher.append(TurnCompleted.make(completionFields))
         }),
       )
       yield* eventPublisher.deliver(envelope)
 
       yield* Effect.logDebug("finalize.turn-after.start")
-      const metrics = yield* Ref.get(scope.turnMetricsRef)
       yield* extensionRegistry.extensionHooks.emitTurnAfter({
         sessionId: scope.sessionId,
         branchId: scope.branchId,

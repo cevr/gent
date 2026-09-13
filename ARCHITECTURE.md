@@ -384,10 +384,12 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as `read_session` goal extraction pass `visibility: "private"`. A run may pass `history: "inherit"` to seed its branch with a copy of the parent branch's visible messages; `/btw` uses this for tool-less side questions that never write back to the parent.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
 - Foreground runs persist a child session/branch and can be revisited with `read_session`. Private runs leave no session behind; they return text/usage/tool-call metadata only.
-- Child metadata reads only the requested branch. Stream totals remain unknown
-  if any stored stream has missing or invalid usage, or if the sum exceeds safe
-  integer precision. Explicit zero is retained; no stream receipts means unknown.
-  These are reported stream totals, not full model-attempt budget accounting.
+- `TurnCompleted` carries the turn's token totals, summed over its model
+  steps. It is absent when any step reported no usage or an unusable count,
+  when the turn had no step, and on historical receipts. Explicit zero is
+  retained. Run results and child completions read usage from that receipt
+  and the answer from the branch's last assistant message; nothing scans the
+  event log. These are reported stream totals, not model-attempt accounting.
 
 ### Interactions (Cold Pattern)
 

@@ -928,3 +928,20 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
 - Feature note: the branch picker now shows name and message count only. A
   model-written branch summary is extension work (a branch-switch hook plus
   a widget), not loop work.
+
+## The turn receipt carries usage (2026-09-13)
+
+- `agent-runner.metadata.ts` (175 lines) rebuilt a child's usage and tool
+  calls by scanning every event on its branch after the fact. The loop
+  already had the totals in hand at the append site.
+- `TurnCompleted.usage` is populated from the turn's metrics when every step
+  reported a usable count; `TurnMetrics` gained `steps` and `usageKnown`.
+  Run results and child completions take usage from the receipt, text from
+  the branch's last assistant message (`latestAssistantText`), and tool
+  calls from tool-call/tool-result parts (`messagesToolCalls`), two pure
+  projections in `message-part-display.ts`.
+- Tests: the "agent runner metadata" suite (147 lines of event fixtures)
+  became two pure projection cases and two loop-level receipt cases in
+  `session-metrics.test.ts` (known sum equals the stream totals; a step
+  without usage leaves the receipt absent). The cell foreground test still
+  reads `metadata.toolCalls` unchanged.

@@ -118,6 +118,11 @@ export const AgentEvent = Schema.TaggedUnion({
      * Absent on historical receipts and on every turn that did reply.
      */
     unanswered: Schema.optional(Schema.Boolean),
+    /**
+     * Token totals over every model step of this turn. Absent when any step
+     * reported no usage or an unusable count, and on historical receipts.
+     */
+    usage: Schema.optional(UsageSchema),
   },
   /** What the model saw this turn after projection and compaction. */
   ModelContextProjected: {

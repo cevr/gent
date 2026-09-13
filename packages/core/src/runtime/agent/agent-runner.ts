@@ -8,11 +8,13 @@ import {
   AgentRunnerService,
   AgentRunResult,
   DEFAULT_AGENT_NAME,
+  agentRunUsage,
   makeRunSpec,
   type AgentName,
 } from "../../domain/agent.js"
 import { MessageId, type SessionId, type BranchId } from "../../domain/ids.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import { latestAssistantText, messagesToolCalls } from "../../domain/message-part-projection.js"
 import type { GentPlatform } from "../gent-platform.js"
 import type { BranchStorage } from "../../storage/branch-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
@@ -23,7 +25,6 @@ import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { makeDurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { ChildCompletionDelivery } from "./child-completion.js"
-import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 export { getSessionDepth } from "./agent-runner.durable.js"
 
 export interface AgentRunnerConfig {
@@ -59,7 +60,6 @@ export const InProcessRunner = (
       const sessionStorage = yield* SessionStorage
       const eventStorage = yield* EventStorage
       const durableRuntime = yield* makeDurableAgentRunRuntime
-      const metadataRuntime = yield* makeAgentRunMetadataRuntime
       const delivery = yield* ChildCompletionDelivery
       // Startup recovery runs beside the server, not before it.
       yield* Effect.forkScoped(delivery.reconcile)
@@ -236,10 +236,31 @@ export const InProcessRunner = (
               ),
             )
 
-            const success = yield* metadataRuntime.loadAgentRunSuccessData({
-              branchId,
+            // The answer is the branch's last assistant message; the totals are
+            // on the turn receipt. Neither needs an event scan.
+            const receipt = yield* eventStorage
+              .getLatestEvent({ sessionId, branchId, tags: ["TurnCompleted"] })
+              .pipe(
+                Effect.map(Option.fromUndefinedOr),
+                Effect.catchEager(() => Effect.succeedNone),
+              )
+            const childMessages = yield* messageStorage.listMessages(branchId)
+            const usage = Option.getOrUndefined(
+              Option.flatMap(receipt, (event) => {
+                if (event._tag !== "TurnCompleted") return Option.none()
+                return Option.map(Option.fromUndefinedOr(event.usage), agentRunUsage)
+              }),
+            )
+            const toolCalls = Option.filter(
+              Option.some(messagesToolCalls(childMessages)),
+              (calls) => calls.length > 0,
+            )
+            const success = AgentRunResult.cases.success.make({
+              text: latestAssistantText(childMessages),
               sessionId,
               agentName,
+              usage,
+              toolCalls: Option.getOrUndefined(toolCalls),
             })
             if (!isPrivate) {
               let preview = success.text
@@ -258,7 +279,7 @@ export const InProcessRunner = (
               usage: success.usage,
               toolCallCount: success.toolCalls?.length ?? 0,
             })
-            return AgentRunResult.cases.success.make(success)
+            return success
           }).pipe(
             withWideEvent(agentRunBoundary(agentName, params.parentSessionId)),
             Effect.catchCause((cause) => {

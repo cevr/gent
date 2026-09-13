@@ -1,5 +1,5 @@
 import { Cause, Context, Effect, Layer, Option, Predicate, Semaphore, Stream } from "effect"
-import type { AgentName } from "../../domain/agent.js"
+import { agentRunUsage, type AgentName } from "../../domain/agent.js"
 import {
   type AgentEvent,
   AgentRunSucceeded,
@@ -9,6 +9,7 @@ import {
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { headTailChars } from "../../domain/output-buffer.js"
 import { MessageId, type RequestId } from "../../domain/ids.js"
+import { latestAssistantText } from "../../domain/message-part-projection.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import {
   SessionOperationStorage,
@@ -16,7 +17,6 @@ import {
 } from "../../storage/session-operation-storage.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import { followUpMessageIdForSource, SessionRuntime } from "../session-runtime.js"
-import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
 
 /** Follow-up source for one child completion. The parent message id derives from it. */
 const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:complete`
@@ -85,7 +85,6 @@ export class ChildCompletionDelivery extends Context.Service<
       const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
-      const metadata = yield* makeAgentRunMetadataRuntime
       const workspaceId = yield* CurrentWorkspaceId
 
       const scope = yield* Effect.scope
@@ -121,11 +120,7 @@ export class ChildCompletionDelivery extends Context.Service<
           followUpMessageIdForSource({ workspaceId, ...parent, sourceId }),
         )
         if (Predicate.isNotUndefined(existing)) return
-        const success = yield* metadata.loadAgentRunSuccessData({
-          sessionId: child.sessionId,
-          branchId: child.branchId,
-          agentName: child.input.agentName,
-        })
+        const text = latestAssistantText(yield* messages.listMessages(child.branchId))
         yield* sessionRuntime.queueFollowUp({
           sourceId,
           ...parent,
@@ -136,7 +131,7 @@ export class ChildCompletionDelivery extends Context.Service<
             agentName: child.input.agentName,
             child,
             completion,
-            text: success.text,
+            text,
           }),
           metadata: {
             customType: "child-completion",
@@ -151,8 +146,10 @@ export class ChildCompletionDelivery extends Context.Service<
             agentName: child.input.agentName,
             toolCallId: child.input.toolCallId,
             branchId: parent.branchId,
-            usage: success.usage,
-            preview: success.text.slice(0, 200),
+            usage: Option.getOrUndefined(
+              Option.map(Option.fromUndefinedOr(completion.usage), agentRunUsage),
+            ),
+            preview: text.slice(0, 200),
           }),
         )
       })

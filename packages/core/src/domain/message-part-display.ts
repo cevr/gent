@@ -1,5 +1,6 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
+import { AgentRunToolCallSchema, type AgentRunToolCall } from "./agent.js"
 import { ToolCallId } from "./ids.js"
 import { filePartDataToDisplay } from "./message-image-conversion.js"
 import {
@@ -144,6 +145,47 @@ export const messageSingleText = (parts: ReadonlyArray<MessagePart>): string | u
 
 export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
   parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
+
+/**
+ * The answer a child run hands back: the last assistant message's text, or its
+ * reasoning when the model wrote nothing else.
+ */
+export const latestAssistantText = (
+  messages: ReadonlyArray<{ readonly role: string; readonly parts: ReadonlyArray<MessagePart> }>,
+): string => {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (Predicate.isUndefined(message) || message.role !== "assistant") continue
+    const text = messagePartsTextLines(message.parts)[0] ?? ""
+    if (text.length > 0) return text
+    return messagePartsReasoningLines(message.parts).join("\n")
+  }
+  return ""
+}
+
+const decodeToolArgs = Schema.decodeUnknownOption(AgentRunToolCallSchema.fields.args)
+
+/** Every finished tool call on a branch, paired with its result. Object params only. */
+export const messagesToolCalls = (
+  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<MessagePart> }>,
+): ReadonlyArray<AgentRunToolCall> => {
+  const parts = messages.flatMap((message) => message.parts)
+  const calls = new Map<string, Pick<AgentRunToolCall, "toolName" | "args">>()
+  for (const part of parts) {
+    if (part.type !== "tool-call") continue
+    calls.set(part.id, {
+      toolName: part.name,
+      args: Option.getOrElse(decodeToolArgs(part.params), () => ({})),
+    })
+  }
+  return parts.flatMap((part) => {
+    if (part.type !== "tool-result") return []
+    const call = calls.get(part.id)
+    return [
+      { toolName: call?.toolName ?? part.name, args: call?.args ?? {}, isError: part.isFailure },
+    ]
+  })
+}
 
 export const messagePartsReasoningLines = (
   parts: ReadonlyArray<MessagePart>,

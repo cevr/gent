@@ -52,15 +52,7 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { ModelId } from "../../src/domain/model"
-import {
-  AgentEvent,
-  EventStore,
-  EventStoreError,
-  StreamEnded,
-  ToolCallStarted,
-  ToolCallSucceeded,
-  TurnCompleted,
-} from "../../src/domain/event"
+import { AgentEvent, EventStore, EventStoreError, TurnCompleted } from "../../src/domain/event"
 import { EventPublisher, EventPublisherLive } from "../../src/domain/event-publisher"
 import { makeStorageTransaction, SqliteStorage } from "../../src/storage/sqlite-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
@@ -71,7 +63,6 @@ import { EventStorage } from "../../src/storage/event-storage"
 import { RelationshipStorage } from "../../src/storage/relationship-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { loadAgentRunSuccessData } from "../../src/runtime/agent/agent-runner.metadata"
 import {
   defineExtension,
   ExtensionContext,
@@ -1719,150 +1710,6 @@ describe("AgentRunner", () => {
         expect(result.text).toBe("the actual answer")
       }
     }),
-  )
-})
-describe("agent runner metadata", () => {
-  it.live("reports only complete branch stream totals and preserves known zero", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const events = yield* EventStorage
-      const sessionId = SessionId.make("usage-session")
-      const now = dateFromMillis(1_767_225_600_000)
-      yield* sessions.createSession(
-        new Session({ id: sessionId, name: "Usage", createdAt: now, updatedAt: now }),
-      )
-      const known = { inputTokens: 10, outputTokens: 2 }
-      const missing = Option.getOrUndefined(Option.none<never>())
-      const cases = [
-        { name: "empty", usages: [], expected: missing },
-        {
-          name: "zero",
-          usages: [{ inputTokens: 0, outputTokens: 0 }],
-          expected: { input: 0, output: 0 },
-        },
-        { name: "known", usages: [known, known], expected: { input: 20, output: 4 } },
-        { name: "missing-last", usages: [known, missing], expected: missing },
-        { name: "missing-first", usages: [missing, known], expected: missing },
-        {
-          name: "negative",
-          usages: [known, { inputTokens: -1, outputTokens: 2 }],
-          expected: missing,
-        },
-        { name: "fraction", usages: [{ inputTokens: 1, outputTokens: 0.5 }], expected: missing },
-        {
-          name: "overflow",
-          usages: [{ inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 2 }, known],
-          expected: missing,
-        },
-      ]
-      // All branches share a session. Prior branch receipts must not enter the next total.
-      for (const sample of cases) {
-        const branchId = BranchId.make(`usage-${sample.name}`)
-        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
-        for (const usage of sample.usages) {
-          yield* events.appendEvent(StreamEnded.make({ sessionId, branchId, usage }))
-        }
-        const result = yield* loadAgentRunSuccessData({
-          sessionId,
-          branchId,
-          agentName: DEFAULT_AGENT_NAME,
-        })
-        expect(result.usage).toEqual(sample.expected)
-      }
-    }).pipe(
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
-    ),
-  )
-
-  it.live("keeps object tool arguments and ignores non-record inputs", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const messages = yield* MessageStorage
-      const events = yield* EventStorage
-      const sessionId = SessionId.make("metadata-session")
-      const branchId = BranchId.make("metadata-branch")
-      const now = dateFromMillis(1_767_225_600_000)
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "Metadata",
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: MessageId.make("metadata-message"),
-          sessionId,
-          branchId,
-          role: "assistant",
-          parts: [Prompt.textPart({ text: "metadata result" })],
-          createdAt: now,
-        }),
-      )
-
-      const started = [
-        ToolCallStarted.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("metadata-scalar"),
-          toolName: "scalar-tool",
-          input: "scalar input",
-        }),
-        ToolCallStarted.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("metadata-array"),
-          toolName: "array-tool",
-          input: ["array", 1],
-        }),
-        ToolCallStarted.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("metadata-object"),
-          toolName: "object-tool",
-          input: { path: "src", limit: 2 },
-        }),
-      ]
-      for (const event of started) yield* events.appendEvent(event)
-      const succeeded = [
-        ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("metadata-scalar"),
-          toolName: "scalar-tool",
-        }),
-        ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("metadata-array"),
-          toolName: "array-tool",
-        }),
-        ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId: ToolCallId.make("metadata-object"),
-          toolName: "object-tool",
-        }),
-      ]
-      for (const event of succeeded) yield* events.appendEvent(event)
-
-      const result = yield* loadAgentRunSuccessData({
-        branchId,
-        sessionId,
-        agentName: DEFAULT_AGENT_NAME,
-      })
-      expect(result.toolCalls).toEqual([
-        { toolName: "scalar-tool", args: {}, isError: false },
-        { toolName: "array-tool", args: {}, isError: false },
-        { toolName: "object-tool", args: { path: "src", limit: 2 }, isError: false },
-      ])
-    }).pipe(
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
-    ),
   )
 })
 // ============================================================================

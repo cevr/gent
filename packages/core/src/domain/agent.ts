@@ -219,6 +219,13 @@ const AgentRunUsageSchema = Schema.Struct({
   output: Schema.Finite,
   cost: Schema.optional(Schema.Finite),
 })
+type AgentRunUsage = typeof AgentRunUsageSchema.Type
+
+/** The receipt's token totals in the run-result shape. */
+export const agentRunUsage = (usage: {
+  readonly inputTokens: number
+  readonly outputTokens: number
+}): AgentRunUsage => ({ input: usage.inputTokens, output: usage.outputTokens })
 
 const AgentRunSuccessStruct = Schema.TaggedStruct("success", {
   text: Schema.String,

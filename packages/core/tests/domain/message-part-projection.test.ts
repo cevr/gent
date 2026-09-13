@@ -8,6 +8,8 @@ import {
   messagePartsSearchText,
   messagePartsText,
   messagePartsTextLines,
+  latestAssistantText,
+  messagesToolCalls,
   projectMessagesWithToolInteractions,
   messagePartsToolCallParts,
   messageSingleText,
@@ -24,7 +26,9 @@ describe("message part projection", () => {
   const makeMessage = (
     id: string,
     role: "assistant" | "tool",
-    parts: ReadonlyArray<Prompt.TextPart | Prompt.ToolCallPart | Prompt.ToolResultPart>,
+    parts: ReadonlyArray<
+      Prompt.TextPart | Prompt.ReasoningPart | Prompt.ToolCallPart | Prompt.ToolResultPart
+    >,
   ) =>
     Message.cases.regular.make({
       id: MessageId.make(id),
@@ -342,5 +346,68 @@ describe("message part projection", () => {
     expect(() => assistantMessagePartToResponsePart(part)).toThrow(
       'responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "https://example.test/image.png"',
     )
+  })
+
+  test("a child's answer is its last assistant text, or its reasoning when the model wrote nothing else", () => {
+    const reasoningOnly = [
+      makeMessage("a-1", "assistant", [
+        Prompt.reasoningPart({ text: "I analyzed the repository" }),
+      ]),
+    ]
+    expect(latestAssistantText(reasoningOnly)).toBe("I analyzed the repository")
+    const mixed = [
+      makeMessage("a-2", "assistant", [
+        Prompt.reasoningPart({ text: "thinking step" }),
+        Prompt.textPart({ text: "the actual answer" }),
+      ]),
+    ]
+    expect(latestAssistantText(mixed)).toBe("the actual answer")
+    const latestWins = [
+      makeMessage("a-3", "assistant", [Prompt.textPart({ text: "first" })]),
+      makeMessage("t-3", "tool", [
+        Prompt.toolResultPart({
+          id: ToolCallId.make("tc-3"),
+          name: "bash",
+          isFailure: false,
+          providerExecuted: false,
+          result: "ok",
+        }),
+      ]),
+      makeMessage("a-4", "assistant", [Prompt.textPart({ text: "second" })]),
+    ]
+    expect(latestAssistantText(latestWins)).toBe("second")
+    expect(latestAssistantText([])).toBe("")
+  })
+
+  test("finished tool calls keep object params and drop scalar or array params", () => {
+    const call = (id: string, name: string, params: Prompt.ToolCallPart["params"]) =>
+      Prompt.toolCallPart({ id: ToolCallId.make(id), name, params, providerExecuted: false })
+    const result = (id: string, name: string, isFailure: boolean) =>
+      Prompt.toolResultPart({
+        id: ToolCallId.make(id),
+        name,
+        isFailure,
+        providerExecuted: false,
+        result: "done",
+      })
+    const messages = [
+      makeMessage("a-1", "assistant", [
+        call("scalar", "scalar-tool", "scalar input"),
+        call("array", "array-tool", ["array", 1]),
+        call("object", "object-tool", { path: "src", limit: 2 }),
+        call("pending", "slow-tool", {}),
+      ]),
+      makeMessage("t-1", "tool", [
+        result("scalar", "scalar-tool", false),
+        result("array", "array-tool", true),
+        result("object", "object-tool", false),
+      ]),
+    ]
+    expect(messagesToolCalls(messages)).toEqual([
+      { toolName: "scalar-tool", args: {}, isError: false },
+      { toolName: "array-tool", args: {}, isError: true },
+      { toolName: "object-tool", args: { path: "src", limit: 2 }, isError: false },
+    ])
+    expect(messagesToolCalls([])).toEqual([])
   })
 })
