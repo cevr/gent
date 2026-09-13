@@ -10,10 +10,6 @@ export {
   QueueSnapshot,
   RequestId,
   ResourceDescriptor,
-  ResourceGraphExtensionSource,
-  ResourceGraphRevision,
-  ResourceGraphSnapshot,
-  ResourceGraphSource,
   ResourceId,
   ResourceRevision,
   Session,
@@ -29,15 +25,6 @@ export type {
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
-} from "@gent/core/protocol"
-
-// Durable resource-graph repair values. These schemas let a control client
-// validate a snapshot previewed from the target declarations before submit.
-export type {
-  ResourceGraphExtensionSource as ResourceGraphExtensionSourceType,
-  ResourceGraphSnapshot as ResourceGraphSnapshotType,
-  ResourceGraphSource as ResourceGraphSourceType,
-  ResourceDescriptor as ResourceDescriptorType,
 } from "@gent/core/protocol"
 
 // Client constructors

@@ -94,10 +94,6 @@ export interface RuntimeProfileOwner {
     inputs: RuntimeProfileInputs,
     retireMode?: ResourceGraphRetireMode,
   ) => Effect.Effect<LiveRuntimeProfile, ConfigLoadError | ResourceGraphHostError>
-  /** Load the current declarations without publishing or acquiring resources. */
-  readonly preview: (
-    inputs: RuntimeProfileInputs,
-  ) => Effect.Effect<ResourceGraphSnapshotType, ResourceGraphApplyError>
   readonly current: Effect.Effect<Option.Option<LiveRuntimeProfile>>
   readonly prepareDesired: (
     request: ResourceGraphDesiredApplication,
@@ -566,23 +562,6 @@ export const makeRuntimeProfileOwner = (params: {
       } satisfies LiveRuntimeProfile
     })
 
-  const preview: RuntimeProfileOwner["preview"] = (inputs) =>
-    Effect.gen(function* () {
-      const config = yield* params.configService
-        .getFresh(inputs.cwd)
-        .pipe(
-          Effect.mapError((error) =>
-            applyError("prepare", `Could not load profile configuration: ${String(error)}`),
-          ),
-        )
-      const desired = yield* loadDesired(inputs, config).pipe(
-        Effect.mapError((error) =>
-          applyError("prepare", `Could not load desired declarations: ${String(error)}`),
-        ),
-      )
-      return desired.snapshot
-    })
-
   const current: RuntimeProfileOwner["current"] = params.host.current.pipe(
     Effect.map((publication) => {
       if (Option.isNone(publication) || Option.isNone(latestDesired)) {
@@ -728,7 +707,6 @@ export const makeRuntimeProfileOwner = (params: {
 
   owner = {
     refresh,
-    preview,
     current,
     prepareDesired,
     validateDesired,

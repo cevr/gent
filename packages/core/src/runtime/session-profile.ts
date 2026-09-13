@@ -104,11 +104,6 @@ interface SessionProfileCacheConfig {
 export interface SessionProfileCacheService {
   /** Get or lazily create a profile for the given cwd. */
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile>
-  /**
-   * Load target declarations without publishing or acquiring resources.
-   * An unknown cwd is not retained in the live cache.
-   */
-  readonly preview: (cwd: string) => Effect.Effect<ResourceGraphSnapshot, ResourceGraphApplyError>
   /** Reload declarations and publish a new catalog when semantic inputs change. */
   readonly refresh: (
     cwd: string,
@@ -345,28 +340,6 @@ export class SessionProfileCache extends Context.Service<
             }).pipe(provideKeyLock(key))
           })
 
-        const preview: SessionProfileCacheService["preview"] = (cwd) =>
-          Effect.gen(function* () {
-            const workspaceId = yield* CurrentWorkspaceId
-            const canonicalCwd = pathSvc.resolve(cwd)
-            const key = cacheKey(workspaceId, canonicalCwd)
-            return yield* Effect.gen(function* () {
-              const cache = yield* TxRef.get(cacheRef)
-              const existing = HashMap.get(cache, key)
-              if (existing._tag === "Some") {
-                return yield* existing.value.owner.preview(inputsFor(canonicalCwd))
-              }
-
-              // A preview must not create an unpublished cache entry. Such an
-              // entry would make a later resolve observe an owner with no live
-              // publication and would poison the first-use path.
-              const initialized = yield* makeOwner()
-              return yield* initialized.owner
-                .preview(inputsFor(canonicalCwd))
-                .pipe(Effect.ensuring(initialized.host.shutdown.pipe(Effect.ignore)))
-            }).pipe(provideKeyLock(key))
-          })
-
         const current: SessionProfileCacheService["current"] = (cwd) =>
           Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId
@@ -441,7 +414,6 @@ export class SessionProfileCache extends Context.Service<
         }
         const cacheService = SessionProfileCache.of({
           resolve,
-          preview,
           refresh,
           current,
           requireCurrent,
@@ -490,13 +462,6 @@ export class SessionProfileCache extends Context.Service<
             cache.set(cwd, profile)
             return profile
           }),
-        preview: () =>
-          Effect.fail(
-            new ResourceGraphApplyError({
-              phase: "prepare",
-              message: "SessionProfileCache.Test does not support graph preview",
-            }),
-          ),
         refresh: () => Effect.die("SessionProfileCache.Test does not support refresh"),
         current: (cwd) => Effect.sync(() => Option.fromUndefinedOr(cache.get(cwd))),
         requireCurrent: (cwd) =>

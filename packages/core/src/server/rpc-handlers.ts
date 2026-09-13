@@ -1,4 +1,4 @@
-import { Predicate, Clock, Effect, Layer, Option, Path, Schema, Stream, type Context } from "effect"
+import { Predicate, Clock, Effect, Layer, Option, Stream, type Context } from "effect"
 import { GentRpcs } from "./rpcs"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
@@ -17,13 +17,6 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
-import {
-  CanonicalCwd,
-  ResourceGraphCommandConflictError,
-  ResourceGraphDesiredCommand,
-  ResourceGraphExpectedRevisionError,
-} from "../domain/resource-graph-state.js"
-import { StorageError } from "../domain/storage-error.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -36,11 +29,8 @@ import { InteractionCommands } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionQueries } from "./session-queries.js"
-import { ResourceGraphCommandService } from "../runtime/extensions/resource-host/resource-graph-command.js"
-import { ResourceGraphApplyError } from "../runtime/extensions/resource-host/resource-graph-entity.js"
-import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import { getBranchTree } from "./session-utils.js"
-import { CurrentWorkspaceId, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
   DriverInfo,
   DriverListResult,
@@ -66,8 +56,6 @@ import {
   type SubscribeEventsInput,
   type SwitchBranchInput,
   type UpdateSessionReasoningLevelInput,
-  type ResourceGraphGetInput,
-  type ResourceGraphSubmitInput,
 } from "./transport-contract.js"
 
 // ============================================================================
@@ -123,26 +111,6 @@ const authPersistenceError = (
     cause,
   })
 
-// oxlint-disable-next-line effect/noUnknownParameters -- Encore send failures are not schema errors.
-const resourceGraphSubmitError = (cause: unknown) => {
-  if (Schema.is(StorageError)(cause)) return cause
-  if (Schema.is(ResourceGraphCommandConflictError)(cause)) return cause
-  if (Schema.is(ResourceGraphExpectedRevisionError)(cause)) return cause
-  return new StorageError({
-    message: `Failed to submit resource graph: ${String(cause)}`,
-    cause,
-  })
-}
-
-// oxlint-disable-next-line effect/noUnknownParameters -- Preview maps loader failures into the RPC schema.
-const resourceGraphPreviewError = (cause: unknown) => {
-  if (Schema.is(ResourceGraphApplyError)(cause)) return cause
-  return new ResourceGraphApplyError({
-    phase: "prepare",
-    message: `Failed to preview resource graph: ${String(cause)}`,
-  })
-}
-
 const extensionRequestError = (params: {
   readonly extensionId: ExtensionId
   readonly capabilityId: string
@@ -178,9 +146,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
     const relationshipStorage = yield* RelationshipStorage
-    const resourceGraphCommands = yield* ResourceGraphCommandService
-    const resourceGraphStorage = yield* ResourceGraphStorage
-    const path = yield* Path.Path
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
     const serverIdentity = yield* ServerIdentity
     // Touching these Tags at layer-build keeps their requirements visible on the
@@ -426,47 +391,6 @@ const RpcHandlers = GentRpcs.toLayer(
           ),
           withWideEvent(WideEventBoundary.rpc("interaction.respondInteraction")),
         ),
-
-      // ----------------------------------------------------------------------
-      // Durable resource graph
-      // ----------------------------------------------------------------------
-      "resourceGraph.submit": (input: ResourceGraphSubmitInput) =>
-        Effect.gen(function* () {
-          const workspaceId = yield* CurrentWorkspaceId
-          return yield* resourceGraphCommands
-            .submit(
-              ResourceGraphDesiredCommand.make({
-                ...input,
-                cwd: CanonicalCwd.make(path.resolve(input.cwd)),
-                workspaceId,
-              }),
-            )
-            .pipe(Effect.mapError(resourceGraphSubmitError))
-        }),
-
-      "resourceGraph.get": ({ cwd }: ResourceGraphGetInput) =>
-        Effect.gen(function* () {
-          const workspaceId = yield* CurrentWorkspaceId
-          const status = yield* resourceGraphStorage.get({
-            workspaceId,
-            cwd: CanonicalCwd.make(path.resolve(cwd)),
-          })
-          return Option.getOrNull(Option.fromUndefinedOr(status))
-        }),
-
-      "resourceGraph.preview": ({ cwd }: ResourceGraphGetInput) =>
-        Effect.gen(function* () {
-          const canonicalCwd = CanonicalCwd.make(path.resolve(cwd))
-          if (Option.isNone(profileCacheOpt)) {
-            return yield* new ResourceGraphApplyError({
-              phase: "prepare",
-              message: "Resource graph preview is unavailable without a profile cache",
-            })
-          }
-          return yield* profileCacheOpt.value
-            .preview(String(canonicalCwd))
-            .pipe(Effect.mapError(resourceGraphPreviewError))
-        }),
 
       // ----------------------------------------------------------------------
       // Config / driver / model / auth / permission

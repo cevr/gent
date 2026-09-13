@@ -9,10 +9,6 @@ import {
 import { SessionId } from "../domain/ids.js"
 import { Model } from "../domain/model.js"
 import { PermissionRule } from "../domain/permission.js"
-import {
-  ResourceGraphDesiredReceipt,
-  ResourceGraphSnapshot,
-} from "../domain/resource-graph-state.js"
 import { GentRpcError } from "./errors.js"
 import { SessionRpcs } from "./rpcs/session.js"
 import {
@@ -26,10 +22,6 @@ import {
   DriverListResult,
   ExtensionHealthSnapshot,
   ExtensionRpcRequestInput,
-  ResourceGraphGetInput,
-  ResourceGraphPreviewInput,
-  ResourceGraphStatusResult,
-  ResourceGraphSubmitInput,
   type GentConnectionError,
   ListAuthMethodsSuccess,
   ListAuthProvidersInput,
@@ -140,28 +132,6 @@ export class ExtensionRpcs extends RpcGroup.make(
   }),
 ) {}
 
-// ============================================================================
-// Durable resource graph
-// ============================================================================
-
-class ResourceGraphRpcs extends RpcGroup.make(
-  Rpc.make("submit", {
-    payload: ResourceGraphSubmitInput.fields,
-    success: ResourceGraphDesiredReceipt,
-    error: GentRpcError,
-  }),
-  Rpc.make("get", {
-    payload: ResourceGraphGetInput.fields,
-    success: ResourceGraphStatusResult,
-    error: GentRpcError,
-  }),
-  Rpc.make("preview", {
-    payload: ResourceGraphPreviewInput.fields,
-    success: ResourceGraphSnapshot,
-    error: GentRpcError,
-  }),
-).prefix("resourceGraph.") {}
-
 // Re-export sub-groups for handler wiring
 export { SessionRpcs, WorkspaceHeaderError, WorkspaceRpcMiddleware }
 
@@ -201,10 +171,6 @@ export {
   ExtensionHealthSnapshot,
   ExtensionHealthIssue,
   ExtensionManifestInfo,
-  ResourceGraphGetInput,
-  ResourceGraphPreviewInput,
-  ResourceGraphStatusResult,
-  ResourceGraphSubmitInput,
 } from "./transport-contract.js"
 
 // ============================================================================
@@ -212,7 +178,7 @@ export {
 // ============================================================================
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(SessionRpcs, ExtensionRpcs, ResourceGraphRpcs, AuthRpcs, RuntimeRpcs)
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, RuntimeRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ============================================================================

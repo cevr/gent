@@ -45,7 +45,7 @@ import {
   ResourceGraphDesiredApplier,
 } from "../../src/runtime/extensions/resource-host/resource-graph-entity"
 import { ResourceLeaseStaleGenerationError } from "../../src/runtime/extensions/resource-host/resource-leases"
-import { makeTempDirectoryScoped, waitFor } from "../../src/test-utils/fixtures"
+import { waitFor } from "../../src/test-utils/fixtures"
 
 const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
@@ -235,86 +235,6 @@ describe("session profile resolution", () => {
         Effect.provide(sessionProfileCacheLive),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("c".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
-  )
-
-  it.scopedLive("does not poison first-use resolution after a resource preview", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const launch = yield* makeTempDirectoryScoped("gent-session-profile-preview-")
-      const home = yield* makeTempDirectoryScoped("gent-session-profile-preview-home-")
-      const workspace = WorkspaceId.make("a".repeat(64))
-      let acquisitions = 0
-      let releases = 0
-      const resourceExtension = defineExtension({
-        id: "@gent/test-session-profile/preview",
-        setup: Effect.gen(function* () {
-          const host = yield* ExtensionHost
-          yield* host.register(
-            "resource",
-            defineResource({
-              id: "test/session-profile/preview",
-              revision: "preview/1",
-              scope: "process",
-              layer: Layer.effect(
-                SessionProfileResourceMarker,
-                Effect.acquireRelease(
-                  Effect.sync(() => {
-                    acquisitions += 1
-                    return SessionProfileResourceMarker.of({ value: "preview" })
-                  }),
-                  () => Effect.sync(() => void (releases += 1)),
-                ),
-              ),
-            }),
-          )
-        }),
-      })
-
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const cache = yield* SessionProfileCache
-          const snapshot = yield* cache
-            .preview(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-          expect(snapshot.descriptors).toHaveLength(1)
-          expect(acquisitions).toBe(0)
-
-          const beforeResolve = yield* cache
-            .current(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-          expect(Option.isNone(beforeResolve)).toBe(true)
-
-          const profile = yield* cache
-            .resolve(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-          expect(acquisitions).toBe(1)
-          expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe(
-            "preview",
-          )
-
-          const generation = profile.publication?.generationId
-          yield* fs.makeDirectory(path.join(launch, ".gent"), { recursive: true })
-          yield* fs.writeFileString(path.join(launch, ".gent", "config.json"), "{ malformed")
-          const invalidPreview = yield* cache
-            .preview(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspace), Effect.exit)
-          expect(Exit.isFailure(invalidPreview)).toBe(true)
-          const afterInvalidPreview = yield* cache
-            .current(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-          expect(Option.isSome(afterInvalidPreview)).toBe(true)
-          if (Option.isSome(afterInvalidPreview)) {
-            expect(afterInvalidPreview.value.publication?.generationId).toBe(generation)
-          }
-          expect(acquisitions).toBe(1)
-        }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This focused test owns one isolated live cache layer.
-          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [resourceExtension] })),
-        ),
-      )
-      expect(releases).toBe(1)
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 

@@ -321,7 +321,6 @@ describe("resolveSessionEnvironment", () => {
         }
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
-          preview: () => Effect.die("unused in this test"),
           refresh: () => Effect.die("unused in this test"),
           current: () => Effect.succeedSome(fakeProfile),
           requireCurrent: () => Effect.succeed(fakeProfile),

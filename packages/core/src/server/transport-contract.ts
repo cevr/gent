@@ -30,12 +30,6 @@ import {
   Session,
   SessionTreeNode,
 } from "../domain/message.js"
-import {
-  CanonicalCwd,
-  ResourceGraphRevision,
-  ResourceGraphSnapshot,
-  ResourceGraphStatus,
-} from "../domain/resource-graph-state.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
@@ -228,29 +222,6 @@ export const ExtensionRpcRequestInput = Schema.Struct({
   branchId: BranchId,
 })
 export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
-
-/** Submit one durable desired resource graph for the workspace header owner. */
-export const ResourceGraphSubmitInput = Schema.Struct({
-  cwd: CanonicalCwd,
-  commandId: RequestId,
-  expectedRevision: Schema.optional(ResourceGraphRevision),
-  desiredRevision: ResourceGraphRevision,
-  snapshot: ResourceGraphSnapshot,
-})
-export type ResourceGraphSubmitInput = typeof ResourceGraphSubmitInput.Type
-
-/** Query one durable resource graph owner in the workspace header. */
-export const ResourceGraphGetInput = Schema.Struct({
-  cwd: CanonicalCwd,
-})
-export type ResourceGraphGetInput = typeof ResourceGraphGetInput.Type
-
-/** Preview the current target declarations without publishing or acquiring them. */
-export const ResourceGraphPreviewInput = ResourceGraphGetInput
-export type ResourceGraphPreviewInput = typeof ResourceGraphPreviewInput.Type
-
-export const ResourceGraphStatusResult = Schema.NullOr(ResourceGraphStatus)
-export type ResourceGraphStatusResult = typeof ResourceGraphStatusResult.Type
 
 export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashCommandInfo")({
   /** Routing key (capability id). */
