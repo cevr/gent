@@ -246,7 +246,6 @@ export const AgentEvent = Schema.TaggedUnion({
       }),
     ),
     preview: Schema.optional(Schema.String),
-    savedPath: Schema.optional(Schema.String),
   },
   AgentRunFailed: {
     parentSessionId: SessionId,

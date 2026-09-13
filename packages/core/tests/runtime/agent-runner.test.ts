@@ -779,7 +779,6 @@ describe("AgentRunner", () => {
           const text = messageSingleText(notice?.parts ?? [])
           expect(text).toContain(`requestId ${requestId}`)
           expect(text).toContain("child says hi")
-          expect(text).toContain("Full output:")
           // A repeated delivery and a startup pass find the message and stop.
           yield* delivery.deliver(requestId)
           yield* delivery.reconcile
@@ -1262,9 +1261,6 @@ describe("AgentRunner", () => {
         if (event._tag !== "AgentRunSucceeded") return
         expect(event.preview).toBeDefined()
         expect(Predicate.isString(event.preview)).toBe(true)
-        expect(event.savedPath).toBeDefined()
-        expect(Predicate.isString(event.savedPath)).toBe(true)
-        expect(event.savedPath).toContain("/tmp/gent/outputs/")
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
@@ -1790,101 +1786,6 @@ describe("AgentRunner", () => {
       }
     }),
   )
-  it.live("agent run output is saved to /tmp/gent/outputs/", () =>
-    Effect.gen(function* () {
-      const eventStoreLayer = EventStore.Memory
-      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const storageLayer = SqliteStorage.TestWithSql(
-        noBranchTools.storage,
-        noBranchTools.migrations,
-      )
-      const mockRuntime = sessionRuntimeStub((input) =>
-        Effect.gen(function* () {
-          const messages = yield* MessageStorage
-          const now = dateFromMillis(1_767_225_600_000)
-          yield* messages.createMessage(
-            Message.cases.regular.make({
-              id: MessageId.make(`${input.sessionId}:assistant:1`),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "assistant",
-              parts: [
-                Prompt.reasoningPart({ text: "internal thinking" }),
-                Prompt.textPart({ text: "visible answer" }),
-              ],
-              createdAt: now,
-            }),
-          )
-        }).pipe(Effect.provide(storageLayer), Effect.orDie),
-      )
-      const deps = Layer.mergeAll(
-        storageLayer,
-        ExtensionRegistry.Test(),
-        LanguageModelLayers.debug(),
-        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        mockRuntime,
-        eventStoreLayer,
-        eventPublisherLayer,
-        BunFileSystem.layer,
-      )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
-      )
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const runner = yield* AgentRunnerService
-        const now = dateFromMillis(1_767_225_600_000)
-        yield* sessions.createSession(
-          new Session({
-            id: SessionId.make("parent-save"),
-            name: "P",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        )
-        yield* branches.createBranch(
-          new Branch({
-            id: BranchId.make("branch-save"),
-            sessionId: SessionId.make("parent-save"),
-            createdAt: now,
-          }),
-        )
-        return yield* runner.run({
-          agent: builtinAgent,
-          prompt: "save test",
-          parentSessionId: SessionId.make("parent-save"),
-          parentBranchId: BranchId.make("branch-save"),
-          cwd: "/tmp",
-          runSpec: { persistence: "durable" },
-        })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-      expect(result._tag).toBe("success")
-      if (result._tag === "success") {
-        const savedPath = result.savedPath
-        expect(savedPath).toBeDefined()
-        if (Predicate.isUndefined(savedPath)) return
-        expect(savedPath).toContain("/tmp/gent/outputs/")
-        expect(savedPath).toContain(`${DEFAULT_AGENT_NAME}_`)
-        expect(savedPath).toEndWith(".md")
-        // Verify file contents
-        // oxlint-disable-next-line effect/noGlobals -- This test verifies the durable output file contents.
-        const content = yield* Effect.promise(() => Bun.file(savedPath).text())
-        expect(content).toContain("## Reasoning")
-        expect(content).toContain("internal thinking")
-        expect(content).toContain("## Response")
-        expect(content).toContain("visible answer")
-        // Cleanup
-        // oxlint-disable-next-line effect/noGlobals -- This test removes the durable output fixture.
-        yield* Effect.promise(() => Bun.file(savedPath).delete())
-      }
-    }),
-  )
 })
 describe("agent runner metadata", () => {
   it.live("reports only complete branch stream totals and preserves known zero", () =>
@@ -1934,7 +1835,7 @@ describe("agent runner metadata", () => {
           agentName: DEFAULT_AGENT_NAME,
           persistence: "durable",
         })
-        expect(result.success.usage).toEqual(sample.expected)
+        expect(result.usage).toEqual(sample.expected)
       }
     }).pipe(
       Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
@@ -2022,7 +1923,7 @@ describe("agent runner metadata", () => {
         agentName: DEFAULT_AGENT_NAME,
         persistence: "ephemeral",
       })
-      expect(result.success.toolCalls).toEqual([
+      expect(result.toolCalls).toEqual([
         { toolName: "scalar-tool", args: {}, isError: false },
         { toolName: "array-tool", args: {}, isError: false },
         { toolName: "object-tool", args: { path: "src", limit: 2 }, isError: false },

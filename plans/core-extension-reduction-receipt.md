@@ -786,3 +786,18 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   delegation tools. Harness candidate: a delegated child should lose the
   delegation tools by default (prime-agent gives subagents no spawn tool),
   so a project prompt cannot recurse.
+
+## Delegation depth and the output mirror (2026-09-13)
+
+- `ff4ca16e`: `delegate` denies `delegate`, `agent-child` and `agent-children`
+  to every child. The gamut roster no longer carries `deniedTools`; the
+  harness owns the rule, as prime-agent's subagents own no spawn tool.
+- Child output was written a second time to `/tmp/gent/outputs/<agent>_<session>_<ts>.md`
+  and the path threaded through `AgentRunSuccess`, `AgentRunSucceeded`, the
+  child-completion notice, the delegate result and the TUI child tracker.
+  Nothing read the file: the parent reads the session through `read_session`,
+  and the TUI stored the path without showing it. The mirror, the optional
+  `FileSystem` in the metadata runtime, the `reasoning` return that only fed
+  the file, and the `savedPath` field on both schemas are gone. The test that
+  asserted the file's contents is deleted; the delivery test no longer expects
+  a "Full output" line.

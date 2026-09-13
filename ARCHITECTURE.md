@@ -358,6 +358,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   Parents read child output through the existing `read_session` tool using the
   returned session and branch IDs. Omitting its extraction goal avoids another
   model call. This reads the session tree, not an exact-turn result snapshot.
+  The session is the only copy of a child's output: core writes no file mirror
+  under `/tmp`, so a result carries text, usage, tool calls, and the session id.
   The extension is not in BuiltinExtensions yet. Default
   cutover remains unfinished.
 - Admitted child sessions share a durable limit of 32 native-model resolution

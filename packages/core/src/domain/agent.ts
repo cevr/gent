@@ -234,7 +234,6 @@ const AgentRunSuccessStruct = Schema.TaggedStruct("success", {
   persistence: Schema.optional(AgentPersistence),
   usage: Schema.optional(AgentRunUsageSchema),
   toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
-  savedPath: Schema.optional(Schema.String),
 })
 const AgentRunFailureStruct = Schema.TaggedStruct("error", {
   error: Schema.String,

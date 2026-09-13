@@ -9,7 +9,6 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { Option } from "effect"
 import { describeChildCompletion } from "../../src/runtime/agent/child-completion"
 import { TurnCompleted } from "../../src/domain/event"
 import { AgentName } from "../../src/domain/agent"
@@ -51,7 +50,6 @@ const message = (flags: Parameters<typeof completionWith>[0], text = "the child 
     child,
     completion: completionWith(flags),
     text,
-    savedPath: Option.none(),
   })
 
 describe("child completion message", () => {

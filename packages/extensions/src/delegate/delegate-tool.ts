@@ -131,9 +131,6 @@ export const DelegateTool = tool({
 
     const sessionId = getDurableAgentRunSessionId(result)
     const parts = [result.text]
-    if (Predicate.isNotUndefined(result.savedPath)) {
-      parts.push(`\n\nFull output: ${result.savedPath}`)
-    }
     if (Predicate.isNotUndefined(sessionId)) {
       parts.push(`\n\nFull session: session://${sessionId}`)
     }

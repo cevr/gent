@@ -47,7 +47,6 @@ export interface ChildSessionEntry {
   streamText: string
   usage?: { input: number; output: number; cost?: number }
   preview?: string
-  savedPath?: string
 }
 
 // =============================================================================
@@ -208,7 +207,6 @@ export const make = (
               status: "completed",
               usage: event.usage,
               preview: event.preview,
-              savedPath: event.savedPath,
             }))
             if (Option.isNone(updated)) return
             break

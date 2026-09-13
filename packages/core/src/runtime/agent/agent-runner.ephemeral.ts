@@ -331,7 +331,7 @@ export const runEphemeralAgent = (params: {
     // fiber context carries per-operation services of the parent turn (the
     // current cell operation, the parent's entity address), and merging it in
     // would make the child's cell refuse to run as a nested outer cell.
-    const { success, reasoning } = yield* Effect.gen(function* () {
+    const success = yield* Effect.gen(function* () {
       const scope = yield* Scope.Scope
       // The layer build captures the fiber context for actor handler builds,
       // so it runs under an empty context as well.
@@ -343,15 +343,7 @@ export const runEphemeralAgent = (params: {
       )
     }).pipe(Effect.scoped)
 
-    // Save full output to disk (runs in parent context where FileSystem is available)
-    let savedPath = Option.none<string>()
     if (!isPrivate) {
-      savedPath = yield* params.metadataRuntime.saveAgentRunOutput({
-        text: success.text,
-        reasoning,
-        agentName: params.agentName,
-        sessionId,
-      })
       let preview = success.text
       if (success.text.length > 200) preview = success.text.slice(0, 200) + "…"
       yield* params.durableRuntime.publishAgentRunSucceeded({
@@ -362,7 +354,6 @@ export const runEphemeralAgent = (params: {
         agentName: params.agentName,
         usage: success.usage,
         preview,
-        savedPath: Option.getOrUndefined(savedPath),
       })
     }
 
@@ -371,10 +362,7 @@ export const runEphemeralAgent = (params: {
       toolCallCount: success.toolCalls?.length ?? 0,
     })
 
-    return AgentRunResult.cases.success.make({
-      ...success,
-      savedPath: Option.getOrUndefined(savedPath),
-    })
+    return AgentRunResult.cases.success.make(success)
   }).pipe(withWideEvent(agentRunBoundary(params.agentName, params.parentSessionId)))
 
   return run.pipe(

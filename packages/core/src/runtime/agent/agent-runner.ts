@@ -5,7 +5,6 @@ import {
   Effect,
   type FileSystem,
   Layer,
-  Option,
   Predicate,
   type Path,
 } from "effect"
@@ -267,17 +266,11 @@ export const InProcessRunner = (
                   }),
                 )
 
-                const { success, reasoning } = yield* metadataRuntime.loadAgentRunSuccessData({
+                const success = yield* metadataRuntime.loadAgentRunSuccessData({
                   branchId,
                   sessionId,
                   agentName: params.agent.name,
                   persistence,
-                })
-                const savedPath = yield* metadataRuntime.saveAgentRunOutput({
-                  text: success.text,
-                  reasoning,
-                  agentName: params.agent.name,
-                  sessionId,
                 })
                 let preview = success.text
                 if (preview.length > 200) preview = preview.slice(0, 200) + "…"
@@ -289,7 +282,6 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   usage: success.usage,
                   preview,
-                  savedPath: Option.getOrUndefined(savedPath),
                 })
 
                 yield* WideEvent.set({
@@ -297,10 +289,7 @@ export const InProcessRunner = (
                   toolCallCount: success.toolCalls?.length ?? 0,
                 })
 
-                return AgentRunResult.cases.success.make({
-                  ...success,
-                  savedPath: Option.getOrUndefined(savedPath),
-                })
+                return AgentRunResult.cases.success.make(success)
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
               return run.pipe(

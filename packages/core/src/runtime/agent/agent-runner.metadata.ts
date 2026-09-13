@@ -1,4 +1,4 @@
-import { DateTime, Effect, FileSystem, Match, Option, Predicate, Schema } from "effect"
+import { Effect, Match, Option, Predicate, Schema } from "effect"
 import type {
   AgentRunResult as AgentRunResultType,
   AgentRunToolCall,
@@ -27,13 +27,7 @@ export interface AgentRunMetadataRuntime {
     sessionId: SessionId
     agentName: AgentName
     persistence: AgentPersistence
-  }) => Effect.Effect<{ success: AgentRunSuccess; reasoning: string }, StorageError, never>
-  readonly saveAgentRunOutput: (result: {
-    text: string
-    reasoning: string
-    agentName: AgentName
-    sessionId: SessionId
-  }) => Effect.Effect<Option.Option<string>>
+  }) => Effect.Effect<AgentRunSuccess, StorageError, never>
 }
 
 interface ChildMetadata {
@@ -157,7 +151,7 @@ export const loadAgentRunSuccessData = (params: {
     const meta = yield* collectChildMetadata(params.sessionId, params.branchId)
     let responseText = text
     if (responseText.length === 0) responseText = reasoning
-    const success = AgentRunResult.cases.success.make({
+    return AgentRunResult.cases.success.make({
       text: responseText,
       sessionId: params.sessionId,
       agentName: params.agentName,
@@ -165,7 +159,6 @@ export const loadAgentRunSuccessData = (params: {
       usage: meta.usage,
       toolCalls: meta.toolCalls,
     })
-    return { success, reasoning }
   })
 
 export const makeAgentRunMetadataRuntime: Effect.Effect<
@@ -175,31 +168,6 @@ export const makeAgentRunMetadataRuntime: Effect.Effect<
 > = Effect.gen(function* () {
   const eventStorage = yield* EventStorage
   const messageStorage = yield* MessageStorage
-  const fs = yield* Effect.serviceOption(FileSystem.FileSystem)
-
-  const saveAgentRunOutput = (result: {
-    text: string
-    reasoning: string
-    agentName: AgentName
-    sessionId: SessionId
-  }) =>
-    Effect.gen(function* () {
-      if (Option.isNone(fs)) return Option.none<string>()
-      let fullContent = `## Response\n\n${result.text}`
-      if (result.reasoning.length > 0) {
-        fullContent = `## Reasoning\n\n${result.reasoning}\n\n${fullContent}`
-      }
-
-      const ts = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-")
-      const dir = "/tmp/gent/outputs"
-      yield* fs.value.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
-      const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
-      const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
-      const header = `# ${result.agentName} — ${result.sessionId}\n\n`
-      return yield* fs.value
-        .writeFileString(filepath, header + fullContent)
-        .pipe(Effect.as(Option.some(filepath)), Effect.orElseSucceed(Option.none<string>))
-    })
 
   return {
     loadAgentRunSuccessData: (params) =>
@@ -207,6 +175,5 @@ export const makeAgentRunMetadataRuntime: Effect.Effect<
         Effect.provideService(EventStorage, eventStorage),
         Effect.provideService(MessageStorage, messageStorage),
       ),
-    saveAgentRunOutput,
   }
 })

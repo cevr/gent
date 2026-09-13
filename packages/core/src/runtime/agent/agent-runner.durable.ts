@@ -106,7 +106,6 @@ export interface DurableAgentRunRuntime {
     agentName: AgentName
     usage?: { input: number; output: number; cost?: number }
     preview?: string
-    savedPath?: string
   }) => Effect.Effect<void, EventStoreError>
   readonly publishAgentRunFailed: (params: {
     parentSessionId: SessionId
@@ -304,7 +303,6 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
     agentName: AgentName
     usage?: { input: number; output: number; cost?: number }
     preview?: string
-    savedPath?: string
   }) =>
     eventPublisher.publish(
       AgentRunSucceeded.make({
@@ -315,7 +313,6 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
         branchId: params.parentBranchId,
         usage: params.usage,
         preview: params.preview,
-        savedPath: params.savedPath,
       }),
     )
 

@@ -42,7 +42,6 @@ export const describeChildCompletion = (params: {
   readonly child: StoredAgentStartResult
   readonly completion: TurnCompleted
   readonly text: string
-  readonly savedPath: Option.Option<string>
 }): string => {
   const outcome: Array<string> = []
   if (params.completion.interrupted === true) outcome.push("interrupted")
@@ -57,7 +56,6 @@ export const describeChildCompletion = (params: {
     "",
     preview.text,
   ]
-  if (Option.isSome(params.savedPath)) lines.push("", `Full output: ${params.savedPath.value}`)
   return lines.join("\n")
 }
 
@@ -123,17 +121,11 @@ export class ChildCompletionDelivery extends Context.Service<
           followUpMessageIdForSource({ workspaceId, ...parent, sourceId }),
         )
         if (Predicate.isNotUndefined(existing)) return
-        const { success, reasoning } = yield* metadata.loadAgentRunSuccessData({
+        const success = yield* metadata.loadAgentRunSuccessData({
           sessionId: child.sessionId,
           branchId: child.branchId,
           agentName: child.input.agentName,
           persistence: "durable",
-        })
-        const savedPath = yield* metadata.saveAgentRunOutput({
-          text: success.text,
-          reasoning,
-          agentName: child.input.agentName,
-          sessionId: child.sessionId,
         })
         yield* sessionRuntime.queueFollowUp({
           sourceId,
@@ -146,7 +138,6 @@ export class ChildCompletionDelivery extends Context.Service<
             child,
             completion,
             text: success.text,
-            savedPath,
           }),
           metadata: {
             customType: "child-completion",
@@ -163,7 +154,6 @@ export class ChildCompletionDelivery extends Context.Service<
             branchId: parent.branchId,
             usage: success.usage,
             preview: success.text.slice(0, 200),
-            savedPath: Option.getOrUndefined(savedPath),
           }),
         )
       })
