@@ -133,19 +133,18 @@ describe("session.delete", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
-        const mutations = yield* SessionMutations
         const eventStore = yield* EventStore
 
         const parent = yield* commands.createSession({ cwd: "/tmp/delete-parent" })
-        const child = yield* mutations.createChildSession({
+        const child = yield* commands.createSession({
+          cwd: "/tmp/delete-child",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
-          cwd: "/tmp/delete-child",
         })
-        const grandchild = yield* mutations.createChildSession({
+        const grandchild = yield* commands.createSession({
+          cwd: "/tmp/delete-grandchild",
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
-          cwd: "/tmp/delete-grandchild",
         })
 
         const primeSessionStream = Effect.fn("primeSessionStream")(function* (
@@ -222,10 +221,18 @@ describe("session.delete", () => {
         }
 
         yield* createActiveSessionFixture({ ...parent, sessions, branches, now })
-        const child = yield* mutations.createChildSession({
+        const child = {
+          sessionId: SessionId.make("mutation-delete-child"),
+          branchId: BranchId.make("mutation-delete-child-branch"),
+        }
+        yield* createActiveSessionFixture({
+          ...child,
+          sessions,
+          branches,
+          now,
+          cwd: "/tmp/mutation-delete-child",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
-          cwd: "/tmp/mutation-delete-child",
         })
 
         yield* mutations.deleteSession(parent.sessionId)

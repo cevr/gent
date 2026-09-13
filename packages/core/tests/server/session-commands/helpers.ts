@@ -132,10 +132,16 @@ export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture"
     readonly branchId: BranchId
     readonly now: Date
     readonly name?: string
+    readonly cwd?: string
+    readonly parentSessionId?: SessionId
+    readonly parentBranchId?: BranchId
   }) {
     const session = new Session({
       id: input.sessionId,
       name: input.name,
+      cwd: input.cwd,
+      parentSessionId: input.parentSessionId,
+      parentBranchId: input.parentBranchId,
       createdAt: input.now,
       updatedAt: input.now,
     })

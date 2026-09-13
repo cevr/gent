@@ -35,23 +35,7 @@ export interface SessionMutationsService {
     readonly toBranchId: BranchId
     readonly requestId?: RequestId
   }) => Effect.Effect<void, SessionMutationError>
-  readonly createChildSession: (input: {
-    readonly parentSessionId: SessionId
-    readonly parentBranchId: BranchId
-    readonly name?: string
-    readonly cwd?: string
-  }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, SessionMutationError>
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionMutationError>
-  readonly deleteBranch: (input: {
-    readonly sessionId: SessionId
-    readonly currentBranchId: BranchId
-    readonly branchId: BranchId
-  }) => Effect.Effect<void, SessionMutationError>
-  readonly deleteMessages: (input: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly afterMessageId?: MessageId
-  }) => Effect.Effect<void, SessionMutationError>
   readonly updateReasoningLevel: (input: {
     readonly sessionId: SessionId
     // oxlint-disable-next-line effect/noNullish -- RPC-facing mutation input preserves an omitted reasoning level.

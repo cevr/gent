@@ -6,12 +6,11 @@ import {
   EventStore,
   SessionNameUpdated,
   SessionSettingsUpdated,
-  SessionStarted,
   type AgentEvent,
   type EventStoreError,
 } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { BranchId, MessageId, type SessionId } from "../domain/ids.js"
 import { Branch, Session, copyMessageToBranch } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -27,7 +26,7 @@ import {
 } from "../storage/session-operation-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { type StorageError, makeStorageTransaction } from "../storage/sqlite-storage.js"
-import { InvalidStateError, NotFoundError } from "./errors.js"
+import { NotFoundError } from "./errors.js"
 import { CurrentWorkspaceId } from "./workspace-rpc.js"
 
 interface CreateBranchResult {
@@ -102,46 +101,6 @@ const makeSessionMutationsService: Effect.Effect<
       yield* eventPublisher.deliver(committed.envelope)
       return committed.result
     })
-
-  const validateMessageCursor = Effect.fn("SessionMutations.validateMessageCursor")(
-    function* (input: {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly afterMessageId?: MessageId
-    }) {
-      if (Predicate.isUndefined(input.afterMessageId)) return
-      const cursor = yield* messageStorage.getMessage(input.afterMessageId)
-      if (
-        Predicate.isUndefined(cursor) ||
-        cursor.sessionId !== input.sessionId ||
-        cursor.branchId !== input.branchId
-      ) {
-        return yield* new NotFoundError({
-          message: `Message "${input.afterMessageId}" not found in current branch`,
-          entity: "message",
-        })
-      }
-    },
-  )
-
-  const validateBranchDeletion = Effect.fn("SessionMutations.validateBranchDeletion")(
-    function* (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) {
-      const branches = yield* branchStorage.listBranches(input.sessionId)
-      if (branches.some((branch) => branch.parentBranchId === input.branchId)) {
-        return yield* new InvalidStateError({
-          message: `Cannot delete branch "${input.branchId}" with child branches`,
-          operation: "deleteBranch",
-        })
-      }
-      const childSessions = yield* relationshipStorage.getChildSessions(input.sessionId)
-      if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
-        return yield* new InvalidStateError({
-          message: `Cannot delete branch "${input.branchId}" with child sessions`,
-          operation: "deleteBranch",
-        })
-      }
-    },
-  )
 
   const collectSessionTreeIds = Effect.fn("SessionMutations.collectSessionTreeIds")(function* (
     rootSessionId: SessionId,
@@ -407,84 +366,8 @@ const makeSessionMutationsService: Effect.Effect<
       }
     }),
 
-    createChildSession: Effect.fn("SessionMutations.createChildSession")(function* (input) {
-      const sessionId = SessionId.make(yield* platform.randomId)
-      const branchId = BranchId.make(yield* platform.randomId)
-      const now = yield* DateTime.nowAsDate
-      const session = new Session({
-        id: sessionId,
-        name: input.name ?? "child session",
-        cwd: input.cwd,
-        parentSessionId: input.parentSessionId,
-        parentBranchId: input.parentBranchId,
-        activeBranchId: branchId,
-        createdAt: now,
-        updatedAt: now,
-      })
-      const branch = new Branch({
-        id: branchId,
-        sessionId,
-        createdAt: now,
-      })
-      const committed = yield* storageTransaction(
-        Effect.gen(function* () {
-          yield* sessionStorage.createSession(session)
-          yield* branchStorage.createBranch(branch)
-          const envelope = yield* eventPublisher.append(
-            SessionStarted.make({ sessionId, branchId }),
-          )
-          return { envelope }
-        }),
-      )
-      yield* eventPublisher.deliver(committed.envelope)
-      return { sessionId, branchId }
-    }),
-
     deleteSession: Effect.fn("SessionMutations.deleteSession")(function* (sessionId) {
       yield* deleteSessionCascade(sessionId)
-    }),
-
-    deleteBranch: Effect.fn("SessionMutations.deleteBranch")(function* (input) {
-      if (input.branchId === input.currentBranchId) {
-        return yield* new InvalidStateError({
-          message: "Cannot delete the current branch",
-          operation: "deleteBranch",
-        })
-      }
-      const session = yield* sessionStorage.getSession(input.sessionId)
-      if (Predicate.isUndefined(session)) {
-        return yield* new NotFoundError({
-          message: "Current session not found",
-          entity: "session",
-        })
-      }
-      if (session.activeBranchId === input.branchId) {
-        return yield* new InvalidStateError({
-          message: "Cannot delete the active branch",
-          operation: "deleteBranch",
-        })
-      }
-      const branch = yield* branchStorage.getBranch(input.branchId)
-      if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
-        return yield* new NotFoundError({
-          message: `Branch "${input.branchId}" not found in current session`,
-          entity: "branch",
-        })
-      }
-      yield* validateBranchDeletion(input)
-      yield* branchStorage.deleteBranch(input.branchId)
-    }),
-
-    deleteMessages: Effect.fn("SessionMutations.deleteMessages")(function* (input) {
-      const branch = yield* branchStorage.getBranch(input.branchId)
-      if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
-        return yield* new NotFoundError({
-          message: `Branch "${input.branchId}" not found in current session`,
-          entity: "branch",
-        })
-      }
-      yield* validateMessageCursor(input)
-      yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
     }),
 
     updateReasoningLevel: Effect.fn("SessionMutations.updateReasoningLevel")(function* (input) {

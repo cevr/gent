@@ -255,12 +255,6 @@ export const AgentEvent = Schema.TaggedUnion({
     toolCallId: Schema.optional(ToolCallId),
     branchId: Schema.optional(BranchId),
   },
-  AgentRestarted: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    attempt: Schema.Finite,
-    error: Schema.optional(Schema.String),
-  },
   /**
    * Typed state-change notification emitted when an extension's
    * externally-observable state may have changed. Carries no payload —
@@ -468,7 +462,6 @@ const matchEventSessionId = AgentEvent.match({
   AgentRunSpawned: (e) => e.parentSessionId,
   AgentRunSucceeded: (e) => e.parentSessionId,
   AgentRunFailed: (e) => e.parentSessionId,
-  AgentRestarted: (e) => e.sessionId,
   ExtensionStateChanged: (e) => e.sessionId,
   StreamSynchronized: (e) => e.sessionId,
 })
@@ -508,7 +501,6 @@ const matchEventBranchId = AgentEvent.match({
   AgentRunSpawned: (e) => e.branchId,
   AgentRunSucceeded: (e) => e.branchId,
   AgentRunFailed: (e) => e.branchId,
-  AgentRestarted: (e) => e.branchId,
   ExtensionStateChanged: (e) => e.branchId,
   StreamSynchronized: (e) => e.branchId,
 })

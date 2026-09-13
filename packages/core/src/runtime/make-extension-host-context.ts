@@ -255,10 +255,7 @@ const unavailableSessionMutations: SessionMutationsService = {
   createSessionBranch: unavailable("SessionMutations"),
   forkSessionBranch: unavailable("SessionMutations"),
   switchActiveBranch: unavailable("SessionMutations"),
-  createChildSession: unavailable("SessionMutations"),
   deleteSession: unavailable("SessionMutations"),
-  deleteBranch: unavailable("SessionMutations"),
-  deleteMessages: unavailable("SessionMutations"),
   updateReasoningLevel: unavailable("SessionMutations"),
 }
 

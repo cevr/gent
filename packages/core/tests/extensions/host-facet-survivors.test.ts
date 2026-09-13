@@ -98,10 +98,7 @@ const baseDeps = (overrides: {
     createSessionBranch: die("createSessionBranch"),
     forkSessionBranch: die("forkSessionBranch"),
     switchActiveBranch: die("switchActiveBranch"),
-    createChildSession: die("createChildSession"),
     deleteSession: die("deleteSession"),
-    deleteBranch: die("deleteBranch"),
-    deleteMessages: die("deleteMessages"),
     updateReasoningLevel: die("updateReasoningLevel"),
   },
   sessionControl: {
