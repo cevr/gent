@@ -15,6 +15,18 @@ import {
 } from "@gent/core/extensions/api"
 import { ChildAgentHandle, ControlChildAgent, ListChildAgents } from "./child-agent-tools.js"
 
+/**
+ * A child never delegates. Fan-out is the caller's decision, and a project
+ * prompt that addresses "the orchestrator" reaches children too, so without
+ * this a worker reads that prompt and spawns its own workers.
+ */
+const CHILD_DENIED_TOOLS: ReadonlyArray<string> = ["delegate", "agent-child", "agent-children"]
+
+const childOverrides = (overrides: (typeof DelegateParams.Type)["overrides"]) => ({
+  ...overrides,
+  deniedTools: [...CHILD_DENIED_TOOLS, ...(overrides?.deniedTools ?? [])],
+})
+
 /** One self-contained task for a child that inherits this agent. Cells compose parallel and chained delegations. */
 export const DelegateParams = Schema.Struct({
   todo: Schema.String,
@@ -55,7 +67,7 @@ export const DelegateResult = Schema.TaggedUnion({
 export const DelegateTool = tool({
   id: "delegate",
   description:
-    "Delegate one self-contained task to a child that inherits this agent and model. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch.",
+    "Delegate one self-contained task to a child that inherits this agent and model but cannot delegate further. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch.",
   promptSnippet: "Delegate work to child agents",
   promptGuidelines: [
     "Use for independent work that benefits from a fresh context or parallelism",
@@ -90,7 +102,10 @@ export const DelegateTool = tool({
         agent,
         prompt: params.todo,
         requestId,
-        runSpec: makeRunSpec({ persistence: "durable", overrides: params.overrides }),
+        runSpec: makeRunSpec({
+          persistence: "durable",
+          overrides: childOverrides(params.overrides),
+        }),
       })
       return DelegateResult.cases.running.make({ requestId, ...child })
     }
@@ -104,7 +119,7 @@ export const DelegateTool = tool({
       runSpec: makeRunSpec({
         persistence: "durable",
         parentToolCallId: ctx.toolCallId,
-        overrides: params.overrides,
+        overrides: childOverrides(params.overrides),
       }),
     })
 

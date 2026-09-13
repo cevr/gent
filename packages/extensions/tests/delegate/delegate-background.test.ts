@@ -8,14 +8,22 @@ import { AllBuiltinAgents } from "../helpers/builtin-agents.js"
 describe("DelegateTool background mode", () => {
   it.live("admits a durable child under the tool call id and returns its handle", () =>
     Effect.gen(function* () {
-      const started: Array<{ requestId: RequestId; prompt: string }> = []
+      const started: Array<{
+        requestId: RequestId
+        prompt: string
+        deniedTools: ReadonlyArray<string>
+      }> = []
       const ctx = testToolContext({
         toolCallId: ToolCallId.make("delegate-call"),
         Agent: {
           listAgents: Effect.succeed(AllBuiltinAgents),
           start: (params) =>
             Effect.sync(() => {
-              started.push({ requestId: params.requestId, prompt: params.prompt })
+              started.push({
+                requestId: params.requestId,
+                prompt: params.prompt,
+                deniedTools: params.runSpec?.overrides?.deniedTools ?? [],
+              })
               return {
                 sessionId: SessionId.make("child-session"),
                 branchId: BranchId.make("child-branch"),
@@ -25,7 +33,7 @@ describe("DelegateTool background mode", () => {
       })
       const result = yield* runToolWithCtx(
         DelegateTool,
-        { todo: "analyze the codebase", background: true },
+        { todo: "analyze the codebase", background: true, overrides: { deniedTools: ["bash"] } },
         ctx,
       )
       // The handle returns now. The result arrives later as a message on the parent branch.
@@ -35,8 +43,13 @@ describe("DelegateTool background mode", () => {
         sessionId: SessionId.make("child-session"),
         branchId: BranchId.make("child-branch"),
       })
+      // The child keeps the caller's denials and cannot delegate further.
       expect(started).toEqual([
-        { requestId: RequestId.make("delegate-call"), prompt: "analyze the codebase" },
+        {
+          requestId: RequestId.make("delegate-call"),
+          prompt: "analyze the codebase",
+          deniedTools: ["delegate", "agent-child", "agent-children", "bash"],
+        },
       ])
     }),
   )
@@ -49,7 +62,7 @@ describe("DelegateTool background mode", () => {
       )
       const error = yield* runToolWithCtx(
         DelegateTool,
-        { todo: "analyze the codebase", background: true },
+        { todo: "analyze the codebase", background: true, overrides: { deniedTools: ["bash"] } },
         ctx,
       ).pipe(Effect.flip)
       expect(error).toMatchObject({

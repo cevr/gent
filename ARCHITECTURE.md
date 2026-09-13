@@ -347,7 +347,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   `delegate` returns a tagged result: `completed` with the foreground child's
   output, or `running` with the handle of a `background: true` child admitted
   under the delegate tool-call ID. It accepts the existing RunSpec overrides for
-  model, reasoning, tool selection, and added instructions. The host still fixes
+  model, reasoning, tool selection, and added instructions, and always denies
+  the child the delegation tools: fan-out is the caller's decision, and a
+  project prompt that addresses "the orchestrator" reaches children too. The host still fixes
   durable persistence and the parent/tool address. Control returns pending or
   the original completed-turn flags, not task success. Absent completion flags
   are omitted from the JSON result. For a recovered Unknown delegate operation,

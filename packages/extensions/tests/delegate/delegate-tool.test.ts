@@ -72,6 +72,28 @@ describe("Delegate Tool", () => {
     )
   })
 
+  it.live("a foreground child cannot delegate further", () => {
+    const runs: Array<ReadonlyArray<string>> = []
+    const ctx = makeCtx({
+      agentRun: (params) =>
+        Effect.sync(() => {
+          runs.push(params.runSpec?.overrides?.deniedTools ?? [])
+          return AgentRunResult.cases.success.make({
+            text: "done",
+            sessionId: SessionId.make("child-session"),
+            agentName: params.agent.name,
+          })
+        }),
+    })
+    return narrowR(
+      runToolWithCtx(DelegateTool, { todo: "hello" }, ctx).pipe(
+        Effect.map(() => {
+          expect(runs).toEqual([["delegate", "agent-child", "agent-children"]])
+        }),
+      ),
+    )
+  })
+
   it.live("child inherits the caller's agent from the tool context", () => {
     const ctx = makeCtx({
       agentName: helperAgent.name,
