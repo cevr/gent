@@ -98,13 +98,16 @@ type TurnStepResult =
     }
 
 const MAX_TURN_STEPS = 200
-/** Continuation instructions one turn may persist after partial-output stream failures. */
+/** Continuation instructions one turn may persist after a failed, empty, or truncated step. */
 const MAX_CONTINUATIONS_PER_TURN = 2
 const CONTINUATION_INSTRUCTION =
   "Your previous reply was cut off by a provider error after partial output. The partial output is saved above. Continue from where you stopped. Do not repeat text you already wrote."
 
 const EMPTY_RESPONSE_INSTRUCTION =
   "Your previous step returned no text and no tool calls. Answer the request now using the tool results above."
+
+const TRUNCATED_RESPONSE_INSTRUCTION =
+  "Your previous step hit the output limit before it finished, so its tool call was discarded. Retry in smaller steps: make one shorter tool call now and continue after its result."
 
 export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
@@ -793,9 +796,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           recoveredResults.push(outcome.result)
           continue
         }
-        // `Incomplete` recorded effects but no result: it must not run again,
-        // and it contributes no result part.
-        if (outcome._tag === "Incomplete") continue
         nativeToolCalls.push(toolCall)
       }
       const toolBindings = yield* captureReplayToolBindings({
@@ -1027,12 +1027,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // with no observable output either answered nothing at all: persisting
         // an empty parts list stores no message, so finalizing here reports a
         // successful turn that produced no reply. Re-prompt once instead.
+        // A step cut off at the output limit lost whatever it was writing,
+        // usually a tool call. Re-prompt for a smaller step instead of
+        // reporting the fragment as the reply.
         const producedNothing = !collected.responseParts.some(isObservableModelOutputPart)
-        if (producedNothing) {
+        const truncated = collected.responseParts.some(
+          (part) => part.type === "finish" && part.reason === "length",
+        )
+        if (producedNothing || truncated) {
+          let instruction = EMPTY_RESPONSE_INSTRUCTION
+          if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
           const continued = yield* continueWithinTurn({
             messageId: params.state.message.id,
             step: params.step,
-            instruction: EMPTY_RESPONSE_INSTRUCTION,
+            instruction,
           })
           if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
         }

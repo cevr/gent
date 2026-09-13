@@ -11,7 +11,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { LanguageModelLayers, finishPart } from "../../src/test-utils/language-model"
+import { LanguageModelLayers, finishPart, textDeltaPart } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
@@ -77,6 +77,45 @@ describe("empty final step", () => {
         // assistant text at all is the failure: the caller cannot tell an empty
         // answer from a successful one.
         expect(assistantTexts.length).toBeGreaterThan(0)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
+    }),
+  )
+
+  it.live("a step cut off at the output limit is retried in a smaller step", () =>
+    Effect.gen(function* () {
+      // Observed in the gamut testbed: the orchestrator wrote one giant tool
+      // call, hit the output limit, and the loop reported the leading text
+      // as the answer. The third step answers the re-prompt the loop should
+      // issue after the truncated one.
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "hello" }),
+        {
+          parts: [
+            textDeltaPart("Let me delegate."),
+            finishPart({ finishReason: "length", usage: { inputTokens: 10, outputTokens: 4096 } }),
+          ],
+        },
+        textStep("Here is the answer."),
+      ])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("do the thing"))
+
+        const messageStorage = yield* MessageStorage
+        const stored = yield* messageStorage.listMessages(branchId)
+        const assistantTexts = stored
+          .filter((message) => message.role === "assistant")
+          .flatMap((message) => message.parts)
+          .flatMap((part) => {
+            if (part.type === "text") return [part.text]
+            return []
+          })
+        expect(assistantTexts).toContain("Here is the answer.")
+        const continuation = stored.find(
+          (message) => message.metadata?.customType === "continuation",
+        )
+        expect(continuation?.role).toBe("user")
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),

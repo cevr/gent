@@ -265,10 +265,13 @@ export const buildAgentLoopActorHandlers = (config: {
           return []
         }),
       )
+      // Continuation prompts belong to the turn that persisted them; they
+      // never complete on their own and must not start a turn of their own.
       const incomplete = envelopes.filter(
         (envelope) =>
           envelope.event._tag === "MessageReceived" &&
           envelope.event.message.role === "user" &&
+          envelope.event.message.metadata?.customType !== "continuation" &&
           !completed.has(envelope.event.message.id),
       )
       const latest = Option.fromUndefinedOr(incomplete[incomplete.length - 1])

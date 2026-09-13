@@ -4,7 +4,7 @@ import { Message, MessageRole } from "../domain/message.js"
 import { MessageId, ToolCallId } from "../domain/ids.js"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"
 
-/** Output budget used by the native model request and its context projection. */
+/** Input tokens the context projection keeps free for the reply. The request itself carries no output cap: each provider uses the model's own limit. */
 export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))

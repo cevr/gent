@@ -10,7 +10,7 @@ import {
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
 import { dateFromMillis, Message } from "../../../src/domain/message"
-import { EventStore, MessageReceived } from "../../../src/domain/event"
+import { EventStore, MessageReceived, TurnCompleted } from "../../../src/domain/event"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { EventStorage } from "../../../src/storage/event-storage"
@@ -372,6 +372,92 @@ describe("queue drain regression", () => {
             yield* agentLoop.getState({ sessionId, branchId })
             yield* Deferred.await(providerCalled).pipe(Effect.timeout("4 seconds"))
             expect(yield* Ref.get(providerCalls)).toBe(1)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "startup does not replay a continuation prompt as a user turn",
+    () =>
+      Effect.gen(function* () {
+        // A continuation prompt is persisted as a user message inside a turn
+        // and never gets a TurnCompleted of its own. Seen in the gamut testbed:
+        // startup took it for an unanswered turn and sent a transcript that
+        // ended with the assistant reply, which the provider rejected.
+        const sessionId = SessionId.make("session-loop-continuation-replay")
+        const branchId = BranchId.make("branch-loop-continuation-replay")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("replayed"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry(),
+          RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          ApprovalService.Test(),
+          BunServices.layer,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+        const messageId = MessageId.make("msg-continuation-replay")
+        const message = Message.cases.regular.make({
+          id: messageId,
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: "answer me" })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+        const continuation = Message.cases.regular.make({
+          id: MessageId.make(`${messageId}:continuation:2`),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: "Answer the request now." })],
+          createdAt: dateFromMillis(1_767_225_600_001),
+          metadata: { customType: "continuation", details: { step: 2 } },
+        })
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: continuation }))
+            yield* eventStorage.appendEvent(
+              TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const state = yield* agentLoop.getState({ sessionId, branchId })
+            expect(state._tag).toBe("Idle")
+            const called = yield* Deferred.await(providerCalled).pipe(
+              Effect.timeout("500 millis"),
+              Effect.option,
+            )
+            expect(Option.isNone(called)).toBe(true)
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )

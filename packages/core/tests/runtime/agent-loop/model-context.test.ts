@@ -32,7 +32,6 @@ import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
-import { MODEL_OUTPUT_RESERVE_TOKENS } from "../../../src/runtime/model-context"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 import { ProcessRunnerLive } from "../../../src/runtime/run-process"
@@ -147,7 +146,7 @@ describe("native model context projection", () => {
     }).pipe(Effect.timeout("5 seconds"))
   })
 
-  it.live("passes the output reserve and stable session cache key to the provider", () => {
+  it.live("leaves the output limit to the provider and passes the stable session cache key", () => {
     const modelId = ModelId.make("context-driver/model")
     let observedMaxTokens = Option.none<number>()
     const observedCacheKeys: Array<Option.Option<string>> = []
@@ -226,7 +225,7 @@ describe("native model context projection", () => {
           ),
           { runSpec: { overrides: { modelId } } },
         )
-        expect(observedMaxTokens).toEqual(Option.some(MODEL_OUTPUT_RESERVE_TOKENS))
+        expect(observedMaxTokens).toEqual(Option.none())
         yield* runAgentLoop(
           agentLoop,
           makeMessage(

@@ -503,10 +503,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   )
   const prompt = toPrompt(compacted.projection.messages, { systemPrompt: resolved.systemPrompt })
   const toolkit = convertTools([...resolved.tools])
-  modelRequest = {
-    ...modelRequest,
-    hints: { ...modelRequest.hints, maxTokens: MODEL_OUTPUT_RESERVE_TOKENS },
-  }
   const rawStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(
       Effect.map((model) => {
