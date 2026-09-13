@@ -192,22 +192,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (params.toolCalls.length === 0) return
 
       const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
+      const assistantMessageId = assistantMessageIdForTurn(params.messageId, params.step)
+      const resultKey = processLocalReplayResultKey({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        toolResultMessageId,
+      })
       const existing = yield* messageStorage.getMessage(toolResultMessageId)
       if (!Predicate.isUndefined(existing)) {
-        yield* processLocalReplay.removeResults(
-          processLocalReplayResultKey({
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            toolResultMessageId,
-          }),
-        )
+        yield* processLocalReplay.removeResults(resultKey)
         return
       }
 
       const persistedResults = yield* findPersistedToolResults({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
-        assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
+        assistantMessageId,
         toolCalls: params.toolCalls,
       }).pipe(
         Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
@@ -227,21 +227,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             yield* recordToolOutcome({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
-              toolResultMessageId: toolResultMessageId,
-              assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
+              toolResultMessageId,
+              assistantMessageId,
               parts: failureParts,
             }).pipe(Effect.orDie)
             return yield* error
           }),
         ),
       )
-      const localResults = yield* processLocalReplay.getResults(
-        processLocalReplayResultKey({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          toolResultMessageId,
-        }),
-      )
+      const localResults = yield* processLocalReplay.getResults(resultKey)
       const knownResults = new Map(localResults)
       for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
       for (const [toolCallId, result] of persistedResults) {
@@ -250,7 +244,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const pendingToolCalls = params.toolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
       const executedResults = yield* executeToolCalls({
         hostToolBindings: params.hostToolBindings,
-        assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
+        assistantMessageId,
         toolCalls: pendingToolCalls,
         sessionId: scope.sessionId,
         branchId: scope.branchId,
@@ -261,14 +255,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           if (error.completedResults.length === 0) return Effect.void
           const partial = new Map(localResults)
           for (const result of error.completedResults) partial.set(result.id, result)
-          return processLocalReplay.setResults(
-            processLocalReplayResultKey({
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
-              toolResultMessageId,
-            }),
-            partial,
-          )
+          return processLocalReplay.setResults(resultKey, partial)
         }),
       )
       const executedById = new Map(executedResults.map((part) => [part.id, part]))
@@ -282,17 +269,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* recordToolOutcome({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
-        toolResultMessageId: toolResultMessageId,
-        assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
+        toolResultMessageId,
+        assistantMessageId,
         parts: toolResults,
       })
-      yield* processLocalReplay.removeResults(
-        processLocalReplayResultKey({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          toolResultMessageId,
-        }),
-      )
+      yield* processLocalReplay.removeResults(resultKey)
     })
 
     const collectTurnStream = Effect.fn("AgentLoop.collectTurnStream")(function* (params: {

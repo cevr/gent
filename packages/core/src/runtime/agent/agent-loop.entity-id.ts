@@ -19,7 +19,7 @@
  * @module
  */
 
-import { Effect, Option, Result, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { AgentLoopError } from "./agent-loop.state.js"
@@ -48,33 +48,18 @@ export const parseEntityId = (
         message: `Invalid entity id (expected workspace/session/branch): ${entityId}`,
       })
     }
-    const rawWorkspace = entityId.slice(0, firstSep)
-    const rawSession = entityId.slice(firstSep + 1, secondSep)
-    const rawBranch = entityId.slice(secondSep + 1)
-    const workspaceRaw = decodeOrFail(rawWorkspace)
-    if (Option.isNone(workspaceRaw)) {
-      return yield* new AgentLoopError({
-        message: `Invalid entity id (workspaceId decode): ${entityId}`,
-      })
-    }
-    const sessionRaw = decodeOrFail(rawSession)
-    if (Option.isNone(sessionRaw)) {
-      return yield* new AgentLoopError({
-        message: `Invalid entity id (sessionId decode): ${entityId}`,
-      })
-    }
-    const branchRaw = decodeOrFail(rawBranch)
-    if (Option.isNone(branchRaw)) {
-      return yield* new AgentLoopError({
-        message: `Invalid entity id (branchId decode): ${entityId}`,
-      })
-    }
     const workspaceId = yield* decodeComponent(WorkspaceId, "workspaceId")(
-      workspaceRaw.value,
+      entityId.slice(0, firstSep),
       entityId,
     )
-    const sessionId = yield* decodeComponent(SessionId, "sessionId")(sessionRaw.value, entityId)
-    const branchId = yield* decodeComponent(BranchId, "branchId")(branchRaw.value, entityId)
+    const sessionId = yield* decodeComponent(SessionId, "sessionId")(
+      entityId.slice(firstSep + 1, secondSep),
+      entityId,
+    )
+    const branchId = yield* decodeComponent(BranchId, "branchId")(
+      entityId.slice(secondSep + 1),
+      entityId,
+    )
     return {
       workspaceId,
       sessionId,
@@ -82,19 +67,25 @@ export const parseEntityId = (
     }
   })
 
-const decodeOrFail = (raw: string): Option.Option<string> =>
-  Result.try(() => decodeURIComponent(raw)).pipe(Result.getSuccess)
-
+/** Percent-decode one entity-id component, then decode it with its schema. */
 const decodeComponent =
   <A>(schema: Schema.Codec<A, string>, label: string) =>
   (raw: string, entityId: string): Effect.Effect<A, AgentLoopError> =>
-    Schema.decodeEffect(schema)(raw).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AgentLoopError({
-            message: `Invalid entity id (${label} schema): ${entityId}`,
-            cause,
-          }),
+    Effect.try({
+      try: () => decodeURIComponent(raw),
+      catch: () =>
+        new AgentLoopError({ message: `Invalid entity id (${label} decode): ${entityId}` }),
+    }).pipe(
+      Effect.flatMap((decoded) =>
+        Schema.decodeEffect(schema)(decoded).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentLoopError({
+                message: `Invalid entity id (${label} schema): ${entityId}`,
+                cause,
+              }),
+          ),
+        ),
       ),
     )
 

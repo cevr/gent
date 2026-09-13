@@ -99,10 +99,7 @@ import type { CurrentExtensionHostContext } from "./current-extension-host-conte
 import { awaitTurnCompletion, turnFailureBaseline } from "./agent-loop.actor-state.js"
 import {
   AgentLoop,
-  type DrainQueueInput,
-  type GetMetricsInput,
-  type GetQueueInput,
-  type GetStateInput,
+  type BranchCommandInput,
   type HandlerRequest,
   type MessageType,
   type RemoveFollowUpInput,
@@ -112,7 +109,6 @@ import {
   type RespondInteractionInput,
   type SteerCommandType,
   type SteerInput,
-  type TerminateBranchInput,
   type TurnSubmissionInput,
 } from "./agent-loop.protocol.js"
 
@@ -331,6 +327,19 @@ export const buildAgentLoopActorHandlers = (config: {
         }),
       )
     }
+
+    /** One branch command on the started loop: check the target, apply the guard, run. */
+    const branchCommand = <A, E, R>(
+      operation: BranchCommandInput,
+      guard: Effect.Effect<unknown, AgentLoopError>,
+      run: (handle: AgentLoopBehavior) => Effect.Effect<A, E, R>,
+    ) =>
+      Effect.gen(function* () {
+        yield* ensureTarget(operation)
+        yield* guard
+        const handle = yield* ensureStarted
+        return yield* run(handle)
+      }).pipe(provideActorWorkspace)
 
     // Both call sites supply an already-resolved `handle`:
     //   - the `AgentLoopFollowUp` enqueue implementation reads
@@ -779,41 +788,25 @@ export const buildAgentLoopActorHandlers = (config: {
           }).pipe(provideActorWorkspace),
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
-        ({ operation }: HandlerRequest<DrainQueueInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* markWrite
-            const handle = yield* ensureStarted
-            return yield* handle.drainQueue
-          }).pipe(provideActorWorkspace),
+        ({ operation }: HandlerRequest<BranchCommandInput>) =>
+          branchCommand(operation, markWrite, (handle) => handle.drainQueue),
       ),
       RemoveFollowUp: Effect.fn("AgentLoop.RemoveFollowUp")(
         ({ operation }: HandlerRequest<RemoveFollowUpInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* markWrite
-            const handle = yield* ensureStarted
-            return yield* handle.removeFollowUp(operation.messageId)
-          }).pipe(provideActorWorkspace),
+          branchCommand(operation, markWrite, (handle) =>
+            handle.removeFollowUp(operation.messageId),
+          ),
       ),
-      GetQueue: Effect.fn("AgentLoop.GetQueue")(({ operation }: HandlerRequest<GetQueueInput>) =>
-        Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* rejectIfTerminated
-          const handle = yield* ensureStarted
-          return yield* handle.queueSnapshot
-        }).pipe(provideActorWorkspace),
+      GetQueue: Effect.fn("AgentLoop.GetQueue")(
+        ({ operation }: HandlerRequest<BranchCommandInput>) =>
+          branchCommand(operation, rejectIfTerminated, (handle) => handle.queueSnapshot),
       ),
-      GetState: Effect.fn("AgentLoop.GetState")(({ operation }: HandlerRequest<GetStateInput>) =>
-        Effect.gen(function* () {
-          yield* ensureTarget(operation)
-          yield* rejectIfTerminated
-          const handle = yield* ensureStarted
-          return yield* handle.runtimeState
-        }).pipe(provideActorWorkspace),
+      GetState: Effect.fn("AgentLoop.GetState")(
+        ({ operation }: HandlerRequest<BranchCommandInput>) =>
+          branchCommand(operation, rejectIfTerminated, (handle) => handle.runtimeState),
       ),
       GetMetrics: Effect.fn("AgentLoop.GetMetrics")(
-        ({ operation }: HandlerRequest<GetMetricsInput>) =>
+        ({ operation }: HandlerRequest<BranchCommandInput>) =>
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* rejectIfTerminated
@@ -897,7 +890,7 @@ export const buildAgentLoopActorHandlers = (config: {
           ),
       ),
       TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(
-        ({ operation }: HandlerRequest<TerminateBranchInput>) =>
+        ({ operation }: HandlerRequest<BranchCommandInput>) =>
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             yield* sessionGovernance.markTerminated(workspaceId, sessionId)

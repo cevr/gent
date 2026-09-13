@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { Actor } from "effect-encore"
-import { AgentName, RunSpecSchema, type RunSpec } from "../../domain/agent.js"
+import { AgentName, RunSpecSchema } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
 import { QueueSnapshot } from "../../domain/queue.js"
 import {
@@ -63,7 +63,8 @@ const RespondInteractionFields = {
   requestId: InteractionRequestId,
 }
 
-const DrainQueueFields = {
+/** One command addressed to a branch: drain, read, terminate. */
+const BranchCommandFields = {
   ...WorkspaceFields,
   sessionId: SessionId,
   branchId: BranchId,
@@ -71,32 +72,8 @@ const DrainQueueFields = {
 }
 
 const RemoveFollowUpFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
+  ...BranchCommandFields,
   messageId: MessageId,
-}
-
-const GetQueueFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
-}
-
-const GetStateFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
-}
-
-const GetMetricsFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
 }
 
 const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
@@ -106,101 +83,23 @@ const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
 type ExtensionRequestInputEnvelope = Schema.Schema.Type<typeof ExtensionRequestInputEnvelope>
 
 const RequestExtensionFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
+  ...BranchCommandFields,
   extensionId: ExtensionId,
   capabilityId: Schema.String,
   input: ExtensionRequestInputEnvelope,
 }
 
-/**
- * `TerminateBranch` shuts down a single branch's loop. Distinct from
- * generic `Interrupt` (which only flushes pending mailbox items) because
- * session termination semantically closes branch resources and must run
- * inside the entity's own scope. Used by `AgentLoopSessionGovernance`-driven
- * `terminateSession` sweeps.
- */
-const TerminateBranchFields = {
-  ...WorkspaceFields,
-  sessionId: SessionId,
-  branchId: BranchId,
-  commandId: ActorCommandId,
-}
-
 export type MessageType = Schema.Schema.Type<typeof Message>
 export type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
 
-type WorkspaceInput = {
-  readonly workspaceId: WorkspaceId
-}
-export type TurnSubmissionInput = WorkspaceInput & {
-  readonly message: MessageType
-  readonly agentOverride?: AgentName
-  readonly runSpec?: RunSpec
-  readonly interactive?: boolean
-}
-export type QueueFollowUpInput = WorkspaceInput & {
-  readonly message: MessageType
-  readonly wake?: boolean
-}
-export type SteerInput = WorkspaceInput & {
-  readonly commandId: ActorCommandId
-  readonly command: SteerCommandType
-}
-export type RespondInteractionInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly requestId: InteractionRequestId
-}
-export type DrainQueueInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-}
-export type RemoveFollowUpInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-  readonly messageId: MessageId
-}
-export type GetQueueInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-}
-export type GetStateInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-}
-export type GetMetricsInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-}
-export type RequestExtensionInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-  readonly extensionId: ExtensionId
-  readonly capabilityId: string
-  readonly input: ExtensionRequestInputEnvelope
-}
-export type TerminateBranchInput = {
-  readonly workspaceId: WorkspaceId
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly commandId: ActorCommandId
-}
+type FieldsInput<F extends Schema.Struct.Fields> = Schema.Struct<F>["Type"]
+export type TurnSubmissionInput = FieldsInput<typeof TurnSubmissionFields>
+export type QueueFollowUpInput = FieldsInput<typeof QueueFollowUpFields>
+export type SteerInput = FieldsInput<typeof SteerFields>
+export type RespondInteractionInput = FieldsInput<typeof RespondInteractionFields>
+export type BranchCommandInput = FieldsInput<typeof BranchCommandFields>
+export type RemoveFollowUpInput = FieldsInput<typeof RemoveFollowUpFields>
+export type RequestExtensionInput = FieldsInput<typeof RequestExtensionFields>
 export type HandlerRequest<Operation> = {
   readonly operation: Operation & { readonly _tag: string }
 }
@@ -268,11 +167,11 @@ export const AgentLoop = Actor.fromEntity(
     // Queue drain is a mutating state transition; route it through the
     // branch-local actor so it serializes with the actor-owned queue.
     DrainQueue: {
-      payload: DrainQueueFields,
+      payload: BranchCommandFields,
       success: QueueSnapshot,
       error: AgentLoopError,
       persisted: true,
-      id: (p: DrainQueueInput) => ({
+      id: (p: BranchCommandInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
@@ -289,28 +188,28 @@ export const AgentLoop = Actor.fromEntity(
       }),
     },
     GetQueue: {
-      payload: GetQueueFields,
+      payload: BranchCommandFields,
       success: QueueSnapshot,
       error: AgentLoopError,
-      id: (p: GetQueueInput) => ({
+      id: (p: BranchCommandInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
     },
     GetState: {
-      payload: GetStateFields,
+      payload: BranchCommandFields,
       success: SessionRuntimeStateSchema,
       error: AgentLoopError,
-      id: (p: GetStateInput) => ({
+      id: (p: BranchCommandInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
     },
     GetMetrics: {
-      payload: GetMetricsFields,
+      payload: BranchCommandFields,
       success: SessionRuntimeMetrics,
       error: AgentLoopError,
-      id: (p: GetMetricsInput) => ({
+      id: (p: BranchCommandInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
@@ -326,11 +225,18 @@ export const AgentLoop = Actor.fromEntity(
     },
     // Branch-local shutdown. Used by session terminate sweeps to close a
     // single branch's loop resources from inside the entity's own scope.
+    /**
+     * `TerminateBranch` shuts down a single branch's loop. Distinct from
+     * generic `Interrupt` (which only flushes pending mailbox items) because
+     * session termination semantically closes branch resources and must run
+     * inside the entity's own scope. Used by `AgentLoopSessionGovernance`-driven
+     * `terminateSession` sweeps.
+     */
     TerminateBranch: {
-      payload: TerminateBranchFields,
+      payload: BranchCommandFields,
       success: Schema.Void,
       error: AgentLoopError,
-      id: (p: TerminateBranchInput) => ({
+      id: (p: BranchCommandInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
         primaryKey: p.commandId,
       }),
