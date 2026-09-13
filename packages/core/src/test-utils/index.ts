@@ -7,12 +7,11 @@ import {
   Layer,
   Option,
   PubSub,
-  Random,
   Ref,
   Schema,
   Stream,
 } from "effect"
-import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
+import type { ExtensionHostPlatform } from "../domain/extension.js"
 import { ExtensionHost, makeCollectingExtensionHost } from "../domain/extension-host.js"
 import type { ExtensionContributions } from "../domain/contribution.js"
 import { BranchId, SessionId } from "../domain/ids.js"
@@ -32,6 +31,7 @@ import type { EventStoreService } from "../domain/event.js"
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
 export { testExtensionHostContext } from "./extension-host-context.js"
+import { testExtensionHostPlatform } from "./extension-host-context.js"
 
 // Call Record
 
@@ -224,27 +224,7 @@ export const testHostFacts = (
   cwd: overrides?.cwd ?? "/tmp",
   source: overrides?.source ?? "test",
   home: overrides?.home ?? "/tmp",
-  host: {
-    osInfo: {
-      platform: "darwin",
-      arch: "arm64",
-      release: "test",
-      hostname: "test-host",
-      type: "Darwin",
-    },
-    execPath: "/usr/bin/node",
-    homeDirectory: overrides?.home ?? "/tmp",
-    parentEnv: {},
-    randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
-    pathListSeparator: ":",
-    runProcess: (command) =>
-      Effect.fail(
-        new ExtensionHostProcessError({
-          command,
-          message: "test host runProcess unavailable",
-        }),
-      ),
-  },
+  host: testExtensionHostPlatform(overrides?.home),
 })
 
 /**

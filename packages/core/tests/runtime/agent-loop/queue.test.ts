@@ -42,7 +42,7 @@ import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-sto
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })

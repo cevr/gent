@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Duration, Effect, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
-import { runProcess, ProcessError } from "../../src/utils/run-process"
+import { runProcess, ProcessError } from "../../src/runtime/run-process"
 const makePlatformLayer = (): Layer.Layer<ChildProcessSpawner.ChildProcessSpawner> =>
   BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)))
 const provideBun = <A, E>(

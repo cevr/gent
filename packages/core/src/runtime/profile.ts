@@ -32,7 +32,7 @@ import { discoverExtensions } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
 import { buildBasePromptSections } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
-import type { ProcessRunner } from "../utils/run-process.js"
+import type { ProcessRunner } from "./run-process.js"
 
 /**
  * Inputs that fully describe a runtime profile.

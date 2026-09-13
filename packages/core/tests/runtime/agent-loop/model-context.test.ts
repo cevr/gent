@@ -35,7 +35,7 @@ import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-a
 import { MODEL_OUTPUT_RESERVE_TOKENS } from "../../../src/runtime/model-context"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content

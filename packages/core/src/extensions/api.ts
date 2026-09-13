@@ -134,7 +134,6 @@ export {
 } from "../domain/extension-services.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { headTailChars } from "../domain/head-tail.js"
-export { saveFullOutput } from "../utils/save-output.js"
 // ── Public API ──
 
 export { ExtensionHost, type ExtensionHostService } from "../domain/extension-host.js"

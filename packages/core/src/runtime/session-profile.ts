@@ -46,7 +46,7 @@ import {
   collectResourceEntries,
 } from "./extensions/resource-host/resource-layer.js"
 import { ConfigService, type UserConfig } from "./config-service.js"
-import { ProcessRunner } from "../utils/run-process.js"
+import { ProcessRunner } from "./run-process.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   buildProfileCatalog,

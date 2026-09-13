@@ -9,7 +9,7 @@ import { ExtensionHost } from "../../src/domain/extension-host.js"
 import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
 import { ExtensionId } from "../../src/domain/ids"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { ProcessRunnerLive } from "../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../src/runtime/run-process"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),

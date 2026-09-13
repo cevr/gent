@@ -42,7 +42,7 @@ import { SessionMutationsLive } from "./session-mutations-live.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { ProcessRunnerLive } from "../utils/run-process.js"
+import { ProcessRunnerLive } from "../runtime/run-process.js"
 import { CurrentWorkspaceId, WorkspaceId } from "./workspace-rpc.js"
 
 interface DependencyOverrides {

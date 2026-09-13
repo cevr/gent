@@ -1,5 +1,5 @@
 import { Effect, Random } from "effect"
-import { ExtensionHostProcessError } from "../domain/extension.js"
+import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import type {
   ExtensionHostAgentService,
   ExtensionHostContext,
@@ -47,6 +47,29 @@ const defaultInteraction = (): ExtensionInteractionService => ({
   present: () => die("Interaction.present"),
 })
 
+/** The one host platform stub: a darwin box whose `runProcess` is unavailable. */
+export const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostPlatform => ({
+  osInfo: {
+    platform: "darwin",
+    arch: "arm64",
+    release: "test",
+    hostname: "test-host",
+    type: "Darwin",
+  },
+  execPath: "/usr/bin/node",
+  homeDirectory: home,
+  parentEnv: {},
+  randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
+  pathListSeparator: ":",
+  runProcess: (command) =>
+    Effect.fail(
+      new ExtensionHostProcessError({
+        command,
+        message: "test host runProcess unavailable",
+      }),
+    ),
+})
+
 export const testExtensionHostContext = (
   overrides: TestExtensionHostContextOverrides = {},
 ): ExtensionHostContext => ({
@@ -54,27 +77,7 @@ export const testExtensionHostContext = (
   branchId: overrides.branchId ?? BranchId.make("test-branch"),
   cwd: overrides.cwd ?? "/tmp",
   home: overrides.home ?? "/tmp",
-  host: overrides.host ?? {
-    osInfo: {
-      platform: "darwin",
-      arch: "arm64",
-      release: "test",
-      hostname: "test-host",
-      type: "Darwin",
-    },
-    execPath: "/usr/bin/node",
-    homeDirectory: overrides.home ?? "/tmp",
-    parentEnv: {},
-    randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
-    pathListSeparator: ":",
-    runProcess: (command) =>
-      Effect.fail(
-        new ExtensionHostProcessError({
-          command,
-          message: "test host runProcess unavailable",
-        }),
-      ),
-  },
+  host: overrides.host ?? testExtensionHostPlatform(overrides.home),
   agentName: overrides.agentName,
   Agent: { ...defaultAgent(), ...overrides.Agent },
   Session: { ...defaultSession(), ...overrides.Session },

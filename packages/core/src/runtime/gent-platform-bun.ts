@@ -19,7 +19,7 @@ import { fileURLToPath as nodeFileURLToPath, pathToFileURL } from "node:url"
 import { Effect, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
-import { ProcessRunnerLive } from "../utils/run-process.js"
+import { ProcessRunnerLive } from "./run-process.js"
 
 declare const __GENT_COMPILED__: boolean
 

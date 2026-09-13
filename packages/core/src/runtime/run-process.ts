@@ -50,7 +50,7 @@ interface RunProcessOptions {
  * fail to compile rather than die on the first command it runs.
  */
 export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerService>()(
-  "@gent/core/src/utils/run-process/ProcessRunner",
+  "@gent/core/src/runtime/run-process/ProcessRunner",
 ) {}
 
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {

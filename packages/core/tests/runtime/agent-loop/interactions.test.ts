@@ -83,7 +83,7 @@ import {
   waitForPhase,
 } from "./helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")

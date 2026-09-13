@@ -139,6 +139,7 @@ export {
  * tool whose storage and kernel are missing fails on first use.
  */
 export { CellExtension, CellBranchTools }
+export { saveFullOutput } from "./exec-tools/save-output.js"
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner | ExtensionHost>> =
   [

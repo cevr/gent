@@ -57,7 +57,7 @@ import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
 import type { TurnStreamPart } from "../../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 // ============================================================================
 // Shared helpers
 // ============================================================================

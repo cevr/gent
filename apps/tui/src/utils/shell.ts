@@ -2,8 +2,8 @@
  * Shell execution utility with truncation and output saving
  */
 
-import { saveFullOutput } from "@gent/core-internal/utils/save-output.js"
-import { runProcess } from "@gent/core-internal/utils/run-process"
+import { saveFullOutput } from "@gent/extensions"
+import { runProcess } from "@gent/core-internal/runtime/run-process"
 import { Effect, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 

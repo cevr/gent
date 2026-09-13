@@ -24,7 +24,7 @@ import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { ProcessRunnerLive } from "../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../src/runtime/run-process"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { ExtensionId } from "../../src/domain/ids"
 

@@ -1,6 +1,6 @@
 import { Effect, Predicate, Schema } from "effect"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../../domain/extension.js"
-import { ProcessRunner } from "../../utils/run-process.js"
+import { ProcessRunner } from "../../runtime/run-process.js"
 import { GentPlatform } from "../gent-platform.js"
 import { hasMessage } from "../../domain/guards.js"
 

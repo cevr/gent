@@ -1144,3 +1144,17 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   never calls. `ServerRootConfig.observability` is now a required layer the
   root supplies: the SDK and `apps/server` pass `GentObservability(cwd)`,
   the test roots pass `Layer.empty`. The seven dependencies left core.
+
+## Output files belong to the bash tool; `utils/` is gone (2026-09-13)
+
+- `utils/save-output.ts` wrote truncated command output under
+  `/tmp/gent/outputs`; its callers were `exec-tools/bash.ts` and the TUI's
+  local shell. It now lives in `exec-tools` and `@gent/extensions` exports it.
+  The `api` barrel loses the name.
+- `utils/run-process.ts` was the directory's last file; it is
+  `runtime/run-process.ts` now and core has no `utils/` directory.
+- `testHostFacts` and `testExtensionHostContext` carried byte-identical host
+  platform stubs; `testExtensionHostPlatform(home)` is the one.
+- `fake-fetch` stays in core test-utils: under `packages/extensions/tests`
+  the test-only lint forbids its `runPromise`, and a shipped `src/` home would
+  be worse.

@@ -14,7 +14,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Predicate } from "effect"
 import { setupBuiltinExtensions } from "@gent/core-internal/runtime/extensions/activation.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { ProcessRunnerLive } from "@gent/core-internal/utils/run-process.js"
+import { ProcessRunnerLive } from "@gent/core-internal/runtime/run-process.js"
 import {
   acpDisposerRelease,
   AcpAgentsExtension,

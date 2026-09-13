@@ -28,7 +28,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SqliteStorage, StorageError } from "../../src/storage/sqlite-storage"
 import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
 import type { ExternalDriverContribution } from "../../src/domain/driver"
-import { ProcessRunnerLive } from "../../src/utils/run-process"
+import { ProcessRunnerLive } from "../../src/runtime/run-process"
 import type { PermissionService } from "../../src/domain/permission"
 import { testHostFacts } from "../../src/test-utils"
 

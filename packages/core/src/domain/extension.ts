@@ -265,7 +265,7 @@ export type {
   ProviderAuthContribution,
   ProviderAuthorizationResult,
 } from "./driver.js"
-import type { ProcessRunner } from "../utils/run-process.js"
+import type { ProcessRunner } from "../runtime/run-process.js"
 
 // Extension — the core primitive
 

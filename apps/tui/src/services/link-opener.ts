@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import { runProcess } from "@gent/core-internal/utils/run-process"
+import { runProcess } from "@gent/core-internal/runtime/run-process"
 import { OsService } from "./os-service"
 
 export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {

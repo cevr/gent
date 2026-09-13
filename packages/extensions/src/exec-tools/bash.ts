@@ -21,11 +21,11 @@ import {
   ExtensionContext,
   tool,
   PermissionRule,
-  saveFullOutput,
   type ExtensionContextService,
   type SessionId,
   ToolCallId,
 } from "@gent/core/extensions/api"
+import { saveFullOutput } from "./save-output.js"
 import {
   BackgroundBashStorage,
   type BackgroundBashTerminalState,

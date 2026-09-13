@@ -91,7 +91,7 @@ import {
 } from "./agent-loop.runtime-context.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"
-import type { ProcessRunner } from "../../utils/run-process.js"
+import type { ProcessRunner } from "../../runtime/run-process.js"
 
 const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
   sessionId: SessionId
