@@ -79,12 +79,6 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
       reason,
       message,
     })
-  if (params.binding.source._tag === "DynamicNonReplayable") {
-    return yield* fail(
-      "DynamicNonReplayable",
-      `Tool ${toolName} was provided by a dynamic registration and cannot be replayed`,
-    )
-  }
   const current = yield* captureCurrentToolBinding({ sessionId: params.sessionId, toolName })
   if (Option.isNone(current)) {
     return yield* fail(

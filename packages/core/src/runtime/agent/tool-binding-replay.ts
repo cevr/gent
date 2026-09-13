@@ -16,7 +16,6 @@ import type { ResolvedToolCapability } from "./tool-runner.js"
 
 export type ToolBindingReplayReason =
   | "MissingBinding"
-  | "DynamicNonReplayable"
   | "ToolUnavailable"
   | "MissingSourceIdentity"
   | "SourceMismatch"
@@ -30,7 +29,6 @@ export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplay
     toolId: Schema.String,
     reason: Schema.Literals([
       "MissingBinding",
-      "DynamicNonReplayable",
       "ToolUnavailable",
       "MissingSourceIdentity",
       "SourceMismatch",
@@ -130,7 +128,7 @@ export const bindingMismatchReason = (
   current: ToolBindingIdentity,
 ): Exclude<
   ToolBindingReplayReason,
-  "MissingBinding" | "DynamicNonReplayable" | "ToolUnavailable" | "MissingSourceIdentity"
+  "MissingBinding" | "ToolUnavailable" | "MissingSourceIdentity"
 > => {
   if (stored.source.sourceRevision !== current.source.sourceRevision) return "SourceMismatch"
   if (stored.schemaRevision !== current.schemaRevision) return "SchemaMismatch"

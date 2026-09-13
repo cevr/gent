@@ -67,7 +67,6 @@ const replayCases = [
     saved: false,
     local: true,
     changed: false,
-    dynamic: false,
     reason: "",
   },
   {
@@ -76,7 +75,6 @@ const replayCases = [
     saved: false,
     local: false,
     changed: false,
-    dynamic: false,
     reason: "MissingBinding",
   },
   {
@@ -85,7 +83,6 @@ const replayCases = [
     saved: true,
     local: false,
     changed: false,
-    dynamic: false,
     reason: "",
   },
   {
@@ -94,7 +91,6 @@ const replayCases = [
     saved: false,
     local: true,
     changed: false,
-    dynamic: false,
     reason: "MissingBinding",
   },
   {
@@ -103,17 +99,7 @@ const replayCases = [
     saved: true,
     local: true,
     changed: true,
-    dynamic: false,
     reason: "SourceMismatch",
-  },
-  {
-    name: "dynamic durable marker",
-    durable: true,
-    saved: true,
-    local: true,
-    changed: false,
-    dynamic: true,
-    reason: "DynamicNonReplayable",
   },
 ]
 
@@ -187,16 +173,6 @@ describe("tool binding replay", () => {
           }).pipe(Effect.flip)
           expect(changed.reason).toBe("SourceMismatch")
           expect(changed.toolCallId).toBe(address.toolCallId)
-          const dynamic = yield* resolveStoredToolBinding({
-            ...address,
-            binding: makeToolBindingIdentity({
-              ...binding,
-              source: ToolBindingSource.cases.DynamicNonReplayable.make({
-                sourceRevision: ToolSourceRevision.make("dynamic-source"),
-              }),
-            }),
-          }).pipe(Effect.flip)
-          expect(dynamic.reason).toBe("DynamicNonReplayable")
         }).pipe(Effect.provideContext(context))
       }),
   )
@@ -282,13 +258,6 @@ describe("tool binding replay", () => {
                 ...binding,
                 source: ToolBindingSource.cases.Static.make({
                   sourceRevision: ToolSourceRevision.make("old-source"),
-                }),
-              })
-            if (scenario.dynamic)
-              binding = makeToolBindingIdentity({
-                ...binding,
-                source: ToolBindingSource.cases.DynamicNonReplayable.make({
-                  sourceRevision: binding.source.sourceRevision,
                 }),
               })
             yield* storage.save({ ...address, binding })

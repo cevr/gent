@@ -11,9 +11,8 @@ export type ToolSchemaRevision = typeof ToolSchemaRevision.Type
 
 /** The source identity for a tool binding.
  *
- * Dynamic registrations are intentionally marked non-replayable. Their
- * process-local registration token is not a durable identity. A process-local
- * static binding is replayable only inside the generation that recorded it.
+ * A static binding names a build artifact and replays across processes. A
+ * process-local binding is replayable only inside the process that recorded it.
  */
 export const ToolBindingSource = Schema.TaggedUnion({
   Static: {
@@ -25,9 +24,6 @@ export const ToolBindingSource = Schema.TaggedUnion({
    * resume inside that generation and never across a process restart.
    */
   ProcessLocal: {
-    sourceRevision: ToolSourceRevision,
-  },
-  DynamicNonReplayable: {
     sourceRevision: ToolSourceRevision,
   },
 })

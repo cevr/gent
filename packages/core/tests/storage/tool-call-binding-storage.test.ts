@@ -351,21 +351,4 @@ describe("ToolCallBindingStorage", () => {
       }
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
-
-  it.live("round-trips a visible non-replayable dynamic source", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture("dynamic")
-      const storage = yield* ToolCallBindingStorage
-      const dynamic = makeToolBindingIdentity({
-        ...makeBinding(),
-        source: ToolBindingSource.cases.DynamicNonReplayable.make({
-          sourceRevision: ToolSourceRevision.make("dynamic-source/1"),
-        }),
-      })
-
-      yield* storage.save(saveParams(fixture, dynamic))
-      const loaded = yield* storage.get(getParams(fixture))
-      expect(loaded?.source._tag).toBe("DynamicNonReplayable")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
 })
