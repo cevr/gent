@@ -20,7 +20,7 @@ import { InteractionPendingError } from "../domain/interaction-request.js"
 import { AgentRunnerService, type AgentName } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
-import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
+import type { ExtensionHostPlatform } from "../domain/extension.js"
 import { ApprovalService } from "./approval-service.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -57,11 +57,8 @@ const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
 
 interface ExtensionHostContextInput {
   readonly extensionRegistry: ExtensionRegistryService
-  /**
-   * Built by the caller over `GentPlatform`, which is an Effect rather than a
-   * service Tag. A context built without one reports it unavailable on use.
-   */
-  readonly host?: ExtensionHostPlatform
+  /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
+  readonly host: ExtensionHostPlatform
   /** The loop's follow-up queue. Absent outside a loop. */
   readonly sessionControl?: ExtensionSessionControlService
 }
@@ -117,32 +114,6 @@ const mapInteraction = <A, E>(
 
 const unavailablePlatform: RuntimeEnvironmentApi = { cwd: "", home: "", platform: "unknown" }
 
-const unavailableExtensionPlatform: ExtensionHostPlatform = {
-  osInfo: {
-    platform: "unknown",
-    arch: "unknown",
-    release: "unknown",
-    hostname: "unknown",
-    type: "unknown",
-  },
-  execPath: "",
-  homeDirectory: "",
-  parentEnv: {},
-  randomId: Effect.succeed("00000000-0000-4000-8000-000000000000"),
-  pathListSeparator: ":",
-  commandCandidates: (command) => [command],
-  isPortFree: () => Effect.succeed(false),
-  isPidAlive: () => Effect.succeed(false),
-  signalPid: () => Effect.void,
-  runProcess: (command) =>
-    Effect.fail(
-      new ExtensionHostProcessError({
-        command,
-        message: "host.runProcess unavailable",
-      }),
-    ),
-}
-
 export const makeExtensionHostContextProvider = (
   input: ExtensionHostContextInput,
 ): Effect.Effect<ExtensionHostContextProviderService> =>
@@ -151,7 +122,7 @@ export const makeExtensionHostContextProvider = (
       yield* Effect.serviceOption(RuntimeEnvironment),
       () => unavailablePlatform,
     )
-    const host = input.host ?? unavailableExtensionPlatform
+    const host = input.host
     const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
     const approval = yield* facet(ApprovalService, "ApprovalService")
     const publisher = yield* facet(EventPublisher, "EventPublisher")

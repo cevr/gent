@@ -46,6 +46,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { captureCurrentToolBinding } from "@gent/core-internal/runtime/agent/tool-binding-resolution.js"
 import { runAgentLoopTurnProfile } from "@gent/core-internal/runtime/agent/agent-loop.turn-profile.js"
 import type { ResolvedToolCapability } from "@gent/core-internal/runtime/agent/tool-runner.js"
+import { testHostFacts } from "@gent/core-internal/test-utils"
 
 const cell = {
   sessionId: SessionId.make("recorded-host-session"),
@@ -86,6 +87,7 @@ const prepareCell = Effect.gen(function* () {
 const currentHostParams = Effect.gen(function* () {
   const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
   const hostProvider = yield* makeExtensionHostContextProvider({
+    host: testHostFacts().host,
     extensionRegistry: profile.registryService,
   })
   const turnProfile = {

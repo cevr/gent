@@ -30,6 +30,7 @@ import { SessionStorage, type SessionStorageService } from "../../src/storage/se
 import type { ExternalDriverContribution } from "../../src/domain/driver"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 import type { PermissionService } from "../../src/domain/permission"
+import { testHostFacts } from "../../src/test-utils"
 
 const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
@@ -109,6 +110,7 @@ describe("resolveSessionEnvironment", () => {
             }),
           )
           const hostProvider = yield* makeExtensionHostContextProvider({
+            host: testHostFacts().host,
             extensionRegistry,
           })
           const resolved = yield* resolveSessionEnvironment({
@@ -160,6 +162,7 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const extensionRegistry = yield* ExtensionRegistry
         const hostProvider = yield* makeExtensionHostContextProvider({
+          host: testHostFacts().host,
           extensionRegistry,
         })
         const resolved = yield* resolveSessionEnvironment({
@@ -201,6 +204,7 @@ describe("resolveSessionEnvironment", () => {
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
+          host: testHostFacts().host,
           extensionRegistry,
         })
         const exit = yield* Effect.exit(
@@ -317,6 +321,7 @@ describe("resolveSessionEnvironment", () => {
           resolve: () => Effect.succeed(fakeProfile),
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
+          host: testHostFacts().host,
           extensionRegistry,
         })
         const resolved = yield* resolveSessionEnvironment({

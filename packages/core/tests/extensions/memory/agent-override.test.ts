@@ -80,7 +80,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     ModelRegistry.Test(),
     GentPlatform.Test(),
     ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
-    Permission.Test(),
+    Permission.Live(),
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )

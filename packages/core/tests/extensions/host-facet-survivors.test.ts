@@ -21,6 +21,7 @@ import { requireAgent, ExtensionContext, ExtensionServiceError } from "@gent/cor
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testToolContext } from "../../src/test-utils/index.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
+import { testHostFacts } from "../../src/test-utils"
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
@@ -72,6 +73,7 @@ describe("host facet survivors after C9.5 prune", () => {
         new Branch({ id: BRANCH_ID, sessionId: SESSION_ID, createdAt: FIXTURE_DATE }),
       )
       const provider = yield* makeExtensionHostContextProvider({
+        host: testHostFacts().host,
         extensionRegistry: {
           extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
           getResolved: () => EMPTY_RESOLVED_EXTENSIONS,

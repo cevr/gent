@@ -18,6 +18,7 @@ import { MessageStorage } from "../../src/storage/message-storage.js"
 import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
 import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
 import { ensureStorageParents } from "../../src/test-utils/index.js"
+import { testHostFacts } from "../../src/test-utils"
 
 const sessionId = SessionId.make("ambient-host-session")
 const branchId = BranchId.make("ambient-host-branch")
@@ -27,6 +28,7 @@ const resolved = resolveExtensions([])
 
 const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
+    host: testHostFacts().host,
     extensionRegistry: { extensionHooks: resolved.extensionHooks, getResolved: () => resolved },
   })
   return provider.forRun({ sessionId, branchId })

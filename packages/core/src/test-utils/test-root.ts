@@ -38,7 +38,7 @@ export const testOverrides = () => ({
   approvalLayer: ApprovalService.Test(),
   configServiceLayer: ConfigService.Test(),
   modelRegistryLayer: ModelRegistry.Test(),
-  permissionLayer: Permission.Test(),
+  permissionLayer: Permission.Live(),
 })
 
 export const testAgentsExtension = (

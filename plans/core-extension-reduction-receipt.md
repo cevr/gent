@@ -1107,3 +1107,13 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   else lives in `packages/extensions/src/compaction/summary-record.ts`; the
   branch-tools barrel drops nine names and gains `UsageSchema`. The TUI never
   imported the core names; it matches the customType string.
+
+## Two stand-in defaults removed (2026-09-13)
+
+- `make-extension-host-context.ts` carried a 25-line `unavailableExtensionPlatform`
+  stub behind an optional `host`. The one production caller always passes a
+  host; only eight test sites omitted it and silently got a platform whose
+  `runProcess` fails. `host` is required now and the tests pass
+  `testHostFacts().host`, the stub test-utils already owned.
+- `Permission.Test()` was `Permission.Live()` with no rules and the default
+  allow action. Deleted; the thirteen callers name the live constructor.

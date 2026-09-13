@@ -51,6 +51,7 @@ import { toolResultMessageIdForTurn } from "@gent/core-internal/runtime/agent/ag
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { textStep } from "@gent/core-internal/test-utils/sequence-steps.js"
+import { testHostFacts } from "@gent/core-internal/test-utils"
 
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,
@@ -274,6 +275,7 @@ it.scopedLive(
           }
           if (state === "waiting") {
             const host = yield* makeExtensionHostContextProvider({
+              host: testHostFacts().host,
               extensionRegistry: profile.registryService,
             })
             const selected = yield* captureCurrentToolBinding({

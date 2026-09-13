@@ -76,7 +76,7 @@ export interface PermissionService {
  *
  * The single definition of that value. Callers that need a permission
  * service but have no rules to apply -- an unconfigured session profile, a
- * tool runner outside a profile, `Permission.Test` -- use this one rather
+ * tool runner outside a profile -- use this one rather
  * than restating the shape.
  */
 export const AllowAllPermission: PermissionService = {
@@ -97,7 +97,4 @@ export class Permission extends Context.Service<Permission, PermissionService>()
           Effect.succeed(evaluatePermissionRules(rules, tool, args, defaultAction)),
       })
     })
-
-  static Test = (): Layer.Layer<Permission> =>
-    Layer.succeed(Permission, Permission.of(AllowAllPermission))
 }

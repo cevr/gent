@@ -5,7 +5,7 @@
  * a real tool-call denial in a full agent session:
  *   1. bash tool contributed via `tool()` factory (so it appears in the registry)
  *   2. A separate extension capability carries `permissionRules: [deny("bash")]`
- *   3. `Permission.Live` is seeded with those rules (overrides `Permission.Test`)
+ *   3. `Permission.Live` is seeded with those rules (overrides the allow-all default)
  *   4. Provider scripts a tool call to `bash`
  *   5. Assert `ToolCallFailed` event is published for `bash`
  */
@@ -120,7 +120,7 @@ describe("capability permissionRules E2E", () => {
           textStep("Understood, bash is denied."),
         ])
 
-        // Override Permission.Test() with a live instance seeded with the deny rule
+        // Override Permission.Live() with a live instance seeded with the deny rule
         const permissionLive = Permission.Live(
           [new PermissionRule({ tool: "bash", action: "deny" })],
           "allow",
@@ -181,7 +181,7 @@ describe("capability permissionRules E2E", () => {
           textStep("Bash ran successfully."),
         ])
 
-        // Default Permission.Test() — always allow; no extraLayers override
+        // Default Permission.Live() — always allow; no extraLayers override
         const e2eLayer = createE2ELayer({
           agents: AllBuiltinAgents,
           extensionInputs: [],
@@ -205,7 +205,7 @@ describe("capability permissionRules E2E", () => {
 
           const envelopes = yield* Ref.get(envelopesRef)
 
-          // With Permission.Test() (always allow), bash call must succeed
+          // With Permission.Live() (always allow), bash call must succeed
           const succeeded = envelopes
             .map((envelope) => envelope.event)
             .filter(Schema.is(ToolCallSucceeded))
