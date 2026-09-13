@@ -1560,3 +1560,28 @@ left for the user: the `session.delete` chain (~120 LOC, a real product
 capability with no client), `DependencyOverrides.modelRegistryLayer`,
 `makeServerRootLayer`. Explorer verdict: one more storage pass at most;
 providers/ and domain/ are clean. Core is 27,656 LOC.
+
+## Eighteenth pass: whole-core sweep (2026-09-13)
+
+Cross-directory patterns the directory passes could not see: six
+"message from an unknown cause" helpers and two open-coded copies are
+`causeMessage` in `domain/guards.ts`; three JSON codec constructions use
+`encodeToolOutput` and the permission evaluator stops rebuilding a codec
+per check. Precision items: `RuntimeProfileDeclarations.cwd` (its only
+caller had already computed it), `ToolCapability.native` (a self-reference
+nothing read), `RequestCapability.public: true` (a constant nothing
+branched on), the queue-storage copy of `emptyLoopQueueState`, the
+`forRun` argument that restated its default plus the omit-vs-undefined
+`runInfo` match nothing observed, `RuntimeEnvironment.Test` (byte-identical
+to `Live`; 17 test files retargeted), the `testOverrides()` spread that
+three of its four keys overwrote, and `storageErrorExcept` for the two
+pass-through storage mappers (`2d13729b`). Eighteenth-pass NO FINDING:
+`extensions/api.ts` and `branch-tools.ts` (every name has a consumer, guard
+enforced), `test-utils/` (single importers are cross-package contracts;
+`core-internal` is a symlink so its importers count), `retry.ts` (importers
+use extensionless specifiers), the model-context trio, driver-registry,
+resource-layer, membrane, project-trust, wide-event shim, and the
+single-importer types that cross a layer. Explorer verdict: "this is the
+last broad sweep worth running"; the remaining core is schema
+declarations, actor protocol, and distinct service implementations.
+Core is 27610 LOC.
