@@ -13,7 +13,7 @@
  * @module
  */
 
-import { DateTime, Effect, Option, Predicate } from "effect"
+import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
@@ -696,6 +696,18 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           return
         if (!controller.open()) controller.refresh("")
       }),
+    )
+    // A child's own turns raise no event in this session, so while the tray
+    // shows children the listing is re-read on a slow clock. The read is a
+    // registry lookup per loop, cheap enough to poll.
+    yield* lifecycle.scoped(
+      Effect.forkScoped(
+        Effect.sync(() => {
+          if (controller.open()) return
+          if (subtreeCounts(controller.rows(), controller.current()).total === 0) return
+          controller.refresh("")
+        }).pipe(Effect.repeat(Schedule.spaced("2 seconds"))),
+      ),
     )
 
     return clientContributions(
