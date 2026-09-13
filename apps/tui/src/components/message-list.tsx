@@ -3,6 +3,7 @@ import { Match, Option, Predicate, Schema } from "effect"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
+import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import type { ToolCall } from "./tool-renderers/index"
 import { formatToolCallIdentity, ToolCallIdentityProvider, ToolFrameBody } from "./tool-frame"
 import { GenericToolRenderer } from "./tool-renderers/generic"
@@ -22,6 +23,7 @@ import {
   formatCompactionLabel,
   formatPreviewFooter,
   formatRowCounts,
+  workingIconFrame,
   previewOutput,
 } from "./message-list-utils"
 import { formatGenericToolText } from "./tool-renderers/generic-format"
@@ -454,10 +456,11 @@ function ToolCallGroup(props: {
   const { theme } = useTheme()
   const failed = () => props.calls.some((call) => call.status === "error")
   const running = () => props.calls.some((call) => call.status === "running")
+  const tick = useSpinnerClock()
   const symbol = () => {
-    if (failed()) return "✕"
-    if (running()) return "⋯"
-    return "●"
+    if (failed()) return "✗"
+    if (running()) return workingIconFrame(tick())
+    return "✓"
   }
   const groupColor = () => {
     if (failed()) return theme.error

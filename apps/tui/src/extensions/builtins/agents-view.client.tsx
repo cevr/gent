@@ -13,7 +13,7 @@
  * @module
  */
 
-import { Effect, Option } from "effect"
+import { DateTime, Effect, Option } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
@@ -29,6 +29,8 @@ import { useScrollSync } from "../../hooks/use-scroll-sync"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
 import { truncate } from "../../utils/format-tool"
+import { formatAge, workingIconFrame } from "../../components/message-list-utils"
+import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import {
   clientCommandContribution,
   clientContributions,
@@ -142,37 +144,62 @@ export const makeAgentsController = (
 }
 
 /**
- * The section label for a row, corrected by live state where we have it.
+ * The section a row is in, corrected by live state where we have it.
  *
  * The listing reports every resident loop as `idle`, because enumerating N
  * loops must not fan out into N state reads. The detail read for the selected
  * row does know, so that one row shows what it is actually doing rather than
  * the conservative guess the listing had to make.
  */
-const sectionLabelFor = (row: AgentRowEntry, detail: Option.Option<ExtensionAgentDetail>): string =>
+const sectionFor = (
+  row: AgentRowEntry,
+  detail: Option.Option<ExtensionAgentDetail>,
+): AgentRowEntry["section"] =>
   Option.match(
     Option.flatMap(detail, (value) => value.status),
     {
-      onNone: () => SECTION_LABEL[row.section],
+      onNone: () => row.section,
       onSome: (status) => {
-        if (status === "Idle") return SECTION_LABEL.idle
-        return SECTION_LABEL.running
+        if (status === "Idle") return "idle"
+        return "running"
       },
     },
   )
 
-/** Section headers, rendered inline so the list stays one flat navigable array. */
-const SECTION_LABEL = {
-  running: "running",
-  idle: "idle",
-  inactive: "inactive",
+/** Section headings, with the count each carries. Empty sections are skipped. */
+const SECTION_TITLE = {
+  running: "Running",
+  idle: "Idle",
+  inactive: "Inactive",
 } satisfies Record<AgentRowEntry["section"], string>
 
-/** Tree prefix from depth. The server already ordered parents before children. */
-const indentFor = (depth: number): string => {
-  if (depth <= 0) return ""
-  return `${"  ".repeat(depth - 1)}└─ `
+/** The list as drawn: a heading opens each section, rows keep their index for selection. */
+type PaneItem =
+  | { readonly kind: "heading"; readonly section: AgentRowEntry["section"]; readonly count: number }
+  | { readonly kind: "row"; readonly row: AgentRowEntry; readonly index: number }
+
+export const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
+  const items: PaneItem[] = []
+  rows.forEach((row, index) => {
+    const previous = rows[index - 1]
+    if (Option.isNone(Option.fromNullishOr(previous)) || previous?.section !== row.section) {
+      const count = rows.filter((entry) => entry.section === row.section).length
+      items.push({ kind: "heading", section: row.section, count })
+    }
+    items.push({ kind: "row", row, index })
+  })
+  return items
 }
+
+/** "1 running, 0 idle, 3 inactive" for the pane title. */
+export const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
+  const count = (section: AgentRowEntry["section"]) =>
+    rows.filter((row) => row.section === section).length
+  return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
+}
+
+/** Tree prefix from depth. The server already ordered parents before children. */
+const indentFor = (depth: number): string => "  ".repeat(Math.max(0, depth))
 
 const labelFor = (row: AgentRowEntry): string => {
   const name = Option.fromUndefinedOr(row.name).pipe(
@@ -180,12 +207,29 @@ const labelFor = (row: AgentRowEntry): string => {
     Option.getOrElse(() => row.sessionId),
   )
   const agent = Option.fromUndefinedOr(row.agent).pipe(Option.getOrElse(() => "—"))
-  return `${indentFor(row.depth)}${name}  ·  ${agent}`
+  return `${name}  ·  ${agent}`
 }
+
+/** What the selected row is doing, from its detail read; other rows carry nothing. */
+const activityFor = (detail: Option.Option<ExtensionAgentDetail>): string =>
+  Option.match(
+    Option.flatMap(detail, (value) => value.status),
+    {
+      onNone: () => "",
+      onSome: (status) => status.toLowerCase(),
+    },
+  )
+
+/** Right-aligned age from the row's last update; blank when the row never ran. */
+const ageFor = (row: AgentRowEntry, now: number): string =>
+  Option.match(Option.fromUndefinedOr(row.updatedAt), {
+    onNone: () => "",
+    onSome: (updatedAt) => formatAge(now - updatedAt),
+  })
 
 /** Marks the loop the shell is on, so a reader can find themselves in the list. */
 const currentMarker = (current: boolean): string => {
-  if (current) return "• "
+  if (current) return "› "
   return "  "
 }
 
@@ -393,18 +437,44 @@ export function AgentsPane(
   const CHROME_ROWS = 6
   const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
 
+  const tick = useSpinnerClock()
   // Detail is fetched for the selected row only, so only that row can be
-  // corrected; the rest keep the label the listing gave them.
-  const sectionFor = (row: AgentRowEntry, selected: boolean): string => {
-    if (!selected) return SECTION_LABEL[row.section]
-    return sectionLabelFor(row, props.controller.detail())
+  // corrected; the rest keep the section the listing gave them.
+  const liveSection = (row: AgentRowEntry, selected: boolean): AgentRowEntry["section"] => {
+    if (!selected) return row.section
+    return sectionFor(row, props.controller.detail())
   }
 
-  const colorFor = (row: AgentRowEntry, selected: boolean) => {
+  // The running pulse animates; idle and inactive share a dot and differ by colour.
+  const glyphFor = (section: AgentRowEntry["section"]): string => {
+    if (section === "running") return workingIconFrame(tick())
+    return "•"
+  }
+
+  const colorFor = (section: AgentRowEntry["section"], selected: boolean) => {
     if (selected) return theme.selectedListItemText
-    if (row.section === "running") return theme.success
-    if (row.section === "inactive") return theme.textMuted
+    if (section === "running") return theme.success
+    if (section === "inactive") return theme.textMuted
     return theme.text
+  }
+
+  const glyphColorFor = (section: AgentRowEntry["section"], selected: boolean) => {
+    if (selected) return theme.selectedListItemText
+    if (section === "idle") return theme.warning
+    return colorFor(section, selected)
+  }
+
+  const items = () => paneItems(visible())
+
+  /** `<marker><indent><glyph> name · agent  ·  activity` padded so the age sits on the right edge. */
+  const rowLine = (row: AgentRowEntry, selected: boolean): string => {
+    const age = ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))
+    let activity = ""
+    if (selected) activity = activityFor(props.controller.detail())
+    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(liveSection(row, selected))} ${labelFor(row)}`
+    if (activity.length > 0) left = `${left}  ·  ${activity}`
+    const width = Math.max(0, rowWidth() - age.length - 2)
+    return `${truncate(left, width).padEnd(width)}  ${age}`
   }
 
   return (
@@ -422,7 +492,7 @@ export function AgentsPane(
         borderStyle="rounded"
         borderColor={theme.borderSubtle}
         flexDirection="column"
-        title="Agents"
+        title={`Agents · ${countsLabel(visible())}`}
       >
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
@@ -439,20 +509,34 @@ export function AgentsPane(
               <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
             }
           >
-            <For each={visible()}>
-              {(row, index) => {
-                const selected = () => state().selectedIndex === index()
+            <For each={items()}>
+              {(item) => {
+                if (item.kind === "heading") {
+                  return (
+                    <box paddingLeft={1}>
+                      <text style={{ fg: theme.textMuted }}>
+                        {`${SECTION_TITLE[item.section]} (${item.count})`}
+                      </text>
+                    </box>
+                  )
+                }
+                const selected = () => state().selectedIndex === item.index
                 const background = () => {
                   if (selected()) return theme.primary
                   return "transparent"
                 }
+                const section = () => liveSection(item.row, selected())
                 return (
-                  <box id={`agents-row-${index()}`} backgroundColor={background()} paddingLeft={1}>
-                    <text style={{ fg: colorFor(row, selected()) }}>
-                      {truncate(
-                        `${currentMarker(isCurrent(row))}${sectionFor(row, selected()).padEnd(9)}${labelFor(row)}`,
-                        rowWidth(),
-                      )}
+                  <box
+                    id={`agents-row-${item.index}`}
+                    backgroundColor={background()}
+                    paddingLeft={1}
+                  >
+                    <text style={{ fg: colorFor(section(), selected()) }}>
+                      <span style={{ fg: glyphColorFor(section(), selected()) }}>
+                        {rowLine(item.row, selected()).slice(0, 1)}
+                      </span>
+                      {rowLine(item.row, selected()).slice(1)}
                     </text>
                   </box>
                 )
@@ -470,7 +554,7 @@ export function AgentsPane(
         </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
-        <ChromePanel.Footer>Type | Up/Down | Enter | Esc | Ctrl+T</ChromePanel.Footer>
+        <ChromePanel.Footer>↑↓ move ↵ open esc close ^t hide</ChromePanel.Footer>
       </box>
     </Show>
   )

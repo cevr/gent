@@ -601,7 +601,7 @@ describe("FX transcript treatment", () => {
         ),
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("└ bash seq 25 · ↓25")
+      expect(frame).toContain("└ bash seq 25 · ↓ 25 lines")
       expect(frame).toContain("row 1")
       expect(frame).toContain("row 20")
       expect(frame).not.toContain("row 21")
@@ -647,7 +647,7 @@ describe("FX transcript treatment", () => {
       const row = Option.getOrThrow(
         Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
       ).trim()
-      expect(row).toContain("↑2 ↓25")
+      expect(row).toContain("↑ 2 ↓ 25 lines")
       yield* Effect.sync(() => setDisclosure("full"))
       const full = yield* Effect.promise(() =>
         waitForRenderedFrame(

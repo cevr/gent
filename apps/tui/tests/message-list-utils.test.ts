@@ -11,6 +11,8 @@ import {
   formatCompactionLabel,
   formatPreviewFooter,
   formatRowCounts,
+  formatAge,
+  workingIconFrame,
   previewOutput,
   TOOL_SPINNERS,
   type ActivityCall,
@@ -324,10 +326,25 @@ describe("formatCellRowLabel", () => {
   })
 })
 
+describe("working icon and age", () => {
+  test("the pulse turns every four ticks and repeats", () => {
+    expect([0, 4, 8, 12, 16].map(workingIconFrame)).toEqual(["◇", "◈", "◆", "◈", "◇"])
+  })
+
+  test("age shows one unit", () => {
+    expect([45_000, 12 * 60_000, 3 * 3_600_000, 2 * 86_400_000].map(formatAge)).toEqual([
+      "45s",
+      "12m",
+      "3h",
+      "2d",
+    ])
+  })
+})
+
 describe("progressive disclosure helpers", () => {
   test("cell rows count code in and display out; bash rows count output only", () => {
-    expect(formatRowCounts("cell", { input: "a\nb\nc", output: "x\ny" })).toBe("↑3 ↓2")
-    expect(formatRowCounts("bash", { input: "ls", output: "" })).toBe("↓0")
+    expect(formatRowCounts("cell", { input: "a\nb\nc", output: "x\ny" })).toBe("↑ 3 ↓ 2 lines")
+    expect(formatRowCounts("bash", { input: "ls", output: "" })).toBe("↓ 0 lines")
     expect(formatRowCounts("read", { input: "", output: "x" })).toBe("")
   })
 

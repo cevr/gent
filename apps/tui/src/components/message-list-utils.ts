@@ -250,15 +250,35 @@ const lineCount = (text: string) => {
   return text.split("\n").length
 }
 
-/** Line counts for a row: cells show code in and display out, bash shows output only. */
+/** Line counts for a row: cells show code in and display out, bash shows output only. The unit keeps them apart from token counts. */
 export function formatRowCounts(
   toolName: string,
   counts: { readonly input: string; readonly output: string },
 ): string {
   const out = lineCount(counts.output)
-  if (toolName === "cell") return `↑${lineCount(counts.input)} ↓${out}`
-  if (toolName === "bash") return `↓${out}`
+  if (toolName === "cell") return `↑ ${lineCount(counts.input)} ↓ ${out} lines`
+  if (toolName === "bash") return `↓ ${out} lines`
   return ""
+}
+
+// ── Working icon ──
+// One pulse for everything still running: transcript groups, agent rows.
+
+const WORKING_ICON_FRAMES: ReadonlyArray<string> = ["◇", "◈", "◆", "◈"]
+
+/** The frame for a spinner tick (60ms); the pulse turns every 250ms. */
+export const workingIconFrame = (tick: number): string =>
+  WORKING_ICON_FRAMES[Math.floor(tick / 4) % WORKING_ICON_FRAMES.length] ?? "◇"
+
+/** Whole seconds under a minute, then minutes, hours, days: `45s`, `12m`, `3h`, `2d`. */
+export const formatAge = (ms: number): string => {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
 }
 
 export interface OutputPreview {

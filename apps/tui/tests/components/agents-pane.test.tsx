@@ -165,7 +165,9 @@ describe("Agents pane navigation", () => {
         )),
       )
 
-      expect(renderFrame(setup)).toContain("running")
+      const frame = renderFrame(setup)
+      expect(frame).toContain("Idle (1)")
+      expect(frame).toContain("Alpha  ·  —  ·  running")
     }),
   )
 
