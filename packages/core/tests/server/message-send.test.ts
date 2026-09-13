@@ -3,6 +3,8 @@ import { Effect, Schema } from "effect"
 import { textStep } from "../../src/debug/provider"
 import { ToolCallId } from "../../src/domain/ids"
 import { ModelId } from "../../src/domain/model"
+import { AgentName } from "../../src/domain/agent"
+import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { waitFor } from "../../src/test-utils/fixtures"
@@ -116,6 +118,74 @@ describe("message.send", () => {
         ).toBe(true)
         yield* controls.assertDone
       }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("config agent overrides set the model and effort, and a runSpec still wins", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("configured reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("openai/gpt-5.6-sol")
+              expect(request.reasoning).toBe("low")
+            },
+          },
+          {
+            ...textStep("run spec reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("custom/model")
+              expect(request.reasoning).toBe("low")
+            },
+          },
+        ])
+        const configServiceLayer = ConfigService.Test(
+          new UserConfig({
+            agents: {
+              [AgentName.make("main")]: {
+                modelId: ModelId.make("openai/gpt-5.6-sol"),
+                reasoningEffort: "low",
+              },
+            },
+          }),
+        )
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
+        )
+        const created = yield* client.session.create({ cwd: process.cwd() })
+        const replied = (text: string) =>
+          waitFor(
+            client.session.getSnapshot({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === text),
+              ),
+            5_000,
+            `assistant reply: ${text}`,
+          )
+
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "use the configured model",
+        })
+        yield* replied("configured reply")
+
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "use the run spec model",
+          runSpec: { overrides: { modelId: ModelId.make("custom/model") } },
+        })
+        yield* replied("run spec reply")
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("6 seconds")),
     ),
   )
 

@@ -63,6 +63,7 @@ const hasAgentOverrides = (overrides: Option.Option<AgentRunOverrides>) =>
   Option.match(overrides, {
     onNone: () => false,
     onSome: (value) =>
+      !Predicate.isUndefined(value.modelId) ||
       !Predicate.isUndefined(value.allowedTools) ||
       !Predicate.isUndefined(value.deniedTools) ||
       !Predicate.isUndefined(value.reasoningEffort) ||
@@ -106,6 +107,10 @@ const applyAgentOverrides = (
         onSome: (value) =>
           Object.assign(
             {},
+            Option.match(Option.fromUndefinedOr(value.modelId), {
+              onNone: () => ({}),
+              onSome: (model) => ({ model }),
+            }),
             Option.match(Option.fromUndefinedOr(value.allowedTools), {
               onNone: () => ({}),
               onSome: (allowedTools) => ({ allowedTools }),
@@ -165,22 +170,23 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
+  // `ConfigService` is a hard requirement of the actor behavior deps.
+  // Making it optional here let test layers omit it and silently fall
+  // through to the default driver, hiding wiring bugs.
+  const configService = yield* ConfigService
+  // Read overrides from the session's cwd. Without per-session
+  // resolution, a multi-cwd server's project overrides would all
+  // come from the launch cwd. `get(undefined)` falls back to the
+  // launch-cwd cached config.
+  const sessionConfig = yield* configService.get(hostCtx.cwd)
+  // Config `agents[name]` reshapes the definition; the run's own overrides win.
   const effectiveAgent = applyAgentOverrides(
-    agent,
+    applyAgentOverrides(agent, Option.fromUndefinedOr(sessionConfig.agents?.[agent.name])),
     Option.fromUndefinedOr(params.runSpec?.overrides),
   )
 
   // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
   // then `UserConfig.driverOverrides[agent.name]`, else default.
-  // `ConfigService` is a hard requirement of the actor behavior deps.
-  // Making it optional here let test layers omit it and silently fall
-  // through to the default driver, hiding wiring bugs.
-  const configService = yield* ConfigService
-  // Read driver overrides from the session's cwd. Without per-session
-  // resolution, a multi-cwd server's project overrides would all
-  // come from the launch cwd. `get(undefined)` falls back to the
-  // launch-cwd cached config.
-  const sessionConfig = yield* configService.get(hostCtx.cwd)
   const driverOverrides = sessionConfig.driverOverrides
   const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
   // If config-routed and the agent had no hardcoded driver, the
@@ -294,7 +300,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     toolBindings,
     hostToolBindings,
     systemPrompt,
-    modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),
+    modelId: resolveAgentModel(dispatchAgent),
     reasoning: Option.getOrUndefined(resolveReasoning(dispatchAgent, session?.reasoningLevel)),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,

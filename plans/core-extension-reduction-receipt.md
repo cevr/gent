@@ -757,3 +757,22 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
 - Tests moved: three `prompt.test.ts` cases about custom instructions became
   five extension tests (order, empty-file fallback, Claude user fallback, no
   section, per-turn reload through the shipped preset).
+
+## Submit paths and config agent overrides (2026-09-13)
+
+- `8ecf50d4`: the three submit handlers admit a turn through one helper that
+  takes the reservation function; eleven identical close-then-fail catch sites
+  became one combinator (−48 lines net). A bulk regex first rewrote the new
+  combinator into a self-call; typecheck and lint passed and every agent-loop
+  test chunk hung. The touched chunk is now run directly before the gate.
+- `agents` on `UserConfig`: per-agent `AgentRunOverrides` from `.gent/config.json`,
+  applied in `turn-resolve` before the run's own overrides. `modelId` now flows
+  through `applyAgentOverrides` like every other override, so the resolved
+  agent carries its model and the loop reads one place. The five config
+  mutations that Live and Test each implemented twice are one table of pure
+  transitions; the positional four-argument constructor helper is gone.
+- Testbed for the model gamut: `/private/tmp/gent-gamut` (ledgerline, a
+  Bun ledger with a red suite and six tasks). `bun gamut.ts use <preset>` pins
+  the orchestrator in `.gent/config.json` and writes the worker and reviewer
+  roster into `AGENTS.md`, which the orchestrator must pass as `delegate`
+  overrides.

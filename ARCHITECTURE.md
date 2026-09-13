@@ -479,7 +479,11 @@ interactive tools. Without a set, the model receives the admitted tools directly
 The cell extension also renders its catalog through `systemPrompt`, whose
 `hostTools` input contains the admitted host bindings' capabilities. `getToolPrompt`
 exposes catalog text without the private execution metadata. Projection hooks see
-the resolved driver, including config overrides. The loop has no `cell` name rule
+the resolved driver, including config overrides. `.gent/config.json` `agents`
+reshapes an agent per name (`modelId`, `reasoningEffort`, tool lists, prompt
+addendum); project entries shadow user entries and a run's `RunSpec.overrides`
+shadows both, so a workspace can pin its orchestrator model while a `delegate`
+call still picks a different model and effort for each child. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
 to core. Test presets that exercise host tools directly omit it.

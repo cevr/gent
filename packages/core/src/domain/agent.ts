@@ -153,7 +153,7 @@ export const resolveAgentDriver = (
 // "what to override" with "how to invoke". Spawn callers always pass a
 // `RunSpec` (possibly empty) instead of a flat positional bag.
 
-const AgentRunOverridesSchema = Schema.Struct({
+export const AgentRunOverridesSchema = Schema.Struct({
   modelId: Schema.optional(ModelId),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
   deniedTools: Schema.optional(Schema.Array(Schema.String)),

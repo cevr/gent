@@ -7,6 +7,7 @@ import { Predicate, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } fro
 import { BunServices } from "@effect/platform-bun"
 import { PermissionRule } from "../../src/domain/permission"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "../../src/domain/agent"
+import { ModelId } from "../../src/domain/model"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 
@@ -421,6 +422,60 @@ describe("user configuration", () => {
         yield* cfg.removePermissionRule("Bash", undefined)
         const result = yield* cfg.get()
         expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
+      }).pipe(Effect.provide(ConfigService.Test())),
+    )
+  })
+
+  describe("agents", () => {
+    it.scopedLive("project agent overrides shadow user overrides key by key", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const project = yield* fs.makeTempDirectoryScoped()
+        const write = (root: string, agents: UserConfig["agents"]) =>
+          Effect.gen(function* () {
+            yield* fs.makeDirectory(path.join(root, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(root, ".gent", "config.json"),
+              encodeJson({ agents }),
+            )
+          })
+        yield* write(home, {
+          [AgentName.make("main")]: {
+            modelId: ModelId.make("anthropic/claude-sonnet-5"),
+            reasoningEffort: "low",
+          },
+          [AgentName.make("helper")]: { reasoningEffort: "minimal" },
+        })
+        yield* write(project, {
+          [AgentName.make("main")]: { modelId: ModelId.make("openai/gpt-5.6-sol") },
+        })
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd: project, home, platform: "darwin" })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const result = yield* cfg.get(project)
+          // The project entry replaces the user entry for `main` as a whole.
+          expect(result.agents?.[AgentName.make("main")]).toEqual({
+            modelId: ModelId.make("openai/gpt-5.6-sol"),
+          })
+          expect(result.agents?.[AgentName.make("helper")]).toEqual({ reasoningEffort: "minimal" })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.live("a partial update without the field keeps the stored agents", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        yield* cfg.set({ agents: { [AgentName.make("main")]: { reasoningEffort: "high" } } })
+        yield* cfg.set({ disabledExtensions: ["@gent/skills"] })
+        const result = yield* cfg.get()
+        expect(result.agents?.[AgentName.make("main")]).toEqual({ reasoningEffort: "high" })
+        expect(result.disabledExtensions).toEqual(["@gent/skills"])
       }).pipe(Effect.provide(ConfigService.Test())),
     )
   })

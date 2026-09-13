@@ -10,7 +10,7 @@ import {
   Schema,
   SynchronizedRef,
 } from "effect"
-import { AgentName, DriverRef } from "../domain/agent.js"
+import { AgentName, AgentRunOverridesSchema, DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 
@@ -31,91 +31,79 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * `main` dispatch through the Claude Code SDK executor.
    */
   driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),
+  /**
+   * Per-agent definition overrides: model, reasoning effort, tool lists and
+   * a prompt addendum. Project config shadows user config key-by-key; a
+   * run's own `RunSpec.overrides` shadows both.
+   */
+  agents: Schema.optional(Schema.Record(AgentName, AgentRunOverridesSchema)),
 }) {}
+
+/** Drop explicit `undefined` so a partial update cannot erase a stored field. */
+const definedFields = (fields: Partial<UserConfig>): Partial<UserConfig> => {
+  const kept: Partial<UserConfig> = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (!Predicate.isUndefined(value)) Object.assign(kept, { [key]: value })
+  }
+  return kept
+}
+
+/** An empty list or record is stored as an absent field. */
+const nonEmpty = <A>(items: ReadonlyArray<A>) =>
+  Option.getOrUndefined(Option.liftPredicate(items, (list) => list.length > 0))
+
+const nonEmptyRecord = <A>(record: Readonly<Record<AgentName, A>>) =>
+  Option.getOrUndefined(Option.liftPredicate(record, (r) => Object.keys(r).length > 0))
+
+/** Pure user-config transitions shared by the live and in-memory services. */
+const configUpdates = {
+  set: (current: UserConfig, partial: Partial<UserConfig>): UserConfig =>
+    new UserConfig({ ...current, ...definedFields(partial) }),
+  addPermissionRule: (current: UserConfig, rule: PermissionRule): UserConfig =>
+    new UserConfig({ ...current, permissions: [...(current.permissions ?? []), rule] }),
+  removePermissionRule: (current: UserConfig, tool: string, pattern?: string): UserConfig =>
+    new UserConfig({
+      ...current,
+      permissions: nonEmpty(
+        (current.permissions ?? []).filter((r) => !(r.tool === tool && r.pattern === pattern)),
+      ),
+    }),
+  setDriverOverride: (current: UserConfig, agent: AgentName, driver: DriverRef): UserConfig =>
+    new UserConfig({
+      ...current,
+      driverOverrides: { ...current.driverOverrides, [agent]: driver },
+    }),
+  /** `None` when the agent had no override, so callers can skip the save. */
+  clearDriverOverride: (current: UserConfig, agent: AgentName): Option.Option<UserConfig> => {
+    const existing = current.driverOverrides ?? {}
+    if (!(agent in existing)) return Option.none()
+    const next = { ...existing }
+    delete next[agent]
+    return Option.some(new UserConfig({ ...current, driverOverrides: nonEmptyRecord(next) }))
+  },
+}
 
 /**
  * Merge user + project configs. Per-field semantics:
  *   - permissions: concatenated (project first, then user — historical order).
  *   - disabledExtensions: concatenated (user first — historical order).
  *   - trustedProjects: user config only; project config cannot grant trust.
- *   - driverOverrides: object spread; project entries shadow user entries
- *     key-by-key. Idempotent set/clear is the load-bearing property —
+ *   - driverOverrides, agents: object spread; project entries shadow user
+ *     entries key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
  *     map directly to `record[name] = ref` / `delete record[name]`.
  */
-const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig => {
-  const projectPermissions = Option.getOrElse(Option.fromUndefinedOr(project.permissions), () => [])
-  const userPermissions = Option.getOrElse(Option.fromUndefinedOr(user.permissions), () => [])
-  const permissions = [...projectPermissions, ...userPermissions]
-  const userDisabledExtensions = Option.getOrElse(
-    Option.fromUndefinedOr(user.disabledExtensions),
-    () => [],
-  )
-  const projectDisabledExtensions = Option.getOrElse(
-    Option.fromUndefinedOr(project.disabledExtensions),
-    () => [],
-  )
-  const disabledExtensions = [...userDisabledExtensions, ...projectDisabledExtensions]
-  const userDriverOverrides = Option.getOrElse(
-    Option.fromUndefinedOr(user.driverOverrides),
-    () => ({}),
-  )
-  const projectDriverOverrides = Option.getOrElse(
-    Option.fromUndefinedOr(project.driverOverrides),
-    () => ({}),
-  )
-  const driverOverrides = {
-    ...userDriverOverrides,
-    ...projectDriverOverrides,
-  }
-
-  let mergedPermissions = Option.none<ReadonlyArray<PermissionRule>>()
-  if (permissions.length > 0) mergedPermissions = Option.some(permissions)
-  let mergedDisabledExtensions = Option.none<ReadonlyArray<string>>()
-  if (disabledExtensions.length > 0) mergedDisabledExtensions = Option.some(disabledExtensions)
-  let mergedDriverOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
-  if (Object.keys(driverOverrides).length > 0) mergedDriverOverrides = Option.some(driverOverrides)
-  return userConfigFromOptions(
-    mergedPermissions,
-    mergedDisabledExtensions,
-    mergedDriverOverrides,
-    Option.fromUndefinedOr(user.trustedProjects),
-  )
-}
-
-const selectConfigField = <A>(partial?: A, current?: A): Option.Option<A> =>
-  Option.match(Option.fromUndefinedOr(partial), {
-    onNone: () => Option.fromUndefinedOr(current),
-    onSome: Option.some,
+const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig =>
+  new UserConfig({
+    permissions: nonEmpty([...(project.permissions ?? []), ...(user.permissions ?? [])]),
+    disabledExtensions: nonEmpty([
+      ...(user.disabledExtensions ?? []),
+      ...(project.disabledExtensions ?? []),
+    ]),
+    driverOverrides: nonEmptyRecord({ ...user.driverOverrides, ...project.driverOverrides }),
+    agents: nonEmptyRecord({ ...user.agents, ...project.agents }),
+    trustedProjects: user.trustedProjects,
   })
-
-const userConfigFromOptions = (
-  permissions: Option.Option<ReadonlyArray<PermissionRule>>,
-  disabledExtensions: Option.Option<ReadonlyArray<string>>,
-  driverOverrides: Option.Option<Readonly<Record<AgentName, DriverRef>>>,
-  trustedProjects: Option.Option<ReadonlyArray<string>>,
-): UserConfig => {
-  const config = Object.assign(
-    {},
-    Option.match(permissions, {
-      onNone: () => ({}),
-      onSome: (value) => ({ permissions: value }),
-    }),
-    Option.match(disabledExtensions, {
-      onNone: () => ({}),
-      onSome: (value) => ({ disabledExtensions: value }),
-    }),
-    Option.match(driverOverrides, {
-      onNone: () => ({}),
-      onSome: (value) => ({ driverOverrides: value }),
-    }),
-    Option.match(trustedProjects, {
-      onNone: () => ({}),
-      onSome: (value) => ({ trustedProjects: value }),
-    }),
-  )
-  return new UserConfig(config)
-}
 
 // ConfigService
 
@@ -325,95 +313,42 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         }),
 
         set: Effect.fn("ConfigService.set")(function* (partial) {
-          yield* mutateUserConfig((current) => {
-            const updated = userConfigFromOptions(
-              selectConfigField(partial.permissions, current.permissions),
-              selectConfigField(partial.disabledExtensions, current.disabledExtensions),
-              selectConfigField(partial.driverOverrides, current.driverOverrides),
-              selectConfigField(partial.trustedProjects, current.trustedProjects),
-            )
-            return { updated, save: true }
-          })
+          yield* mutateUserConfig((current) => ({
+            updated: configUpdates.set(current, partial),
+            save: true,
+          }))
         }),
 
         addPermissionRule: Effect.fn("ConfigService.addPermissionRule")(function* (rule) {
-          yield* mutateUserConfig((current) => {
-            const currentPermissions = Option.getOrElse(
-              Option.fromUndefinedOr(current.permissions),
-              () => [],
-            )
-            const permissions = [...currentPermissions, rule]
-            const updated = userConfigFromOptions(
-              Option.some(permissions),
-              Option.fromUndefinedOr(current.disabledExtensions),
-              Option.fromUndefinedOr(current.driverOverrides),
-              Option.fromUndefinedOr(current.trustedProjects),
-            )
-            return { updated, save: true }
-          })
+          yield* mutateUserConfig((current) => ({
+            updated: configUpdates.addPermissionRule(current, rule),
+            save: true,
+          }))
         }),
 
         removePermissionRule: Effect.fn("ConfigService.removePermissionRule")(
           function* (tool, pattern) {
-            yield* mutateUserConfig((current) => {
-              const currentPermissions = Option.getOrElse(
-                Option.fromUndefinedOr(current.permissions),
-                () => [],
-              )
-              const permissions = currentPermissions.filter(
-                (r) => !(r.tool === tool && r.pattern === pattern),
-              )
-              let nextPermissions = Option.none<ReadonlyArray<PermissionRule>>()
-              if (permissions.length > 0) nextPermissions = Option.some(permissions)
-              const updated = userConfigFromOptions(
-                nextPermissions,
-                Option.fromUndefinedOr(current.disabledExtensions),
-                Option.fromUndefinedOr(current.driverOverrides),
-                Option.fromUndefinedOr(current.trustedProjects),
-              )
-              return { updated, save: true }
-            })
+            yield* mutateUserConfig((current) => ({
+              updated: configUpdates.removePermissionRule(current, tool, pattern),
+              save: true,
+            }))
           },
         ),
 
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
-          yield* mutateUserConfig((current) => {
-            const existing = Option.getOrElse(
-              Option.fromUndefinedOr(current.driverOverrides),
-              () => ({}),
-            )
-            const driverOverrides = { ...existing, [agent]: driver }
-            const updated = userConfigFromOptions(
-              Option.fromUndefinedOr(current.permissions),
-              Option.fromUndefinedOr(current.disabledExtensions),
-              Option.some(driverOverrides),
-              Option.fromUndefinedOr(current.trustedProjects),
-            )
-            return { updated, save: true }
-          })
+          yield* mutateUserConfig((current) => ({
+            updated: configUpdates.setDriverOverride(current, agent, driver),
+            save: true,
+          }))
         }),
 
         clearDriverOverride: Effect.fn("ConfigService.clearDriverOverride")(function* (agent) {
-          yield* mutateUserConfig((current) => {
-            const existing = Option.getOrElse(
-              Option.fromUndefinedOr(current.driverOverrides),
-              () => ({}),
-            )
-            if (!(agent in existing)) {
-              return { updated: current, save: false }
-            }
-            const next = { ...existing }
-            delete next[agent]
-            let nextOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
-            if (Object.keys(next).length > 0) nextOverrides = Option.some(next)
-            const updated = userConfigFromOptions(
-              Option.fromUndefinedOr(current.permissions),
-              Option.fromUndefinedOr(current.disabledExtensions),
-              nextOverrides,
-              Option.fromUndefinedOr(current.trustedProjects),
-            )
-            return { updated, save: true }
-          })
+          yield* mutateUserConfig((current) =>
+            Option.match(configUpdates.clearDriverOverride(current, agent), {
+              onNone: () => ({ updated: current, save: false }),
+              onSome: (updated) => ({ updated, save: true }),
+            }),
+          )
         }),
       }
 
@@ -445,78 +380,21 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               return mergeConfigsImpl(user, project)
             }),
           set: (partial) =>
-            Ref.update(userConfigRef, (current) =>
-              userConfigFromOptions(
-                selectConfigField(partial.permissions, current.permissions),
-                selectConfigField(partial.disabledExtensions, current.disabledExtensions),
-                selectConfigField(partial.driverOverrides, current.driverOverrides),
-                selectConfigField(partial.trustedProjects, current.trustedProjects),
-              ),
-            ),
+            Ref.update(userConfigRef, (current) => configUpdates.set(current, partial)),
           addPermissionRule: (rule) =>
-            Ref.update(userConfigRef, (current) => {
-              const currentPermissions = Option.getOrElse(
-                Option.fromUndefinedOr(current.permissions),
-                () => [],
-              )
-              const permissions = [...currentPermissions, rule]
-              return userConfigFromOptions(
-                Option.some(permissions),
-                Option.fromUndefinedOr(current.disabledExtensions),
-                Option.fromUndefinedOr(current.driverOverrides),
-                Option.fromUndefinedOr(current.trustedProjects),
-              )
-            }).pipe(Effect.asVoid),
+            Ref.update(userConfigRef, (current) => configUpdates.addPermissionRule(current, rule)),
           removePermissionRule: (tool, pattern) =>
-            Ref.update(userConfigRef, (current) => {
-              const currentPermissions = Option.getOrElse(
-                Option.fromUndefinedOr(current.permissions),
-                () => [],
-              )
-              const permissions = currentPermissions.filter(
-                (r) => !(r.tool === tool && r.pattern === pattern),
-              )
-              let nextPermissions = Option.none<ReadonlyArray<PermissionRule>>()
-              if (permissions.length > 0) nextPermissions = Option.some(permissions)
-              return userConfigFromOptions(
-                nextPermissions,
-                Option.fromUndefinedOr(current.disabledExtensions),
-                Option.fromUndefinedOr(current.driverOverrides),
-                Option.fromUndefinedOr(current.trustedProjects),
-              )
-            }).pipe(Effect.asVoid),
+            Ref.update(userConfigRef, (current) =>
+              configUpdates.removePermissionRule(current, tool, pattern),
+            ),
           setDriverOverride: (agent, driver) =>
-            Ref.update(userConfigRef, (current) => {
-              const existing = Option.getOrElse(
-                Option.fromUndefinedOr(current.driverOverrides),
-                () => ({}),
-              )
-              const driverOverrides = { ...existing, [agent]: driver }
-              return userConfigFromOptions(
-                Option.fromUndefinedOr(current.permissions),
-                Option.fromUndefinedOr(current.disabledExtensions),
-                Option.some(driverOverrides),
-                Option.fromUndefinedOr(current.trustedProjects),
-              )
-            }).pipe(Effect.asVoid),
+            Ref.update(userConfigRef, (current) =>
+              configUpdates.setDriverOverride(current, agent, driver),
+            ),
           clearDriverOverride: (agent) =>
-            Ref.update(userConfigRef, (current) => {
-              const existing = Option.getOrElse(
-                Option.fromUndefinedOr(current.driverOverrides),
-                () => ({}),
-              )
-              if (!(agent in existing)) return current
-              const next = { ...existing }
-              delete next[agent]
-              let nextOverrides = Option.none<Readonly<Record<AgentName, DriverRef>>>()
-              if (Object.keys(next).length > 0) nextOverrides = Option.some(next)
-              return userConfigFromOptions(
-                Option.fromUndefinedOr(current.permissions),
-                Option.fromUndefinedOr(current.disabledExtensions),
-                nextOverrides,
-                Option.fromUndefinedOr(current.trustedProjects),
-              )
-            }).pipe(Effect.asVoid),
+            Ref.update(userConfigRef, (current) =>
+              Option.getOrElse(configUpdates.clearDriverOverride(current, agent), () => current),
+            ),
         })
       }),
     )
