@@ -1658,3 +1658,41 @@ as idle; detail reads are now limited to live rows. Open design note
 for the user: `session.getSnapshot` spawning an entity is right when a
 client is about to use the session and wrong for a listing; a
 durable-only read path would need a new concept.
+
+## Twenty-first pass: durability, tray, read-only requests (2026-09-13)
+
+User directive: "add durability, read for snapshot is good and lets do
+1 2 and 3". Five gate-green commits:
+
+- `2e997821` durations. `toolCallDurations(events)` in
+  `domain/message-part-display.ts` derives each cell's wall time from the
+  `ToolCallStarted` → `ToolCallSucceeded/Failed` envelope gap, so no new
+  persisted field. `getSessionSnapshot` reads the branch's events inside
+  the same transaction and `ToolInteraction` carries `durationMs`. The TUI
+  feed stamps `startedAt` live and the row reads `✓ … · 1.2s`; group
+  headers sum finished cells. Verified: `68ms` / `7ms` survive `gent -c`.
+- `c102fef9` tray. `SubagentTray` in the `above-input` slot renders
+  `● N running   ◐ N idle   ○ N inactive` from the same `ListAgents` rows
+  as the pane, counting only the current session's subtree (new
+  `parentSessionId` on `AgentRowEntry`). Hidden while the pane is open or
+  the subtree is empty.
+- `36ac6903` read-only requests. The turn worker holds the side-mutation
+  permit for the whole turn, so every extension request blocked until the
+  turn ended (the pane showed "loading…" for minutes). `request({ readonly:
+  true })` skips the permit; `CompiledRpcRegistry.isReadonly` answers the
+  handler. Only `ListAgents` is marked; `btw.progress`, `goal.get`, and the
+  skills list/get-content requests are candidates not yet marked.
+- `32b84303` live status in the listing. `listActiveLoops` now reads each
+  loop's registered `SessionRuntimeState` through effect-encore's
+  `stateOf`, so the live half of the catalog carries `Running`/`Idle`
+  without a per-row snapshot. `SessionRuntime.listActiveLoops` and
+  `ActiveLoop` deleted (the host context was the only caller). Follow-up:
+  the address needs a placeholder `ShardId`; an upstream
+  `stateOf(entityType, entityId)` helper would remove it.
+- `d0d8118c` tray poller. Receipts arrive only at spawn/success/failure,
+  so counts went stale mid-run; a 2s `Schedule.spaced` refresh runs while
+  the subtree is non-empty and the pane is closed.
+
+Gamut run 30 (sonnet-sonnet at `32b84303`): 5 children, 5/5 receipts, 18
+tests green in 2m59s, $0.83, no continuation. Live check showed
+`● 1 running` mid-spawn and `◐ 5 idle` after.
