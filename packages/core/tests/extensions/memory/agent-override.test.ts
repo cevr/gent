@@ -12,7 +12,8 @@ import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { textStep } from "../../../src/test-utils/sequence-steps"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { AgentEvent } from "../../../src/domain/event"
-import { SessionCommands } from "../../../src/server/session-commands"
+import { SessionMutations } from "../../../src/domain/session-mutations"
+import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
@@ -50,7 +51,7 @@ const makeTestExtensions = () => {
     },
   ])
 }
-const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
+const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
@@ -89,13 +90,10 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMode
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
+    SessionMutationsLive,
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
-  return Layer.provideMerge(
-    SessionCommands.Live,
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer),
-  )
+  return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
@@ -103,7 +101,7 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
     .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
 describe("agent override behavior", () => {
   it.scopedLive(
-    "sendMessage keeps agentOverride turn-scoped and does not switch the session agent",
+    "sendUserMessage keeps agentOverride turn-scoped and does not switch the session agent",
     () =>
       Effect.gen(function* () {
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
@@ -121,17 +119,18 @@ describe("agent override behavior", () => {
           },
         ])
         yield* Effect.gen(function* () {
-          const commands = yield* SessionCommands
+          const mutations = yield* SessionMutations
+          const sessionRuntime = yield* SessionRuntime
           const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
-          const session = yield* commands.createSession({ name: "Agent Override Test" })
-          yield* commands.sendMessage({
+          const session = yield* mutations.createSession({ name: "Agent Override Test" })
+          yield* sessionRuntime.sendUserMessage({
             sessionId: session.sessionId,
             branchId: session.branchId,
             content: "with override",
             agentOverride: AgentName.make("memory:reflect"),
           })
-          yield* commands.sendMessage({
+          yield* sessionRuntime.sendUserMessage({
             sessionId: session.sessionId,
             branchId: session.branchId,
             content: "without override",
@@ -152,7 +151,7 @@ describe("agent override behavior", () => {
           expect(eventTags(calls)).not.toContain("AgentSwitched")
           yield* controls.assertDone
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeCommandsLayer(providerLayer)), Effect.scoped)
+        }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
       }).pipe(Effect.provide(BunCrypto.layer)),
   )
   it.scopedLive(
@@ -168,10 +167,10 @@ describe("agent override behavior", () => {
           },
         ])
         yield* Effect.gen(function* () {
-          const commands = yield* SessionCommands
+          const mutations = yield* SessionMutations
           const messageStorage = yield* MessageStorage
           const recorder = yield* SequenceRecorder
-          const session = yield* commands.createSession({
+          const session = yield* mutations.createSession({
             name: "Initial Prompt Override",
             initialPrompt: "seed the session",
             agentOverride: AgentName.make("memory:reflect"),
@@ -187,17 +186,17 @@ describe("agent override behavior", () => {
           expect(eventTags(calls)).not.toContain("AgentSwitched")
           yield* controls.assertDone
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeCommandsLayer(providerLayer)), Effect.scoped)
+        }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
       }).pipe(Effect.provide(BunCrypto.layer)),
   )
   it.scopedLive("createSession skips dispatch when initialPrompt is missing or empty", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
       yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
+        const mutations = yield* SessionMutations
         const messageStorage = yield* MessageStorage
-        const noPrompt = yield* commands.createSession({ name: "No Prompt Test" })
-        const emptyPrompt = yield* commands.createSession({
+        const noPrompt = yield* mutations.createSession({ name: "No Prompt Test" })
+        const emptyPrompt = yield* mutations.createSession({
           name: "Empty Prompt Test",
           initialPrompt: "",
         })
@@ -205,7 +204,7 @@ describe("agent override behavior", () => {
         expect(yield* messageStorage.listMessages(emptyPrompt.branchId)).toEqual([])
         yield* controls.assertDone
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makeCommandsLayer(providerLayer)), Effect.scoped)
+      }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
 })

@@ -110,9 +110,11 @@ Rule:
 
 The app surface is split by concern:
 
-- `SessionCommands`
+- `SessionMutations` (`packages/core/src/domain/session-mutations.ts`; `SessionMutationsLive` in `packages/core/src/server/session-mutations-live.ts`) — every durable session/branch mutation, including `createSession`; request-id-bearing mutations replay their durable operation row and collapse concurrent same-request fibers in-process
 - `SessionQueries`
 - `InteractionCommands`
+
+`message.send` request-id dedup lives in `rpc-handlers.ts` next to the handler; the runtime keys the actor command on the same request id.
 
 `SessionEvents` and `SessionSubscriptions` are inlined into `rpc-handlers.ts` — they are not separate services.
 

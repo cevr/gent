@@ -14,7 +14,7 @@ import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionQueries } from "../../src/server/session-queries"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
-import { sessionRuntimeLayer } from "./session-commands/helpers"
+import { sessionRuntimeLayer } from "./session-mutations/helpers"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {

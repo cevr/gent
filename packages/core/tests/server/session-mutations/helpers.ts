@@ -1,4 +1,5 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
+import { RpcClient, RpcTest } from "effect/unstable/rpc"
 import { ExtensionContext, hook } from "@gent/core/extensions/api"
 import { textStep } from "../../../src/test-utils/sequence-steps"
 import { ExtensionRegistry } from "../../../src/runtime/extensions/registry.js"
@@ -12,13 +13,12 @@ import { EventPublisher } from "../../../src/domain/event-publisher"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import {
-  SessionRuntime,
-  SessionRuntimeError,
-  type SessionRuntimeService,
-} from "../../../src/runtime/session-runtime"
+import { SessionRuntime, type SessionRuntimeService } from "../../../src/runtime/session-runtime"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { SessionCommands } from "../../../src/server/session-commands"
+import { GentRpcs } from "../../../src/server/rpcs"
+import { RpcHandlersLive } from "../../../src/server/rpc-handlers"
+import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
+import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../../src/server/workspace-rpc"
 import { BranchStorage, type BranchStorageService } from "../../../src/storage/branch-storage"
 import { SessionStorage, type SessionStorageService } from "../../../src/storage/session-storage"
 import { SqliteStorage, StorageError } from "../../../src/storage/sqlite-storage"
@@ -35,6 +35,36 @@ export const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep(reply)])
     return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+  })
+
+const rpcTestWorkspaceId = WorkspaceId.make("c".repeat(64))
+
+/**
+ * RPC client over `RpcHandlersLive` with the production e2e root underneath
+ * and a stub `SessionRuntime` on top. The stub shadows the root's runtime so
+ * a test can count or fail dispatches while the `message.send` handler runs
+ * its real request-id dedup.
+ */
+export const makeRpcHandlersClient = (
+  runtimeOverrides: Partial<SessionRuntimeService> = {},
+  extraLayer: Layer.Layer<never> = Layer.empty,
+) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      Layer.provide(
+        RpcHandlersLive,
+        Layer.mergeAll(
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+          sessionRuntimeLayer(runtimeOverrides),
+          extraLayer,
+        ),
+      ),
+    )
+    // oxlint-disable-next-line effect/noInlineProvide -- This test composes the handler context for this client.
+    const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+    const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      RpcClient.withHeaders(effect, { [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId })
+    return { client, inWorkspace }
   })
 
 export const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
@@ -98,7 +128,7 @@ export const sessionRuntimeLayer = (
     }),
   )
 
-const buildFailingSessionCommandsLayer = () => {
+const buildFailingSessionMutationsLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
     Layer.provide(GentPlatform.Test()),
   )
@@ -113,14 +143,11 @@ const buildFailingSessionCommandsLayer = () => {
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
-export const failingSessionCommandsLayer = Layer.fresh(
-  Layer.unwrap(Effect.sync(buildFailingSessionCommandsLayer)),
+export const failingSessionMutationsLayer = Layer.fresh(
+  Layer.unwrap(Effect.sync(buildFailingSessionMutationsLayer)),
 )
 
 export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(
@@ -152,35 +179,7 @@ export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture"
   },
 )
 
-const buildSendFailingSessionCommandsLayer = () => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
-  const failingRuntimeLayer = sessionRuntimeLayer({
-    sendUserMessage: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
-  })
-  const deps = Layer.mergeAll(
-    storageLayer,
-    failingRuntimeLayer,
-    sessionGovernanceProbeLayer(),
-    EventStore.Memory,
-    EventPublisher.Test(),
-    LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
-}
-
-export const sendFailingSessionCommandsLayer = Layer.fresh(
-  Layer.unwrap(Effect.sync(buildSendFailingSessionCommandsLayer)),
-)
-
-const buildSessionCommandsLayer = () => {
+const buildSessionMutationsLayer = () => {
   const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
     Layer.provide(GentPlatform.Test()),
   )
@@ -195,14 +194,11 @@ const buildSessionCommandsLayer = () => {
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
-export const sessionCommandsLayer = Layer.fresh(
-  Layer.unwrap(Effect.sync(buildSessionCommandsLayer)),
+export const sessionMutationsLayer = Layer.fresh(
+  Layer.unwrap(Effect.sync(buildSessionMutationsLayer)),
 )
 
 export const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
@@ -226,7 +222,7 @@ const sessionGovernanceProbeLayer = (restored?: Array<SessionId>) =>
     }),
   )
 
-export const sessionCommandsLayerWithMachineProbe = (
+export const sessionMutationsLayerWithMachineProbe = (
   runtimeTerminated?: Array<SessionId>,
   runtimeRestored?: Array<SessionId>,
 ) => {
@@ -248,32 +244,10 @@ export const sessionCommandsLayerWithMachineProbe = (
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
-export const sessionMutationsLayerWithMachineProbe = (runtimeTerminated: Array<SessionId>) => {
-  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-    Layer.provide(GentPlatform.Test()),
-  )
-  const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
-  const deps = Layer.mergeAll(
-    storageLayer,
-    runtimeLayer,
-    sessionGovernanceProbeLayer(),
-    EventStore.Memory,
-    EventPublisher.Test(),
-    LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-    GentPlatform.Test(),
-    ExtensionRegistry.Test(),
-  )
-  return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
-}
-
-export const failingDeleteSessionCommandsLayerWithMachineProbe = (
+export const failingDeleteSessionMutationsLayerWithMachineProbe = (
   runtimeTerminated: Array<SessionId>,
   runtimeRestored: Array<SessionId>,
 ) => {
@@ -302,20 +276,17 @@ export const failingDeleteSessionCommandsLayerWithMachineProbe = (
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
 /**
- * SessionCommands layer that injects a child-session create into the DB
+ * SessionMutations layer that injects a child-session create into the DB
  * between the pre-collect and the durable `deleteSession` tx. Simulates the
  * race the audit flagged: a new descendant committing after
  * `collectSessionTreeIds` runs but before the cascade tx opens. Fires once
  * for any deleteSession call, inserting a child pointed at the deleted root.
  */
-export const racySessionCommandsLayer = (params: {
+export const racySessionMutationsLayer = (params: {
   readonly runtimeTerminated: Array<SessionId>
   readonly lateChild: { sessionId: SessionId; branchId: BranchId }
 }) => {
@@ -369,10 +340,7 @@ export const racySessionCommandsLayer = (params: {
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
-  return Layer.provideMerge(
-    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-    deps,
-  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
 export const parentToolCallProbeExtension: LoadedExtension = {

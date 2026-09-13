@@ -56,7 +56,7 @@ import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
-import { SessionCommands } from "../../src/server/session-commands"
+import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
@@ -137,7 +137,7 @@ const makeRuntimeLayer = (
     Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
+    SessionMutationsLive,
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
   return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)

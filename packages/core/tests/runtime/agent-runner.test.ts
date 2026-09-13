@@ -76,7 +76,7 @@ import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { CapabilityError } from "../../src/domain/capability"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
-import { SessionCommands } from "../../src/server/session-commands"
+import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { Permission } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
@@ -196,7 +196,7 @@ const makeLiveAgentRunnerLayer = (
     ),
   )
   const sessionMutationsLayer = Layer.provide(
-    SessionCommands.SessionMutationsLive,
+    SessionMutationsLive,
     Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
   )
   const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)

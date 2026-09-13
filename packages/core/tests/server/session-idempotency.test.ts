@@ -17,7 +17,8 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { makeRequestDeduper } from "../../src/runtime/request-dedup"
-import { SessionCommands, SessionCommandsDedupControl } from "../../src/server/session-commands"
+import { SessionMutations } from "../../src/domain/session-mutations"
+import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import type { SteerCommand } from "../../src/domain/steer"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
@@ -26,14 +27,15 @@ import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   FIXED_NOW,
   createActiveSessionFixture,
-  sessionCommandsLayer,
+  makeRpcHandlersClient,
+  sessionMutationsLayer,
   sessionRuntimeLayer,
-} from "./session-commands/helpers"
+} from "./session-mutations/helpers"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { waitFor } from "../../src/test-utils/fixtures"
 
 describe("requestId idempotency", () => {
-  const makePersistentSessionCommandsLayer = (dbPath: string) => {
+  const makePersistentSessionMutationsLayer = (dbPath: string) => {
     const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
       Layer.provide(BunServices.layer),
       Layer.provide(GentPlatform.Test()),
@@ -49,25 +51,22 @@ describe("requestId idempotency", () => {
       GentPlatform.Test(),
       ExtensionRegistry.Test(),
     )
-    return Layer.provideMerge(
-      SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-      deps,
-    )
+    return Layer.provideMerge(SessionMutationsLive, deps)
   }
 
   it.live("duplicate createSession requestId converges on a single session id", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
-      const first = yield* commands.createSession({
+      const first = yield* mutations.createSession({
         cwd: "/tmp/idem",
         requestId: "req-create-1",
       })
-      const second = yield* commands.createSession({
+      const second = yield* mutations.createSession({
         cwd: "/tmp/idem",
         requestId: "req-create-1",
       })
-      const third = yield* commands.createSession({
+      const third = yield* mutations.createSession({
         cwd: "/tmp/idem",
         requestId: "req-create-1",
       })
@@ -76,23 +75,23 @@ describe("requestId idempotency", () => {
       expect(third.sessionId).toBe(first.sessionId)
       const all = yield* sessions.listSessions
       expect(all).toHaveLength(1)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("distinct createSession requestIds create distinct sessions", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
-      const a = yield* commands.createSession({ cwd: "/tmp/a", requestId: "req-a" })
-      const b = yield* commands.createSession({ cwd: "/tmp/b", requestId: "req-b" })
+      const a = yield* mutations.createSession({ cwd: "/tmp/a", requestId: "req-a" })
+      const b = yield* mutations.createSession({ cwd: "/tmp/b", requestId: "req-b" })
       expect(a.sessionId).not.toBe(b.sessionId)
       expect((yield* sessions.listSessions).length).toBe(2)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate createSession requestIds converge on one session", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       // Fire three parallel creates with the same requestId. Before the
       // Deferred-based claim this would race two `Ref.get` misses through
@@ -100,137 +99,76 @@ describe("requestId idempotency", () => {
       // fiber wins the write; the others `Deferred.await` its outcome.
       const results = yield* Effect.all(
         [
-          commands.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
-          commands.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
-          commands.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+          mutations.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+          mutations.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+          mutations.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
         ],
         { concurrency: "unbounded" },
       )
       expect(results[0].sessionId).toBe(results[1].sessionId)
       expect(results[0].sessionId).toBe(results[2].sessionId)
       expect((yield* sessions.listSessions).length).toBe(1)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
-  it.live("duplicate sendMessage requestId sends to runtime only once", () =>
-    Effect.gen(function* () {
-      let dispatchCount = 0
-      const countingRuntime = sessionRuntimeLayer({
-        sendUserMessage: () =>
-          Effect.sync(() => {
-            dispatchCount++
-          }),
-      })
-      const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-        Layer.provide(GentPlatform.Test()),
-      )
-      const deps = Layer.mergeAll(
-        storageLayer,
-        countingRuntime,
-        EventStore.Memory,
-        EventPublisher.Test(),
-        AgentLoopSessionGovernance.Live,
-        LanguageModelLayers.debug(),
-        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-        GentPlatform.Test(),
-        ExtensionRegistry.Test(),
-      )
-      const layer = Layer.provideMerge(
-        SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-        deps,
-      )
+  it.live("duplicate public message.send requestId dispatches to the runtime only once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let dispatchCount = 0
+        const { client, inWorkspace } = yield* makeRpcHandlersClient({
+          sendUserMessage: () =>
+            Effect.sync(() => {
+              dispatchCount++
+            }),
+        })
+        const send = (content: string, requestId: string) =>
+          inWorkspace(
+            client["message.send"]({
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
+              content,
+              requestId,
+            }),
+          )
 
-      const probe = Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        yield* commands.sendMessage({
-          sessionId: SessionId.make("s1"),
-          branchId: BranchId.make("b1"),
-          content: "hi",
-          requestId: "req-send-1",
-        })
-        yield* commands.sendMessage({
-          sessionId: SessionId.make("s1"),
-          branchId: BranchId.make("b1"),
-          content: "hi",
-          requestId: "req-send-1",
-        })
-        yield* commands.sendMessage({
-          sessionId: SessionId.make("s1"),
-          branchId: BranchId.make("b1"),
-          content: "hi (distinct)",
-          requestId: "req-send-2",
-        })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+        yield* send("hi", "req-send-1")
+        yield* send("hi", "req-send-1")
+        yield* send("hi (distinct)", "req-send-2")
 
-      yield* probe
-      expect(dispatchCount).toBe(2)
-    }).pipe(Effect.timeout("4 seconds")),
+        expect(dispatchCount).toBe(2)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 
-  it.live("concurrent duplicate sendMessage requestIds dispatch only once", () =>
-    Effect.gen(function* () {
-      let dispatchCount = 0
-      const countingRuntime = sessionRuntimeLayer({
-        sendUserMessage: () =>
-          Effect.sync(() => {
-            dispatchCount++
+  it.live("concurrent duplicate public message.send requestIds dispatch only once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let dispatchCount = 0
+        const { client, inWorkspace } = yield* makeRpcHandlersClient({
+          sendUserMessage: () =>
+            Effect.sync(() => {
+              dispatchCount++
+            }),
+        })
+        const send = inWorkspace(
+          client["message.send"]({
+            sessionId: SessionId.make("s1"),
+            branchId: BranchId.make("b1"),
+            content: "hi",
+            requestId: "req-conc-send",
           }),
-      })
-      const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-        Layer.provide(GentPlatform.Test()),
-      )
-      const deps = Layer.mergeAll(
-        storageLayer,
-        countingRuntime,
-        EventStore.Memory,
-        EventPublisher.Test(),
-        AgentLoopSessionGovernance.Live,
-        LanguageModelLayers.debug(),
-        ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-        GentPlatform.Test(),
-        ExtensionRegistry.Test(),
-      )
-      const layer = Layer.provideMerge(
-        SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-        deps,
-      )
-
-      yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        yield* Effect.all(
-          [
-            commands.sendMessage({
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              content: "hi",
-              requestId: "req-conc-send",
-            }),
-            commands.sendMessage({
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              content: "hi",
-              requestId: "req-conc-send",
-            }),
-            commands.sendMessage({
-              sessionId: SessionId.make("s1"),
-              branchId: BranchId.make("b1"),
-              content: "hi",
-              requestId: "req-conc-send",
-            }),
-          ],
-          { concurrency: "unbounded" },
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
 
-      expect(dispatchCount).toBe(1)
-    }).pipe(Effect.timeout("4 seconds")),
+        yield* Effect.all([send, send, send], { concurrency: "unbounded" })
+
+        expect(dispatchCount).toBe(1)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 
   it.live("duplicate createBranch requestId converges on a single branch id", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const branches = yield* BranchStorage
       const sessions = yield* SessionStorage
       const sessionId = SessionId.make("session-branch-dedup")
@@ -243,12 +181,12 @@ describe("requestId idempotency", () => {
         now: FIXED_NOW,
       })
 
-      const first = yield* commands.createBranch({
+      const first = yield* mutations.createSessionBranch({
         sessionId,
         name: "feat",
         requestId: "req-branch-1",
       })
-      const second = yield* commands.createBranch({
+      const second = yield* mutations.createSessionBranch({
         sessionId,
         name: "feat",
         requestId: "req-branch-1",
@@ -257,12 +195,12 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       // 1 from fixture + 1 from the deduped create
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("concurrent duplicate createBranch requestIds converge on one branch", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const branches = yield* BranchStorage
       const sessions = yield* SessionStorage
       const sessionId = SessionId.make("session-branch-conc")
@@ -277,21 +215,21 @@ describe("requestId idempotency", () => {
 
       const results = yield* Effect.all(
         [
-          commands.createBranch({ sessionId, name: "x", requestId: "req-bconc" }),
-          commands.createBranch({ sessionId, name: "x", requestId: "req-bconc" }),
-          commands.createBranch({ sessionId, name: "x", requestId: "req-bconc" }),
+          mutations.createSessionBranch({ sessionId, name: "x", requestId: "req-bconc" }),
+          mutations.createSessionBranch({ sessionId, name: "x", requestId: "req-bconc" }),
+          mutations.createSessionBranch({ sessionId, name: "x", requestId: "req-bconc" }),
         ],
         { concurrency: "unbounded" },
       )
       expect(results[0].branchId).toBe(results[1].branchId)
       expect(results[0].branchId).toBe(results[2].branchId)
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate switchBranch requestId activates the target only once", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-switch-dedup")
@@ -307,13 +245,13 @@ describe("requestId idempotency", () => {
       })
       yield* branches.createBranch(new Branch({ id: toBranchId, sessionId, createdAt: now }))
 
-      yield* commands.switchBranch({
+      yield* mutations.switchActiveBranch({
         sessionId,
         fromBranchId,
         toBranchId,
         requestId: "req-switch-1",
       })
-      yield* commands.switchBranch({
+      yield* mutations.switchActiveBranch({
         sessionId,
         fromBranchId,
         toBranchId,
@@ -321,12 +259,12 @@ describe("requestId idempotency", () => {
       })
 
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(toBranchId)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate forkBranch requestId converges on a single new branch", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const messages = yield* MessageStorage
@@ -352,14 +290,14 @@ describe("requestId idempotency", () => {
         }),
       )
 
-      const first = yield* commands.forkBranch({
+      const first = yield* mutations.forkSessionBranch({
         sessionId,
         fromBranchId: branchId,
         atMessageId: messageId,
         name: "fork",
         requestId: "req-fork-1",
       })
-      const second = yield* commands.forkBranch({
+      const second = yield* mutations.forkSessionBranch({
         sessionId,
         fromBranchId: branchId,
         atMessageId: messageId,
@@ -370,7 +308,7 @@ describe("requestId idempotency", () => {
       expect(second.branchId).toBe(first.branchId)
       // origin + 1 forked branch
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
-    }).pipe(Effect.provide(sessionCommandsLayer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
   )
 
   it.live("duplicate public branch.create requestId converges through RPC handlers", () =>
@@ -558,81 +496,59 @@ describe("requestId idempotency", () => {
     ),
   )
 
-  // Process-cache eviction. createSession has a durable operation result
+  // Fresh process cache. createSession has a durable operation result
   // underneath the in-memory process cache, so a retry of the same
-  // `requestId` still returns the original session/branch ids even after
-  // that cache entry is removed.
-  it.effect("durable createSession result survives process-cache eviction", () => {
-    let invalidateCreateSession = Option.none<(requestId: string) => Effect.Effect<void>>()
-    const dedupControlLayer = Layer.succeed(
-      SessionCommandsDedupControl,
-      SessionCommandsDedupControl.of({
-        registerCreateSessionInvalidator: (invalidate) =>
-          Effect.sync(() => {
-            invalidateCreateSession = Option.some(invalidate)
-          }),
-      }),
-    )
-    const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-      Layer.provide(GentPlatform.Test()),
-    )
-    const deps = Layer.mergeAll(
-      storageLayer,
-      sessionRuntimeLayer(),
-      EventStore.Memory,
-      EventPublisher.Test(),
-      AgentLoopSessionGovernance.Live,
-      LanguageModelLayers.debug(),
-      ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
-      GentPlatform.Test(),
-      ExtensionRegistry.Test(),
-      dedupControlLayer,
-    )
-    const layer = Layer.provideMerge(
-      SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-      deps,
-    )
-    return Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const sessions = yield* SessionStorage
-      const first = yield* commands.createSession({
-        cwd: "/tmp/ttl",
-        requestId: "req-ttl-1",
+  // `requestId` still returns the original session/branch ids after the
+  // cache is gone. Each `Effect.provide` of the layer builds a new
+  // `SessionMutations` (new dedup cache) over the same SQLite file.
+  it.scoped("durable createSession result survives a fresh process cache", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const dbPath = path.join(dir, "gent.db")
+      const layer = makePersistentSessionMutationsLayer(dbPath)
+      const create = Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        return yield* mutations.createSession({ cwd: "/tmp/ttl", requestId: "req-ttl-1" })
       })
-      if (Option.isNone(invalidateCreateSession)) {
-        return yield* Effect.die("createSession dedup invalidator was not registered")
-      }
-      yield* invalidateCreateSession.value("req-ttl-1")
-      const second = yield* commands.createSession({
-        cwd: "/tmp/ttl",
-        requestId: "req-ttl-1",
-      })
+
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      const first = yield* create.pipe(Effect.provide(layer))
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      const second = yield* create.pipe(Effect.provide(layer))
+      const sessions = yield* Effect.gen(function* () {
+        const storage = yield* SessionStorage
+        return yield* storage.listSessions
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer))
+
       expect(second.sessionId).toBe(first.sessionId)
       expect(second.branchId).toBe(first.branchId)
-      expect((yield* sessions.listSessions).length).toBe(1)
-    }).pipe(Effect.provide(layer))
-  })
+      expect(sessions).toHaveLength(1)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
 
   // Companion to the TTL eviction test: prove the bound is the bound.
   // Within the 60s window, a retry MUST collapse onto the cached outcome
   // — otherwise "evict past TTL" would be vacuous.
   it.effect("dedup cache retains success entry within TTL — retried requestId collapses", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
-      const first = yield* commands.createSession({
+      const first = yield* mutations.createSession({
         cwd: "/tmp/ttl-mid",
         requestId: "req-ttl-mid",
       })
       // Advance well inside the 60s window — should still hit the cache.
       yield* TestClock.adjust("30 seconds")
-      const second = yield* commands.createSession({
+      const second = yield* mutations.createSession({
         cwd: "/tmp/ttl-mid",
         requestId: "req-ttl-mid",
       })
       expect(second.sessionId).toBe(first.sessionId)
       expect((yield* sessions.listSessions).length).toBe(1)
-    }).pipe(Effect.provide(sessionCommandsLayer)),
+    }).pipe(Effect.provide(sessionMutationsLayer)),
   )
 
   it.effect("dedup cache hard cap evicts the oldest requestId", () =>
@@ -701,7 +617,7 @@ describe("requestId idempotency", () => {
     }),
   )
 
-  it.scoped("createSession requestId replays durable result after command layer restart", () =>
+  it.scoped("createSession requestId replays durable result after mutations layer restart", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -739,16 +655,13 @@ describe("requestId idempotency", () => {
           GentPlatform.Test(),
           ExtensionRegistry.Test(),
         )
-        return Layer.provideMerge(
-          SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
-          deps,
-        )
+        return Layer.provideMerge(SessionMutationsLive, deps)
       }
 
       const firstExit = yield* Effect.exit(
         Effect.gen(function* () {
-          const commands = yield* SessionCommands
-          yield* commands.createSession({
+          const mutations = yield* SessionMutations
+          yield* mutations.createSession({
             cwd: "/tmp/restart-create",
             requestId: "req-create-restart",
             initialPrompt: "stored prompt",
@@ -759,8 +672,8 @@ describe("requestId idempotency", () => {
       expect(firstExit._tag).toBe("Failure")
 
       const second = yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        return yield* commands.createSession({
+        const mutations = yield* SessionMutations
+        return yield* mutations.createSession({
           cwd: "/tmp/restart-create",
           requestId: "req-create-restart",
           initialPrompt: "retry prompt should not win",
@@ -781,13 +694,13 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scoped("createBranch requestId replays durable result after command layer restart", () =>
+  it.scoped("createBranch requestId replays durable result after mutations layer restart", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
       const dbPath = path.join(dir, "gent.db")
-      const layer = makePersistentSessionCommandsLayer(dbPath)
+      const layer = makePersistentSessionMutationsLayer(dbPath)
       const sessionId = SessionId.make("session-create-branch-restart")
       const branchId = BranchId.make("branch-create-branch-restart")
 
@@ -805,8 +718,8 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       const first = yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        return yield* commands.createBranch({
+        const mutations = yield* SessionMutations
+        return yield* mutations.createSessionBranch({
           sessionId,
           name: "durable branch",
           requestId: "req-create-branch-restart",
@@ -815,33 +728,33 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       const second = yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        return yield* commands.createBranch({
+        const mutations = yield* SessionMutations
+        return yield* mutations.createSessionBranch({
           sessionId,
           name: "retry name should not win",
           requestId: "req-create-branch-restart",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const branches = yield* Effect.gen(function* () {
         const storage = yield* BranchStorage
         return yield* storage.listBranches(sessionId)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(second.branchId).toBe(first.branchId)
       expect(branches).toHaveLength(2)
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scoped("switchBranch requestId replays durable result after command layer restart", () =>
+  it.scoped("switchBranch requestId replays durable result after mutations layer restart", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
       const dbPath = path.join(dir, "gent.db")
-      const layer = makePersistentSessionCommandsLayer(dbPath)
+      const layer = makePersistentSessionMutationsLayer(dbPath)
       const sessionId = SessionId.make("session-switch-branch-restart")
       const fromBranchId = BranchId.make("branch-switch-branch-restart-from")
       const toBranchId = BranchId.make("branch-switch-branch-restart-to")
@@ -863,8 +776,8 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        yield* commands.switchBranch({
+        const mutations = yield* SessionMutations
+        yield* mutations.switchActiveBranch({
           sessionId,
           fromBranchId,
           toBranchId,
@@ -877,36 +790,36 @@ describe("requestId idempotency", () => {
         const sql = yield* SqlClient.SqlClient
         yield* sql`DELETE FROM branches WHERE id = ${fromBranchId}`
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        yield* commands.switchBranch({
+        const mutations = yield* SessionMutations
+        yield* mutations.switchActiveBranch({
           sessionId,
           fromBranchId,
           toBranchId,
           requestId: "req-switch-branch-restart",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const session = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
         return yield* sessions.getSession(sessionId)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(session?.activeBranchId).toBe(toBranchId)
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scoped("forkBranch requestId replays durable result after command layer restart", () =>
+  it.scoped("forkBranch requestId replays durable result after mutations layer restart", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
       const dbPath = path.join(dir, "gent.db")
-      const layer = makePersistentSessionCommandsLayer(dbPath)
+      const layer = makePersistentSessionMutationsLayer(dbPath)
       const sessionId = SessionId.make("session-fork-branch-restart")
       const branchId = BranchId.make("branch-fork-branch-restart")
       const messageId = MessageId.make("message-fork-branch-restart")
@@ -936,8 +849,8 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(layer))
 
       const first = yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        return yield* commands.forkBranch({
+        const mutations = yield* SessionMutations
+        return yield* mutations.forkSessionBranch({
           sessionId,
           fromBranchId: branchId,
           atMessageId: messageId,
@@ -951,11 +864,11 @@ describe("requestId idempotency", () => {
         const sql = yield* SqlClient.SqlClient
         yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const second = yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        return yield* commands.forkBranch({
+        const mutations = yield* SessionMutations
+        return yield* mutations.forkSessionBranch({
           sessionId,
           fromBranchId: branchId,
           atMessageId: messageId,
@@ -963,13 +876,13 @@ describe("requestId idempotency", () => {
           requestId: "req-fork-branch-restart",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const branches = yield* Effect.gen(function* () {
         const storage = yield* BranchStorage
         return yield* storage.listBranches(sessionId)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(makePersistentSessionCommandsLayer(dbPath)))
+      }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(second.branchId).toBe(first.branchId)
       expect(branches).toHaveLength(2)

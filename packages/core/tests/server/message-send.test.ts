@@ -10,7 +10,7 @@ import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { makeClient, parentToolCallProbeExtension } from "./session-commands/helpers"
+import { makeClient, parentToolCallProbeExtension } from "./session-mutations/helpers"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 

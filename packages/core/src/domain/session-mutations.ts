@@ -4,10 +4,18 @@ import type { EventStoreError } from "./event.js"
 import type { BranchId, MessageId, RequestId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
 import type { StorageError } from "./storage-error.js"
+import type { SessionRuntimeError } from "../runtime/session-runtime.js"
+import type { CreateSessionInput } from "../server/transport-contract.js"
 
 type SessionMutationError = StorageError | EventStoreError | InvalidStateError | NotFoundError
 
 export interface SessionMutationsService {
+  readonly createSession: (
+    input: CreateSessionInput,
+  ) => Effect.Effect<
+    { sessionId: SessionId; branchId: BranchId; name: string },
+    SessionMutationError | SessionRuntimeError
+  >
   readonly renameSession: (input: {
     readonly sessionId: SessionId
     readonly name: string

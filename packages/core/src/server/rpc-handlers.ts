@@ -15,7 +15,8 @@ import {
 } from "../runtime/extensions/registry.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
-import { SessionRuntime } from "../runtime/session-runtime.js"
+import { makeRequestDeduper } from "../runtime/request-dedup.js"
+import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -27,7 +28,6 @@ import { ExtensionProtocolError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
-import { SessionCommands } from "./session-commands.js"
 import { SessionMutations } from "../domain/session-mutations.js"
 import { SessionQueries } from "./session-queries.js"
 import { getBranchTree } from "./session-utils.js"
@@ -132,7 +132,6 @@ const extensionRequestError = (params: {
 const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
     const queries = yield* SessionQueries
-    const commands = yield* SessionCommands
     const mutations = yield* SessionMutations
     const eventStore = yield* EventStore
     const interactions = yield* InteractionCommands
@@ -156,6 +155,35 @@ const RpcHandlers = GentRpcs.toLayer(
     // request-time defects instead of layer-build failures.
     yield* RuntimeEnvironment
     yield* DriverRegistry
+
+    // `message.send` has no durable operation row; the runtime keys its actor
+    // command on `requestId`. This cache collapses concurrent same-requestId
+    // fibers (unbounded RPC concurrency + client transport retries) so the
+    // runtime sees one dispatch per request id.
+    const sendMessage = yield* makeRequestDeduper<SendMessageInput, void, SessionRuntimeError>({
+      body: (input) =>
+        sessionRuntime
+          .sendUserMessage({
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            content: input.content,
+            agentOverride: input.agentOverride,
+            runSpec: input.runSpec,
+            requestId: input.requestId,
+          })
+          .pipe(
+            Effect.tap(() =>
+              Effect.logInfo("session.messageSent").pipe(
+                Effect.annotateLogs({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  requestId: input.requestId,
+                }),
+              ),
+            ),
+          ),
+      keyOf: (input) => Option.fromUndefinedOr(input.requestId),
+    })
 
     const loadSession = (sessionId: string) =>
       sessionStorage.getSession(SessionId.make(sessionId)).pipe(
@@ -194,7 +222,7 @@ const RpcHandlers = GentRpcs.toLayer(
       // Session / branch / message / queue / interaction
       // ----------------------------------------------------------------------
       "session.create": (input: CreateSessionInput) =>
-        commands
+        mutations
           .createSession({
             name: input.name,
             cwd: input.cwd,
@@ -262,8 +290,8 @@ const RpcHandlers = GentRpcs.toLayer(
       "branch.list": ({ sessionId }: SessionIdPayload) => branchStorage.listBranches(sessionId),
 
       "branch.create": ({ sessionId, name, requestId }: CreateBranchInput) =>
-        commands
-          .createBranch({
+        mutations
+          .createSessionBranch({
             sessionId,
             name,
             requestId,
@@ -280,8 +308,8 @@ const RpcHandlers = GentRpcs.toLayer(
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
       "branch.switch": ({ sessionId, fromBranchId, toBranchId, requestId }: SwitchBranchInput) =>
-        commands
-          .switchBranch({
+        mutations
+          .switchActiveBranch({
             sessionId,
             fromBranchId,
             toBranchId,
@@ -297,8 +325,8 @@ const RpcHandlers = GentRpcs.toLayer(
           ),
 
       "branch.fork": ({ sessionId, fromBranchId, atMessageId, name, requestId }: ForkBranchInput) =>
-        commands
-          .forkBranch({
+        mutations
+          .forkSessionBranch({
             sessionId,
             fromBranchId,
             atMessageId,
@@ -324,23 +352,21 @@ const RpcHandlers = GentRpcs.toLayer(
         runSpec,
         requestId,
       }: SendMessageInput) =>
-        commands
-          .sendMessage({
-            sessionId,
-            branchId,
-            content,
-            agentOverride,
-            runSpec,
-            requestId,
-          })
-          .pipe(
-            Effect.tap(() => WideEvent.set({ sessionId, branchId })),
-            withWideEvent(
-              WideEventBoundary.rpc("message.send", {
-                requestId,
-              }),
-            ),
+        sendMessage({
+          sessionId,
+          branchId,
+          content,
+          agentOverride,
+          runSpec,
+          requestId,
+        }).pipe(
+          Effect.tap(() => WideEvent.set({ sessionId, branchId })),
+          withWideEvent(
+            WideEventBoundary.rpc("message.send", {
+              requestId,
+            }),
           ),
+        ),
 
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
@@ -358,7 +384,7 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "queue.drain": ({ sessionId, branchId, requestId }: QueueDrainInput) =>
         sessionRuntime.drainQueuedMessages({ sessionId, branchId, requestId }).pipe(
-          Effect.withSpan("SessionCommands.drainQueuedMessages"),
+          Effect.withSpan("SessionRuntime.drainQueuedMessages"),
           Effect.tap(() => WideEvent.set({ sessionId, branchId })),
           withWideEvent(
             WideEventBoundary.rpc("queue.drain", {

@@ -4,7 +4,6 @@ import type { Scope } from "effect"
 import type { FileSystem } from "effect/FileSystem"
 import { createDependencies, type DependenciesConfig } from "./dependencies.js"
 import { InteractionCommands } from "./interaction-commands.js"
-import { SessionCommands } from "./session-commands.js"
 import { SessionQueries } from "./session-queries.js"
 import { ConnectionTracker, type ConnectionTrackerService } from "./connection-tracker.js"
 import { ServerIdentity, type ServerIdentityApi } from "./server-identity.js"
@@ -14,16 +13,15 @@ import { GentLogger, GentLogLevel } from "../runtime/logger.js"
 import { GentTracerLive } from "../runtime/tracer.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
-// `SessionCommands.Live` depends on `SessionMutations` and `SessionRuntime`.
-// Neither is provided here: production wiring builds them once in
-// `dependencies.ts` and forwards them via the parent context. Callers must
-// include `SessionMutationsLive` and `SessionRuntime.Live` in the
-// parent layer they provide to `AppServicesLive`.
-const SessionCommandsCluster = Layer.mergeAll(SessionQueries.Live, SessionCommands.Live)
+// `SessionMutations` and `SessionRuntime` are not provided here: production
+// wiring builds them once in `dependencies.ts` and forwards them via the
+// parent context. Callers must include `SessionMutationsLive` and
+// `SessionRuntime.Live` in the parent layer they provide to `AppServicesLive`.
+const QueryServicesLive = SessionQueries.Live
 
 const AppServicesLive = Layer.merge(
-  SessionCommandsCluster,
-  InteractionCommands.Live.pipe(Layer.provideMerge(SessionCommandsCluster)),
+  QueryServicesLive,
+  InteractionCommands.Live.pipe(Layer.provideMerge(QueryServicesLive)),
 )
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels

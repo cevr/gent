@@ -3,7 +3,6 @@ import { Predicate, Cause, Deferred, Effect, Stream } from "effect"
 import { BranchId, SessionId } from "../../src/domain/ids"
 import { EventStore, SessionStarted } from "../../src/domain/event"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
@@ -14,12 +13,11 @@ import {
   FIXED_NOW,
   collectSessionEvents,
   createActiveSessionFixture,
-  failingDeleteSessionCommandsLayerWithMachineProbe,
+  failingDeleteSessionMutationsLayerWithMachineProbe,
   makeClient,
-  racySessionCommandsLayer,
-  sessionCommandsLayerWithMachineProbe,
+  racySessionMutationsLayer,
   sessionMutationsLayerWithMachineProbe,
-} from "./session-commands/helpers"
+} from "./session-mutations/helpers"
 
 describe("session.delete", () => {
   it.live("closes session event streams and removes the session from public queries", () =>
@@ -132,17 +130,16 @@ describe("session.delete", () => {
     const runtimeTerminated: Array<SessionId> = []
     return Effect.scoped(
       Effect.gen(function* () {
-        const commands = yield* SessionCommands
         const mutations = yield* SessionMutations
         const eventStore = yield* EventStore
 
-        const parent = yield* commands.createSession({ cwd: "/tmp/delete-parent" })
-        const child = yield* commands.createSession({
+        const parent = yield* mutations.createSession({ cwd: "/tmp/delete-parent" })
+        const child = yield* mutations.createSession({
           cwd: "/tmp/delete-child",
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
-        const grandchild = yield* commands.createSession({
+        const grandchild = yield* mutations.createSession({
           cwd: "/tmp/delete-grandchild",
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
@@ -171,7 +168,7 @@ describe("session.delete", () => {
         yield* Deferred.await(grandchildClosed).pipe(Effect.timeout("5 seconds"))
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(
-        Effect.provide(sessionCommandsLayerWithMachineProbe(runtimeTerminated)),
+        Effect.provide(sessionMutationsLayerWithMachineProbe(runtimeTerminated)),
         Effect.timeout("4 seconds"),
       ),
     )
@@ -183,11 +180,10 @@ describe("session.delete", () => {
     const lateChildBranchId = BranchId.make("race-late-child-branch")
     return Effect.scoped(
       Effect.gen(function* () {
-        const commands = yield* SessionCommands
         const mutations = yield* SessionMutations
         const sessions = yield* SessionStorage
 
-        const parent = yield* commands.createSession({ cwd: "/tmp/race-parent" })
+        const parent = yield* mutations.createSession({ cwd: "/tmp/race-parent" })
 
         yield* mutations.deleteSession(parent.sessionId)
 
@@ -196,7 +192,7 @@ describe("session.delete", () => {
         expect(runtimeTerminated.sort()).toEqual([parent.sessionId, lateChildSessionId].sort())
       }).pipe(
         Effect.provide(
-          racySessionCommandsLayer({
+          racySessionMutationsLayer({
             runtimeTerminated,
             lateChild: {
               sessionId: lateChildSessionId,
@@ -274,7 +270,7 @@ describe("session.delete", () => {
         expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
       }).pipe(
         Effect.provide(
-          failingDeleteSessionCommandsLayerWithMachineProbe(runtimeTerminated, runtimeRestored),
+          failingDeleteSessionMutationsLayerWithMachineProbe(runtimeTerminated, runtimeRestored),
         ),
         Effect.timeout("4 seconds"),
       ),

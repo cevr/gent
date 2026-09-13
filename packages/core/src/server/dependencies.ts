@@ -38,7 +38,7 @@ import {
   type ApprovalDecision,
 } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
-import { SessionCommands } from "./session-commands.js"
+import { SessionMutationsLive } from "./session-mutations-live.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
@@ -467,7 +467,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const sessionRuntimeLive = Layer.provide(SessionRuntime.Client, allDeps)
 
   const sessionMutationsLive = Layer.provide(
-    SessionCommands.SessionMutationsLive,
+    SessionMutationsLive,
     Layer.merge(allDeps, sessionRuntimeLive),
   )
 

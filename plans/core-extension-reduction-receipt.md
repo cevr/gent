@@ -1079,3 +1079,18 @@ messageId)` returns when the loop no longer holds the message (not starting,
   `testOverrides()` (fresh layers per call, since the approval stub carries a
   decision queue), `testAgentsExtension`, and `stubAgentRunnerLayer`; the
   three roots are deltas over it.
+
+## SessionCommands folded into SessionMutations (2026-09-13)
+
+- `server/session-commands.ts` (331 lines) was a second service over the
+  same four session mutations plus `createSession`: it re-wrapped each
+  `SessionMutations` call in a request-id deduper and forwarded `sendMessage`
+  to the runtime. Every RPC handler went through it; nothing else did.
+- `SessionMutations` now owns `createSession` and the in-process dedup
+  (`makeRequestDeduper` keyed on the request id, durable replay unchanged).
+  `message.send` keeps one local deduper next to its handler in
+  `rpc-handlers.ts`. `SessionCommandsDedupControl` is gone; the cache-eviction
+  test became "durable createSession result survives a fresh process cache".
+- Regression probes: handler dedup off fails two tests, durable replay off
+  fails two, log-on-failure fails one. Test fixture dir renamed to
+  `tests/server/session-mutations/`.
