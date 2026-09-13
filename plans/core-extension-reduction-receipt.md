@@ -1688,7 +1688,8 @@ true })` skips the permit; `CompiledRpcRegistry.isReadonly` answers the
   without a per-row snapshot. `SessionRuntime.listActiveLoops` and
   `ActiveLoop` deleted (the host context was the only caller). Follow-up:
   the address needs a placeholder `ShardId`; an upstream
-  `stateOf(entityType, entityId)` helper would remove it.
+  `stateOf(entityType, entityId)` helper would remove it (opened as
+  effect-encore PR #66, `ActorStateKey`, same day).
 - `d0d8118c` tray poller. Receipts arrive only at spawn/success/failure,
   so counts went stale mid-run; a 2s `Schedule.spaced` refresh runs while
   the subtree is non-empty and the pane is closed.
