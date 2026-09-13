@@ -1679,7 +1679,7 @@ User directive: "add durability, read for snapshot is good and lets do
 - `36ac6903` read-only requests. The turn worker holds the side-mutation
   permit for the whole turn, so every extension request blocked until the
   turn ended (the pane showed "loading…" for minutes). `request({ readonly:
-  true })` skips the permit; `CompiledRpcRegistry.isReadonly` answers the
+true })` skips the permit; `CompiledRpcRegistry.isReadonly` answers the
   handler. Only `ListAgents` is marked; `btw.progress`, `goal.get`, and the
   skills list/get-content requests are candidates not yet marked.
 - `32b84303` live status in the listing. `listActiveLoops` now reads each
