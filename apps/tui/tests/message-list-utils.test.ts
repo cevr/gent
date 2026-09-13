@@ -5,6 +5,7 @@ import {
   truncatePath,
   getSpinnerFrames,
   formatToolInput,
+  describeCellCode,
   formatActivityHeader,
   formatCellRowLabel,
   formatCompactionLabel,
@@ -219,7 +220,7 @@ const op = (
 const cell = (
   operations: ActivityCall["operations"],
   status: ActivityCall["status"] = "completed",
-): ActivityCall => ({ toolName: "cell", status, operations })
+): ActivityCall => ({ toolName: "cell", status, operations, code: "" })
 
 describe("formatActivityHeader", () => {
   test("a cell-only turn counts cells, ops, children, and failures instead of tool calls", () => {
@@ -234,21 +235,54 @@ describe("formatActivityHeader", () => {
       ]),
     ).toBe("3 cells · 3 ops · 2 children · 2 failed")
     expect(formatActivityHeader([cell([])])).toBe("1 cell")
+    expect(formatActivityHeader([{ ...cell([]), code: "await Bun.$`bun test`.text()" }])).toBe(
+      "1 cell · $ bun test",
+    )
   })
 
   test("a turn with direct tools keeps the tool call counts", () => {
     expect(
       formatActivityHeader([
-        { toolName: "read", status: "completed", operations: [] },
-        { toolName: "read", status: "completed", operations: [] },
+        { toolName: "read", status: "completed", operations: [], code: "" },
+        { toolName: "read", status: "completed", operations: [], code: "" },
         cell([op("bash")]),
       ]),
     ).toBe("3 tool calls · 2 read · 1 cell")
   })
 })
 
+describe("describeCellCode", () => {
+  test("names host tools, shell, files, globs, and fetches in source order", () => {
+    const code = `
+      const files = [...new Bun.Glob("src/**/*.ts").scanSync()]
+      const out = await Bun.$\`bun test --filter store | head -20\`.text()
+      const a = await Bun.file("src/a.ts").text()
+      const b = await Bun.file("src/b.ts").text()
+      await Bun.write("out.json", JSON.stringify({ a, b }))
+      const page = await fetch("https://example.com/docs/x")
+      await tools.call('read', { path: "c.ts" })
+      await tools.call("read", { path: "d.ts" })
+      Bun.spawn(["git", "status", "--short"])
+    `
+    expect(describeCellCode(code)).toEqual([
+      "glob src/**/*.ts",
+      "$ bun test --filter",
+      "read src/a.ts",
+      "read src/b.ts",
+      "write out.json",
+      "fetch example.com",
+      "read ×2",
+      "$ git status --short",
+    ])
+  })
+
+  test("source with no recognised verb yields nothing", () => {
+    expect(describeCellCode("const x = 1 + 1")).toEqual([])
+  })
+})
+
 describe("formatCellRowLabel", () => {
-  const fallback = { code: "const x = await tools.call('read', {})", display: "", error: "" }
+  const fallback = { code: "const x = 1 + 1", display: "", error: "" }
 
   test("names the operations a cell ran, collapsing repeats and marking failures", () => {
     const label = formatCellRowLabel(
@@ -263,11 +297,18 @@ describe("formatCellRowLabel", () => {
     expect(label).toBe("bash pwd · read a.ts ×2 · ✕ write b.ts")
   })
 
-  test("a cell without operations shows its result, else its first code line", () => {
+  test("a cell without operations shows its verbs, else its result, else its first code line", () => {
+    expect(
+      formatCellRowLabel(cell([]), {
+        ...fallback,
+        code: 'await Bun.$`git status`.text()\nawait Bun.file("a.ts").text()',
+        display: "\n[ 1, 2 ]",
+      }),
+    ).toBe("$ git status · read a.ts")
     expect(formatCellRowLabel(cell([]), { ...fallback, display: "\n[ 1, 2 ]\nmore" })).toBe(
       "→ [ 1, 2 ]",
     )
-    expect(formatCellRowLabel(cell([]), fallback)).toBe("const x = await tools.call('read', {})")
+    expect(formatCellRowLabel(cell([]), fallback)).toBe("const x = 1 + 1")
   })
 
   test("a failed cell leads with its error and long labels are cut with an ellipsis", () => {

@@ -28,8 +28,12 @@ describe("turn prompt sections", () => {
       const sections = buildTurnPromptSections([], agent, [CellTool], [])
       const guidelines = sections.find((section) => section.id === "tool-guidelines")
       expect(guidelines?.content).toContain(
-        "- The cell is a Bun runtime in the working directory: Bun (Bun.file, Bun.$, Bun.spawn), fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory.",
+        "- The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available.",
       )
+      expect(guidelines?.content).toContain(
+        "- Shell that changes state (git, installs, deletes, network writes) goes through tools.call('bash', { command })",
+      )
+      expect(guidelines?.content).toContain("- Return a summary, not the data.")
       expect(guidelines?.content).toContain(
         "- console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result",
       )

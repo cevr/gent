@@ -12,6 +12,7 @@ import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
 import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
+import { describeCellCode } from "../message-list-utils"
 import type { ToolRendererProps } from "./types"
 
 const OperationReceipt = Schema.Struct({
@@ -53,8 +54,11 @@ export function CellToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutputOption(CellOutputSchema, props.toolCall.output))
   const code = createMemo(() => getString(props.toolCall.input, "code"))
   const codeLines = createMemo(() => code().split("\n"))
+  // The verbs the source spells out; the first code line only when it spells none.
   const subtitle = createMemo(() => {
-    const first = codeLines()[0] ?? ""
+    const verbs = describeCellCode(code())
+    let first = codeLines()[0] ?? ""
+    if (verbs.length > 0) first = verbs.join(" · ")
     if (first.length > 60) return `${first.slice(0, 60)}…`
     return first
   })

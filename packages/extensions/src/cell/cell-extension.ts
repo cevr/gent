@@ -70,7 +70,10 @@ export const CellExtension = defineExtension({
 const CELL_WORK = `# Working in the cell
 
 - The cell is your persistent control environment. Keep intermediate values in named variables, inspect and transform outputs, and write small helpers. Use it for loops, parsing, and state; call host tools for effects.
-- You solve tasks by writing and running TypeScript in the cell, observing results, and iterating one step at a time.`
+- You solve tasks by writing and running TypeScript in the cell, observing results, and iterating. Batch independent work inside one cell; iterate between cells.
+- Independent work goes to children: Promise.all over tools.call('delegate', { todo }) from one cell. Single reads, searches, and edits stay inline.
+- Example: \`const run = await Bun.$\`bun test\`.quiet().nothrow(); const lines = (run.stdout.toString() + run.stderr.toString()).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
+- To find files, prefer tools.call('grep', ...) over a raw directory walk: it honours .gitignore and caches the listing.`
 
 const describeInputKeys = (tool: ToolCapability): string => {
   const ast = tool.parametersSchema.ast

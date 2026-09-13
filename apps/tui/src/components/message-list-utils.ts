@@ -112,6 +112,70 @@ export interface ActivityCall {
   readonly toolName: string
   readonly status: "running" | "completed" | "error"
   readonly operations: ReadonlyArray<ActivityOperation>
+  /** The cell source; empty for other tools. */
+  readonly code: string
+}
+
+// ── Cell intent ──
+// A cell with no inner calls still did something; its source says what.
+
+const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => string]> = [
+  [/tools\.call\(\s*["'`]([\w-]+)["'`]/g, (m) => m[1] ?? ""],
+  [/Bun\.\$`([^`]*)`/g, (m) => `$ ${shellHead(m[1] ?? "")}`],
+  [
+    /Bun\.spawn\(\s*(?:\{\s*cmd:\s*)?\[\s*((?:["'`][^"'`]*["'`]\s*,?\s*)+)\]/g,
+    (m) => `$ ${shellHead(argv(m[1] ?? ""))}`,
+  ],
+  [/Bun\.file\(\s*["'`]([^"'`]+)["'`]/g, (m) => `read ${m[1]}`],
+  [/Bun\.write\(\s*["'`]([^"'`]+)["'`]/g, (m) => `write ${m[1]}`],
+  [/new Bun\.Glob\(\s*["'`]([^"'`]+)["'`]/g, (m) => `glob ${m[1]}`],
+  [/\bfetch\(\s*["'`]([^"'`]+)["'`]/g, (m) => `fetch ${urlHost(m[1] ?? "")}`],
+]
+
+const argv = (list: string) =>
+  Array.from(list.matchAll(/["'`]([^"'`]*)["'`]/g), (m) => m[1] ?? "").join(" ")
+
+const shellHead = (command: string) => {
+  const first = command.split(/\n|\||&&|;/)[0] ?? ""
+  return first.trim().split(/\s+/).slice(0, 3).join(" ")
+}
+
+const urlHost = (url: string) => URL.parse(url)?.host ?? url
+
+/** Repeats next to each other fold into one label with a count. */
+const collapseRepeats = (labels: ReadonlyArray<string>): string[] => {
+  const out: string[] = []
+  let previous = ""
+  let repeats = 0
+  const flush = () => {
+    if (previous.length === 0) return
+    if (repeats > 1) out.push(`${previous} ×${repeats}`)
+    else out.push(previous)
+  }
+  for (const label of labels) {
+    if (label === previous) {
+      repeats += 1
+      continue
+    }
+    flush()
+    previous = label
+    repeats = 1
+  }
+  flush()
+  return out
+}
+
+/** The verbs a cell's source spells out, in source order: host tools, shell, files, globs, fetches. */
+export function describeCellCode(code: string): ReadonlyArray<string> {
+  const found: Array<{ readonly index: number; readonly label: string }> = []
+  for (const [pattern, label] of CELL_VERB_PATTERNS) {
+    for (const match of code.matchAll(pattern)) {
+      const text = label(match)
+      if (text.trim().length > 0) found.push({ index: match.index, label: text })
+    }
+  }
+  found.sort((left, right) => left.index - right.index)
+  return collapseRepeats(found.map((entry) => entry.label))
 }
 
 const plural = (count: number, singular: string, pluralForm = `${singular}s`) => {
@@ -137,6 +201,10 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
     calls.filter((call) => call.status === "error").length
   const parts = [plural(calls.length, "cell")]
   if (operations.length > 0) parts.push(plural(operations.length, "op"))
+  else {
+    const verbs = calls.flatMap((call) => describeCellCode(call.code)).slice(0, 4)
+    if (verbs.length > 0) parts.push(verbs.join(" · "))
+  }
   if (children > 0) parts.push(plural(children, "child", "children"))
   if (failed > 0) parts.push(`${failed} failed`)
   return parts.join(" · ")
@@ -147,7 +215,7 @@ const truncateLabel = (text: string, maxLength: number) => {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
 }
 
-/** One-line label for a cell row: its operations, else its error, else its result, else its code. */
+/** One-line label for a cell row: its error, else its operations, else its verbs, else its result, else its code. */
 export function formatCellRowLabel(
   call: ActivityCall,
   fallback: { readonly code: string; readonly display: string; readonly error: string },
@@ -157,29 +225,18 @@ export function formatCellRowLabel(
     return truncateLabel(fallback.error.split("\n")[0] ?? "", maxLength)
   }
   if (call.operations.length > 0) {
-    const labels: string[] = []
-    let previous = ""
-    let repeats = 0
-    const flush = () => {
-      if (previous.length === 0) return
-      if (repeats > 1) labels.push(`${previous} ×${repeats}`)
-      else labels.push(previous)
-    }
-    for (const operation of call.operations) {
-      let label = operation.tool
-      if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
-      if (operation.outcome === "failed") label = `✕ ${label}`
-      if (label === previous) {
-        repeats += 1
-        continue
-      }
-      flush()
-      previous = label
-      repeats = 1
-    }
-    flush()
+    const labels = collapseRepeats(
+      call.operations.map((operation) => {
+        let label = operation.tool
+        if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
+        if (operation.outcome === "failed") label = `✕ ${label}`
+        return label
+      }),
+    )
     return truncateLabel(labels.join(" · "), maxLength)
   }
+  const verbs = describeCellCode(fallback.code)
+  if (verbs.length > 0) return truncateLabel(verbs.join(" · "), maxLength)
   const display = fallback.display.split("\n").find((line) => line.trim().length > 0) ?? ""
   if (display.length > 0) return truncateLabel(`→ ${display.trim()}`, maxLength)
   return truncateLabel(fallback.code.split("\n")[0] ?? "", maxLength)

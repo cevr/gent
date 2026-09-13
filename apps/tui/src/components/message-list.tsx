@@ -89,6 +89,7 @@ const toActivityCall = (call: ToolCall): ActivityCall => ({
   toolName: call.toolName,
   status: call.status,
   operations: cellOperations(call),
+  code: getString(call.input, "code"),
 })
 
 const cellResultText = (call: ToolCall) =>
