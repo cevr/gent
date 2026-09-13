@@ -15,6 +15,18 @@ import { SteerCommand } from "../../domain/steer.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
 
+/** Route a branch-scoped command to its loop entity, keyed by the command id. */
+const branchTarget = (p: BranchCommandInput) => ({
+  entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+  primaryKey: p.commandId,
+})
+
+/** Route a message-carrying command to its loop entity, keyed by the message id. */
+const messageTarget = (p: TurnSubmissionInput | QueueFollowUpInput) => ({
+  entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
+  primaryKey: p.message.id,
+})
+
 /** Follow-up admission is idempotent by source: the message id is the durable key. */
 export const followUpMessageIdForSource = (input: {
   readonly workspaceId: string
@@ -111,38 +123,26 @@ export const AgentLoop = Actor.fromEntity(
       payload: TurnSubmissionFields,
       success: Schema.Void,
       error: AgentLoopError,
-      id: (p: TurnSubmissionInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-        primaryKey: p.message.id,
-      }),
+      id: messageTarget,
     },
     SubmitAndWait: {
       payload: TurnSubmissionFields,
       success: Schema.Void,
       error: AgentLoopError,
-      id: (p: TurnSubmissionInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-        primaryKey: p.message.id,
-      }),
+      id: messageTarget,
     },
     SubmitDurable: {
       payload: TurnSubmissionFields,
       success: Schema.Void,
       error: AgentLoopError,
       persisted: true,
-      id: (p: TurnSubmissionInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-        primaryKey: p.message.id,
-      }),
+      id: messageTarget,
     },
     QueueFollowUp: {
       payload: QueueFollowUpFields,
       success: Schema.Void,
       error: AgentLoopError,
-      id: (p: QueueFollowUpInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
-        primaryKey: p.message.id,
-      }),
+      id: messageTarget,
     },
     Steer: {
       payload: SteerFields,
@@ -171,10 +171,7 @@ export const AgentLoop = Actor.fromEntity(
       success: QueueSnapshot,
       error: AgentLoopError,
       persisted: true,
-      id: (p: BranchCommandInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
     // Removing one queued follow-up mutates the queue too; same actor route.
     RemoveFollowUp: {
@@ -182,46 +179,31 @@ export const AgentLoop = Actor.fromEntity(
       success: Schema.Boolean,
       error: AgentLoopError,
       persisted: true,
-      id: (p: RemoveFollowUpInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
     GetQueue: {
       payload: BranchCommandFields,
       success: QueueSnapshot,
       error: AgentLoopError,
-      id: (p: BranchCommandInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
     GetState: {
       payload: BranchCommandFields,
       success: SessionRuntimeStateSchema,
       error: AgentLoopError,
-      id: (p: BranchCommandInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
     GetMetrics: {
       payload: BranchCommandFields,
       success: SessionRuntimeMetrics,
       error: AgentLoopError,
-      id: (p: BranchCommandInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
     RequestExtension: {
       payload: RequestExtensionFields,
       success: Schema.Unknown,
       error: AgentLoopError,
-      id: (p: RequestExtensionInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
     // Branch-local shutdown. Used by session terminate sweeps to close a
     // single branch's loop resources from inside the entity's own scope.
@@ -236,10 +218,7 @@ export const AgentLoop = Actor.fromEntity(
       payload: BranchCommandFields,
       success: Schema.Void,
       error: AgentLoopError,
-      id: (p: BranchCommandInput) => ({
-        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: p.commandId,
-      }),
+      id: branchTarget,
     },
   },
   {

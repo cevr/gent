@@ -860,7 +860,7 @@ Everything else is builtin/internal:
 - storage, event publisher, event store, session mutation services, and
   interaction pending readers;
 - runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
-  `ExtensionEventSink`, `runProcess`);
+  `runProcess`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
 - raw event/message domain internals that are not part of the serialized

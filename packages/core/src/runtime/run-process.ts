@@ -32,7 +32,7 @@ interface ProcessRunnerService {
   ) => Effect.Effect<ProcessResult, ProcessError>
 }
 
-interface RunProcessOptions {
+export interface RunProcessOptions {
   readonly cwd?: string
   // oxlint-disable-next-line effect/noNullish -- Child-process environments use undefined to remove inherited variables.
   readonly env?: Record<string, string | undefined>

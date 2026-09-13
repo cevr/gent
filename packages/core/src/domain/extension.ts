@@ -1,4 +1,4 @@
-import type { Duration, Effect, FileSystem, Path } from "effect"
+import type { Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "../runtime/gent-platform.js"
@@ -218,7 +218,7 @@ export type {
   ProviderAuthContribution,
   ProviderAuthorizationResult,
 } from "./driver.js"
-import type { ProcessRunner } from "../runtime/run-process.js"
+import type { ProcessRunner, RunProcessOptions } from "../runtime/run-process.js"
 
 // Extension — the core primitive
 
@@ -246,16 +246,6 @@ export interface ExtensionHostProcessResult {
   readonly stderr: string
 }
 
-export interface ExtensionHostRunProcessOptions {
-  readonly cwd?: string
-  // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
-  readonly env?: Record<string, string | undefined>
-  readonly timeout?: Duration.Duration
-  readonly stdin?: "pipe" | "ignore" | "inherit"
-  readonly stdout?: "pipe" | "ignore" | "inherit"
-  readonly stderr?: "pipe" | "ignore" | "inherit"
-}
-
 export interface ExtensionHostFacts {
   readonly osInfo: ExtensionHostOsInfo
   readonly execPath: string
@@ -270,7 +260,7 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
   readonly runProcess: (
     command: string,
     args: ReadonlyArray<string>,
-    options?: ExtensionHostRunProcessOptions,
+    options?: RunProcessOptions,
   ) => Effect.Effect<ExtensionHostProcessResult, ExtensionHostProcessError>
 }
 

@@ -181,51 +181,38 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         ),
       )
 
-      // Load config from disk (merges project over user)
-      const loadConfig = Effect.gen(function* () {
-        const readConfig = (filePath: string) =>
-          fs.exists(filePath).pipe(
-            Effect.flatMap((exists) => {
-              if (exists) return fs.readFileString(filePath)
-              return Effect.succeed("{}")
-            }),
-            Effect.flatMap((content) =>
-              Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
-            ),
-            Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
-          )
-
-        const userConfig = yield* readConfig(userConfigPath)
-        const projectConfig = yield* readConfig(projectConfigPath)
-
-        yield* SynchronizedRef.set(userConfigRef, userConfig)
-        yield* Ref.set(projectConfigRef, projectConfig)
-
-        return mergeConfigs(userConfig, projectConfig)
-      }).pipe(Effect.asVoid)
-
-      const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
+      // A missing file reads as an empty config.
+      const readConfigFile = (filePath: string) =>
         fs.exists(filePath).pipe(
           Effect.flatMap((exists) => {
             if (exists) return fs.readFileString(filePath)
             return Effect.succeed("{}")
           }),
           Effect.flatMap((content) =>
-            Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ConfigLoadError({
-                    path: filePath,
-                    message: String(cause),
-                  }),
-              ),
-            ),
+            Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
           ),
-          Effect.mapError((cause) => {
-            if (Schema.is(ConfigLoadError)(cause)) return cause
-            return new ConfigLoadError({ path: filePath, message: String(cause) })
-          }),
         )
+
+      const readConfigOrEmpty = (filePath: string): Effect.Effect<UserConfig> =>
+        readConfigFile(filePath).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
+
+      const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
+        readConfigFile(filePath).pipe(
+          Effect.mapError(
+            (cause) => new ConfigLoadError({ path: filePath, message: String(cause) }),
+          ),
+        )
+
+      // Load config from disk (merges project over user)
+      const loadConfig = Effect.gen(function* () {
+        const userConfig = yield* readConfigOrEmpty(userConfigPath)
+        const projectConfig = yield* readConfigOrEmpty(projectConfigPath)
+
+        yield* SynchronizedRef.set(userConfigRef, userConfig)
+        yield* Ref.set(projectConfigRef, projectConfig)
+
+        return mergeConfigs(userConfig, projectConfig)
+      }).pipe(Effect.asVoid)
 
       // Save user config to disk
       const saveUserConfig = (config: UserConfig) =>
@@ -249,19 +236,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // that cwd's per-project overrides instead of the server's launch
       // cwd. Falls back to an empty UserConfig on missing / unparsable
       // file so a misconfigured project never blocks dispatch.
-      const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> => {
-        const filePath = path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE)
-        return fs.exists(filePath).pipe(
-          Effect.flatMap((exists) => {
-            if (exists) return fs.readFileString(filePath)
-            return Effect.succeed("{}")
-          }),
-          Effect.flatMap((content) =>
-            Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
-          ),
-          Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
-        )
-      }
+      const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> =>
+        readConfigOrEmpty(path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE))
 
       const mutateUserConfig = (
         decide: (current: UserConfig) => {

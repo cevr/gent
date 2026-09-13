@@ -18,6 +18,8 @@ import {
   type BranchRow,
   type MessageChunkRow,
   type SessionRow,
+  MESSAGE_CHUNK_SELECT,
+  SESSION_COLUMNS,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
@@ -57,7 +59,7 @@ export class RelationshipStorage extends Context.Service<
           function* (parentSessionId) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE parent_session_id = ${parentSessionId} AND workspace_id = ${workspaceId} ORDER BY created_at ASC`
+              yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions WHERE parent_session_id = ${parentSessionId} AND workspace_id = ${workspaceId} ORDER BY created_at ASC`
             return yield* Effect.forEach(rows, sessionFromRow)
           },
           Effect.mapError(storageError("Failed to get child sessions")),
@@ -67,8 +69,8 @@ export class RelationshipStorage extends Context.Service<
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`WITH RECURSIVE ancestors(id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
-            SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, 0
+              yield* sql<SessionRow>`WITH RECURSIVE ancestors(${sql.literal(SESSION_COLUMNS)}, depth) AS (
+            SELECT ${sql.literal(SESSION_COLUMNS)}, 0
             FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
             UNION ALL
             SELECT s.id, s.name, s.cwd, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
@@ -76,7 +78,7 @@ export class RelationshipStorage extends Context.Service<
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20 AND s.workspace_id = ${workspaceId}
           )
-          SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at
+          SELECT ${sql.literal(SESSION_COLUMNS)}
           FROM ancestors
           ORDER BY depth ASC`
             return yield* Effect.forEach(rows, sessionFromRow)
@@ -88,7 +90,7 @@ export class RelationshipStorage extends Context.Service<
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
             const sessionRows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}`
+              yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}`
             const sessionRow = sessionRows[0]
             if (Predicate.isUndefined(sessionRow)) {
               return yield* new StorageError({ message: `Session not found: ${sessionId}` })
@@ -108,21 +110,7 @@ export class RelationshipStorage extends Context.Service<
             }
 
             const branchIds = branches.map((b) => b.id)
-            const allMsgRawRows = yield* sql`SELECT
-              m.id,
-              m.session_id,
-              m.branch_id,
-              m.kind,
-              m.role,
-              m.created_at,
-              m.turn_duration_ms,
-              m.metadata,
-              mc.ordinal as chunk_ordinal,
-              c.part_json as chunk_part_json
-            FROM messages m
-            LEFT JOIN message_chunks mc ON mc.message_id = m.id
-            LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-            JOIN sessions s ON s.id = m.session_id
+            const allMsgRawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
             WHERE m.branch_id IN ${sql.in(branchIds)}
               AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.insertion_order ASC, mc.ordinal ASC`

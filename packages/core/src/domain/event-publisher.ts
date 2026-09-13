@@ -15,10 +15,6 @@ interface EventPublisherService {
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
 }
 
-interface ExtensionEventSinkService {
-  readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
-}
-
 interface ExtensionStatePublisherService {
   readonly changed: (params: {
     readonly sessionId: SessionId
@@ -44,11 +40,6 @@ export class EventPublisher extends Context.Service<EventPublisher, EventPublish
     )
 }
 
-export class ExtensionEventSink extends Context.Service<
-  ExtensionEventSink,
-  ExtensionEventSinkService
->()("@gent/core/src/domain/event-publisher/ExtensionEventSink") {}
-
 export class ExtensionStatePublisher extends Context.Service<
   ExtensionStatePublisher,
   ExtensionStatePublisherService
@@ -57,16 +48,13 @@ export class ExtensionStatePublisher extends Context.Service<
 const makePublisherContext = (publisher: EventPublisherService) =>
   Context.empty().pipe(
     Context.add(EventPublisher, publisher),
-    Context.add(ExtensionEventSink, {
-      publish: publisher.publish,
-    }),
     Context.add(ExtensionStatePublisher, {
       changed: (params) => publisher.publish(ExtensionStateChanged.make(params)),
     }),
   )
 
 export const EventPublisherLive: Layer.Layer<
-  EventPublisher | ExtensionEventSink | ExtensionStatePublisher,
+  EventPublisher | ExtensionStatePublisher,
   never,
   EventStore
 > = Layer.effectContext(

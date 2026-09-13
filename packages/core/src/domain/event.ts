@@ -11,6 +11,7 @@ import {
   Stream,
   TxQueue,
 } from "effect"
+import type { Scope } from "effect"
 
 import { Message } from "./message"
 import {
@@ -474,7 +475,7 @@ export const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): bo
 // EventStore Service
 
 /** The marker describes one subscription's position. Storing it would replay a lie. */
-export const rejectStreamMarker = (event: AgentEvent) =>
+const rejectStreamMarker = (event: AgentEvent) =>
   Effect.gen(function* () {
     if (event._tag === "StreamSynchronized") {
       return yield* new EventStoreError({
@@ -483,27 +484,34 @@ export const rejectStreamMarker = (event: AgentEvent) =>
     }
   })
 
-const makeMemoryEventStore = Effect.gen(function* () {
-  const registry = yield* makeSessionPubSubRegistry
-  const eventsRef = yield* Ref.make<EventEnvelope[]>([])
-  const idRef = yield* Ref.make(0)
+/** The durable half of an event store; `makeEventStore` supplies delivery, replay, and subscriptions. */
+interface EventStoreBackend {
+  readonly append: (
+    event: AgentEvent,
+    traceId: Option.Option<string>,
+  ) => Effect.Effect<EventEnvelope, EventStoreError>
+  readonly load: (
+    sessionId: SessionId,
+    afterId: EventId,
+  ) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStoreError>
+  /** Runs inside the subscription scope before replay starts. */
+  readonly open?: (
+    params: Parameters<EventStoreService["subscribe"]>[0],
+  ) => Effect.Effect<void, EventStoreError, Scope.Scope>
+}
 
+export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: EventStoreBackend) {
+  const registry = yield* makeSessionPubSubRegistry
   const deliver = yield* makeSerializedEventDelivery(registry.broadcast)
 
   const service: EventStoreService = {
     append: Effect.fn("EventStore.append")(function* (event) {
       yield* rejectStreamMarker(event)
-      const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
       const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
-      const fields = {
-        id: EventId.make(id),
+      return yield* backend.append(
         event,
-        createdAt: yield* Clock.currentTimeMillis,
-      }
-      if (Option.isSome(currentSpan)) Object.assign(fields, { traceId: currentSpan.value.traceId })
-      const envelope = EventEnvelope.make(fields)
-      yield* Ref.update(eventsRef, (events) => [...events, envelope])
-      return envelope
+        Option.map(currentSpan, (span) => span.traceId),
+      )
     }),
 
     broadcast: registry.broadcast,
@@ -514,10 +522,12 @@ const makeMemoryEventStore = Effect.gen(function* () {
       yield* deliver(envelope)
     }),
 
-    subscribe: ({ sessionId, branchId, after, synchronize }) =>
+    subscribe: (params) =>
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
+            const { sessionId, branchId, after, synchronize } = params
+            if (backend.open) yield* backend.open(params)
             const subscription = yield* registry.subscribe(sessionId)
             return makeCursorReplayStream({
               subscription,
@@ -525,12 +535,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
               afterId: after ?? EventId.make(0),
               branchId,
               synchronize,
-              load: (afterId) =>
-                Ref.get(eventsRef).pipe(
-                  Effect.map((events) =>
-                    events.filter((env) => env.id > afterId && matchesEventFilter(env, sessionId)),
-                  ),
-                ),
+              load: (afterId) => backend.load(sessionId, afterId),
             })
           }),
         ),
@@ -539,6 +544,32 @@ const makeMemoryEventStore = Effect.gen(function* () {
     removeSession: registry.remove,
   }
   return service
+})
+
+const makeMemoryEventStore = Effect.gen(function* () {
+  const eventsRef = yield* Ref.make<EventEnvelope[]>([])
+  const idRef = yield* Ref.make(0)
+  return yield* makeEventStore({
+    append: (event, traceId) =>
+      Effect.gen(function* () {
+        const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
+        const fields = {
+          id: EventId.make(id),
+          event,
+          createdAt: yield* Clock.currentTimeMillis,
+        }
+        if (Option.isSome(traceId)) Object.assign(fields, { traceId: traceId.value })
+        const envelope = EventEnvelope.make(fields)
+        yield* Ref.update(eventsRef, (events) => [...events, envelope])
+        return envelope
+      }),
+    load: (sessionId, afterId) =>
+      Ref.get(eventsRef).pipe(
+        Effect.map((events) =>
+          events.filter((env) => env.id > afterId && matchesEventFilter(env, sessionId)),
+        ),
+      ),
+  })
 })
 
 export class EventStore extends Context.Service<EventStore, EventStoreService>()(

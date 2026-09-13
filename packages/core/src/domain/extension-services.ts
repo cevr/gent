@@ -12,11 +12,11 @@ import type { AgentEvent, TurnCompleted } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type {
   ExtensionHostPlatform,
-  ExtensionHostRunProcessOptions,
   ExtensionHostProcessResult,
   ExtensionTurnContext,
 } from "./extension.js"
 import { makeFileWriter } from "./file-writer.js"
+import type { RunProcessOptions } from "../runtime/run-process.js"
 import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
@@ -185,7 +185,7 @@ interface ExtensionProcessService {
   readonly run: (
     command: string,
     args: ReadonlyArray<string>,
-    options?: ExtensionHostRunProcessOptions,
+    options?: RunProcessOptions,
   ) => Effect.Effect<ExtensionHostProcessResult, ExtensionServiceError>
   // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>

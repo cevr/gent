@@ -97,6 +97,17 @@ export const decodeEventRow = Schema.decodeUnknownEffect(EventRow)
 export const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
 
+export const SESSION_COLUMNS =
+  "id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at"
+
+/** One message row per content chunk, scoped through the owning session. Interpolate with `sql.literal`. */
+export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.kind, m.role, m.created_at, m.turn_duration_ms, m.metadata,
+  mc.ordinal as chunk_ordinal, c.part_json as chunk_part_json
+  FROM messages m
+  LEFT JOIN message_chunks mc ON mc.message_id = m.id
+  LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+  JOIN sessions s ON s.id = m.session_id`
+
 const rowToSession = (row: SessionRow) =>
   Effect.gen(function* () {
     const createdAt = yield* decodeDateFromMillis(row.created_at)

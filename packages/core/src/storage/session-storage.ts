@@ -10,7 +10,7 @@ import type { Session } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError, storageError } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
-import { sessionFromRow, toSqlNull, type SessionRow } from "./sqlite/rows.js"
+import { sessionFromRow, toSqlNull, SESSION_COLUMNS, type SessionRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface SessionStorageService {
@@ -87,7 +87,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           function* (id) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}`
+              yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}`
             const row = rows[0]
             // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
             if (Predicate.isUndefined(row)) return undefined
@@ -100,7 +100,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           Effect.fn("SessionStorage.listSessions")(function* () {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE workspace_id = ${workspaceId} ORDER BY updated_at DESC`
+              yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions WHERE workspace_id = ${workspaceId} ORDER BY updated_at DESC`
             return yield* Effect.forEach(rows, sessionFromRow)
           }),
         ).pipe(Effect.mapError(storageError("Failed to list sessions"))),

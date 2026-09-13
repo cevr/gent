@@ -451,5 +451,5 @@ Preview is not a sandbox or a general side-effect-free operation.
 - Handlers take input only; host authority comes from `yield* ExtensionContext`.
 - Extension-private authority is an imported service Tag from a resource layer,
   not a read/write or capability declaration.
-- Runtime services such as `GentPlatform`, `ToolRunner`, `ExtensionEventSink`,
+- Runtime services such as `GentPlatform`, `ToolRunner`,
   storage Tags, event stores, and process helpers are not public extension API.

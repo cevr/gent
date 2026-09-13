@@ -16,6 +16,7 @@ import {
   encodeStoredMessage,
   groupMessageChunkRows,
   toSqlNull,
+  MESSAGE_CHUNK_SELECT,
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -166,21 +167,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           getMessage: Effect.fn("MessageStorage.getMessage")(
             function* (id) {
               const workspaceId = yield* CurrentWorkspaceId
-              const rawRows = yield* sql`SELECT
-              m.id,
-              m.session_id,
-              m.branch_id,
-              m.kind,
-              m.role,
-              m.created_at,
-              m.turn_duration_ms,
-              m.metadata,
-              mc.ordinal as chunk_ordinal,
-              c.part_json as chunk_part_json
-            FROM messages m
-            LEFT JOIN message_chunks mc ON mc.message_id = m.id
-            LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-            JOIN sessions s ON s.id = m.session_id
+              const rawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
             WHERE m.id = ${id} AND s.workspace_id = ${workspaceId}
             ORDER BY mc.ordinal ASC`
               const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
@@ -243,21 +230,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           listMessages: Effect.fn("MessageStorage.listMessages")(
             function* (branchId) {
               const workspaceId = yield* CurrentWorkspaceId
-              const rawRows = yield* sql`SELECT
-              m.id,
-              m.session_id,
-              m.branch_id,
-              m.kind,
-              m.role,
-              m.created_at,
-              m.turn_duration_ms,
-              m.metadata,
-              mc.ordinal as chunk_ordinal,
-              c.part_json as chunk_part_json
-            FROM messages m
-            LEFT JOIN message_chunks mc ON mc.message_id = m.id
-            LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-            JOIN sessions s ON s.id = m.session_id
+              const rawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
             WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.insertion_order ASC, mc.ordinal ASC`
               const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
