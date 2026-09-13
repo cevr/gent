@@ -9,7 +9,7 @@ import type {
   TurnAfterInput,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
-import type { ExtensionHostContext } from "../../src/domain/extension-host-context"
+import type { ExtensionHostContext } from "../../src/domain/extension-services"
 import { testExtensionHostContext } from "../../src/test-utils"
 import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"

@@ -38,7 +38,7 @@ describe("ambient extension host context", () => {
   it.live("reports the absence only when an unwired facet is called", () =>
     Effect.gen(function* () {
       const ctx = yield* ambientContext
-      const exit = yield* Effect.exit(ctx.interaction.approve(request))
+      const exit = yield* Effect.exit(ctx.Interaction.approve(request))
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
@@ -51,7 +51,7 @@ describe("ambient extension host context", () => {
   it.live("uses the real service once its Tag is in scope", () =>
     Effect.gen(function* () {
       const ctx = yield* ambientContext
-      expect(yield* ctx.interaction.approve(request)).toStrictEqual({ approved: true })
+      expect(yield* ctx.Interaction.approve(request)).toStrictEqual({ approved: true })
     }).pipe(
       Effect.provideService(ApprovalService, {
         present: () => Effect.succeed({ approved: true }),

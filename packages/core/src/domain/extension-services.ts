@@ -1,18 +1,17 @@
-import {
-  Predicate,
-  Context,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Schema,
-  type PlatformError,
-} from "effect"
-import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent.js"
+import { Predicate, Context, Effect, FileSystem, Option, Path, Schema } from "effect"
+import type {
+  AgentDefinition,
+  AgentName,
+  AgentRunError,
+  AgentRunResult,
+  ChildAgentRegistryEntry,
+  RunSpec,
+} from "./agent.js"
 import { DEFAULT_AGENT_NAME } from "./agent.js"
-import type { AgentEvent, EventStoreError } from "./event.js"
+import type { AgentEvent, TurnCompleted } from "./event.js"
 import { hasMessage } from "./guards.js"
 import type {
+  ExtensionHostPlatform,
   ExtensionHostRunProcessOptions,
   ExtensionHostProcessResult,
   ExtensionHostSignal,
@@ -23,11 +22,13 @@ import { makeFileWriter } from "./file-writer.js"
 import { FileLockService } from "./file-lock.js"
 import { ExtensionStatePublisher } from "./event-publisher.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
-import type { ApprovalDecision, ApprovalRequest } from "./interaction-request.js"
-import { InteractionPendingError } from "./interaction-request.js"
-import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids.js"
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  InteractionPendingError,
+} from "./interaction-request.js"
+import { BranchId, ExtensionId, SessionId, type RequestId, type ToolCallId } from "./ids.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
-import type { ExtensionHostContext, ExtensionHostSearchResult } from "./extension-host-context.js"
 
 export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceError>()(
   "@gent/core/src/domain/extension-services/ExtensionServiceError",
@@ -47,7 +48,7 @@ const errorMessage = (cause: unknown): string => {
   return String(cause)
 }
 
-const serviceError =
+export const extensionServiceError =
   (service: string, operation: string) =>
   (cause: unknown): ExtensionServiceError =>
     new ExtensionServiceError({
@@ -62,9 +63,19 @@ const mapError = <A, E, R>(
   operation: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, ExtensionServiceError, R> =>
-  effect.pipe(Effect.mapError(serviceError(service, operation)))
+  effect.pipe(Effect.mapError(extensionServiceError(service, operation)))
 
-interface ExtensionSessionService {
+export class ExtensionHostSearchResult extends Schema.Class<ExtensionHostSearchResult>(
+  "ExtensionHostSearchResult",
+)({
+  sessionId: SessionId,
+  sessionName: Schema.NullOr(Schema.String),
+  branchId: BranchId,
+  snippet: Schema.String,
+  createdAt: Schema.Finite,
+}) {}
+
+export interface ExtensionSessionService {
   readonly listMessages: (
     branchId?: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, ExtensionServiceError>
@@ -124,29 +135,58 @@ interface ExtensionSessionService {
   >
 }
 
-interface ExtensionAgentService extends Pick<
-  ExtensionHostContext.Agent,
-  "inspect" | "list" | "cancel"
-> {
+interface ExtensionAgentStartParams {
+  readonly agent: AgentDefinition
+  readonly prompt: string
+  readonly requestId: RequestId
+  readonly cwd?: string
+  readonly runSpec?: RunSpec
+}
+
+interface ExtensionAgentRunParams {
+  readonly agent: AgentDefinition
+  readonly prompt: string
+  readonly cwd?: string
+  readonly runSpec?: RunSpec
+  /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
+  readonly observe?: (event: AgentEvent) => Effect.Effect<void>
+}
+
+interface ExtensionAgentService {
   readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
   /** Start from a host-owned tool call. The host supplies parent and tool identity. */
   readonly start: (
-    params: Omit<Parameters<ExtensionHostContext.Agent["start"]>[0], "toolCallId">,
+    params: ExtensionAgentStartParams,
   ) => Effect.Effect<
-    Effect.Success<ReturnType<ExtensionHostContext.Agent["start"]>>,
+    { readonly sessionId: SessionId; readonly branchId: BranchId },
     AgentRunError | ExtensionServiceError
   >
-  readonly run: (params: {
-    readonly agent: AgentDefinition
-    readonly prompt: string
-    readonly cwd?: string
-    readonly runSpec?: RunSpec
-    /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
-    readonly observe?: (event: AgentEvent) => Effect.Effect<void>
-  }) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
+  readonly inspect: (params: { readonly requestId: RequestId }) => Effect.Effect<
+    {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly completion: Option.Option<TurnCompleted>
+    },
+    AgentRunError
+  >
+  readonly list: () => Effect.Effect<ReadonlyArray<ChildAgentRegistryEntry>, AgentRunError>
+  readonly cancel: (params: { readonly requestId: RequestId }) => Effect.Effect<void, AgentRunError>
+  readonly run: (
+    params: ExtensionAgentRunParams,
+  ) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
 }
 
-interface ExtensionInteractionService {
+/** The host's agent facet. `start` still needs the tool call the child is owned by. */
+export interface ExtensionHostAgentService extends Omit<ExtensionAgentService, "start"> {
+  readonly start: (
+    params: ExtensionAgentStartParams & { readonly toolCallId: ToolCallId },
+  ) => Effect.Effect<
+    { readonly sessionId: SessionId; readonly branchId: BranchId },
+    AgentRunError | ExtensionServiceError
+  >
+}
+
+export interface ExtensionInteractionService {
   readonly approve: (
     params: ApprovalRequest,
   ) => Effect.Effect<ApprovalDecision, ExtensionServiceError | InteractionPendingError>
@@ -186,9 +226,7 @@ interface ExtensionProcessService {
   readonly parentEnv: Record<string, string | undefined>
 }
 
-const extensionProcessFromHostContext = (
-  host: ExtensionHostContext["host"],
-): ExtensionProcessService => ({
+const extensionProcessFromHostContext = (host: ExtensionHostPlatform): ExtensionProcessService => ({
   randomId: host.randomId,
   run: (command, args, options) =>
     mapError("ExtensionProcess", "run", host.runProcess(command, args, options)),
@@ -257,6 +295,23 @@ interface ExtensionStateServiceApi {
   }) => Effect.Effect<void, ExtensionServiceError>
 }
 
+/**
+ * What the host builds once per run. The per-call context adds tool identity
+ * and the ambient file, lock and state services on top of it.
+ */
+export interface ExtensionHostContext {
+  readonly extensionId?: ExtensionId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName?: AgentName
+  readonly cwd: string
+  readonly home: string
+  readonly host: ExtensionHostPlatform
+  readonly Agent: ExtensionHostAgentService
+  readonly Session: ExtensionSessionService
+  readonly Interaction: ExtensionInteractionService
+}
+
 export interface ExtensionContextService {
   readonly extensionId: ExtensionId
   readonly sessionId: SessionId
@@ -286,26 +341,25 @@ const extensionServicesFromHostContext = (
   },
 ): Effect.Effect<Context.Context<ExtensionContext>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
+    // A session call made later from a background fiber, after the turn that
+    // built this context, must still land in the workspace it was made from.
     const workspaceId = yield* CurrentWorkspaceId
-    const sessionEffect = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
-      mapError("ExtensionSession", operation, effect).pipe(
-        Effect.provideService(CurrentWorkspaceId, workspaceId),
-      )
+    const inWorkspace = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+      effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
     const Session: ExtensionSessionService = {
-      listMessages: (branchId) => sessionEffect("listMessages", ctx.session.listMessages(branchId)),
-      getSession: (sessionId) => sessionEffect("getSession", ctx.session.getSession(sessionId)),
-      getDetail: (sessionId) => sessionEffect("getDetail", ctx.session.getDetail(sessionId)),
-      renameCurrent: (name) => sessionEffect("renameCurrent", ctx.session.renameCurrent(name)),
-      search: (query, options) => sessionEffect("search", ctx.session.search(query, options)),
-      queueFollowUp: (params) => sessionEffect("queueFollowUp", ctx.session.queueFollowUp(params)),
-      dequeueFollowUp: (params) =>
-        sessionEffect("dequeueFollowUp", ctx.session.dequeueFollowUp(params)),
-      listBranches: sessionEffect("listBranches", ctx.session.listBranches()),
-      listSessions: sessionEffect("listSessions", ctx.session.listSessions()),
-      listActiveLoops: sessionEffect("listActiveLoops", ctx.session.listActiveLoops()),
+      listMessages: (branchId) => inWorkspace(ctx.Session.listMessages(branchId)),
+      getSession: (sessionId) => inWorkspace(ctx.Session.getSession(sessionId)),
+      getDetail: (sessionId) => inWorkspace(ctx.Session.getDetail(sessionId)),
+      renameCurrent: (name) => inWorkspace(ctx.Session.renameCurrent(name)),
+      search: (query, options) => inWorkspace(ctx.Session.search(query, options)),
+      queueFollowUp: (params) => inWorkspace(ctx.Session.queueFollowUp(params)),
+      dequeueFollowUp: (params) => inWorkspace(ctx.Session.dequeueFollowUp(params)),
+      listBranches: inWorkspace(ctx.Session.listBranches),
+      listSessions: inWorkspace(ctx.Session.listSessions),
+      listActiveLoops: inWorkspace(ctx.Session.listActiveLoops),
     }
     const Agent: ExtensionAgentService = {
-      listAgents: mapError("ExtensionAgent", "listAgents", ctx.agent.listAgents()),
+      ...ctx.Agent,
       start: Effect.fn("ExtensionAgent.start")(function* (params) {
         if (Predicate.isUndefined(ctx.toolCallId)) {
           return yield* new ExtensionServiceError({
@@ -314,29 +368,8 @@ const extensionServicesFromHostContext = (
             message: "Child start requires a host-owned tool call",
           })
         }
-        return yield* ctx.agent.start({ ...params, toolCallId: ctx.toolCallId })
+        return yield* ctx.Agent.start({ ...params, toolCallId: ctx.toolCallId })
       }),
-      inspect: ctx.agent.inspect,
-      list: ctx.agent.list,
-      cancel: ctx.agent.cancel,
-      run: (params) =>
-        ctx.agent.run(params).pipe(
-          Effect.mapError((cause) => {
-            if (Schema.is(ExtensionServiceError)(cause)) return cause
-            return new ExtensionServiceError({
-              service: "ExtensionAgent",
-              operation: "run",
-              message: errorMessage(cause),
-              cause,
-            })
-          }),
-        ),
-    }
-    const Interaction: ExtensionInteractionService = {
-      approve: (params) => mapInteraction("approve", ctx.interaction.approve(params)),
-      present: (params) => mapInteraction("present", ctx.interaction.present(params)),
-      confirm: (params) => mapInteraction("confirm", ctx.interaction.confirm(params)),
-      review: (params) => mapInteraction("review", ctx.interaction.review(params)),
     }
     const Process = extensionProcessFromHostContext(ctx.host)
 
@@ -448,7 +481,7 @@ const extensionServicesFromHostContext = (
         home: ctx.home,
         Session,
         Agent,
-        Interaction,
+        Interaction: ctx.Interaction,
         Process,
         Files,
         FileLock,
@@ -456,19 +489,6 @@ const extensionServicesFromHostContext = (
       }),
     )
   })
-
-const mapInteraction = <A>(
-  operation: string,
-  effect: Effect.Effect<A, EventStoreError | InteractionPendingError | PlatformError.PlatformError>,
-): Effect.Effect<A, ExtensionServiceError | InteractionPendingError> =>
-  effect.pipe(
-    Effect.mapError((cause) => {
-      if (Schema.is(InteractionPendingError)(cause)) {
-        return cause
-      }
-      return serviceError("ExtensionInteraction", operation)(cause)
-    }),
-  )
 
 export const provideExtensionServices = <A, E, R>(
   ctx: ExtensionHostContext & {

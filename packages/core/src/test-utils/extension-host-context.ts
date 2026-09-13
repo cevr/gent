@@ -1,47 +1,52 @@
 import { Effect, Random } from "effect"
 import { ExtensionHostProcessError } from "../domain/extension.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import type {
+  ExtensionHostAgentService,
+  ExtensionHostContext,
+  ExtensionInteractionService,
+  ExtensionSessionService,
+} from "../domain/extension-services.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 
 type TestExtensionHostContextOverrides = Omit<
   Partial<ExtensionHostContext>,
-  "agent" | "session" | "interaction"
+  "Agent" | "Session" | "Interaction"
 > & {
-  readonly agent?: Partial<ExtensionHostContext.Agent>
-  readonly session?: Partial<ExtensionHostContext.SessionFacet>
-  readonly interaction?: Partial<ExtensionHostContext.Interaction>
+  readonly Agent?: Partial<ExtensionHostAgentService>
+  readonly Session?: Partial<ExtensionSessionService>
+  readonly Interaction?: Partial<ExtensionInteractionService>
 }
 
 const die = (operation: string) =>
   Effect.die(new Error(`unconfigured test ExtensionHostContext.${operation}`))
 
-const defaultAgent = (): ExtensionHostContext.Agent => ({
-  listAgents: () => die("agent.listAgents"),
-  start: () => die("agent.start"),
-  inspect: () => die("agent.inspect"),
-  list: () => die("agent.list"),
-  cancel: () => die("agent.cancel"),
-  run: () => die("agent.run"),
+const defaultAgent = (): ExtensionHostAgentService => ({
+  listAgents: die("Agent.listAgents"),
+  start: () => die("Agent.start"),
+  inspect: () => die("Agent.inspect"),
+  list: () => die("Agent.list"),
+  cancel: () => die("Agent.cancel"),
+  run: () => die("Agent.run"),
 })
 
-const defaultSession = (): ExtensionHostContext.SessionFacet => ({
-  listMessages: () => die("session.listMessages"),
-  getSession: () => die("session.getSession"),
-  getDetail: () => die("session.getDetail"),
-  renameCurrent: () => die("session.renameCurrent"),
-  search: () => die("session.search"),
-  queueFollowUp: () => die("session.queueFollowUp"),
-  dequeueFollowUp: () => die("session.dequeueFollowUp"),
-  listBranches: () => die("session.listBranches"),
-  listSessions: () => die("session.listSessions"),
-  listActiveLoops: () => die("session.listActiveLoops"),
+const defaultSession = (): ExtensionSessionService => ({
+  listMessages: () => die("Session.listMessages"),
+  getSession: () => die("Session.getSession"),
+  getDetail: () => die("Session.getDetail"),
+  renameCurrent: () => die("Session.renameCurrent"),
+  search: () => die("Session.search"),
+  queueFollowUp: () => die("Session.queueFollowUp"),
+  dequeueFollowUp: () => die("Session.dequeueFollowUp"),
+  listBranches: die("Session.listBranches"),
+  listSessions: die("Session.listSessions"),
+  listActiveLoops: die("Session.listActiveLoops"),
 })
 
-const defaultInteraction = (): ExtensionHostContext.Interaction => ({
-  approve: () => die("interaction.approve"),
-  present: () => die("interaction.present"),
-  confirm: () => die("interaction.confirm"),
-  review: () => die("interaction.review"),
+const defaultInteraction = (): ExtensionInteractionService => ({
+  approve: () => die("Interaction.approve"),
+  present: () => die("Interaction.present"),
+  confirm: () => die("Interaction.confirm"),
+  review: () => die("Interaction.review"),
 })
 
 export const testExtensionHostContext = (
@@ -77,7 +82,7 @@ export const testExtensionHostContext = (
       ),
   },
   agentName: overrides.agentName,
-  agent: { ...defaultAgent(), ...overrides.agent },
-  session: { ...defaultSession(), ...overrides.session },
-  interaction: { ...defaultInteraction(), ...overrides.interaction },
+  Agent: { ...defaultAgent(), ...overrides.Agent },
+  Session: { ...defaultSession(), ...overrides.Session },
+  Interaction: { ...defaultInteraction(), ...overrides.Interaction },
 })

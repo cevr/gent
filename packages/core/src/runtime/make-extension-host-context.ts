@@ -5,13 +5,15 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Predicate, Context, Effect, Option } from "effect"
+import { Predicate, Context, Effect, Option, Schema } from "effect"
 import { ActorStateRegistry, listStateEntityIds } from "effect-encore"
 import {
-  ExtensionHostError,
   ExtensionHostSearchResult,
+  type ExtensionServiceError,
+  extensionServiceError,
   type ExtensionHostContext,
-} from "../domain/extension-host-context.js"
+} from "../domain/extension-services.js"
+import { InteractionPendingError } from "../domain/interaction-request.js"
 import { AgentRunnerService, type AgentRunner, type AgentName } from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
@@ -29,7 +31,6 @@ import { SearchStorage, type SearchStorageService } from "../storage/search-stor
 import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
 import type { MessageMetadata } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
-import { hasMessage } from "../domain/guards.js"
 import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
 import { listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
@@ -129,20 +130,19 @@ type AmbientHostContextDefaults = Pick<
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
 
-const errorMessage = (error: Parameters<typeof hasMessage>[0]): string => {
-  if (Predicate.isError(error)) return error.message
-  if (hasMessage(error)) return error.message
-  return String(error)
-}
+const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
 
-const toHostError =
-  (operation: string) =>
-  (error: Parameters<typeof hasMessage>[0]): ExtensionHostError =>
-    new ExtensionHostError({
-      operation,
-      message: errorMessage(error),
-      cause: error,
-    })
+/** A pending interaction is the caller's to handle; anything else is a service failure. */
+const mapInteraction = <A, E>(
+  operation: string,
+  effect: Effect.Effect<A, E>,
+): Effect.Effect<A, ExtensionServiceError | InteractionPendingError> =>
+  effect.pipe(
+    Effect.mapError((cause) => {
+      if (Schema.is(InteractionPendingError)(cause)) return cause
+      return extensionServiceError("ExtensionInteraction", operation)(cause)
+    }),
+  )
 
 const unavailablePlatform: RuntimeEnvironmentApi = { cwd: "", home: "", platform: "unknown" }
 
@@ -378,8 +378,8 @@ const makeExtensionHostContext = (
     home: deps.platform.home,
     host: deps.host,
 
-    agent: {
-      listAgents: () => Effect.succeed([...deps.extensionRegistry.getResolved().agents.values()]),
+    Agent: {
+      listAgents: Effect.succeed([...deps.extensionRegistry.getResolved().agents.values()]),
       start: (params) =>
         deps.agentRunner.start({
           ...params,
@@ -405,34 +405,36 @@ const makeExtensionHostContext = (
           parentBranchId: runInfo.branchId,
         }),
       run: (params) =>
-        deps.agentRunner.run({
-          agent: params.agent,
-          prompt: params.prompt,
-          parentSessionId: runInfo.sessionId,
-          parentBranchId: runInfo.branchId,
-          cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
-          runSpec: params.runSpec,
-          observe: params.observe,
-        }),
+        deps.agentRunner
+          .run({
+            agent: params.agent,
+            prompt: params.prompt,
+            parentSessionId: runInfo.sessionId,
+            parentBranchId: runInfo.branchId,
+            cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
+            runSpec: params.runSpec,
+            observe: params.observe,
+          })
+          .pipe(Effect.mapError(extensionServiceError("ExtensionAgent", "run"))),
     },
 
-    session: {
+    Session: {
       listMessages: (branchId) =>
         deps.messageStorage
           .listMessages(branchId ?? runInfo.branchId)
-          .pipe(Effect.mapError(toHostError("session.listMessages"))),
+          .pipe(Effect.mapError(sessionError("listMessages"))),
       getSession: (sessionId) =>
         deps.sessionStorage
           .getSession(sessionId ?? runInfo.sessionId)
-          .pipe(Effect.mapError(toHostError("session.getSession"))),
+          .pipe(Effect.mapError(sessionError("getSession"))),
       getDetail: (sessionId) =>
         deps.relationshipStorage
           .getSessionDetail(sessionId)
-          .pipe(Effect.mapError(toHostError("session.getDetail"))),
+          .pipe(Effect.mapError(sessionError("getDetail"))),
       renameCurrent: (name) =>
         deps.sessionMutations
           .renameSession({ sessionId: runInfo.sessionId, name })
-          .pipe(Effect.mapError(toHostError("session.renameCurrent"))),
+          .pipe(Effect.mapError(sessionError("renameCurrent"))),
       search: (query, options) =>
         deps.searchStorage.searchMessages(query, options).pipe(
           Effect.map((results) =>
@@ -446,9 +448,8 @@ const makeExtensionHostContext = (
               }),
             ),
           ),
-          Effect.mapError(toHostError("session.search")),
+          Effect.mapError(sessionError("search")),
         ),
-
       queueFollowUp: (params) =>
         deps.sessionControl
           .queueFollowUp({
@@ -459,8 +460,7 @@ const makeExtensionHostContext = (
             metadata: params.metadata,
             wake: params.wake,
           })
-          .pipe(Effect.mapError(toHostError("session.queueFollowUp"))),
-
+          .pipe(Effect.mapError(sessionError("queueFollowUp"))),
       dequeueFollowUp: (params) =>
         deps.sessionControl
           .dequeueFollowUp({
@@ -468,44 +468,52 @@ const makeExtensionHostContext = (
             sessionId: runInfo.sessionId,
             branchId: params.branchId ?? runInfo.branchId,
           })
-          .pipe(Effect.mapError(toHostError("session.dequeueFollowUp"))),
-
-      listBranches: () =>
-        deps.branchStorage
-          .listBranches(runInfo.sessionId)
-          .pipe(Effect.mapError(toHostError("session.listBranches"))),
-
-      listSessions: () =>
-        deps.sessionStorage.listSessions.pipe(Effect.mapError(toHostError("session.listSessions"))),
-
-      listActiveLoops: () =>
-        deps.activeLoops.list.pipe(Effect.mapError(toHostError("session.listActiveLoops"))),
+          .pipe(Effect.mapError(sessionError("dequeueFollowUp"))),
+      listBranches: deps.branchStorage
+        .listBranches(runInfo.sessionId)
+        .pipe(Effect.mapError(sessionError("listBranches"))),
+      listSessions: deps.sessionStorage.listSessions.pipe(
+        Effect.mapError(sessionError("listSessions")),
+      ),
+      listActiveLoops: deps.activeLoops.list.pipe(Effect.mapError(sessionError("listActiveLoops"))),
     },
 
-    interaction: {
+    Interaction: {
       approve: (params) =>
-        deps.approvalService.present(params, {
-          sessionId: runInfo.sessionId,
-          branchId: runInfo.branchId,
-        }),
+        mapInteraction(
+          "approve",
+          deps.approvalService.present(params, {
+            sessionId: runInfo.sessionId,
+            branchId: runInfo.branchId,
+          }),
+        ),
       present: (params) =>
-        deps.promptPresenter.present({
-          sessionId: runInfo.sessionId,
-          branchId: runInfo.branchId,
-          ...params,
-        }),
+        mapInteraction(
+          "present",
+          deps.promptPresenter.present({
+            sessionId: runInfo.sessionId,
+            branchId: runInfo.branchId,
+            ...params,
+          }),
+        ),
       confirm: (params) =>
-        deps.promptPresenter.confirm({
-          sessionId: runInfo.sessionId,
-          branchId: runInfo.branchId,
-          ...params,
-        }),
+        mapInteraction(
+          "confirm",
+          deps.promptPresenter.confirm({
+            sessionId: runInfo.sessionId,
+            branchId: runInfo.branchId,
+            ...params,
+          }),
+        ),
       review: (params) =>
-        deps.promptPresenter.review({
-          sessionId: runInfo.sessionId,
-          branchId: runInfo.branchId,
-          ...params,
-        }),
+        mapInteraction(
+          "review",
+          deps.promptPresenter.review({
+            sessionId: runInfo.sessionId,
+            branchId: runInfo.branchId,
+            ...params,
+          }),
+        ),
     },
   }
   return hostCtx

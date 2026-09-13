@@ -137,8 +137,8 @@ describe("extension capability registries", () => {
           sessionId: SessionId.make("request-session"),
           branchId: BranchId.make("request-branch"),
           host: { ...testExtensionHostContext().host, parentEnv: { TEST_VALUE: "visible" } },
-          session: { queueFollowUp: () => Effect.void },
-          interaction: { present: () => Effect.void },
+          Session: { queueFollowUp: () => Effect.void },
+          Interaction: { present: () => Effect.void },
         }),
       )
       expect(result).toEqual({

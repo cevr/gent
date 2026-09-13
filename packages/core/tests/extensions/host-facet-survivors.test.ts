@@ -2,7 +2,7 @@
  * Host facet survivor regression suite.
  *
  * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.session.listBranches` and the `requireAgent` helper remain as the
+ * `ctx.Session.listBranches` and the `requireAgent` helper remain as the
  * two non-trivial host-wired behaviors with no other direct test coverage.
  * The RPC suites exercise the durable mutation surface from the public
  * RPC angle; these tests pin the host-facet shape from the extension
@@ -136,7 +136,7 @@ describe("host facet survivors after C9.5 prune", () => {
     }),
   )
 
-  it.live("ctx.session.listBranches returns branches for the current session", () =>
+  it.live("ctx.Session.listBranches returns branches for the current session", () =>
     Effect.gen(function* () {
       const session = new Session({
         id: SESSION_ID,
@@ -164,7 +164,7 @@ describe("host facet survivors after C9.5 prune", () => {
         sessionId: SESSION_ID,
         branchId: BRANCH_ID,
       })
-      const branches = yield* ctx.session.listBranches()
+      const branches = yield* ctx.Session.listBranches
       expect(branches).toHaveLength(1)
       expect(branches[0]!.id).toBe(BRANCH_ID)
     }),

@@ -24,7 +24,7 @@ import {
   ToolResultFailure,
 } from "../../domain/tool-output.js"
 import { withWideEvent, WideEvent, WideEventBoundary } from "../wide-event-boundary"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import type { ExtensionHostContext } from "../../domain/extension-services.js"
 import { ToolCallId, type ExtensionId } from "../../domain/ids.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"

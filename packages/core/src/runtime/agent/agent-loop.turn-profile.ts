@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import type { ExtensionHostContext } from "../../domain/extension-services.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import type { PromptSection } from "../../domain/prompt.js"

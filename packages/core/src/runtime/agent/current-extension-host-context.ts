@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import type { ExtensionHostContext } from "../../domain/extension-services.js"
 
 export class CurrentExtensionHostContext extends Context.Service<
   CurrentExtensionHostContext,

@@ -18,9 +18,9 @@ import {
   ExtensionContext,
   ExtensionServiceError,
   type ExtensionContextService,
+  type ExtensionHostContext,
 } from "../domain/extension-services.js"
 import { getToolEffect } from "../domain/capability/tool.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -116,34 +116,13 @@ const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
 export type TestToolContext = ExtensionHostContext &
   ExtensionContextService & { readonly toolCallId: ToolCallId }
 
-type TestToolContextOverrides = Omit<Partial<TestToolContext>, "agent" | "Agent"> & {
-  readonly agent?: Partial<ExtensionHostContext.Agent>
-  readonly Agent?: Partial<ExtensionContextService["Agent"]>
+type TestToolContextOverrides = Omit<Partial<TestToolContext>, "Agent"> & {
+  readonly Agent?: Partial<TestToolContext["Agent"]>
 }
 
 /** Default ToolCapabilityContext for tests — overridable via spread */
 export const testToolContext = (overrides?: TestToolContextOverrides): TestToolContext => {
   const host = testExtensionHostContext().host
-  const agent = {
-    listAgents: dieStub("agent.listAgents"),
-    start: dieStub("agent.start"),
-    inspect: dieStub("agent.inspect"),
-    list: dieStub("agent.list"),
-    cancel: dieStub("agent.cancel"),
-    run: dieStub("agent.run"),
-  }
-  const session = {
-    listMessages: dieStub("session.listMessages"),
-    getSession: dieStub("session.getSession"),
-    getDetail: dieStub("session.getDetail"),
-    renameCurrent: dieStub("session.renameCurrent"),
-    search: dieStub("session.search"),
-    queueFollowUp: dieStub("session.queueFollowUp"),
-    dequeueFollowUp: dieStub("session.dequeueFollowUp"),
-    listBranches: dieStub("session.listBranches"),
-    listSessions: dieStub("session.listSessions"),
-    listActiveLoops: dieStub("session.listActiveLoops"),
-  }
   const Agent: ExtensionContextService["Agent"] = {
     listAgents: dieEffect("agent.listAgents"),
     start: dieStub("agent.start"),
@@ -164,11 +143,11 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     listSessions: dieEffect("session.listSessions"),
     listActiveLoops: dieEffect("session.listActiveLoops"),
   }
-  const interaction = {
-    approve: dieStub("interaction.approve"),
-    present: dieStub("interaction.present"),
-    confirm: dieStub("interaction.confirm"),
-    review: dieStub("interaction.review"),
+  const Interaction: ExtensionContextService["Interaction"] = {
+    approve: dieStub("Interaction.approve"),
+    present: dieStub("Interaction.present"),
+    confirm: dieStub("Interaction.confirm"),
+    review: dieStub("Interaction.review"),
   }
   const process: ExtensionContextService["Process"] = {
     randomId: host.randomId,
@@ -263,7 +242,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
   }
   const resolvedAgent = { ...Agent, ...overrides?.Agent }
   const resolvedSession = overrides?.Session ?? Session
-  const resolvedInteraction = overrides?.Interaction ?? interaction
+  const resolvedInteraction = overrides?.Interaction ?? Interaction
   const resolvedProcess = overrides?.Process ?? process
   const resolvedFiles = overrides?.Files ?? files
   const resolvedFileLock = overrides?.FileLock ?? fileLock
@@ -278,8 +257,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     cwd: "/tmp",
     home: "/tmp",
     host,
-    session,
-    interaction,
     Session: resolvedSession,
     Interaction: resolvedInteraction,
     Process: resolvedProcess,
@@ -287,7 +264,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     FileLock: resolvedFileLock,
     State: resolvedState,
     ...overrides,
-    agent: { ...agent, ...overrides?.agent },
     Agent: resolvedAgent,
   }
 }
