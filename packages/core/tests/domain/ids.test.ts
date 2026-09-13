@@ -11,9 +11,7 @@ import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
 import {
   ActorCommandId,
-  ActorId,
   BranchId,
-  CommandId,
   ExtensionId,
   InteractionRequestId,
   MessageId,
@@ -34,9 +32,8 @@ describe("branded ids — roundtrip", () => {
     expect(String(id)).toBe("tc-1")
   })
 
-  test("ToolId, CommandId, RpcId all roundtrip", () => {
+  test("ToolId and RpcId roundtrip", () => {
     expect(String(Schema.decodeSync(ToolId)("read_file"))).toBe("read_file")
-    expect(String(Schema.decodeSync(CommandId)("executor-start"))).toBe("executor-start")
     expect(String(Schema.decodeSync(RpcId)("todo.list"))).toBe("todo.list")
   })
 
@@ -46,8 +43,7 @@ describe("branded ids — roundtrip", () => {
     expect(String(Schema.decodeSync(ActorCommandId)("a-1"))).toBe("a-1")
   })
 
-  test("ActorId, InteractionRequestId, ExtensionId all roundtrip", () => {
-    expect(String(Schema.decodeSync(ActorId)("actor-1"))).toBe("actor-1")
+  test("InteractionRequestId and ExtensionId roundtrip", () => {
     expect(String(Schema.decodeSync(InteractionRequestId)("int-1"))).toBe("int-1")
     expect(String(Schema.decodeSync(ExtensionId)("@gent/x"))).toBe("@gent/x")
   })
@@ -68,29 +64,23 @@ describe("branded ids — cross-brand assignability is a type error", () => {
     expect(String(session)).toBe("tc-1")
   })
 
-  test("ExtensionId, ActorId, InteractionRequestId are mutually non-assignable", () => {
+  test("ExtensionId and InteractionRequestId are mutually non-assignable", () => {
     const ext = Schema.decodeSync(ExtensionId)("@gent/x")
-    const actor = Schema.decodeSync(ActorId)("a-1")
     const interaction = Schema.decodeSync(InteractionRequestId)("int-1")
     // @ts-expect-error
-    const a: ActorId = ext
+    const a: InteractionRequestId = ext
     // @ts-expect-error
-    const b: InteractionRequestId = actor
-    // @ts-expect-error
-    const c: ExtensionId = interaction
-    expect([String(a), String(b), String(c)]).toEqual(["@gent/x", "a-1", "int-1"])
+    const b: ExtensionId = interaction
+    expect([String(a), String(b)]).toEqual(["@gent/x", "int-1"])
   })
 
-  test("ToolId, CommandId, RpcId are mutually non-assignable", () => {
+  test("ToolId and RpcId are mutually non-assignable", () => {
     const tool = Schema.decodeSync(ToolId)("read_file")
-    const command = Schema.decodeSync(CommandId)("executor-start")
     const rpc = Schema.decodeSync(RpcId)("todo.list")
     // @ts-expect-error
-    const a: CommandId = tool
+    const a: RpcId = tool
     // @ts-expect-error
-    const b: RpcId = command
-    // @ts-expect-error
-    const c: ToolId = rpc
-    expect([String(a), String(b), String(c)]).toEqual(["read_file", "executor-start", "todo.list"])
+    const b: ToolId = rpc
+    expect([String(a), String(b)]).toEqual(["read_file", "todo.list"])
   })
 })

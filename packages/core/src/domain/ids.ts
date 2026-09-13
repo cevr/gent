@@ -21,20 +21,11 @@ export type ToolCallId = typeof ToolCallId.Type
 export const ToolId = Schema.String.pipe(branded("ToolId"))
 export type ToolId = typeof ToolId.Type
 
-const ToolName = Schema.String.pipe(branded("ToolName"))
-type ToolName = typeof ToolName.Type
-
-export const CommandId = Schema.String.pipe(branded("CommandId"))
-export type CommandId = typeof CommandId.Type
-
 export const RpcId = Schema.String.pipe(branded("RpcId"))
 export type RpcId = typeof RpcId.Type
 
 export const ActorCommandId = Schema.String.pipe(branded("ActorCommandId"))
 export type ActorCommandId = typeof ActorCommandId.Type
-
-export const ActorId = Schema.String.pipe(branded("ActorId"))
-export type ActorId = typeof ActorId.Type
 
 export const InteractionRequestId = Schema.String.pipe(branded("InteractionRequestId"))
 export type InteractionRequestId = typeof InteractionRequestId.Type

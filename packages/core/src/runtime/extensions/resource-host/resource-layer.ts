@@ -39,25 +39,6 @@ export const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-const mergeResourceServiceLayers = (entries: ReadonlyArray<ResourceEntry>): ErasedResourceLayer =>
-  entries.reduce<ErasedResourceLayer>(
-    (acc, { resource }) =>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
-      Layer.merge(acc, eraseResourceLayer(resource.layer)),
-    emptyErasedResourceLayer,
-  )
-
-export const buildResourceServiceLayer = (
-  extensions: ReadonlyArray<LoadedExtension>,
-  scope: ResourceScope = "process",
-): ErasedResourceLayer => {
-  const entries = collectResourceEntries(extensions, scope)
-  if (entries.length === 0) {
-    return emptyErasedResourceLayer
-  }
-  return mergeResourceServiceLayers(entries)
-}
-
 const buildLifecycleLayer = (
   entries: ReadonlyArray<ResourceEntry>,
 ): Layer.Layer<never, ResourceStartError> =>
@@ -97,7 +78,12 @@ export const buildResourceLayer = (
   const entries = collectResourceEntries(extensions, scope)
   if (entries.length === 0) return emptyErasedResourceLayer
 
-  const serviceLayers = mergeResourceServiceLayers(entries)
+  const serviceLayers = entries.reduce<ErasedResourceLayer>(
+    (acc, { resource }) =>
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
+      Layer.merge(acc, eraseResourceLayer(resource.layer)),
+    emptyErasedResourceLayer,
+  )
   const hasLifecycle = entries.some(
     ({ resource }) =>
       !Predicate.isUndefined(resource.start) || !Predicate.isUndefined(resource.stop),

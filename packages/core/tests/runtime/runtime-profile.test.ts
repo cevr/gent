@@ -16,7 +16,6 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
-  buildExtensionLayers,
   loadRuntimeProfileDeclarations,
   type RuntimeProfileInputs,
 } from "../../src/runtime/profile"
@@ -223,14 +222,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(inputs)
         expect(events).toEqual([])
-        expect(declarations.extensionSectionInputs).toEqual([
-          {
-            id: "rp-declaration-prompt-section",
-            content: "loaded during declaration setup",
-            priority: 1,
-          },
-        ])
-        expect(declarations.resolved.failedExtensions).toContainEqual(
+        expect(declarations.extensionDeclarations.failed).toContainEqual(
           expect.objectContaining({
             manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
             phase: "validation",
@@ -240,6 +232,11 @@ describe("live Profile", () => {
         const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs)))
         expect(runtimeExit._tag).toBe("Success")
         if (runtimeExit._tag === "Success") {
+          expect(runtimeExit.value.profile.baseSections).toContainEqual({
+            id: "rp-declaration-prompt-section",
+            content: "loaded during declaration setup",
+            priority: 1,
+          })
           expect(runtimeExit.value.profile.resolved.failedExtensions).toContainEqual(
             expect.objectContaining({
               manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
@@ -462,35 +459,22 @@ describe("live Profile", () => {
             extensions,
           })
           expect(Context.get(runtime.layerContext, PrecedenceProbe).value).toBe(expected)
-
-          const builderContext = yield* Layer.build(
-            buildExtensionLayers(runtime.profile.resolved, {
-              lifecycle: "skip",
-            }),
-          ).pipe(Effect.scoped)
-          expect(Context.get(builderContext, PrecedenceProbe).value).toBe(expected)
         }
 
         expect(starts).toBe(2)
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("buildExtensionLayers wires ExtensionRegistry from resolved data", () =>
+  test("the profile's ExtensionRegistry carries the resolved prompt sections", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { profile } = yield* openProfile({
+        const { layerContext } = yield* openProfile({
           cwd: "/tmp",
           home: "/tmp",
           platform: "darwin",
           extensions: [sectionExtension],
         })
-
-        const layer = buildExtensionLayers(profile.resolved)
-
-        const registryService = yield* Layer.build(layer).pipe(
-          Effect.scoped,
-          Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
-        )
+        const registryService = Context.get(layerContext, ExtensionRegistry)
 
         const sections = [...registryService.getResolved().promptSections.values()]
         const ids = sections.map((s) => s.id)
@@ -498,20 +482,16 @@ describe("live Profile", () => {
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("resource-backed turnProjection resolves through buildExtensionLayers", () =>
+  test("resource-backed turnProjection resolves through the profile registry", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { profile } = yield* openProfile({
+        const { layerContext } = yield* openProfile({
           cwd: "/tmp",
           home: "/tmp",
           platform: "darwin",
           extensions: [dynamicExtension],
         })
-        const layer = buildExtensionLayers(profile.resolved)
-        const registryService = yield* Layer.build(layer).pipe(
-          Effect.scoped,
-          Effect.map((ctx) => Context.get(ctx, ExtensionRegistry)),
-        )
+        const registryService = Context.get(layerContext, ExtensionRegistry)
 
         const hookCtx = {
           projection: {
@@ -538,8 +518,7 @@ describe("live Profile", () => {
           .resolveTurnProjection(hookCtx.projection)
           .pipe(
             Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-            Effect.provide(layer),
+            Effect.provideContext(layerContext),
           )
 
         expect(result.promptSections).toContainEqual({

@@ -1,12 +1,37 @@
 import { Predicate, Context, Effect, Layer, Option } from "effect"
 import { Auth, AuthApi, AuthOauth, AuthAuthorization } from "../domain/auth.js"
-import type { AuthMethod } from "../domain/auth.js"
+import type { AuthMethod, AuthService } from "../domain/auth.js"
 import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
 import type { SessionId } from "../domain/ids.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 
 export { ProviderAuthError } from "../domain/driver.js"
+
+const authValue = (auth: Parameters<PersistAuth>[0]): AuthApi | AuthOauth => {
+  if (auth.type === "api") return AuthApi.make({ type: "api", key: auth.key })
+  return AuthOauth.make({
+    type: "oauth",
+    access: auth.access,
+    refresh: auth.refresh,
+    expires: auth.expires,
+    accountId: auth.accountId,
+  })
+}
+
+/** Build a PersistAuth callback for a provider — writes credentials to Auth. */
+export const persistAuthTo =
+  (authStore: AuthService, providerId: string): PersistAuth =>
+  (auth) =>
+    authStore.set(providerId, authValue(auth)).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to persist auth for provider "${providerId}"`,
+            cause: e,
+          }),
+      ),
+    )
 
 interface ProviderAuthService {
   readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
@@ -38,42 +63,7 @@ const makeProviderAuth: Effect.Effect<
     return String(cause)
   }
 
-  /** Build a PersistAuth callback for a provider — writes credentials to Auth */
-  const makePersist =
-    (providerId: string): PersistAuth =>
-    (auth) => {
-      if (auth.type === "api") {
-        return authStore.set(providerId, AuthApi.make({ type: "api", key: auth.key })).pipe(
-          Effect.mapError(
-            (e) =>
-              new ProviderAuthError({
-                message: `Failed to persist auth for provider "${providerId}"`,
-                cause: e,
-              }),
-          ),
-        )
-      }
-      return authStore
-        .set(
-          providerId,
-          AuthOauth.make({
-            type: "oauth",
-            access: auth.access,
-            refresh: auth.refresh,
-            expires: auth.expires,
-            accountId: auth.accountId,
-          }),
-        )
-        .pipe(
-          Effect.mapError(
-            (e) =>
-              new ProviderAuthError({
-                message: `Failed to persist auth for provider "${providerId}"`,
-                cause: e,
-              }),
-          ),
-        )
-    }
+  const makePersist = (providerId: string) => persistAuthTo(authStore, providerId)
 
   const listMethods = Effect.gen(function* () {
     const result: Record<string, ReadonlyArray<AuthMethod>> = {}

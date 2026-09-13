@@ -86,7 +86,6 @@ const effectiveInputs = (
   )
   return {
     ...inputs,
-    config,
     disabledExtensions: [...explicitDisabled, ...configDisabled],
   }
 }

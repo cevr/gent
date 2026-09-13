@@ -8,7 +8,7 @@
  * Import from @gent/core-internal/test-utils/e2e-layer
  */
 
-import { Predicate, Effect, Layer, Option, Ref } from "effect"
+import { Predicate, Effect, Layer, Option } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition, AgentRunner, AgentRunnerService } from "../domain/agent.js"
@@ -30,7 +30,6 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,
-  testObservability,
   testEnvironment,
   testIdentity,
   testOverrides,
@@ -172,7 +171,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
   return makeServerRootLayer({
-    observability: testObservability,
+    observability: Layer.empty,
     dependencies: {
       ...testEnvironment,
       persistenceMode: Option.fromUndefinedOr(config.storagePath).pipe(
@@ -196,33 +195,3 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     identity: testIdentity(config.storagePath),
   }).pipe(Layer.provide(BunServices.layer))
 }
-
-// ── Test helpers ──
-
-/**
- * ApprovalService that tracks whether present() was called.
- *
- * Returns a Layer + a Ref<boolean> that flips to true if present() fires.
- * Always resolves with approved=true so tests don't hang.
- *
- * Usage:
- * ```ts
- * const { layer, presentCalled } = yield* trackingApprovalService
- * // ... provide layer ...
- * expect(yield* Ref.get(presentCalled)).toBe(false)
- * ```
- */
-export const trackingApprovalService = Effect.gen(function* () {
-  const presentCalled = yield* Ref.make(false)
-  const layer = Layer.succeed(
-    ApprovalService,
-    ApprovalService.of({
-      present: () => Ref.set(presentCalled, true).pipe(Effect.as({ approved: true })),
-      pendingRequestId: () => Effect.undefined,
-      storeResolution: () => Effect.void,
-      respond: () => Effect.void,
-      rehydrate: () => Effect.void,
-    }),
-  )
-  return { layer, presentCalled }
-})

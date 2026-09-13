@@ -39,7 +39,7 @@ import { SlashCommandInfo } from "../../src/server/transport-contract"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
-import { buildExtensionLayers } from "../../src/runtime/profile"
+import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import { defineResource } from "../../src/domain/resource"
 import type { PermissionService } from "../../src/domain/permission"
 import {
@@ -118,7 +118,18 @@ describe("extension command RPCs", () => {
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     Effect.gen(function* () {
       const resolved = resolveExtensions(extensions)
-      const layerContext = yield* Layer.build(buildExtensionLayers(resolved))
+      const layerContext = yield* Layer.build(
+        Layer.provideMerge(
+          buildResourceLayer(resolved.extensions, "process"),
+          Layer.mergeAll(
+            ExtensionRegistry.fromResolved(resolved),
+            DriverRegistry.fromResolved({
+              modelDrivers: resolved.modelDrivers,
+              externalDrivers: resolved.externalDrivers,
+            }),
+          ),
+        ),
+      )
       return {
         cwd,
         resolved,

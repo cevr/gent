@@ -13,15 +13,10 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type { GentPlatform } from "./gent-platform.js"
 import {
   ExtensionRegistry,
-  resolveExtensions,
   type ExtensionRegistryService,
   type ResolvedExtensions,
 } from "./extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
-import {
-  buildResourceLayer,
-  buildResourceServiceLayer,
-} from "./extensions/resource-host/resource-layer.js"
 import {
   setupExtensions,
   validateLoadedExtensions,
@@ -30,7 +25,7 @@ import {
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
 import { environmentSection } from "../domain/prompt.js"
-import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
+import type { ConfigServiceService, UserConfig } from "./config-service.js"
 import type { ProcessRunner } from "./run-process.js"
 import type { ProcessGenerationId } from "../domain/process-generation.js"
 
@@ -48,7 +43,6 @@ export interface RuntimeProfileInputs {
   readonly osVersion?: string
   readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Fresh config supplied by an explicit refresh. */
-  readonly config?: UserConfig
   readonly disabledExtensions?: ReadonlyArray<string>
 }
 
@@ -86,11 +80,8 @@ export interface SessionProfile {
  */
 interface RuntimeProfileDeclarations {
   readonly cwd: string
-  readonly config: UserConfig
   readonly extensionDeclarations: ExtensionActivationResult
-  readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
-  readonly extensionSectionInputs: ReadonlyArray<PromptSection>
 }
 
 const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
@@ -134,20 +125,12 @@ export const loadRuntimeProfileDeclarations = (
 ): Effect.Effect<
   RuntimeProfileDeclarations,
   never,
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner
-  | ConfigService
-  | GentPlatform
-  | ProcessRunner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform | ProcessRunner
 > =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const fs = yield* FileSystem.FileSystem
-    const configService = yield* ConfigService
-
     const canonicalCwd = path.resolve(inputs.cwd)
-    const config = inputs.config ?? (yield* configService.get(canonicalCwd))
 
     // 1. Disabled set (file-based + caller-provided)
     const disabledSet = yield* readDisabledExtensions({
@@ -202,8 +185,6 @@ export const loadRuntimeProfileDeclarations = (
       active: extensionDeclarations.active,
       failed: [...setup.failed, ...extensionDeclarations.failed],
     }
-    const resolved = resolveExtensions(declarations.active, declarations.failed)
-
     // 5. Build base prompt sections (core writes the environment; extensions shadow by id)
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
@@ -220,60 +201,12 @@ export const loadRuntimeProfileDeclarations = (
       }),
     ]
 
-    // Extension prompt sections come pre-merged in scope-precedence order from
-    // `resolveExtensions` (project > user > builtin). Dynamic sections are
-    // assembled per-turn by extension hooks.
-    const extensionSectionInputs = [...resolved.promptSections.values()]
-
     return {
       cwd: canonicalCwd,
-      config,
       extensionDeclarations: declarations,
-      resolved,
       coreSections,
-      extensionSectionInputs,
     }
   })
-
-/**
- * Build the extension-side layers (registry, state runtime, extension-contributed
- * services) from a resolved profile.
- *
- * Ephemeral children forward the parent's declarations and rebuild private
- * services with lifecycle disabled. Live profiles build resources per
- * extension and call buildProfileCatalog instead. Direct test fixtures can own
- * a scoped layer.
- */
-export const buildExtensionLayers = (
-  resolved: ResolvedExtensions,
-  options?: {
-    readonly lifecycle?: "run" | "skip"
-  },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous extension Resource services are intentionally erased at this host membrane
-): Layer.Layer<any, never, never> => {
-  // Child runs rebuild private resource values without process lifecycle hooks.
-  const resourceLayer = (() => {
-    if (options?.lifecycle === "skip") {
-      return buildResourceServiceLayer(resolved.extensions, "process")
-    }
-    return buildResourceLayer(resolved.extensions, "process")
-  })()
-
-  const baseLayers = Layer.mergeAll(
-    ExtensionRegistry.fromResolved(resolved),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolved.modelDrivers,
-      externalDrivers: resolved.externalDrivers,
-    }),
-  )
-
-  // Resource layers may declare `R` deps on services from `baseLayers`
-  // (e.g. `ExtensionRegistry` / `DriverRegistry`). `Layer.mergeAll`
-  // does NOT cross-wire siblings, so
-  // we feed `baseLayers` into the resource layer via `provideMerge` —
-  // resource deps are satisfied AND base outputs stay in the result.
-  return Layer.provideMerge(resourceLayer, baseLayers)
-}
 
 /**
  * Build a session profile from a context whose resources are already built.

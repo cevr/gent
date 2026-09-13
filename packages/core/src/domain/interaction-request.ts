@@ -80,55 +80,30 @@ export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
 const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema)
 const decisionJsonCodec = Schema.fromJsonString(ApprovalDecisionSchema)
 
-const encodeInteractionParams = (params: ApprovalRequest): Effect.Effect<string, EventStoreError> =>
-  Schema.encodeEffect(interactionJsonCodec)(params).pipe(
-    Effect.mapError(
-      (cause) =>
-        new EventStoreError({
-          message: "Failed to encode interaction params",
-          cause,
-        }),
+const jsonCodec = <A>(codec: Schema.Codec<A, string>, label: string) => ({
+  encode: (value: A): Effect.Effect<string, EventStoreError> =>
+    Schema.encodeEffect(codec)(value).pipe(
+      Effect.mapError(
+        (cause) => new EventStoreError({ message: `Failed to encode ${label}`, cause }),
+      ),
     ),
-  )
+  decode: (json: string): Effect.Effect<A, EventStoreError> =>
+    Schema.decodeEffect(codec)(json).pipe(
+      Effect.mapError(
+        (cause) => new EventStoreError({ message: `Failed to decode ${label}`, cause }),
+      ),
+    ),
+})
 
-export const decodeInteractionParams = (
-  paramsJson: string,
-): Effect.Effect<ApprovalRequest, EventStoreError> =>
-  Schema.decodeEffect(interactionJsonCodec)(paramsJson).pipe(
-    Effect.mapError(
-      (cause) =>
-        new EventStoreError({
-          message: "Failed to decode interaction params",
-          cause,
-        }),
-    ),
-  )
-
-export const encodeInteractionDecision = (
-  decision: ApprovalDecision,
-): Effect.Effect<string, EventStoreError> =>
-  Schema.encodeEffect(decisionJsonCodec)(decision).pipe(
-    Effect.mapError(
-      (cause) =>
-        new EventStoreError({
-          message: "Failed to encode interaction decision",
-          cause,
-        }),
-    ),
-  )
-
-export const decodeInteractionDecision = (
-  decisionJson: string,
-): Effect.Effect<ApprovalDecision, EventStoreError> =>
-  Schema.decodeEffect(decisionJsonCodec)(decisionJson).pipe(
-    Effect.mapError(
-      (cause) =>
-        new EventStoreError({
-          message: "Failed to decode interaction decision",
-          cause,
-        }),
-    ),
-  )
+const { encode: encodeInteractionParams, decode: decodeInteractionParams } = jsonCodec(
+  interactionJsonCodec,
+  "interaction params",
+)
+export { decodeInteractionParams }
+export const { encode: encodeInteractionDecision, decode: decodeInteractionDecision } = jsonCodec(
+  decisionJsonCodec,
+  "interaction decision",
+)
 
 // ============================================================================
 // Interaction service

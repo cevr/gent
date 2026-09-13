@@ -20,9 +20,6 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 
-/** Tests keep Effect's default logger; the preload sets the level floor. */
-export const testObservability: Layer.Layer<never> = Layer.empty
-
 export const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
 
 export const testIdentity = (dbPath: string = ":memory:") => ({

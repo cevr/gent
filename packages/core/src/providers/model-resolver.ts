@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, type Scope } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
-import { Auth, AuthOauth } from "../domain/auth.js"
+import { Auth } from "../domain/auth.js"
+import { persistAuthTo } from "./provider-auth.js"
 import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import type { AgentName } from "../domain/agent.js"
 import { parseModelId, type ModelId } from "../domain/model.js"
@@ -94,33 +95,13 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   if (Option.isSome(authInfo) && authInfo.value.type === "api") {
     authParam = Option.some({ type: "api", key: authInfo.value.key })
   } else if (Option.isSome(authInfo) && authInfo.value.type === "oauth") {
-    authParam = Option.some({
+    authParam = Option.some<ProviderAuthInfo>({
       type: "oauth",
       access: authInfo.value.access,
       refresh: authInfo.value.refresh,
       expires: authInfo.value.expires,
       accountId: authInfo.value.accountId,
-      persist: (updated) =>
-        authStore
-          .set(
-            providerName,
-            AuthOauth.make({
-              type: "oauth",
-              access: updated.access,
-              refresh: updated.refresh,
-              expires: updated.expires,
-              accountId: updated.accountId,
-            }),
-          )
-          .pipe(
-            Effect.mapError(
-              (e) =>
-                new ProviderAuthError({
-                  message: `Failed to persist refreshed auth for provider "${providerName}"`,
-                  cause: e,
-                }),
-            ),
-          ),
+      persist: (updated) => persistAuthTo(authStore, providerName)({ type: "oauth", ...updated }),
     })
   }
 
