@@ -104,13 +104,11 @@ const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefi
 const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
   // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
   if (part.type !== "tool-result") return undefined
-  let outputType: "error-json" | "json" = "json"
-  if (part.isFailure) outputType = "error-json"
   return {
     id: part.id,
     toolName: part.name,
     value: part.result,
-    summary: summarizeOutput({ type: outputType, value: part.result }),
+    summary: summarizeOutput(part.result),
     text: stringifyOutput(part.result),
     isError: part.isFailure,
   }

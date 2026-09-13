@@ -11,10 +11,7 @@ import {
   messagePartsToolCallParts,
   messageSingleText,
 } from "../../src/domain/message-part-display"
-import {
-  responsePartToAssistantMessagePart,
-  responsePartToToolResultPart,
-} from "../../src/domain/response-to-prompt"
+import { projectResponsePartsToMessageParts } from "../../src/domain/response-to-prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -192,37 +189,33 @@ describe("message part projection", () => {
   })
 
   test("projects Effect response parts back to Gent transcript parts", () => {
-    expect(responsePartToAssistantMessagePart(Response.makePart("text", { text: "hi" }))).toEqual(
-      Prompt.textPart({ text: "hi" }),
-    )
-
-    expect(
-      responsePartToAssistantMessagePart(
-        Response.makePart("file", {
-          data: Uint8Array.from(Buffer.from("abc")),
-          mediaType: "image/png",
-        }),
-      ),
-    ).toEqual(
-      Prompt.filePart({
-        data: "data:image/png;base64,YWJj",
+    const projection = projectResponsePartsToMessageParts([
+      Response.makePart("text", { text: "hi" }),
+      Response.makePart("file", {
+        data: Uint8Array.from(Buffer.from("abc")),
         mediaType: "image/png",
       }),
-    )
+      Response.makePart("tool-approval-request", {
+        approvalId: "approval-2",
+        toolCallId: "tc-approval-2",
+      }),
+      Response.makePart("tool-result", {
+        id: "tc-2",
+        name: "read",
+        isFailure: false,
+        result: "visible",
+        encodedResult: { value: "encoded" },
+        providerExecuted: false,
+        preliminary: false,
+      }),
+    ])
 
-    expect(
-      responsePartToToolResultPart(
-        Response.makePart("tool-result", {
-          id: "tc-2",
-          name: "read",
-          isFailure: false,
-          result: "visible",
-          encodedResult: { value: "encoded" },
-          providerExecuted: false,
-          preliminary: false,
-        }),
-      ),
-    ).toEqual(
+    expect(projection.assistant).toEqual([
+      Prompt.textPart({ text: "hi" }),
+      Prompt.filePart({ data: "data:image/png;base64,YWJj", mediaType: "image/png" }),
+      Prompt.toolApprovalRequestPart({ approvalId: "approval-2", toolCallId: "tc-approval-2" }),
+    ])
+    expect(projection.tool).toEqual([
       Prompt.toolResultPart({
         id: ToolCallId.make("tc-2"),
         name: "read",
@@ -230,21 +223,7 @@ describe("message part projection", () => {
         providerExecuted: false,
         result: { value: "encoded" },
       }),
-    )
-
-    expect(
-      responsePartToAssistantMessagePart(
-        Response.makePart("tool-approval-request", {
-          approvalId: "approval-2",
-          toolCallId: "tc-approval-2",
-        }),
-      ),
-    ).toEqual(
-      Prompt.toolApprovalRequestPart({
-        approvalId: "approval-2",
-        toolCallId: "tc-approval-2",
-      }),
-    )
+    ])
   })
 
   test("a child's answer is its last assistant text, or its reasoning when the model wrote nothing else", () => {

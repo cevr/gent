@@ -30,8 +30,6 @@ export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
   NotRecovered: {},
   /** Settled from a receipt; the result is recorded as if the call returned. */
   Settled: { result: Schema.Any },
-  /** Effects occurred but no result was recorded. It must not run again. */
-  Incomplete: {},
   /** Waiting on an interaction; the turn suspends until it resolves. */
   Suspended: { requestId: InteractionRequestId },
 })

@@ -6,7 +6,7 @@
  *  - failures/defects are isolated so later extensions still run
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Data, Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import type {
@@ -17,7 +17,6 @@ import type {
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
 import { BranchId, SessionId, ExtensionId } from "../../src/domain/ids"
-import { ProjectionError } from "@gent/core/extensions/api"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { testExtensionHostContext } from "../../src/test-utils"
@@ -62,6 +61,10 @@ const hookExt = <E, R>(
   },
 })
 
+class HookBoom extends Data.TaggedError(
+  "@gent/core/tests/extensions/extension-turn-projections.test/HookBoom",
+) {}
+
 describe("turn projection hooks", () => {
   const test = it.live.layer(BunServices.layer)
 
@@ -101,9 +104,7 @@ describe("turn projection hooks", () => {
   test("failing hook is logged + skipped while later hooks continue", () =>
     Effect.gen(function* () {
       const compiled = compile([
-        hookExt("bad-hook", "builtin", () =>
-          Effect.fail(new ProjectionError({ projectionId: "bad", reason: "boom" })),
-        ),
+        hookExt("bad-hook", "builtin", () => Effect.fail(new HookBoom())),
         hookExt("good-hook", "project", () =>
           Effect.succeed({
             promptSections: [{ id: "good", content: "still-runs", priority: 50 }],

@@ -281,15 +281,6 @@ export const collectFailedModelTurnResponse = (params: {
     })
   })
 
-const externalToolOutput = (part: Extract<Response.AnyPart, { readonly type: "tool-result" }>) => {
-  let type: "json" | "error-json" = "json"
-  if (part.isFailure) type = "error-json"
-  return {
-    type,
-    value: part.encodedResult,
-  } satisfies { readonly type: "json" | "error-json"; readonly value: unknown }
-}
-
 const publishExternalStreamChunk = (params: {
   sessionId: SessionId
   branchId: BranchId
@@ -326,16 +317,15 @@ const publishExternalToolResult = (params: {
   assistantMessageId: MessageId
   part: Extract<Response.AnyPart, { readonly type: "tool-result" }>
 }) => {
-  const output = externalToolOutput(params.part)
   const fields = {
     sessionId: params.sessionId,
     branchId: params.branchId,
     assistantMessageId: params.assistantMessageId,
     toolCallId: ToolCallId.make(params.part.id),
     toolName: params.part.name,
-    summary: summarizeOutput(output),
-    output: stringifyOutput(output.value),
-    resultJson: encodeToolOutput(output.value),
+    summary: summarizeOutput(params.part.encodedResult),
+    output: stringifyOutput(params.part.encodedResult),
+    resultJson: encodeToolOutput(params.part.encodedResult),
   }
   if (params.part.isFailure) return publishEventOrDie(ToolCallFailed.make(fields))
   return publishEventOrDie(ToolCallSucceeded.make(fields))

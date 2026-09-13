@@ -83,12 +83,6 @@ export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-/** Failure raised by a turn projection hook. Carries slot id + cause for diagnostics. */
-export class ProjectionError extends Schema.TaggedError<ProjectionError>()("ProjectionError", {
-  projectionId: Schema.String,
-  reason: Schema.String,
-}) {}
-
 // Run Context — per-run metadata for tool policy decisions
 
 export interface RunContext {

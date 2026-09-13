@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { normalizeResponseParts } from "../../src/domain/response-part-normalization"
-import {
-  promptFromResponseParts,
-  projectResponsePartsToMessageParts,
-} from "../../src/domain/response-to-prompt"
+import { projectResponsePartsToMessageParts } from "../../src/domain/response-to-prompt"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,
@@ -321,17 +318,6 @@ describe("AI transcript projection", () => {
       "tool-approval-request",
     ])
     expect(projection.tool).toEqual([])
-
-    const replayPrompt = promptFromResponseParts(responseParts)
-    const assistant = replayPrompt.content[0]
-    expect(assistant?.role).toBe("assistant")
-    if (assistant?.role === "assistant") {
-      expect(assistant.content.map((part) => part.type)).toEqual([
-        "text",
-        "tool-call",
-        "tool-approval-request",
-      ])
-    }
   })
 
   test("normalizes streaming deltas and round-trips assistant/tool replay with images", () => {
@@ -374,18 +360,14 @@ describe("AI transcript projection", () => {
       "tool-result",
     ])
 
-    const replayPrompt = promptFromResponseParts(responseParts)
-    expect(replayPrompt.content.map((message) => message.role)).toEqual(["assistant", "tool"])
-    const assistant = replayPrompt.content[0]
-    expect(assistant?.role).toBe("assistant")
-    if (assistant?.role === "assistant") {
-      expect(assistant.content.map((part) => part.type)).toEqual([
-        "text",
-        "reasoning",
-        "tool-call",
-        "tool-approval-request",
-        "file",
-      ])
-    }
+    const projection = projectResponsePartsToMessageParts(responseParts)
+    expect(projection.assistant.map((part) => part.type)).toEqual([
+      "text",
+      "reasoning",
+      "tool-call",
+      "tool-approval-request",
+      "file",
+    ])
+    expect(projection.tool.map((part) => part.type)).toEqual(["tool-result"])
   })
 })

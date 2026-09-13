@@ -34,19 +34,14 @@ const tryPrettyStringifyJson = (value: unknown): Option.Option<string> =>
     return pretty
   }).pipe(Result.getSuccess)
 
-type ToolOutput = {
-  readonly type: "json" | "error-json"
-  readonly value: unknown
-}
-
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
 export const stringifyOutput = (value: unknown): string => {
   if (Predicate.isString(value)) return value
   return Option.getOrElse(tryPrettyStringifyJson(value), () => String(value))
 }
 
-export const summarizeOutput = (output: ToolOutput): string => {
-  const value = output.value
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
+export const summarizeOutput = (value: unknown): string => {
   if (Predicate.isString(value)) {
     const firstLine = value.split("\n")[0] ?? ""
     if (firstLine.length > 100) {
@@ -63,8 +58,5 @@ export const summarizeOutput = (output: ToolOutput): string => {
   return String(value)
 }
 
-export const summarizeToolOutput = (result: Prompt.ToolResultPart): string => {
-  let type: ToolOutput["type"] = "json"
-  if (result.isFailure) type = "error-json"
-  return summarizeOutput({ type, value: result.result })
-}
+export const summarizeToolOutput = (result: Prompt.ToolResultPart): string =>
+  summarizeOutput(result.result)
