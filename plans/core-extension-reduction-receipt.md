@@ -1459,3 +1459,22 @@ became `decodeComponent(schema, label)`; `terminateRuntimeSession` reuses
 `attachToolBindingIdentity` dropped. Skipped: moving `replayHook` +
 `registerContributions` into the e2e layer (net-zero move). Core is 28,477
 LOC at `db7538aa`.
+
+## Thirteenth pass: single-shape helpers around the composition root (2026-09-13)
+
+The three session-mutation runtime helpers inlined (services yielded once,
+captured context gone); `respondInteraction`/`queueFollowUp`/
+`dequeueFollowUp` routed through `actorCommand`; the seven
+override-or-live `make*Layer` helpers in `dependencies.ts` replaced by the
+override expression at each call site; never-set options deleted
+(`InProcessLayerConfig.branchTools`, the debug-slow provider mode,
+`createWorkerEnv` `includeAuthFiles`/`extra`); `RpcHarnessConfig` is
+`Omit<E2ELayerConfig, "toolRunner">`; the session-runtime re-exports of
+the runtime state schema, `followUpMessageIdForSource`, and the
+wide-event envelope types dropped. Thirteenth-pass NO FINDING: `FileLockService.currentSize`
+(eviction is not observable through `withLock`; the map-size assertions are
+the only proof of the invariant), `selectWithLatestUser`/`selectWithoutUser`
+(different overflow semantics), per-variant event re-exports (both
+spellings live), TurnMetrics fields, Submit/SubmitDurable split,
+extension-hooks and turn-persistence single-call helpers (each names a
+real step). Core is 28,326 LOC at `2f15ebf4`.
