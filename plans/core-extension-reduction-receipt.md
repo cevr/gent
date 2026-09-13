@@ -1695,4 +1695,6 @@ User directive: "add durability, read for snapshot is good and lets do
 
 Gamut run 30 (sonnet-sonnet at `32b84303`): 5 children, 5/5 receipts, 18
 tests green in 2m59s, $0.83, no continuation. Live check showed
-`● 1 running` mid-spawn and `◐ 5 idle` after.
+`● 1 running` mid-spawn and `◐ 5 idle` after. Gamut run 31 (opus-luna
+at `d0d8118c`): 5 Luna children, 5/5 receipts, 19 tests green in 8m11s,
+$1.26, no continuation; the poller kept `● 2 running` current mid-turn.
