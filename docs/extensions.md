@@ -106,8 +106,8 @@ import { Effect } from "effect"
 
 const program = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
-  const messages = yield* ctx.Session.listMessages()
-  return messages.length
+  const detail = yield* ctx.Session.getDetail(ctx.sessionId)
+  return detail.branches.length
 })
 ```
 
@@ -117,8 +117,8 @@ interaction, process, file index, file lock, and state-pulse accessors
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. The `Files` / `FileLock` / `State` facets wrap the host-internal
 `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so authors
-never reach into runtime Tags. `ctx.State.changed(...)` uses the current
-extension identity supplied by the host; do not pass an extension ID. If an
+never reach into runtime Tags. `ctx.State.changed()` uses the current
+extension identity, session, and branch supplied by the host. If an
 extension needs private state, it
 should import its own service Tag from a `defineResource(...)` layer and
 yield that service directly. Do not add ctx parameters, private builtin APIs,

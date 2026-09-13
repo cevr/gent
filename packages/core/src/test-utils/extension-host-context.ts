@@ -30,7 +30,6 @@ const defaultAgent = (): ExtensionHostAgentService => ({
 })
 
 const defaultSession = (): ExtensionSessionService => ({
-  listMessages: () => die("Session.listMessages"),
   getSession: () => die("Session.getSession"),
   getDetail: () => die("Session.getDetail"),
   renameCurrent: () => die("Session.renameCurrent"),

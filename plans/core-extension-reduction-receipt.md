@@ -1308,3 +1308,20 @@ duplicate `isRecord` in `model-registry.ts` uses the shared guard.
 `model-context.ts`, already declared the same JSON encoder and the same
 chars/4 rule; `estimateTokens` now lives beside the other two estimators
 and the file is gone.
+
+## Sixth pass, group C: one adapter per seam (2026-09-13)
+
+`ApprovalService` had two constructors and an optional storage: `Live`
+(memory only) had no production caller, and `LiveWithStorage` took an
+adapter that `dependencies.ts` built from `InteractionStorage`. The service
+now yields `InteractionStorage` itself and builds that adapter once;
+`InteractionServiceConfig.storage` is required, and the dead `onRespond`,
+`autoResolve`, and four storage-absent guards are gone. Tests that used the
+memory constructor provide `InteractionStorage` like production does.
+`persistAssistantParts` and `persistToolParts` restated five fields to add
+a role literal; `persistMessageParts` is exported with a role-discriminated
+parts type and every caller names the role. `ctx.State.changed` lost the
+`{ sessionId?, branchId? }` params every caller passed as `{}`; it reports
+the context it already holds. `ctx.Session.listMessages` had no production
+caller and is gone from the facet, host binding, and stubs; the surface-lock
+test and `docs/extensions.md` follow.

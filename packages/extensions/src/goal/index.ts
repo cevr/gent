@@ -116,7 +116,7 @@ const createGoal = (input: CreateGoalInput) =>
         return { next: Option.some(created), result: created }
       }),
     )
-    yield* ctx.State.changed({})
+    yield* ctx.State.changed()
     return goal
   })
 
@@ -168,7 +168,7 @@ const setStatus = (change: StatusChange) =>
         return { next: Option.some(updated), result: updated }
       }),
     )
-    yield* ctx.State.changed({})
+    yield* ctx.State.changed()
     return goal
   })
 
@@ -187,7 +187,7 @@ const clearGoal = Effect.gen(function* () {
       return { next: Option.none<GoalState>(), result: current }
     }),
   )
-  yield* ctx.State.changed({})
+  yield* ctx.State.changed()
   return goal
 })
 
@@ -230,7 +230,7 @@ const continueGoal = (input: TurnAfterInput) =>
         return { next: Option.some(continued), result: Option.some(continued) }
       }),
     )
-    yield* ctx.State.changed({})
+    yield* ctx.State.changed()
     if (Option.isNone(decision)) return
     const goal = decision.value
     if (goal.status === "budget_limited") {

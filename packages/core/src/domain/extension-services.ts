@@ -74,9 +74,6 @@ export class ExtensionHostSearchResult extends Schema.Class<ExtensionHostSearchR
 }) {}
 
 export interface ExtensionSessionService {
-  readonly listMessages: (
-    branchId?: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Message>, ExtensionServiceError>
   readonly getSession: (
     sessionId?: SessionId,
   ) => // oxlint-disable-next-line effect/noNullish -- The public extension facade preserves undefined for an absent session.
@@ -255,10 +252,7 @@ interface ExtensionFileLockServiceApi {
 }
 
 interface ExtensionStateServiceApi {
-  readonly changed: (params: {
-    readonly sessionId?: SessionId
-    readonly branchId?: BranchId
-  }) => Effect.Effect<void, ExtensionServiceError>
+  readonly changed: () => Effect.Effect<void, ExtensionServiceError>
 }
 
 /**
@@ -313,7 +307,6 @@ const extensionServicesFromHostContext = (
     const inWorkspace = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
       effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
     const Session: ExtensionSessionService = {
-      listMessages: (branchId) => inWorkspace(ctx.Session.listMessages(branchId)),
       getSession: (sessionId) => inWorkspace(ctx.Session.getSession(sessionId)),
       getDetail: (sessionId) => inWorkspace(ctx.Session.getDetail(sessionId)),
       renameCurrent: (name) => inWorkspace(ctx.Session.renameCurrent(name)),
@@ -394,25 +387,16 @@ const extensionServicesFromHostContext = (
           }
         }
         return {
-          changed: (params: { readonly sessionId?: SessionId; readonly branchId?: BranchId }) => {
-            const sessionId = Option.getOrElse(
-              Option.fromUndefinedOr(params.sessionId),
-              () => ctx.sessionId,
-            )
-            const branchId = Option.getOrElse(
-              Option.fromUndefinedOr(params.branchId),
-              () => ctx.branchId,
-            )
-            return mapError(
+          changed: () =>
+            mapError(
               "ExtensionState",
               "changed",
               statePublisher.changed({
                 extensionId: currentExtensionId,
-                sessionId,
-                branchId,
+                sessionId: ctx.sessionId,
+                branchId: ctx.branchId,
               }),
-            )
-          },
+            ),
         }
       },
     })

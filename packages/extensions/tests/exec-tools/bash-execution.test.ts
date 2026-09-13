@@ -155,7 +155,6 @@ const stubCtx = testToolContext({
     listAgents: Effect.die("listAgents not wired in test"),
   },
   Session: {
-    listMessages: dieStub("listMessages"),
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
     renameCurrent: dieStub("renameCurrent"),

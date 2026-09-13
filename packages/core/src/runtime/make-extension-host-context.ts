@@ -196,10 +196,6 @@ export const makeExtensionHostContextProvider = (
       },
 
       Session: {
-        listMessages: (branchId) =>
-          messages((storage) => storage.listMessages(branchId ?? runInfo.branchId)).pipe(
-            Effect.mapError(sessionError("listMessages")),
-          ),
         getSession: (sessionId) =>
           sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
             Effect.mapError(sessionError("getSession")),

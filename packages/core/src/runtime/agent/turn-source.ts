@@ -57,7 +57,7 @@ import {
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
 import { convertTools, ToolRunner } from "./tool-runner"
-import { persistToolParts } from "./turn-persistence.js"
+import { persistMessageParts } from "./turn-persistence.js"
 import {
   collectFailedModelTurnResponse,
   formatStreamErrorMessage,
@@ -251,7 +251,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
                 toolCallId,
               }),
             )
-          yield* persistToolParts({
+          yield* persistMessageParts({
+            role: "tool",
             sessionId: params.sessionId,
             branchId: params.branchId,
             messageId: persistence.toolResultMessageId,

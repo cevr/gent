@@ -22,7 +22,6 @@ import {
   ExtensionId,
   makeRunSpec,
   request,
-  SessionId,
   tool,
   ToolCallId,
   type RequestInput,
@@ -108,7 +107,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("state change notifications use the current ExtensionContext identity", () => {
     type StateChanged = PublicExtensionApi.ExtensionContextService["State"]["changed"]
 
-    const good: Parameters<StateChanged> = [{ sessionId: SessionId.make("surface-session") }]
+    const good: Parameters<StateChanged> = []
 
     // @ts-expect-error — extension identity is supplied by ExtensionContext, not a parameter
     const bad: Parameters<StateChanged> = [{ extensionId: ExtensionId.make("surface-locks") }]
@@ -327,7 +326,6 @@ describe("Effect-purity locks (compile-time)", () => {
         yield* host.on("turnAfter", (_input: PublicExtensionApi.TurnAfterInput) =>
           Effect.gen(function* () {
             const ctx = yield* ExtensionContext
-            void ctx.Session.listMessages
             void ctx.Session.queueFollowUp
           }),
         )

@@ -184,14 +184,7 @@ interface InteractionServiceConfig {
     params: ApprovalRequest,
     ctx: { sessionId: SessionId; branchId: BranchId },
   ) => Effect.Effect<void, EventStoreError>
-  readonly onRespond?: (
-    requestId: InteractionRequestId,
-    decision: ApprovalDecision,
-  ) => Effect.Effect<void, EventStoreError>
-  // oxlint-disable-next-line effect/noNullish -- Auto-resolution may be absent when interaction requires a user decision.
-  readonly autoResolve?: (params: ApprovalRequest) => ApprovalDecision | undefined
-  /** Storage callbacks — omit for in-memory-only (tests) */
-  readonly storage?: InteractionStorageConfig
+  readonly storage: InteractionStorageConfig
 }
 
 interface InteractionState {
@@ -253,10 +246,8 @@ export const makeInteractionService = (
     return {
       storeResolution: (requestId, decision) =>
         Effect.gen(function* () {
-          if (!Predicate.isUndefined(config.storage)) {
-            const decisionJson = yield* encodeInteractionDecision(decision)
-            yield* config.storage.decide(requestId, decisionJson)
-          }
+          const decisionJson = yield* encodeInteractionDecision(decision)
+          yield* config.storage.decide(requestId, decisionJson)
           yield* setResolution(requestId, decision)
         }),
 
@@ -264,9 +255,6 @@ export const makeInteractionService = (
         params: ApprovalRequest,
         ctx: Parameters<InteractionService["present"]>[1],
       ) {
-        const auto = config.autoResolve?.(params)
-        if (!Predicate.isUndefined(auto)) return auto
-
         // Check for a stored resolution (cold interaction resumption).
         // The tool re-calls present() after the machine resumes. The resolution
         // was stored by requestId via storeResolution(). We find the requestId
@@ -274,9 +262,7 @@ export const makeInteractionService = (
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
         const stored = yield* takeStoredResolution(ctxKey, ctx.resumeRequestId)
         if (Option.isSome(stored)) {
-          if (!Predicate.isUndefined(config.storage)) {
-            yield* config.storage.resolve(stored.value.requestId)
-          }
+          yield* config.storage.resolve(stored.value.requestId)
           return stored.value.decision
         }
         if (Option.isSome(Option.fromUndefinedOr(ctx.resumeRequestId).pipe(Option.flatten))) {
@@ -288,17 +274,15 @@ export const makeInteractionService = (
         const requestId = InteractionRequestId.make(yield* platform.randomId)
 
         // Persist to storage before publishing event (crash-safe)
-        if (!Predicate.isUndefined(config.storage)) {
-          const paramsJson = yield* encodeInteractionParams(params)
-          yield* config.storage.persist({
-            requestId,
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            paramsJson,
-            status: "pending",
-            createdAt: yield* Clock.currentTimeMillis,
-          })
-        }
+        const paramsJson = yield* encodeInteractionParams(params)
+        yield* config.storage.persist({
+          requestId,
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          paramsJson,
+          status: "pending",
+          createdAt: yield* Clock.currentTimeMillis,
+        })
         yield* setPending(ctxKey, requestId)
 
         yield* config.onPresent(requestId, params, ctx)
@@ -319,9 +303,7 @@ export const makeInteractionService = (
         ),
 
       respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
-        if (!Predicate.isUndefined(config.storage)) {
-          yield* config.storage.resolve(requestId)
-        }
+        yield* config.storage.resolve(requestId)
         yield* Ref.update(state, (current) => ({
           storedResolutions: new Map(
             [...current.storedResolutions].filter(([id]) => id !== requestId),
@@ -330,8 +312,6 @@ export const makeInteractionService = (
             [...current.pendingByContext].filter(([, id]) => id !== requestId),
           ),
         }))
-        // onRespond is optional — events can be published here if needed
-        // but the primary response path is storeResolution + machine wake
       }),
 
       rehydrate: Effect.fn("InteractionService.rehydrate")(function* (

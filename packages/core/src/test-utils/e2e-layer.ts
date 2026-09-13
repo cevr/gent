@@ -18,6 +18,7 @@ import { type ExtensionContributions, defineResource } from "../domain/contribut
 import type { EventPublisher } from "../domain/event-publisher.js"
 import type { ExtensionId } from "../domain/ids.js"
 import { ApprovalService } from "../runtime/approval-service.js"
+import type { InteractionStorage } from "../storage/interaction-storage.js"
 import { ConfigService } from "../runtime/config-service.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
@@ -53,7 +54,11 @@ export interface E2ELayerConfig {
   /** Use "live" for real child sessions. Default mocks blocking run only. */
   readonly subagentRunner?: "live" | Pick<AgentRunner, "run">
   /** Approval service override. Default auto-approves for E2E tests. */
-  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
+  readonly approvalLayer?: Layer.Layer<
+    ApprovalService,
+    never,
+    EventPublisher | GentPlatform | InteractionStorage
+  >
   /** Use the production cold-interaction service with durable pending rows. */
   readonly durableApproval?: boolean
   /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */

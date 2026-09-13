@@ -149,7 +149,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         }
         yield* runs.set(branchId, { question, text: "", done: false })
         // The pulse tells the client to read progress; failures there never touch the run.
-        const pulse = ctx.State.changed({}).pipe(Effect.ignore)
+        const pulse = ctx.State.changed().pipe(Effect.ignore)
         yield* pulse
         const finish = (change: (run: SideQuestionRun) => SideQuestionRun) =>
           runs.update(branchId, change).pipe(Effect.andThen(pulse))

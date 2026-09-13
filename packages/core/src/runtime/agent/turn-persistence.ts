@@ -235,14 +235,18 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
   },
 )
 
-const persistMessageParts = Effect.fn("TurnHelpers.persistMessageParts")(function* (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  messageId: MessageId
-  role: "assistant" | "tool"
-  parts: ReadonlyArray<Message["parts"][number]>
-  createdAt?: Date
-}) {
+/** One durable message per role: the caller names the role it is persisting. */
+export const persistMessageParts = Effect.fn("TurnHelpers.persistMessageParts")(function* (
+  params: {
+    sessionId: SessionId
+    branchId: BranchId
+    messageId: MessageId
+    createdAt?: Date
+  } & (
+    | { role: "assistant"; parts: ReadonlyArray<AssistantResponsePart> }
+    | { role: "tool"; parts: ReadonlyArray<ToolResponsePart> }
+  ),
+) {
   if (params.parts.length === 0) return Option.none<Message>()
 
   const messageStorage = yield* MessageStorage
@@ -260,22 +264,6 @@ const persistMessageParts = Effect.fn("TurnHelpers.persistMessageParts")(functio
 
   return yield* persistMessageReceived({ message }).pipe(Effect.asSome)
 })
-
-export const persistAssistantParts = (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  messageId: MessageId
-  parts: ReadonlyArray<AssistantResponsePart>
-  createdAt?: Date
-}) =>
-  persistMessageParts({
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    messageId: params.messageId,
-    role: "assistant",
-    parts: params.parts,
-    createdAt: params.createdAt,
-  })
 
 /** Persist an assistant tool-call message and its immutable bindings together. */
 export const persistAssistantPartsWithBindings = Effect.fn(
@@ -366,7 +354,8 @@ export const recordToolOutcome = (params: {
   assistantMessageId: MessageId
   parts: ReadonlyArray<Prompt.ToolResultPart>
 }) =>
-  persistToolParts({
+  persistMessageParts({
+    role: "tool",
     sessionId: params.sessionId,
     branchId: params.branchId,
     messageId: params.toolResultMessageId,
@@ -381,19 +370,3 @@ export const recordToolOutcome = (params: {
       }),
     ),
   )
-
-export const persistToolParts = (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  messageId: MessageId
-  parts: ReadonlyArray<ToolResponsePart>
-  createdAt?: Date
-}) =>
-  persistMessageParts({
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    messageId: params.messageId,
-    role: "tool",
-    parts: params.parts,
-    createdAt: params.createdAt,
-  })

@@ -20,21 +20,88 @@ import {
   type InteractionStorageConfig,
 } from "../domain/interaction-request.js"
 import type { GentPlatform } from "./gent-platform.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
+
+const makeApprovalInteractionService: Effect.Effect<
+  InteractionService,
+  never,
+  EventPublisher | GentPlatform | InteractionStorage
+> = Effect.gen(function* () {
+  const store = yield* InteractionStorage
+  const storage: InteractionStorageConfig = {
+    persist: (record) =>
+      Effect.gen(function* () {
+        // A dispatching tool owns the interactions its inner calls raise, so
+        // they are written to its receipt. Core does not know which tools
+        // those are; an absent owner is a direct call.
+        const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
+        if (Option.isSome(owner)) {
+          yield* owner.value.persist(record)
+        } else {
+          yield* store.persist(record)
+        }
+      }).pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (cause) =>
+            new EventStoreError({ message: "Failed to persist interaction request", cause }),
+        ),
+      ),
+    resolve: (requestId) => store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    decide: (requestId, decisionJson) =>
+      store
+        .decide(requestId, decisionJson)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EventStoreError({ message: "Failed to persist interaction decision", cause }),
+          ),
+        ),
+  }
+  const eventPublisher = yield* EventPublisher
+  const service = yield* makeInteractionService({
+    onPresent: (requestId, params, ctx) =>
+      eventPublisher.publish(
+        InteractionPresented.make({
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          requestId,
+          text: params.text,
+          metadata: params.metadata,
+        }),
+      ),
+    storage,
+  })
+  return {
+    ...service,
+    present: Effect.fn("ApprovalService.present")(function* (params, ctx) {
+      // An interaction raised inside a dispatching tool belongs to that
+      // tool's receipt, not to the branch's native replay. Absent owner is
+      // the common case: a direct tool call takes the native path.
+      const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
+      if (Option.isNone(owner)) return yield* service.present(params, ctx)
+      if (owner.value.sessionId !== ctx.sessionId || owner.value.branchId !== ctx.branchId)
+        return yield* new EventStoreError({
+          message: "The owning call belongs to another branch",
+        })
+      return yield* service.present(params, {
+        ...ctx,
+        resumeRequestId: yield* owner.value.resumeRequestId,
+      })
+    }),
+  }
+})
 
 interface ApprovalServiceApi extends InteractionService {}
 
 export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceApi>()(
   "@gent/core/src/runtime/approval-service/ApprovalService",
 ) {
-  static Live: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> = Layer.effect(
+  static Live: Layer.Layer<
     ApprovalService,
-    makeApprovalInteractionService(),
-  )
-
-  static LiveWithStorage = (
-    storage: InteractionStorageConfig,
-  ): Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform> =>
-    Layer.effect(ApprovalService, makeApprovalInteractionService(storage))
+    never,
+    EventPublisher | GentPlatform | InteractionStorage
+  > = Layer.effect(ApprovalService, makeApprovalInteractionService)
 
   static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
     const queue = [...(decisions ?? [{ approved: true }])]
@@ -55,47 +122,4 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
       }),
     )
   }
-}
-
-function makeApprovalInteractionService(
-  storage?: InteractionStorageConfig,
-): Effect.Effect<InteractionService, never, EventPublisher | GentPlatform> {
-  return Effect.gen(function* () {
-    const eventPublisher = yield* EventPublisher
-    const service = yield* makeInteractionService({
-      onPresent: (requestId, params, ctx) =>
-        eventPublisher.publish(
-          InteractionPresented.make({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            requestId,
-            text: params.text,
-            metadata: params.metadata,
-          }),
-        ),
-      storage,
-    })
-    return {
-      ...service,
-      present: Effect.fn("ApprovalService.present")(function* (params, ctx) {
-        // An interaction raised inside a dispatching tool belongs to that
-        // tool's receipt, not to the branch's native replay. Absent owner is
-        // the common case: a direct tool call takes the native path.
-        const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
-        if (Option.isNone(owner)) return yield* service.present(params, ctx)
-        if (Option.isNone(Option.fromUndefinedOr(storage)))
-          return yield* new EventStoreError({
-            message: "An owned interaction requires durable interaction storage",
-          })
-        if (owner.value.sessionId !== ctx.sessionId || owner.value.branchId !== ctx.branchId)
-          return yield* new EventStoreError({
-            message: "The owning call belongs to another branch",
-          })
-        return yield* service.present(params, {
-          ...ctx,
-          resumeRequestId: yield* owner.value.resumeRequestId,
-        })
-      }),
-    }
-  })
 }

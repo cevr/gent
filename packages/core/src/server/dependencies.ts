@@ -5,7 +5,6 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { AgentRunnerService } from "../domain/agent.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
-import { EventStoreError } from "../domain/event.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { FileLockService } from "../domain/file-lock.js"
@@ -30,7 +29,6 @@ import {
   CurrentBranchToolFeature,
   type BranchToolFeature,
 } from "../runtime/agent/branch-tool-feature.js"
-import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import {
   decodeInteractionDecision,
   decodeInteractionParams,
@@ -46,7 +44,11 @@ import { CurrentWorkspaceId, WorkspaceId } from "./workspace-rpc.js"
 
 interface DependencyOverrides {
   readonly authLayer?: Layer.Layer<Auth>
-  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
+  readonly approvalLayer?: Layer.Layer<
+    ApprovalService,
+    never,
+    EventPublisher | GentPlatform | InteractionStorage
+  >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
@@ -190,54 +192,11 @@ const makeToolRunnerLayer = <A, E, R>(
 const makeApprovalServiceLayer = <A, E, R>(
   override: Option.Option<NonNullable<DependencyOverrides["approvalLayer"]>>,
   baseServicesLive: Layer.Layer<A, E, R>,
-) => {
-  if (Option.isSome(override)) {
-    return Layer.provide(override.value, baseServicesLive)
-  }
-  return Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const store = yield* InteractionStorage
-        return ApprovalService.LiveWithStorage({
-          persist: (record) =>
-            Effect.gen(function* () {
-              // A dispatching tool owns the interactions its inner calls
-              // raise, so they are written to its receipt. Core does not know
-              // which tools those are; an absent owner is a direct call.
-              const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
-              if (Option.isSome(owner)) {
-                yield* owner.value.persist(record)
-              } else {
-                yield* store.persist(record)
-              }
-            }).pipe(
-              Effect.asVoid,
-              Effect.mapError(
-                (cause) =>
-                  new EventStoreError({
-                    message: "Failed to persist interaction request",
-                    cause,
-                  }),
-              ),
-            ),
-          resolve: (requestId) =>
-            store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-          decide: (requestId, decisionJson) =>
-            store.decide(requestId, decisionJson).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new EventStoreError({
-                    message: "Failed to persist interaction decision",
-                    cause,
-                  }),
-              ),
-            ),
-        })
-      }),
-    ),
+) =>
+  Layer.provide(
+    Option.getOrElse(override, () => ApprovalService.Live),
     baseServicesLive,
   )
-}
 
 const makeSessionProfileCacheLayer = <A, E, R>(
   config: DependenciesConfig,

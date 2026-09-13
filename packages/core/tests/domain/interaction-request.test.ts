@@ -51,16 +51,17 @@ describe("Interaction Request", () => {
     SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
     GentPlatform.Test(),
   )
+  const callbacksFor = (is: InteractionStorage["Service"]): InteractionStorageConfig => ({
+    persist: (record) => persistInteraction(is, record),
+    decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
+    resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+  })
   const workspaceA = "a".repeat(64)
   const workspaceB = "b".repeat(64)
   it.live("present persists request to storage and throws InteractionPendingError", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const storageCallbacks: InteractionStorageConfig = {
-        persist: (record) => persistInteraction(is, record),
-        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
-        resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-      }
+      const storageCallbacks = callbacksFor(is)
       const interaction = yield* makeInteractionService({
         onPresent: () => Effect.void,
         storage: storageCallbacks,
@@ -213,11 +214,7 @@ describe("Interaction Request", () => {
       const is = yield* InteractionStorage
       const sessionId = SessionId.make("s-service-singleton")
       const branchId = BranchId.make("b-service-singleton")
-      const storageCallbacks: InteractionStorageConfig = {
-        persist: (record) => persistInteraction(is, record),
-        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
-        resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-      }
+      const storageCallbacks = callbacksFor(is)
       yield* ensureStorageParents({ sessionId, branchId })
       yield* is.persist({
         requestId: InteractionRequestId.make("req-existing-pending"),
@@ -253,11 +250,14 @@ describe("Interaction Request", () => {
   )
   it.live("storeResolution + subsequent present returns stored value without throwing", () =>
     Effect.gen(function* () {
+      const storageCallbacks = callbacksFor(yield* InteractionStorage)
       const interaction = yield* makeInteractionService({
         onPresent: () => Effect.void,
+        storage: storageCallbacks,
       })
       const sessionId = SessionId.make("s-cold")
       const branchId = BranchId.make("b-cold")
+      yield* ensureStorageParents({ sessionId, branchId })
       // First present — fails with InteractionPendingError
       const error = yield* Effect.flip(
         interaction.present({ text: "Approve?" }, { sessionId, branchId }),
@@ -271,13 +271,15 @@ describe("Interaction Request", () => {
       // Second present — finds stored resolution, returns it
       const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
       expect(result.approved).toBe(true)
-    }).pipe(Effect.provide(GentPlatform.Test())),
+    }).pipe(Effect.provide(storageLive)),
   )
   it.live("rehydrate + storeResolution + present returns stored value (restart-resume)", () =>
     Effect.gen(function* () {
       // Simulate a fresh service after restart — no in-memory state
+      const storageCallbacks = callbacksFor(yield* InteractionStorage)
       const interaction = yield* makeInteractionService({
         onPresent: () => Effect.void,
+        storage: storageCallbacks,
       })
       const sessionId = SessionId.make("s-restart")
       const branchId = BranchId.make("b-restart")
@@ -290,16 +292,12 @@ describe("Interaction Request", () => {
       const result = yield* interaction.present({ text: "Approve?" }, { sessionId, branchId })
       expect(result.approved).toBe(true)
       expect(result.notes).toBe("yes")
-    }).pipe(Effect.provide(GentPlatform.Test())),
+    }).pipe(Effect.provide(storageLive)),
   )
   it.live("cold-resume with InteractionStorage: persist → new service → rehydrate → resolve", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
-      const storageCallbacks: InteractionStorageConfig = {
-        persist: (record) => persistInteraction(is, record),
-        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
-        resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-      }
+      const storageCallbacks = callbacksFor(is)
       const sessionId = SessionId.make("s-cold-resume")
       const branchId = BranchId.make("b-cold-resume")
       yield* ensureStorageParents({ sessionId, branchId })
@@ -340,30 +338,6 @@ describe("Interaction Request", () => {
       // Verify resolved in storage
       const afterResolve = yield* is.listPending()
       expect(afterResolve.some((r) => r.requestId === requestId)).toBe(false)
-    }).pipe(Effect.provide(storageLive)),
-  )
-  it.live("autoResolve skips storage persistence", () =>
-    Effect.gen(function* () {
-      const is = yield* InteractionStorage
-      const storageCallbacks: InteractionStorageConfig = {
-        persist: (record) => persistInteraction(is, record),
-        decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
-        resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
-      }
-      const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
-        autoResolve: () => ({ approved: true, notes: "auto" }),
-        storage: storageCallbacks,
-      })
-      // Auto-resolved — should not persist and not throw
-      const result = yield* interaction.present(
-        { text: "Auto approve?" },
-        { sessionId: SessionId.make("s4"), branchId: BranchId.make("b5") },
-      )
-      expect(result.approved).toBe(true)
-      expect(result.notes).toBe("auto")
-      const pending = yield* is.listPending()
-      expect(pending.filter((r) => r.sessionId === "s4").length).toBe(0)
     }).pipe(Effect.provide(storageLive)),
   )
 })

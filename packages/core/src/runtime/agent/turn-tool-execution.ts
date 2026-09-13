@@ -21,7 +21,7 @@ import { makeBindingReplayError, ToolBindingReplayError } from "./tool-binding-r
 import { captureCurrentToolBinding, resolveReplayToolBinding } from "./tool-binding-resolution.js"
 import {
   persistAssistantPartsWithBindings,
-  persistToolParts,
+  persistMessageParts,
   recordToolOutcome,
 } from "./turn-persistence.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
@@ -227,7 +227,8 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       currentTurnAgent: params.currentTurnAgent,
       toolBindings,
     })
-    yield* persistToolParts({
+    yield* persistMessageParts({
+      role: "tool",
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: params.toolResultMessageId,

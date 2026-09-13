@@ -41,10 +41,9 @@ import {
 import {
   findPersistedEvent,
   findPersistedToolResults,
-  persistAssistantParts,
   persistAssistantPartsWithBindings,
   persistMessageReceived,
-  persistToolParts,
+  persistMessageParts,
   recordToolOutcome,
   ToolResultReplayError,
   type AssistantResponsePart,
@@ -304,7 +303,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         parts: ReadonlyArray<AssistantResponsePart>,
         createdAt?: Date,
       ) =>
-        persistAssistantParts({
+        persistMessageParts({
+          role: "assistant",
           sessionId: scope.sessionId,
           branchId: scope.branchId,
           messageId: assistantMessageIdForTurn(params.messageId, step),
@@ -353,7 +353,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         parts: ReadonlyArray<ToolResponsePart>,
         createdAt?: Date,
       ) =>
-        persistToolParts({
+        persistMessageParts({
+          role: "tool",
           sessionId: scope.sessionId,
           branchId: scope.branchId,
           messageId: toolResultMessageIdForTurn(params.messageId, step),
