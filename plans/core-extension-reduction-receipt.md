@@ -1634,3 +1634,27 @@ and the docked agents pane now follow that language (this commit).
 Not done: per-cell durations (the TUI `ToolCall` carries no timing),
 a persistent subagent tray above the composer, and a model column on
 every row (the listing deliberately avoids per-row detail reads).
+
+## Twentieth pass: concept census against prime-agent (2026-09-13)
+
+Explorer verdict: "Stop — no findings". The census counted 54 Tags,
+13 tables, 24 event variants, 14 actor messages, and 3 hook kinds, and
+every mechanical candidate (head-tail helpers, `listSessions`,
+`branch.getTree`, `BranchCreated`/`SessionStarted`, 25 test-only
+exports, 36 files under 60 lines, storage methods, thin Tags) was
+refuted by a shipped consumer, most of them in `apps/tui`. Lesson
+recorded: reduction greps must include `apps/`. prime-agent's core is
+52,439 LOC against gent's 27,495; its RLM kernel is a facade over a
+larger session manager, and the concepts gent has that it lacks are
+the durability ones (persisted actor messages, queue and operation
+tables, resumable event log). The three parked items closed: the
+`session.delete` chain now has a client (Ctrl+X in the agents pane,
+two-press confirm, prime-agent parity), `makeServerRootLayer` is
+deleted, `DependencyOverrides.modelRegistryLayer` is a real seam
+(`ModelRegistry.Test` is a second adapter next to `authLayer` and
+`configServiceLayer`). A live check found that the pane's per-row
+detail read spawned the row's loop actor and made stored sessions show
+as idle; detail reads are now limited to live rows. Open design note
+for the user: `session.getSnapshot` spawning an entity is right when a
+client is about to use the session and wrong for a listing; a
+durable-only read path would need a new concept.
