@@ -65,7 +65,7 @@ export {
   ChildAgentRegistryEntry,
   AgentRunError,
 } from "../domain/agent.js"
-export { requireAgent, requireCurrentAgent } from "../domain/extension-services.js"
+export { requireCurrentAgent } from "../domain/extension-services.js"
 export {
   type AnyExtensionHook,
   type GentExtension,

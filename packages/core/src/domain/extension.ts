@@ -85,7 +85,7 @@ export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
 
 // Run Context — per-run metadata for tool policy decisions
 
-export interface RunContext {
+interface RunContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
@@ -177,19 +177,6 @@ export const hook = <K extends ExtensionHookKind, E = never, R = never>(
 export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<ToolCapability>
-}
-
-/** Turn-scoped host + agent context used by prompt/tool-policy hooks. */
-export interface ProjectionTurnContext {
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
-  /** Process working directory (host cwd). */
-  readonly cwd: string
-  /** User home directory. */
-  readonly home: string
-  /** Session-scoped working directory, if the session was opened in a specific cwd. */
-  readonly sessionCwd?: string
-  readonly turn: ExtensionTurnContext
 }
 
 /** Fragment contributed by an extension's derive() to influence tool visibility */

@@ -4,9 +4,9 @@ import { Predicate, Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import type { ExtensionContributions } from "../../src/domain/contribution"
-import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "../../src/domain/driver"
-import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
 import {
   getToolId,
   request,
@@ -41,12 +41,7 @@ const compileRegistryPolicy = (
   agent: AgentDefinition,
   projections: Parameters<typeof compileToolPolicy>[3] = [],
 ) =>
-  compileToolPolicy(
-    [...registry.getResolved().modelCapabilities.values()],
-    agent,
-    runCtx,
-    projections,
-  )
+  compileToolPolicy([...registry.getResolved().modelCapabilities.values()], agent, {}, projections)
 const makeAgent = (
   name: string,
   options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
@@ -134,10 +129,6 @@ const makeRequest = (id: string): RequestCapability =>
     output: Schema.Unknown,
     execute: () => Effect.void,
   })
-const runCtx: RunContext = {
-  sessionId: SessionId.make("test-session"),
-  branchId: BranchId.make("test-branch"),
-}
 describe("resolveExtensions", () => {
   test("empty extensions produce empty maps", () => {
     const resolved = resolveExtensions([])

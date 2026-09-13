@@ -147,18 +147,10 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     agentName: currentAgent,
     parentToolCallId: params.runSpec?.parentToolCallId,
   }
-  const projectionCtx = {
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    cwd: hostCtx.cwd,
-    home: hostCtx.home,
-    sessionCwd: hostCtx.cwd,
-    turn: turnCtx,
-  }
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection(projectionCtx)
+  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection(turnCtx)
   const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
     toolPolicy: p,
   }))
@@ -171,18 +163,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools: hostTools,
     modelTools: tools,
     promptSections: extensionSections,
-  } = compileToolPolicy(
-    allTools,
-    effectiveAgent,
-    {
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      agentName: currentAgent,
-      interactive: params.interactive,
-      parentToolCallId: params.runSpec?.parentToolCallId,
-    },
-    extensionProjections,
-  )
+  } = compileToolPolicy(allTools, effectiveAgent, params, extensionProjections)
   const entriesByToolId = new Map<string, ResolvedToolCapability>()
   for (const entry of allToolEntries) {
     const bound = yield* attachToolBindingIdentity(entry, resolvedExtensions.extensions)

@@ -3,11 +3,11 @@ import {
   SCOPE_PRECEDENCE,
   type AnyExtensionHook,
   type ExtensionHook,
+  type ExtensionTurnContext,
   type LoadedExtension,
   type SystemPromptInput,
   type ToolPolicyFragment,
   type TurnAfterInput,
-  type ProjectionTurnContext,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -23,7 +23,7 @@ export interface CompiledExtensionHooks {
     input: SystemPromptInput,
   ) => Effect.Effect<string, never, CurrentExtensionHostContext>
   readonly resolveTurnProjection: (
-    projection: ProjectionTurnContext,
+    turn: ExtensionTurnContext,
   ) => Effect.Effect<ExtensionTurnProjection, never, CurrentExtensionHostContext>
   readonly emitTurnAfter: (
     input: TurnAfterInput,
@@ -89,7 +89,7 @@ const collectTurnProjection = (
   for (const fragment of projection.value.policyFragments) policyFragments.push(fragment)
 }
 
-const runTurnProjectionHook = (slot: HookTurnProjectionSlot, projection: ProjectionTurnContext) =>
+const runTurnProjectionHook = (slot: HookTurnProjectionSlot, turn: ExtensionTurnContext) =>
   sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off
@@ -108,7 +108,7 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot, projection: Project
             return Option.some({ promptSections, policyFragments })
           }),
         )
-        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId, turn: projection.turn })),
+        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId, turn })),
     {
       onFailure: (error) =>
         Effect.logWarning("extension.hook.turn-projection.failed").pipe(
@@ -214,14 +214,14 @@ export const compileExtensionHooks = (
         return current
       }),
 
-    resolveTurnProjection: (projection) =>
+    resolveTurnProjection: (turn) =>
       Effect.gen(function* () {
         const sectionsById = new Map<string, PromptSection>()
         const policyFragments: ToolPolicyFragment[] = []
 
         for (const slot of turnProjectionSlots) {
           collectTurnProjection(
-            yield* runTurnProjectionHook(slot, projection),
+            yield* runTurnProjectionHook(slot, turn),
             sectionsById,
             policyFragments,
           )

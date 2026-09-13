@@ -3,6 +3,7 @@ import type * as EffectNs from "effect/Effect"
 import { branded, BranchId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import type { AgentEvent, TurnCompleted } from "./event.js"
 import { ModelId } from "./model"
+import { omitUndefined } from "./guards.js"
 
 // Agent definitions
 
@@ -172,17 +173,7 @@ export const RunSpecSchema = Schema.Struct({
 })
 export type RunSpec = typeof RunSpecSchema.Type
 
-interface RunSpecInput extends RunSpec {}
-
-export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
-  const spec: { -readonly [K in keyof RunSpec]: RunSpec[K] } = {}
-  if (Predicate.isNotUndefined(input.history)) spec.history = input.history
-  if (Predicate.isNotUndefined(input.visibility)) spec.visibility = input.visibility
-  if (Predicate.isNotUndefined(input.overrides)) spec.overrides = input.overrides
-  if (Predicate.isNotUndefined(input.parentToolCallId))
-    spec.parentToolCallId = input.parentToolCallId
-  return spec
-}
+export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input)
 
 // Agent run depth
 

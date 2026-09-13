@@ -13,7 +13,6 @@ import type {
   ExtensionHookHandler,
   ExtensionTurnContext,
   LoadedExtension,
-  ProjectionTurnContext,
 } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
 import { BranchId, SessionId, ExtensionId } from "../../src/domain/ids"
@@ -29,20 +28,13 @@ const turnCtx: ExtensionTurnContext = {
   interactive: true,
 }
 
-const turnEvalCtx: ProjectionTurnContext = {
-  sessionId: turnCtx.sessionId,
-  branchId: turnCtx.branchId,
-  cwd: "/tmp",
-  home: "/tmp",
-  turn: turnCtx,
-}
 const hookCtx = {
-  projection: turnEvalCtx,
+  projection: turnCtx,
   host: testExtensionHostContext({
     sessionId: turnCtx.sessionId,
     branchId: turnCtx.branchId,
-    cwd: turnEvalCtx.cwd,
-    home: turnEvalCtx.home,
+    cwd: "/tmp",
+    home: "/tmp",
   }),
 }
 

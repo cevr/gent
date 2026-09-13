@@ -356,15 +356,9 @@ describe("live Profile", () => {
               projection: {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
-                cwd: "/tmp",
-                home: "/tmp",
-                turn: {
-                  sessionId: SessionId.make("s"),
-                  branchId: BranchId.make("b"),
-                  agent: getBuiltinAgent("cowork")!,
-                  agentName: AgentName.make("cowork"),
-                  allTools: [],
-                },
+                agent: getBuiltinAgent("cowork")!,
+                agentName: AgentName.make("cowork"),
+                allTools: [],
               },
               host: testExtensionHostContext({
                 sessionId: SessionId.make("s"),
@@ -497,15 +491,9 @@ describe("live Profile", () => {
           projection: {
             sessionId: SessionId.make("s"),
             branchId: BranchId.make("b"),
-            cwd: "/tmp",
-            home: "/tmp",
-            turn: {
-              sessionId: SessionId.make("s"),
-              branchId: BranchId.make("b"),
-              agent: getBuiltinAgent("cowork")!,
-              agentName: AgentName.make("cowork"),
-              allTools: [],
-            },
+            agent: getBuiltinAgent("cowork")!,
+            agentName: AgentName.make("cowork"),
+            allTools: [],
           },
           host: testExtensionHostContext({
             sessionId: SessionId.make("s"),

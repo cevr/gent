@@ -25,7 +25,6 @@ import {
   type FailedExtension,
   type TurnProjection,
   type LoadedExtension,
-  type RunContext,
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
@@ -470,7 +469,7 @@ const collectProjectionPromptSections = (
 export const compileToolPolicy = (
   allTools: ReadonlyArray<ToolCapability>,
   agent: AgentDefinition,
-  runContext: RunContext,
+  turn: { readonly interactive?: boolean },
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
   const allToolsByName = new Map(allTools.map((t) => [String(getToolId(t)), t]))
@@ -487,7 +486,7 @@ export const compileToolPolicy = (
   tools = applyDenyFilter(tools, agent)
 
   // 5. Filter interactive tools in non-interactive contexts (headless, subagent)
-  if (runContext.interactive === false) {
+  if (turn.interactive === false) {
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }
 

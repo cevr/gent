@@ -51,9 +51,7 @@ type AgentLoopQueue = {
   readonly runtimeState: Effect.Effect<SessionRuntimeState>
   readonly queueSnapshot: Effect.Effect<QueueSnapshot>
   readonly currentLoopState: Effect.Effect<LoopState>
-  readonly persistRuntimeState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   readonly refreshRuntimeState: Effect.Effect<void, AgentLoopError>
-  readonly setStartingState: (state: RunningState) => Effect.Effect<void>
   readonly reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
@@ -177,13 +175,6 @@ export const makeAgentLoopQueue = (
     const queueState = readState.pipe(Effect.map((s) => s.queue))
     const queueSnapshot: Effect.Effect<QueueSnapshot> = queueState.pipe(
       Effect.map(queueSnapshotFromQueueState),
-    )
-
-    const setStartingState = Effect.fn("AgentLoop.setStartingState")((state: RunningState) =>
-      TxSubscriptionRef.update(scope.loopRef, (s) => ({
-        ...s,
-        startingState: state,
-      })),
     )
 
     const reserveStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveStartOrQueueFollowUp")(
@@ -343,9 +334,7 @@ export const makeAgentLoopQueue = (
       runtimeState,
       queueSnapshot,
       currentLoopState,
-      persistRuntimeState,
       refreshRuntimeState,
-      setStartingState,
       reserveStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle: takeNextQueuedTurnFromState({ onlyIfIdle: true }),
       takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),

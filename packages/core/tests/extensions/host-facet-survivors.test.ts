@@ -2,7 +2,7 @@
  * Host facet survivor regression suite.
  *
  * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.Session.listBranches` and the `requireAgent` helper remain as the
+ * `ctx.Session.listBranches` and the `requireCurrentAgent` helper remain as the
  * two non-trivial host-wired behaviors with no other direct test coverage.
  * The RPC suites exercise the durable mutation surface from the public
  * RPC angle; these tests pin the host-facet shape from the extension
@@ -17,7 +17,11 @@ import { BranchStorage } from "../../src/storage/branch-storage.js"
 import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
-import { requireAgent, ExtensionContext, ExtensionServiceError } from "@gent/core/extensions/api"
+import {
+  requireCurrentAgent,
+  ExtensionContext,
+  ExtensionServiceError,
+} from "@gent/core/extensions/api"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testToolContext } from "../../src/test-utils/index.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
@@ -29,31 +33,34 @@ const FIXTURE_DATE = dateFromMillis(0)
 const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
 
 describe("host facet survivors after C9.5 prune", () => {
-  it.live("requireAgent fails with typed ExtensionServiceError when the agent is missing", () =>
-    Effect.gen(function* () {
-      const base = testToolContext()
-      const ctxLayer = Layer.succeed(
-        ExtensionContext,
-        ExtensionContext.of({
-          ...base,
-          Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
-        }),
-      )
-      const exit = yield* Effect.exit(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        requireAgent(AgentName.make("missing-agent")).pipe(Effect.provide(ctxLayer)),
-      )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag !== "Failure") return
-      const error = Cause.findErrorOption(exit.cause)
-      expect(Option.isSome(error)).toBe(true)
-      if (!Option.isSome(error)) return
-      expect(Schema.is(ExtensionServiceError)(error.value)).toBe(true)
-      if (!Schema.is(ExtensionServiceError)(error.value)) return
-      expect(error.value.service).toBe("ExtensionAgent")
-      expect(error.value.operation).toBe("require")
-      expect(error.value.message).toBe('Agent "missing-agent" not found in registry')
-    }),
+  it.live(
+    "requireCurrentAgent fails with typed ExtensionServiceError when the agent is missing",
+    () =>
+      Effect.gen(function* () {
+        const base = testToolContext()
+        const ctxLayer = Layer.succeed(
+          ExtensionContext,
+          ExtensionContext.of({
+            ...base,
+            agentName: AgentName.make("missing-agent"),
+            Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
+          }),
+        )
+        const exit = yield* Effect.exit(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          requireCurrentAgent.pipe(Effect.provide(ctxLayer)),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag !== "Failure") return
+        const error = Cause.findErrorOption(exit.cause)
+        expect(Option.isSome(error)).toBe(true)
+        if (!Option.isSome(error)) return
+        expect(Schema.is(ExtensionServiceError)(error.value)).toBe(true)
+        if (!Schema.is(ExtensionServiceError)(error.value)) return
+        expect(error.value.service).toBe("ExtensionAgent")
+        expect(error.value.operation).toBe("require")
+        expect(error.value.message).toBe('Agent "missing-agent" not found in registry')
+      }),
   )
 
   it.live("ctx.Session.listBranches returns branches for the current session", () =>

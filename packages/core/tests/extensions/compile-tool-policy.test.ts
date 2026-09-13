@@ -12,7 +12,6 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { compileToolPolicy } from "../../src/runtime/extensions/registry"
-import { BranchId, SessionId } from "../../src/domain/ids"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
@@ -56,16 +55,12 @@ describe("compileToolPolicy", () => {
     makeTool("lookup"),
   ]
 
-  const emptyCtx = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
-
   const names = (tools: ReadonlyArray<ToolCapability>) =>
     tools.map((t) => String(getToolId(t))).sort()
 
   test("model selection leaves admitted host tools available", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const result = compileToolPolicy(allTools, agent, emptyCtx, [
-      { toolPolicy: { modelSet: ["read"] } },
-    ])
+    const result = compileToolPolicy(allTools, agent, {}, [{ toolPolicy: { modelSet: ["read"] } }])
     expect(names(result.tools)).toEqual(names(allTools))
     expect(names(result.modelTools)).toEqual(["read"])
     expect(result.modelTools[0]).toBe(allTools[0])
@@ -76,7 +71,7 @@ describe("compileToolPolicy", () => {
     const result = compileToolPolicy(
       [...allTools, makeInteractiveTool("question")],
       agent,
-      { ...emptyCtx, interactive: false },
+      { interactive: false },
       [{ toolPolicy: { modelSet: ["read", "read", "bash", "question", "missing"] } }],
     )
     expect(names(result.modelTools)).toEqual(["read"])
@@ -84,7 +79,7 @@ describe("compileToolPolicy", () => {
 
   test("the last explicit model selection wins and an empty set advertises no tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const result = compileToolPolicy(allTools, agent, emptyCtx, [
+    const result = compileToolPolicy(allTools, agent, {}, [
       { toolPolicy: { modelSet: ["read"] } },
       { toolPolicy: { modelSet: [] } },
       { toolPolicy: { include: ["bash"] } },
@@ -96,9 +91,9 @@ describe("compileToolPolicy", () => {
   test("a cell name has no special allowance without an extension policy", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork"), allowedTools: ["read"] })
     const tools = [makeTool("cell"), ...allTools]
-    const direct = compileToolPolicy(tools, agent, emptyCtx, [])
+    const direct = compileToolPolicy(tools, agent, {}, [])
     expect(names(direct.modelTools)).toEqual(["read"])
-    const selected = compileToolPolicy(tools, agent, emptyCtx, [
+    const selected = compileToolPolicy(tools, agent, {}, [
       { toolPolicy: { include: ["cell"], modelSet: ["cell"] } },
     ])
     expect(names(selected.modelTools)).toEqual(["cell"])
@@ -107,7 +102,7 @@ describe("compileToolPolicy", () => {
 
   test("no allow-list → all tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
+    const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(names(tools)).toEqual(names(allTools))
   })
 
@@ -116,20 +111,20 @@ describe("compileToolPolicy", () => {
       name: AgentName.make("cowork"),
       allowedTools: ["bash", "read"],
     })
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
+    const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(names(tools)).toEqual(["bash", "read"])
   })
 
   test("allowedTools: [] means no tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork"), allowedTools: [] })
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
+    const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(tools).toEqual([])
   })
 
   test("extension projection exclude removes tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const projections = [{ toolPolicy: { exclude: ["bash", "write"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
+    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
     expect(names(tools)).not.toContain("bash")
     expect(names(tools)).not.toContain("write")
   })
@@ -140,7 +135,7 @@ describe("compileToolPolicy", () => {
       allowedTools: ["read", "grep", "lookup"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
+    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
     expect(names(tools)).toContain("bash")
     expect(names(tools)).toContain("read")
   })
@@ -148,7 +143,7 @@ describe("compileToolPolicy", () => {
   test("extension projection overrideSet replaces tool list", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
     const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
+    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
     expect(names(tools)).toEqual(["grep", "read"])
   })
 
@@ -158,7 +153,7 @@ describe("compileToolPolicy", () => {
       deniedTools: ["bash"],
     })
     const projections = [{ toolPolicy: { include: ["bash"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
+    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
     expect(names(tools)).not.toContain("bash")
   })
 
@@ -168,7 +163,7 @@ describe("compileToolPolicy", () => {
       { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
       { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
     ]
-    const { promptSections } = compileToolPolicy(allTools, agent, emptyCtx, projections)
+    const { promptSections } = compileToolPolicy(allTools, agent, {}, projections)
     expect(promptSections).toHaveLength(2)
     expect(promptSections.map((s) => s.id)).toEqual(["ext-a", "ext-b"])
   })
@@ -177,8 +172,12 @@ describe("compileToolPolicy", () => {
     const interactiveTool = makeInteractiveTool("ask_user")
     const nonInteractiveTool = makeTool("read")
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const ctx = { ...emptyCtx, interactive: false }
-    const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [])
+    const { tools } = compileToolPolicy(
+      [interactiveTool, nonInteractiveTool],
+      agent,
+      { interactive: false },
+      [],
+    )
     expect(names(tools)).toEqual(["read"])
     expect(names(tools)).not.toContain("ask_user")
   })
@@ -186,7 +185,7 @@ describe("compileToolPolicy", () => {
   test("interactive tools remain available when the run is interactive", () => {
     const interactiveTool = makeInteractiveTool("ask_user")
     const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])
+    const { tools } = compileToolPolicy([interactiveTool], agent, {}, [])
     expect(names(tools)).toContain("ask_user")
   })
 })

@@ -441,22 +441,13 @@ export const requireCurrentAgent: Effect.Effect<
   ExtensionContext
 > = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
-  return yield* requireAgent(
-    Option.getOrElse(Option.fromUndefinedOr(ctx.agentName), () => DEFAULT_AGENT_NAME),
-  )
-})
-
-export const requireAgent = (
-  name: AgentName,
-): Effect.Effect<AgentDefinition, ExtensionServiceError, ExtensionContext> =>
-  Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const agents = yield* ctx.Agent.listAgents
-    const agent = agents.find((a) => a.name === name)
-    if (!Predicate.isUndefined(agent)) return agent
-    return yield* new ExtensionServiceError({
-      service: "ExtensionAgent",
-      operation: "require",
-      message: `Agent "${name}" not found in registry`,
-    })
+  const name = Option.getOrElse(Option.fromUndefinedOr(ctx.agentName), () => DEFAULT_AGENT_NAME)
+  const agents = yield* ctx.Agent.listAgents
+  const agent = agents.find((a) => a.name === name)
+  if (!Predicate.isUndefined(agent)) return agent
+  return yield* new ExtensionServiceError({
+    service: "ExtensionAgent",
+    operation: "require",
+    message: `Agent "${name}" not found in registry`,
   })
+})
