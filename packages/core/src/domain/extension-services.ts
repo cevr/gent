@@ -14,7 +14,6 @@ import type {
   ExtensionHostPlatform,
   ExtensionHostRunProcessOptions,
   ExtensionHostProcessResult,
-  ExtensionHostSignal,
   ExtensionTurnContext,
 } from "./extension.js"
 import { makeFileWriter } from "./file-writer.js"
@@ -202,13 +201,6 @@ interface ExtensionProcessService {
     args: ReadonlyArray<string>,
     options?: ExtensionHostRunProcessOptions,
   ) => Effect.Effect<ExtensionHostProcessResult, ExtensionServiceError>
-  readonly signalPid: (
-    pid: number,
-    signal: ExtensionHostSignal,
-  ) => Effect.Effect<void, ExtensionServiceError>
-  readonly isPortFree: (port: number) => Effect.Effect<boolean, ExtensionServiceError>
-  readonly isPidAlive: (pid: number) => Effect.Effect<boolean, ExtensionServiceError>
-  readonly commandCandidates: (command: string) => ReadonlyArray<string>
   // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>
 }
@@ -217,11 +209,6 @@ const extensionProcessFromHostContext = (host: ExtensionHostPlatform): Extension
   randomId: host.randomId,
   run: (command, args, options) =>
     mapError("ExtensionProcess", "run", host.runProcess(command, args, options)),
-  signalPid: (pid, signal) =>
-    mapError("ExtensionProcess", "signalPid", host.signalPid(pid, signal)),
-  isPortFree: (port) => mapError("ExtensionProcess", "isPortFree", host.isPortFree(port)),
-  isPidAlive: (pid) => mapError("ExtensionProcess", "isPidAlive", host.isPidAlive(pid)),
-  commandCandidates: host.commandCandidates,
   parentEnv: host.parentEnv,
 })
 
@@ -249,10 +236,6 @@ export interface ExtensionFilesService {
   ) => Effect.Effect<void, ExtensionServiceError>
   readonly exists: (path: string) => Effect.Effect<boolean, ExtensionServiceError>
   readonly stat: (path: string) => Effect.Effect<ExtensionFileStat, ExtensionServiceError>
-  readonly readDirectory: (
-    path: string,
-    options?: { readonly recursive?: boolean },
-  ) => Effect.Effect<ReadonlyArray<string>, ExtensionServiceError>
   readonly makeDirectory: (
     path: string,
     options?: { readonly recursive?: boolean; readonly mode?: number },
@@ -380,8 +363,6 @@ const extensionServicesFromHostContext = (
             })),
           ),
         ),
-      readDirectory: (path, options) =>
-        mapError("ExtensionFiles", "readDirectory", fs.readDirectory(path, options)),
       makeDirectory: (path, options) =>
         mapError("ExtensionFiles", "makeDirectory", fs.makeDirectory(path, options)),
       rename: (from, to) => mapError("ExtensionFiles", "rename", fs.rename(from, to)),

@@ -14,7 +14,6 @@
  */
 
 import * as os from "node:os"
-import { createServer } from "node:net"
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
 import { fileURLToPath as nodeFileURLToPath, pathToFileURL } from "node:url"
 import { Effect, Layer, Option, Schema } from "effect"
@@ -60,25 +59,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
       }
       return ":"
     }),
-
-    commandCandidates: (command) => {
-      if (os.platform() === "win32") {
-        return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
-      }
-      return [command]
-    },
-
-    isPortFree: (port) =>
-      Effect.callback<boolean>((resume) => {
-        const server = createServer()
-        server.once("error", () => {
-          server.close()
-          resume(Effect.succeed(false))
-        })
-        server.listen(port, "127.0.0.1", () => {
-          server.close(() => resume(Effect.succeed(true)))
-        })
-      }),
 
     signal: (pid, signal) =>
       Effect.try({

@@ -67,10 +67,6 @@ export const testExtensionHostContext = (
     parentEnv: {},
     randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
     pathListSeparator: ":",
-    commandCandidates: (command) => [command],
-    isPortFree: () => Effect.succeed(true),
-    isPidAlive: () => Effect.succeed(true),
-    signalPid: () => Effect.void,
     runProcess: (command) =>
       Effect.fail(
         new ExtensionHostProcessError({

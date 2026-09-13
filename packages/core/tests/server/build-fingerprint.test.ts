@@ -34,8 +34,6 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
       homeDirectory: Effect.succeed("/tmp"),
       env: Effect.succeed({}),
       pathListSeparator: Effect.succeed(":"),
-      commandCandidates: (command) => [command],
-      isPortFree: () => Effect.succeed(true),
       signal: () => Effect.void,
       exit: () => Effect.die(new Error("exit not expected in this test")),
       now: Effect.succeed(0),

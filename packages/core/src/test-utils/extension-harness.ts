@@ -119,21 +119,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
             }),
         ),
       ),
-    signalPid: (pid, signal) =>
-      host.signalPid(pid, signal).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ExtensionServiceError({
-              service: "ExtensionProcess",
-              operation: "signalPid",
-              message: String(cause),
-              cause,
-            }),
-        ),
-      ),
-    isPortFree: host.isPortFree,
-    isPidAlive: host.isPidAlive,
-    commandCandidates: host.commandCandidates,
     parentEnv: host.parentEnv,
   }
   const filesError = (operation: string) => (cause: unknown) => {
@@ -173,8 +158,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
           })),
         ),
       ),
-    readDirectory: (path, options) =>
-      filesFs("readDirectory", (fs) => fs.readDirectory(path, options)),
     makeDirectory: (path, options) =>
       filesFs("makeDirectory", (fs) => fs.makeDirectory(path, options)),
     rename: (from, to) => filesFs("rename", (fs) => fs.rename(from, to)),

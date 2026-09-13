@@ -13,8 +13,8 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Effect, Layer, Option } from "effect"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
-import type { AnyResourceContribution, ExtensionState } from "../../src/domain/resource"
-import { defineResource, defineStateResource } from "../../src/domain/contribution"
+import type { AnyResourceContribution } from "../../src/domain/resource"
+import { defineResource } from "../../src/domain/contribution"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "../../src/domain/ids"
 
@@ -26,10 +26,6 @@ class TestServiceA extends Context.Service<TestServiceA, { readonly value: strin
 class TestServiceB extends Context.Service<TestServiceB, { readonly value: string }>()(
   "@gent/core/tests/extensions/resource-host.test/TestServiceB",
 ) {}
-class TestCounterState extends Context.Service<TestCounterState, ExtensionState<number>>()(
-  "@gent/core/tests/extensions/resource-host.test/TestCounterState",
-) {}
-
 const layerA = Layer.succeed(TestServiceA, TestServiceA.of({ value: "A" }))
 const layerB = Layer.succeed(TestServiceB, TestServiceB.of({ value: "B" }))
 
@@ -71,17 +67,6 @@ describe("defineResource", () => {
       }),
     ).toThrow()
   })
-
-  test("defineStateResource lowers scoped state to a Resource", () => {
-    const r = defineStateResource({
-      id: "test/resource-host/state",
-      tag: TestCounterState,
-      scope: "process",
-      initial: 0,
-    })
-    expect(r.scope).toBe("process")
-    expect(r.tag).toBe(TestCounterState)
-  })
 })
 
 describe("buildResourceLayer", () => {
@@ -117,27 +102,6 @@ describe("buildResourceLayer", () => {
         const ctx = yield* Layer.build(layer)
         expect(Context.get(ctx, TestServiceA).value).toBe("A")
         expect(Context.get(ctx, TestServiceB).value).toBe("B")
-      }),
-    ),
-  )
-
-  it.live("state resources provide an Effect state cell", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const ext = makeStubExtension("ext", [
-          defineStateResource({
-            id: "test/resource-host/state-layer",
-            tag: TestCounterState,
-            scope: "process",
-            initial: Effect.succeed(1),
-          }),
-        ])
-        const ctx = yield* Layer.build(buildResourceLayer([ext], "process"))
-        const state = Context.get(ctx, TestCounterState)
-        yield* state.update((current) => current + 1)
-        const doubled = yield* state.modify((current) => [current * 2, current * 2])
-        expect(doubled).toBe(4)
-        expect(yield* state.get).toBe(4)
       }),
     ),
   )

@@ -5,7 +5,6 @@ import {
   promptFromResponseParts,
   projectResponsePartsToMessageParts,
 } from "../../src/domain/response-to-prompt"
-import { responsePartsFromMessages } from "../../src/domain/prompt-to-response"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,
@@ -388,52 +387,5 @@ describe("AI transcript projection", () => {
         "file",
       ])
     }
-
-    const replayMessages = [
-      baseMessage({
-        id: MessageId.make("assistant-replay"),
-        sessionId: SessionId.make("session"),
-        branchId: BranchId.make("branch"),
-        role: "assistant",
-        parts: projectResponsePartsToMessageParts(responseParts).assistant,
-      }),
-      baseMessage({
-        id: MessageId.make("tool-replay"),
-        sessionId: SessionId.make("session"),
-        branchId: BranchId.make("branch"),
-        role: "tool",
-        parts: projectResponsePartsToMessageParts(responseParts).tool,
-      }),
-    ]
-
-    expect(responsePartsFromMessages(replayMessages).map((part) => part.type)).toEqual([
-      "text",
-      "reasoning",
-      "tool-call",
-      "tool-approval-request",
-      "file",
-      "tool-result",
-    ])
-  })
-
-  test("response replay rejects URL-backed images instead of silently dropping them", () => {
-    const replayMessages = [
-      baseMessage({
-        id: MessageId.make("assistant-url-image"),
-        sessionId: SessionId.make("session"),
-        branchId: BranchId.make("branch"),
-        role: "assistant",
-        parts: [
-          Prompt.filePart({
-            data: "https://example.com/image.png",
-            mediaType: "image/png",
-          }),
-        ],
-      }),
-    ]
-
-    expect(() => responsePartsFromMessages(replayMessages)).toThrow(
-      'responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "https://example.com/image.png"',
-    )
   })
 })

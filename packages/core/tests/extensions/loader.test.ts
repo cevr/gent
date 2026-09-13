@@ -122,10 +122,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         manifest: { id: ExtensionId.make("@gent/test-public-setup") },
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
-          sawProcessAuthority.value =
-            "runProcess" in host.Process &&
-            "parentEnv" in host.Process &&
-            "signalPid" in host.Process
+          sawProcessAuthority.value = "runProcess" in host.Process && "parentEnv" in host.Process
         }),
       }
 

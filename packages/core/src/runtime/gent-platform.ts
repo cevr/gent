@@ -15,9 +15,6 @@
  *                          process launches that must inherit shell config
  *   - `pathListSeparator`— PATH-like list separator (`;` on Windows, `:`
  *                          elsewhere)
- *   - `commandCandidates(command)` — platform-specific executable name
- *                          candidates for PATH lookup
- *   - `isPortFree(port)` — host TCP port probe on loopback
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
  *   - `exit(code)`       — request the host to exit with `code`. NOT
  *                          finalizer-safe: `process.exit` is synchronous and
@@ -96,8 +93,6 @@ interface GentPlatformApi {
   // oxlint-disable-next-line effect/noNullish -- Platform environment snapshots preserve undefined for absent process variables.
   readonly env: Effect.Effect<Record<string, string | undefined>>
   readonly pathListSeparator: Effect.Effect<string>
-  readonly commandCandidates: (command: string) => ReadonlyArray<string>
-  readonly isPortFree: (port: number) => Effect.Effect<boolean>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly exit: (code: number) => Effect.Effect<never>
   readonly now: Effect.Effect<number>
@@ -137,8 +132,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           homeDirectory: Effect.succeed("/tmp"),
           env: Effect.succeed({}),
           pathListSeparator: Effect.succeed(":"),
-          commandCandidates: (command) => [command],
-          isPortFree: () => Effect.succeed(true),
           signal: () => Effect.void,
           // The default Test stub dies loudly: silent `Effect.never` would
           // make accidental `platform.exit(...)` calls in a test hang

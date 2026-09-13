@@ -2,26 +2,25 @@
  * Example: One-file session notes extension.
  *
  * Demonstrates the public authoring loop:
- *   - process-scoped extension state
+ *   - process-scoped extension state (a Ref behind the extension's own Tag)
  *   - one model-callable tool
  *   - one slash-presented request
  *   - one turn projection hook
  */
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import {
   defineExtension,
-  defineStateResource,
+  defineResource,
   ExtensionHost,
   request,
   tool,
-  type ExtensionState,
 } from "@gent/core/extensions/api"
 
 interface NotesState {
   readonly notes: ReadonlyArray<string>
 }
 
-class SessionNotesState extends Context.Service<SessionNotesState, ExtensionState<NotesState>>()(
+class SessionNotesState extends Context.Service<SessionNotesState, Ref.Ref<NotesState>>()(
   "gent/examples/extensions/session-notes/SessionNotesState",
 ) {}
 
@@ -43,7 +42,7 @@ export const AddNoteTool = tool({
   execute: ({ text }) =>
     Effect.gen(function* () {
       const state = yield* SessionNotesState
-      return yield* state.modify((current) => [
+      return yield* Ref.modify(state, (current) => [
         { count: current.notes.length + 1, latest: text },
         { notes: [...current.notes, text] },
       ])
@@ -62,8 +61,7 @@ export const SessionNotesSummary = request({
   output: Schema.String,
   execute: () =>
     Effect.gen(function* () {
-      const state = yield* SessionNotesState
-      const snapshot = yield* state.get
+      const snapshot = yield* Ref.get(yield* SessionNotesState)
       if (snapshot.notes.length === 0) return "No session notes yet."
       return snapshot.notes.map((note, index) => `${index + 1}. ${note}`).join("\n")
     }),
@@ -75,19 +73,18 @@ export default defineExtension({
     const host = yield* ExtensionHost
     yield* host.register(
       "resource",
-      defineStateResource({
+      defineResource({
         id: "example/session-notes/state",
         tag: SessionNotesState,
         scope: "process",
-        initial: { notes: [] },
+        layer: Layer.effect(SessionNotesState, Ref.make<NotesState>({ notes: [] })),
       }),
     )
     yield* host.register("tool", AddNoteTool)
     yield* host.register("request", SessionNotesSummary)
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
-        const state = yield* SessionNotesState
-        const snapshot = yield* state.get
+        const snapshot = yield* Ref.get(yield* SessionNotesState)
         if (snapshot.notes.length === 0) return {}
         return {
           promptSections: [

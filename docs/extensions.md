@@ -83,7 +83,7 @@ Public authoring surface:
 | --------------- | ---------------------------------------------------------------------------- |
 | Extension shape | `defineExtension`, `GentExtension`, `ExtensionHost`                          |
 | Capabilities    | `tool`, `request`, `ref`                                                     |
-| Resources       | `defineResource`, `defineStateResource`                                      |
+| Resources       | `defineResource`                                                             |
 | Hooks           | `host.on(kind, handler)` and hook input/output types                         |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
 | Stable ids      | `ExtensionId`, `ToolCallId`                                                  |
@@ -287,9 +287,9 @@ Each `host.on` call is typed by the kind's input and output.
 A Resource declares a stable `id`, its scope (lifetime), and a service Layer
 plus optional `start` and `stop` effects. Resources build in extension
 resolution order, so a resource may depend on services from extensions that
-resolve before its own. Extension-owned state should live in scoped
-services/resources; `defineStateResource(...)` is the low-ceremony state cell
-helper for that case. True actor protocols belong at their owning runtime
+resolve before its own. Extension-owned state is a resource whose
+service is a `Ref` (or any Effect data cell) behind the extension's own Tag.
+True actor protocols belong at their owning runtime
 boundary through Effect Entity/RPC, not in extension registrations.
 
 | Scope     | Lifetime        |
@@ -303,14 +303,8 @@ contributions from active registries, and appears in extension health surfaces
 including `gent doctor`.
 
 ```ts
-import {
-  defineExtension,
-  defineResource,
-  defineStateResource,
-  ExtensionHost,
-  type ExtensionState,
-} from "@gent/core/extensions/api"
-import { Context, Layer, Effect } from "effect"
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
+import { Context, Layer, Effect, Ref } from "effect"
 
 class MyService extends Context.Service<
   MyService,
@@ -321,7 +315,7 @@ class MyService extends Context.Service<
   })
 }
 
-class CounterState extends Context.Service<CounterState, ExtensionState<number>>()(
+class CounterState extends Context.Service<CounterState, Ref.Ref<number>>()(
   "my-service-ext/CounterState",
 ) {}
 
@@ -337,11 +331,11 @@ export default defineExtension({
         scope: "process",
         layer: MyService.Live,
       }),
-      defineStateResource({
+      defineResource({
         id: "my-service-ext/counter-state",
         tag: CounterState,
         scope: "process",
-        initial: 0,
+        layer: Layer.effect(CounterState, Ref.make(0)),
       }),
     )
   }),
@@ -448,7 +442,7 @@ Preview is not a sandbox or a general side-effect-free operation.
   `host.on(kind, handler)`; there are no per-kind buckets on
   `defineExtension`.
 - Prompt shaping and policy derivation live in `host.on("turnProjection", ...)`.
-- Long-lived state lives in `defineResource(...)` or `defineStateResource(...)`.
+- Long-lived state lives in `defineResource(...)`, typically a `Ref` behind the extension's Tag.
 - Generic middleware APIs are not part of extension authoring.
 - The registration domain is the discriminator; extension authors do not build flat `_kind` contribution unions.
 - Builtins, user extensions, and project extensions use the same public API.

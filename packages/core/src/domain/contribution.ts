@@ -9,8 +9,8 @@
  * `request({...})` at `domain/capability/{tool,request}.ts`. Slash commands
  * are requests carrying a `slash:` presentation block.
  *
- * Resources are authored through `defineResource({...})` or
- * `defineStateResource({...})` from `./resource.ts`. Each leaf carries an
+ * Resources are authored through `defineResource({...})` from
+ * `./resource.ts`. Each leaf carries an
  * explicit stable resource identity and graph metadata; the leaf is widened
  * by structural assignability at the bucket boundary.
  *
@@ -86,9 +86,7 @@ export const rpcCapabilities = (
 // `domain/capability/{tool,request}.ts`. The Resource primitive is authored
 // through `defineResource({...})` directly — leaves widen to
 // `AnyResourceContribution` by structural assignability when the `layer`'s
-// `A` is concrete (not `never`). `defineStateResource({...})` lowers a
-// state cell to that same Resource primitive. Lifecycle-only resources should
+// `A` is concrete (not `never`). Lifecycle-only resources should
 // encode disposal as a `Layer.scoped` finalizer over a marker tag rather than
 // `{ layer: Layer.empty, stop: ... }`.
-export { defineResource, defineStateResource } from "./resource.js"
-export type { ExtensionState, StateInitializer, StateResourceSpec } from "./resource.js"
+export { defineResource } from "./resource.js"

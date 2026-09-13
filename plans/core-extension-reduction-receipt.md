@@ -1117,3 +1117,18 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   `testHostFacts().host`, the stub test-utils already owned.
 - `Permission.Test()` was `Permission.Live()` with no rules and the default
   allow action. Deleted; the thirteen callers name the live constructor.
+
+## Dead surface: prompt-to-response, process probes, state cells (2026-09-13)
+
+- `domain/prompt-to-response.ts` (98 lines) converted persisted messages
+  back into provider `Response` parts. No production caller; the loop uses
+  `response-to-prompt` and `response-part-normalization` directly. Deleted
+  with its image-conversion half and the `ai-transcript` re-export block.
+- `ctx.Process.{signalPid,isPortFree,isPidAlive,commandCandidates}` and
+  `ctx.Files.readDirectory` threaded through six layers (GentPlatform, the
+  Bun adapter, host-platform, ExtensionHostPlatform, the services, three
+  stubs) to reach no extension. Deleted at every layer; extensions that list
+  directories already use `FileSystem`.
+- `defineStateResource` / `ExtensionState` wrapped a `Ref` in four methods
+  for one example. The example and docs now show `defineResource` with
+  `Layer.effect(Tag, Ref.make(...))`, which is the same thing said once.

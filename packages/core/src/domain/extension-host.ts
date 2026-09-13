@@ -59,10 +59,7 @@ export interface ExtensionHostService {
     ExtensionHostPlatform,
     "osInfo" | "execPath" | "homeDirectory" | "pathListSeparator"
   >
-  readonly Process: Pick<
-    ExtensionHostPlatform,
-    "parentEnv" | "runProcess" | "signalPid" | "isPortFree" | "isPidAlive" | "commandCandidates"
-  >
+  readonly Process: Pick<ExtensionHostPlatform, "parentEnv" | "runProcess">
   /** Registers leaves in one typed domain. Order within a domain is kept. */
   readonly register: <D extends RegistrationDomain>(
     domain: D,
@@ -127,10 +124,6 @@ export const makeCollectingExtensionHost = (facts: ExtensionHostFacts): Collecti
     Process: {
       parentEnv: facts.host.parentEnv,
       runProcess: facts.host.runProcess,
-      signalPid: facts.host.signalPid,
-      isPortFree: facts.host.isPortFree,
-      isPidAlive: facts.host.isPidAlive,
-      commandCandidates: facts.host.commandCandidates,
     },
     register: (domain, ...values) =>
       Effect.sync(() => {

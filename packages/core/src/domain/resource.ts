@@ -19,8 +19,8 @@
  * @module
  */
 
-import { Effect, Layer, Ref, Schema } from "effect"
-import type { Context } from "effect"
+import { Schema } from "effect"
+import type { Context, Effect, Layer } from "effect"
 
 /** Stable identity for a declared resource. */
 export const ResourceId = Schema.NonEmptyString.pipe(Schema.brand("ResourceId"))
@@ -160,49 +160,3 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never,
   const { id, ...resource } = spec
   return { ...resource, id: ResourceId.make(id) }
 }
-
-export interface ExtensionState<Value> {
-  readonly get: Effect.Effect<Value>
-  readonly set: (value: Value) => Effect.Effect<void>
-  readonly update: (f: (current: Value) => Value) => Effect.Effect<void>
-  readonly modify: <A>(f: (current: Value) => readonly [A, Value]) => Effect.Effect<A>
-}
-
-export type StateInitializer<Value, E = never, R = never> = Value | Effect.Effect<Value, E, R>
-
-export interface StateResourceSpec<A, Value, R = never, E = never> extends ResourceIdentitySpec {
-  readonly tag: Context.Key<A, ExtensionState<Value>>
-  readonly scope: "process"
-  readonly initial: StateInitializer<Value, E, R>
-}
-
-const resolveStateInitial = <Value, E, R>(
-  initial: StateInitializer<Value, E, R>,
-): Effect.Effect<Value, E, R> => {
-  if (Effect.isEffect(initial)) return initial
-  return Effect.succeed(initial)
-}
-
-export const defineStateResource = <A, Value, R = never, E = never>(
-  spec: StateResourceSpec<A, Value, R, E>,
-): ResourceContribution<A, "process", R, E> =>
-  defineResource<A, "process", R, E>({
-    id: spec.id,
-    tag: spec.tag,
-    // State resources are deliberately process-only. The explicit generic above
-    // pins the literal now that `ResourceScope` also admits `"branch"`.
-    scope: "process",
-    layer: Layer.effect(
-      spec.tag,
-      Effect.gen(function* () {
-        const initial = yield* resolveStateInitial(spec.initial)
-        const ref = yield* Ref.make(initial)
-        return {
-          get: Ref.get(ref),
-          set: (value) => Ref.set(ref, value),
-          update: (f) => Ref.update(ref, f),
-          modify: (f) => Ref.modify(ref, f),
-        } satisfies ExtensionState<Value>
-      }),
-    ),
-  })

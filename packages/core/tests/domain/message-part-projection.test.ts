@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  assistantMessagePartToResponsePart,
-  messagePartToPromptPart,
-  toolResultPartToResponsePart,
-} from "../../src/domain/prompt-to-response"
-import {
   messagePartsImages,
   messagePartsReasoning,
   messagePartsReasoningLines,
@@ -92,83 +87,6 @@ describe("message part projection", () => {
     expect(messagePartsTextLines(parts)).toEqual(["one", "two"])
     expect(messagePartsReasoning(parts)).toBe("think")
     expect(messagePartsReasoningLines(parts)).toEqual(["think"])
-  })
-
-  test("maps Gent images to Effect prompt file parts", () => {
-    const promptPart = messagePartToPromptPart(
-      Prompt.filePart({
-        data: "data:image/jpeg;base64,abc",
-        mediaType: "image/jpeg",
-      }),
-    )
-
-    expect(promptPart).toEqual(
-      expect.objectContaining({
-        type: "file",
-        data: "data:image/jpeg;base64,abc",
-        mediaType: "image/jpeg",
-      }),
-    )
-  })
-
-  test("maps Gent tool calls to Effect prompt and response parts", () => {
-    const part = Prompt.toolCallPart({
-      id: ToolCallId.make("tc-1"),
-      name: "search",
-      params: { query: "effect" },
-      providerExecuted: false,
-    })
-
-    expect(messagePartToPromptPart(part)).toEqual(
-      expect.objectContaining({
-        type: "tool-call",
-        id: "tc-1",
-        name: "search",
-        params: { query: "effect" },
-        providerExecuted: false,
-      }),
-    )
-    expect(assistantMessagePartToResponsePart(part)).toEqual(
-      expect.objectContaining({
-        type: "tool-call",
-        id: "tc-1",
-        name: "search",
-        params: { query: "effect" },
-        providerExecuted: false,
-      }),
-    )
-  })
-
-  test("maps Gent tool results to Effect result fields", () => {
-    const part = Prompt.toolResultPart({
-      id: ToolCallId.make("tc-1"),
-      name: "search",
-      isFailure: true,
-      providerExecuted: false,
-      result: { message: "nope" },
-    })
-
-    expect(messagePartToPromptPart(part)).toEqual(
-      expect.objectContaining({
-        type: "tool-result",
-        id: "tc-1",
-        name: "search",
-        isFailure: true,
-        result: { message: "nope" },
-      }),
-    )
-    expect(toolResultPartToResponsePart(part)).toEqual(
-      expect.objectContaining({
-        type: "tool-result",
-        id: "tc-1",
-        name: "search",
-        isFailure: true,
-        result: { message: "nope" },
-        encodedResult: { message: "nope" },
-        providerExecuted: false,
-        preliminary: false,
-      }),
-    )
   })
 
   test("pairs duplicate provider tool ids with the result before the next duplicate call", () => {
@@ -331,24 +249,6 @@ describe("message part projection", () => {
         approvalId: "approval-2",
         toolCallId: "tc-approval-2",
       }),
-    )
-  })
-
-  test("uses URL-backed images for Prompt and rejects them for Response", () => {
-    const part = Prompt.filePart({
-      data: "https://example.test/image.png",
-      mediaType: "image/png",
-    })
-
-    expect(messagePartToPromptPart(part)).toEqual(
-      expect.objectContaining({
-        type: "file",
-        data: "https://example.test/image.png",
-        mediaType: "image/png",
-      } satisfies Partial<Prompt.FilePart>),
-    )
-    expect(() => assistantMessagePartToResponsePart(part)).toThrow(
-      'responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "https://example.test/image.png"',
     )
   })
 

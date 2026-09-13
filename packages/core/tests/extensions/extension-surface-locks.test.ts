@@ -466,8 +466,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionFiles = typeof PublicExtensionApi.ExtensionFiles
     // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
     type _BadExtensionFileLock = typeof PublicExtensionApi.ExtensionFileLock
-    // @ts-expect-error — individual authority facades are collapsed into ExtensionContext
-    type _BadExtensionState = typeof PublicExtensionApi.ExtensionState
     // @ts-expect-error — raw tool metadata is internal lowering detail
     type _BadGetToolMetadata = typeof PublicExtensionApi.getToolMetadata
     // @ts-expect-error — raw tool metadata is internal lowering detail
@@ -590,19 +588,18 @@ describe("Effect-purity locks (compile-time)", () => {
       const source = host.source
       void host.Process.parentEnv
       void host.Process.runProcess
-      void host.Process.commandCandidates
       // @ts-expect-error — host facts do not carry the parent process env
       void host.host.parentEnv
       // @ts-expect-error — host facts cannot signal host processes
-      host.host.signalPid(1, "SIGTERM")
+      void host.host.signalPid
+      // @ts-expect-error — process signalling is not an extension authority
+      void host.Process.signalPid
       // @ts-expect-error — host facts cannot spawn host processes
       host.host.runProcess("git", ["status"])
-      // @ts-expect-error — commandCandidates lives on Process, not host facts
-      void host.host.commandCandidates
-      // @ts-expect-error — isPortFree lives on Process, not host facts
-      void host.host.isPortFree
-      // @ts-expect-error — isPidAlive lives on Process, not host facts
-      void host.host.isPidAlive
+      // @ts-expect-error — port probes are not an extension authority
+      void host.Process.isPortFree
+      // @ts-expect-error — liveness probes are not an extension authority
+      void host.Process.isPidAlive
       return `${platform}:${home.length}:${cwd}:${source}`
     })
     void setup

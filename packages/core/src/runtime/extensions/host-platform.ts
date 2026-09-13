@@ -1,9 +1,5 @@
 import { Effect, Predicate, Schema } from "effect"
-import {
-  ExtensionHostProcessError,
-  type ExtensionHostPlatform,
-  type ExtensionHostSignal,
-} from "../../domain/extension.js"
+import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../../domain/extension.js"
 import { ProcessRunner } from "../../utils/run-process.js"
 import { GentPlatform } from "../gent-platform.js"
 import { hasMessage } from "../../domain/guards.js"
@@ -49,15 +45,6 @@ export const makeExtensionHostPlatform: Effect.Effect<
     parentEnv,
     randomId: platform.randomId,
     pathListSeparator,
-    commandCandidates: platform.commandCandidates,
-    isPortFree: platform.isPortFree,
-    isPidAlive: (pid: number) =>
-      platform.signal(pid, 0).pipe(
-        Effect.as(true),
-        Effect.catchEager(() => Effect.succeed(false)),
-      ),
-    signalPid: (pid: number, signal: ExtensionHostSignal) =>
-      platform.signal(pid, signal).pipe(Effect.catchEager(() => Effect.void)),
     runProcess: (command, args, options) =>
       processRunner.run(command, args, options).pipe(Effect.mapError(toHostProcessError(command))),
   }

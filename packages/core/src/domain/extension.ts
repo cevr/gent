@@ -277,8 +277,6 @@ interface ExtensionHostOsInfo {
   readonly type: string
 }
 
-export type ExtensionHostSignal = string | 0
-
 export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostProcessError>()(
   "ExtensionHostProcessError",
   {
@@ -310,16 +308,12 @@ export interface ExtensionHostFacts {
   readonly execPath: string
   readonly homeDirectory: string
   readonly pathListSeparator: string
-  readonly commandCandidates: (command: string) => ReadonlyArray<string>
-  readonly isPortFree: (port: number) => Effect.Effect<boolean>
-  readonly isPidAlive: (pid: number) => Effect.Effect<boolean>
 }
 
 export interface ExtensionHostPlatform extends ExtensionHostFacts {
   // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>
   readonly randomId: Effect.Effect<string>
-  readonly signalPid: (pid: number, signal: ExtensionHostSignal) => Effect.Effect<void>
   readonly runProcess: (
     command: string,
     args: ReadonlyArray<string>,
