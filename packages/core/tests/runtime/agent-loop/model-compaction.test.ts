@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Predicate, Schema, Stream } from "effect"
+import { Effect, Layer, Option, Predicate, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { Message, dateFromMillis } from "../../../src/domain/message"
@@ -10,7 +10,8 @@ import {
 } from "../../../src/test-utils/language-model"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { ModelCompactionDetails } from "../../../src/runtime/model-compaction"
+import { ModelCompactionDetails } from "../../../src/runtime/model-context-compactor"
+import { ModelContextCompactorLive } from "../../../../extensions/tests/helpers/test-preset"
 import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "./helpers"
 
 const promptText = (prompt: Prompt.Prompt): string =>
@@ -77,6 +78,9 @@ describe("native model compaction integration", () => {
         expect(Schema.is(ModelCompactionDetails)(summary.metadata?.details)).toBe(true)
         expect(durable.some((message) => message.id === oldMessages[0]?.id)).toBe(true)
       }),
-    ).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("15 seconds"))
+    ).pipe(
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
+      Effect.timeout("15 seconds"),
+    )
   })
 })

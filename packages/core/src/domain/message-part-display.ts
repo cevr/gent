@@ -365,6 +365,29 @@ const messagePartSearchText = (part: MessagePart): string => {
   return ""
 }
 
+/** One durable message part as text for a model; `context.read` and summary prompts share it. */
+export const partToText = (part: MessagePart): string => {
+  switch (part.type) {
+    case "text":
+      return part.text
+    case "reasoning":
+      return `[reasoning] ${part.text}`
+    case "tool-call":
+      return `[tool-call ${part.name} ${part.id}] ${encodeJson(part.params)}`
+    case "tool-result":
+      return `[tool-result ${part.name} ${part.id}] ${encodeJson(part.result)}`
+    case "file":
+      return `[file ${part.mediaType}]`
+    case "tool-approval-request":
+      return `[tool-approval-request ${part.toolCallId}]`
+    case "tool-approval-response": {
+      let status = "denied"
+      if (part.approved) status = "approved"
+      return `[tool-approval-response ${part.approvalId}] ${status}`
+    }
+  }
+}
+
 export const messagePartsSearchText = (parts: ReadonlyArray<MessagePart>): string =>
   parts
     .map(messagePartSearchText)

@@ -36,10 +36,8 @@ import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-sto
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import {
-  compactModelContext,
-  ModelCompactionDetails,
-} from "@gent/core-internal/runtime/model-compaction.js"
+import { ModelCompactionDetails } from "@gent/core-internal/runtime/model-context-compactor.js"
+import { compactModelContext } from "../../src/compaction/model-compaction.js"
 import { ModelContextBudget } from "@gent/core-internal/runtime/model-context.js"
 import { CellBranchTools } from "../../src/cell/cell-storage.js"
 

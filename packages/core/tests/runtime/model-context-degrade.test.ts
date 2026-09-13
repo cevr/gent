@@ -1,13 +1,18 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Stream } from "effect"
-import * as AiError from "effect/unstable/ai/AiError"
+import { Effect, Layer } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { Model, ModelId, ProviderId } from "../../src/domain/model"
 import { dateFromMillis, Branch, Message, Session } from "../../src/domain/message"
-import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { textStep } from "../../src/debug/provider"
+import {
+  ModelCompactionError,
+  ModelCompactionFailure,
+  ModelContextCompactor,
+} from "../../src/runtime/model-context-compactor"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { EventStorage } from "../../src/storage/event-storage"
@@ -56,33 +61,31 @@ const seedOverflowingHistory = Effect.gen(function* () {
   }
 })
 
+/** A compactor whose summary model is down; the seam contract says the turn degrades. */
+const failingCompactor = Layer.succeed(
+  ModelContextCompactor,
+  ModelContextCompactor.of({
+    compact: (request) =>
+      Effect.fail(
+        new ModelCompactionError({
+          modelId: request.modelId,
+          failure: ModelCompactionFailure.cases.SummaryGenerationFailed.make({
+            message: "summary provider down",
+          }),
+        }),
+      ),
+  }),
+)
+
 describe("context compaction degrade path", () => {
-  it.live("a failing summary model does not cost the turn; the notice names the omission", () =>
+  it.live("a failing compactor does not cost the turn; the notice names the omission", () =>
     Effect.gen(function* () {
-      let calls = 0
-      const providerLayer = LanguageModelLayers.testStream(() => {
-        calls += 1
-        if (calls === 1) {
-          return Effect.succeed(
-            Stream.fail(
-              AiError.make({
-                module: "DegradeTest",
-                method: "streamText",
-                reason: new AiError.UnknownError({ description: "summary provider down" }),
-              }),
-            ),
-          )
-        }
-        return Effect.succeed(
-          Stream.fromIterable([
-            textDeltaPart("reply after degrade"),
-            finishPart({ finishReason: "stop", usage: { inputTokens: 10, outputTokens: 3 } }),
-          ]),
-        )
-      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("reply after degrade"),
+      ])
       const layer = baseLocalLayerWithProvider(providerLayer, {
         agents: [agent],
-        extraLayers: [ModelRegistry.Test([smallWindowModel])],
+        extraLayers: [ModelRegistry.Test([smallWindowModel]), failingCompactor],
       })
       const result = yield* narrowR(
         Effect.gen(function* () {
@@ -103,7 +106,7 @@ describe("context compaction degrade path", () => {
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
       )
-      expect(calls).toBe(2)
+      expect(yield* controls.callCount).toBe(1)
       const notices = result.events.filter((event) => event._tag === "ErrorOccurred")
       expect(notices).toHaveLength(1)
       expect(notices[0]?.error).toContain("Context compaction failed")

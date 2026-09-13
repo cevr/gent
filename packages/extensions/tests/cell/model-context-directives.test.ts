@@ -9,7 +9,8 @@ import { RequestId } from "@gent/core-internal/domain/ids.js"
 import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import type { Message } from "@gent/core-internal/domain/message.js"
 import { CellTool } from "../../src/cell/cell-tool.js"
-import { ModelCompactionDetails } from "@gent/core-internal/runtime/model-compaction.js"
+import { CompactionExtension } from "../../src/compaction/index.js"
+import { ModelCompactionDetails } from "@gent/core-internal/runtime/model-context-compactor.js"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "@gent/core-internal/runtime/model-context-window.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
@@ -56,6 +57,7 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
           providerLayer,
           agents: [],
           extensionInputs: [
+            CompactionExtension,
             {
               ...fixture,
               artifactIdentity: LoadedArtifactIdentity.make("model-context-directive-source"),
@@ -175,6 +177,7 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
             providerLayer,
             agents: [],
             extensionInputs: [
+              CompactionExtension,
               {
                 ...fixture,
                 artifactIdentity: LoadedArtifactIdentity.make(

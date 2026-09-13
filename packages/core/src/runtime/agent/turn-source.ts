@@ -36,14 +36,12 @@ import {
   projectModelContext,
 } from "../model-context.js"
 import {
-  compactModelContext,
   isRecoverableCompactionFailure,
   latestCompactionRevision,
-  MODEL_COMPACTION_OUTPUT_TOKENS,
   type ModelCompactionError,
   ModelCompactionResult,
-} from "../model-compaction.js"
-import { RetainedBindings } from "../../domain/retained-bindings.js"
+  ModelContextCompactor,
+} from "../model-context-compactor.js"
 import { type ContextDirective, ModelContextLedger } from "../model-context-ledger.js"
 import {
   latestUserMessageId,
@@ -391,28 +389,43 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     persist: persistDurableMessage,
   })
   const windowed = messagesInCurrentWindow(durableMessages)
-  // The summary names the bindings that survive compaction. A branch with no
-  // stateful tool retains nothing.
-  const retained = yield* Effect.serviceOption(RetainedBindings)
-  const retainedBindings = yield* Option.match(retained, {
-    onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
-    onSome: (service) => service.list({ sessionId: params.sessionId, branchId: params.branchId }),
+  // The plain window: what the model sees when nothing summarises, and what a
+  // failed summary degrades to.
+  const plainProjection = Effect.gen(function* () {
+    const projection = projectModelContext(windowed, budget)
+    if (Result.isFailure(projection)) {
+      return yield* new ModelContextProjectionError({
+        modelId: contextModelId,
+        failure: projection.failure,
+      })
+    }
+    return ModelCompactionResult.make({
+      messages: [...windowed],
+      projection: projection.success,
+      compacted: false,
+    })
   })
+  // Summarising is an extension's job. With no compactor installed the
+  // transcript is truncated and the omission is reported as usual.
+  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
   const compact = (forced: Option.Option<CompactionRequest>) =>
-    compactModelContext({
-      modelId: contextModelId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messages: windowed,
-      budget,
-      hash: params.hash,
-      persistSummary: persistDurableMessage,
-      retainedBindings,
-      force: Option.getOrUndefined(forced),
-      summaryModel: resolveAdmittedModel({
-        ...modelRequest,
-        hints: { ...modelRequest.hints, maxTokens: MODEL_COMPACTION_OUTPUT_TOKENS },
-      }),
+    Effect.gen(function* () {
+      if (Option.isNone(compactor)) return yield* plainProjection
+      return yield* compactor.value.compact({
+        modelId: contextModelId,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messages: windowed,
+        budget,
+        hash: params.hash,
+        persistSummary: persistDurableMessage,
+        force: Option.getOrUndefined(forced),
+        summaryModel: (maxTokens) =>
+          resolveAdmittedModel({
+            ...modelRequest,
+            hints: { ...modelRequest.hints, maxTokens },
+          }),
+      })
     })
   // A summary that cannot be produced must not cost the turn: a requested one
   // falls back to the automatic path, and that falls back to the plain
@@ -422,25 +435,15 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // Integrity failures (the source moved, a conflicting summary) still stop
       // the turn; only a summary the model could not produce degrades.
       if (!isRecoverableCompactionFailure(error.failure)) return yield* error
-      const projection = projectModelContext(windowed, budget)
-      if (Result.isFailure(projection)) {
-        return yield* new ModelContextProjectionError({
-          modelId: contextModelId,
-          failure: projection.failure,
-        })
-      }
+      const plain = yield* plainProjection
       yield* eventPublisher.publish(
         ErrorOccurred.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
-          error: `Context compaction failed (${error.failure._tag}); continuing with ${projection.success.omittedMessageIds.length} older messages omitted`,
+          error: `Context compaction failed (${error.failure._tag}); continuing with ${plain.projection.omittedMessageIds.length} older messages omitted`,
         }),
       )
-      return ModelCompactionResult.make({
-        messages: [...windowed],
-        projection: projection.success,
-        compacted: false,
-      })
+      return plain
     })
   const compacted = yield* compact(force).pipe(
     Effect.catchTag("ModelCompactionError", (error) => {

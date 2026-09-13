@@ -296,6 +296,12 @@ Shape:
   Historical and forwarded ephemeral receipts can omit it and must not be treated
   as exact per-turn budget evidence. Token-budget enforcement remains unfinished;
   compaction invokes a separate model and needs accounting within the same policy.
+- Context compaction is a seam, not a core feature. The loop checks the window,
+  and with no `ModelContextCompactor` process resource installed it truncates
+  and reports the omission. The `@gent/compaction` extension installs the
+  summariser; core keeps only the durable summary record shape that status and
+  the TUI read. A compactor that fails recoverably degrades to truncation with a
+  visible notice; an integrity failure still stops the turn.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in

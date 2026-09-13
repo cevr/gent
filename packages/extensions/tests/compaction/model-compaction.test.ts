@@ -3,24 +3,33 @@ import { Cause, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "e
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { Message, dateFromMillis } from "../../src/domain/message"
-import { ModelId } from "../../src/domain/model"
-import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
-import { ensureStorageParents } from "../../src/test-utils"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { GentPlatform } from "../../src/runtime/gent-platform"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
+import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
+import { ModelId } from "@gent/core-internal/domain/model.js"
 import {
-  compactModelContext,
+  finishPart,
+  LanguageModelLayers,
+  textDeltaPart,
+} from "@gent/core-internal/test-utils/language-model.js"
+import { ensureStorageParents } from "@gent/core-internal/test-utils"
+import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
+import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import {
   isRecoverableCompactionFailure,
-  MODEL_COMPACTION_OUTPUT_TOKENS,
   ModelCompactionDetails,
   ModelCompactionError,
   ModelCompactionFailure,
-} from "../../src/runtime/model-compaction"
-import { ModelContextBudget, ModelContextProjectionError } from "../../src/runtime/model-context"
-import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature"
+} from "@gent/core-internal/runtime/model-context-compactor.js"
+import {
+  compactModelContext,
+  MODEL_COMPACTION_OUTPUT_TOKENS,
+} from "../../src/compaction/model-compaction.js"
+import {
+  ModelContextBudget,
+  ModelContextProjectionError,
+} from "@gent/core-internal/runtime/model-context.js"
+import { noBranchTools } from "@gent/core-internal/runtime/agent/branch-tool-feature.js"
 
 // The cell's storage carries the projections core reads from it, so this is
 // the same wiring production uses.

@@ -667,3 +667,37 @@ Source receipts:
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/packages/extensions/src/anthropic/index.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.112+11eac7cfbf53fc55/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.d.ts:148`
 - `/Users/cvr/Developer/personal/.rifts/gent/core-extension-reduction/node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.112+11eac7cfbf53fc55/node_modules/@effect/ai-anthropic/dist/Generated.d.ts:1236`
+
+## Resource graph host replaced by a scoped profile build (2026-09-13)
+
+Commits `282cf346`, `5a89367e`, `19072506`, `d39487a6`, `ff1cc573`.
+
+- The resource graph host, plan, diff, leases, generation ids, and the binding
+  resource vector are gone. `SessionProfileCache` builds each extension's process
+  resources into a child scope in `sortExtensionsByScope` order; a failed build
+  reports the extension as failed at `startup` and the profile stays live.
+- `ResourceContribution` carries a branded `ResourceId` only; tool binding
+  identity is five fields. `DynamicNonReplayable` left `ToolBindingSource`
+  (101 persisted rows, all `Static`, decode unchanged; `Schema.Struct` ignores
+  the dropped `resources` key).
+- Guardrail `core-retired-reconciler` fails if any retired identifier or module
+  returns under `packages/(core|extensions|sdk)/src` or `apps/*/src`.
+- Three message-part projections with no shipped consumer removed.
+
+Net: 494 files, +15723/−19637 versus `main` at `ff1cc573`.
+
+## Context compaction behind an extension-owned seam (2026-09-13)
+
+- Core keeps `runtime/model-context-compactor.ts`: the `ModelContextCompactor`
+  service, the durable summary record schemas, and the helpers status and the
+  TUI read. The loop resolves the compactor with `Effect.serviceOption`; absent,
+  it projects the plain window and reports the omission as before.
+- The summariser (prompt, source selection, path record, integrity checks)
+  moved to `packages/extensions/src/compaction/model-compaction.ts`. The new
+  `@gent/compaction` builtin registers it as a process resource. `partToText`
+  now lives in `domain/message-part-display.ts`.
+- Tests moved with the code: the summariser unit test and its RPC acceptance
+  test are under `packages/extensions/tests/compaction/`. The degrade test now
+  stubs the seam with a compactor that fails `SummaryGenerationFailed`; the
+  provider is called once and the notice still names the omission.
+- `runtime/model-compaction.ts` (913 lines) left core.

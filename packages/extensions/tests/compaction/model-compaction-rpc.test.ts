@@ -2,11 +2,15 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Option, Predicate, Stream } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { RequestId } from "../../src/domain/ids"
-import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
-import { createRpcHarness } from "../../src/test-utils/rpc-harness"
-import { waitFor } from "../../src/test-utils/fixtures"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { RequestId } from "@gent/core-internal/domain/ids.js"
+import {
+  finishPart,
+  LanguageModelLayers,
+  textDeltaPart,
+} from "@gent/core-internal/test-utils/language-model.js"
+import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
+import { e2ePreset } from "../helpers/test-preset.js"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content

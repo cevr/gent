@@ -3,6 +3,8 @@
  * Imports from @gent/extensions so test-utils don't need to.
  */
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+
+export { ModelContextCompactorLive } from "../../src/compaction/model-compaction.js"
 import { CELL_EXTENSION_ID } from "../../src/cell/cell-extension.js"
 import { AllBuiltinAgents } from "./builtin-agents.js"
 import type { E2ELayerConfig } from "@gent/core-internal/test-utils/e2e-layer"
