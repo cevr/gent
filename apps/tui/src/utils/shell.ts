@@ -2,7 +2,7 @@
  * Shell execution utility with truncation and output saving
  */
 
-import { saveFullOutput } from "@gent/core-internal/domain/output-buffer.js"
+import { saveFullOutput } from "@gent/core-internal/utils/save-output.js"
 import { runProcess } from "@gent/core-internal/utils/run-process"
 import { Effect, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"

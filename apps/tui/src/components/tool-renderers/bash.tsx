@@ -7,7 +7,7 @@
 
 import { Option, Schema } from "effect"
 import { Show, createMemo } from "solid-js"
-import { formatHeadTail } from "@gent/core-internal/domain/output-buffer.js"
+import { formatHeadTail } from "@gent/core-internal/domain/head-tail.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"

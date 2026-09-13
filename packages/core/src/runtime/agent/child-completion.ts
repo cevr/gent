@@ -7,7 +7,7 @@ import {
   type TurnCompleted,
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { headTailChars } from "../../domain/output-buffer.js"
+import { headTailChars } from "../../domain/head-tail.js"
 import { MessageId, type RequestId } from "../../domain/ids.js"
 import { latestAssistantText } from "../../domain/message-part-projection.js"
 import { MessageStorage } from "../../storage/message-storage.js"

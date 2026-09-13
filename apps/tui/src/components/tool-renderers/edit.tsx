@@ -8,7 +8,7 @@
 import { Show, For, createMemo } from "solid-js"
 import type { JSX } from "solid-js"
 import { Option } from "effect"
-import { headTail } from "@gent/core-internal/domain/output-buffer.js"
+import { headTail } from "@gent/core-internal/domain/head-tail.js"
 import { buildSyntaxStyle, useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"

@@ -1001,3 +1001,16 @@ messageId)` returns when the loop no longer holds the message (not starting,
   queue tests that relied on `Run` returning early for a busy loop now
   `submitAgentLoop` the queued message and wait for `Idle` before asserting
   on the drained queue.
+
+## The streaming output buffer is a bash-tool concern (2026-09-13)
+
+- `domain/output-buffer.ts` (207 lines) mixed three things: pure head/tail
+  projections used by the loop, the TUI, and `read_session`; a streaming
+  `OutputBuffer` class used only by the bash tool; and `saveFullOutput`, a
+  filesystem helper used by the bash tool and the TUI's `!` shell.
+- Now: `domain/head-tail.ts` keeps `headTail`, `formatHeadTail`,
+  `headTailChars` (pure); `utils/save-output.ts` keeps `saveFullOutput`;
+  `OutputBuffer` lives in `packages/extensions/src/exec-tools/output-buffer.ts`
+  beside its one caller and is no longer public extension API. Its tests
+  moved with it.
+

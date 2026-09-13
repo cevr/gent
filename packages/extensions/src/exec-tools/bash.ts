@@ -21,7 +21,6 @@ import {
   ExtensionContext,
   tool,
   PermissionRule,
-  OutputBuffer,
   saveFullOutput,
   type ExtensionContextService,
   type SessionId,
@@ -33,6 +32,7 @@ import {
   type BackgroundBashJobKeyFields,
   type BackgroundBashStorageError,
 } from "./bash-storage.js"
+import { OutputBuffer } from "./output-buffer.js"
 
 // Bash command classification for guardrails.
 //
