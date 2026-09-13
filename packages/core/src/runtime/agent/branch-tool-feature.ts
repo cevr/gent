@@ -14,11 +14,45 @@
  * deployment whose tools are all stateless.
  */
 
-import { Context, Layer } from "effect"
+import { Context, type Effect, Layer } from "effect"
+import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtraRepositories } from "../../storage/sqlite-storage.js"
 import type { FeatureMigrations } from "../../storage/schema.js"
-import type { BranchToolLayerFactory } from "./branch-tool-layer.js"
-import { emptyErasedResourceLayer } from "../extensions/extension-effect-membrane.js"
+import {
+  emptyErasedResourceLayer,
+  type ErasedResourceLayer,
+} from "../extensions/extension-effect-membrane.js"
+import type { TurnInterruptionStatus } from "./turn-interruption.js"
+
+interface BranchToolLayerInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  /** Lets branch work notice that the turn was interrupted, and stop. */
+  readonly turnInterruption: TurnInterruptionStatus
+}
+
+/**
+ * Per-branch services a tool needs built with the loop and torn down with it:
+ * a worker process, a session, a namespace. What the layer provides is erased
+ * on purpose: the loop merges it into the branch context and reads only what
+ * it knows to look for, such as `BranchToolWork`.
+ */
+export type BranchToolLayerFactory = (input: BranchToolLayerInput) => ErasedResourceLayer
+
+interface BranchToolWorkApi {
+  /** Cancel in-flight work. Must be safe to call when nothing is running. */
+  readonly cancel: Effect.Effect<void>
+}
+
+/**
+ * Cancellation for tool work that outlives a single call. A tool holding a
+ * branch-scoped process must be told when the loop is interrupted; the turn's
+ * fiber interrupt alone does not reach it. A tool with nothing to cancel does
+ * not provide this, and interruption is a no-op.
+ */
+export class BranchToolWork extends Context.Service<BranchToolWork, BranchToolWorkApi>()(
+  "@gent/core/src/runtime/agent/branch-tool-feature/BranchToolWork",
+) {}
 
 export interface BranchToolFeature<A> {
   /** Migrations creating the feature's tables, merged into core's chain. */

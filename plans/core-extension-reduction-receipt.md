@@ -817,3 +817,13 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   the tests reached (`isRetryable`, `getRetryAfterOption`, `getRetryDelay`,
   the jitter constant) are private; six tests drive `retryProviderCall`
   through `TestClock` instead.
+
+## Branch-tool seam in one file (2026-09-13)
+
+- `BranchToolLayer` was a second `Context.Reference` bound at both roots to
+  `CurrentBranchToolFeature.branchLayer`; the loop now reads the feature and
+  takes its factory. The child root binds the feature itself, so the guard
+  test that builds the child's branch layer and looks for `BranchToolWork`
+  still fails on an unwired child. `branch-tool-layer.ts` and
+  `branch-tool-work.ts` folded into `branch-tool-feature.ts`: three files,
+  two references and one derived binding became one file and one reference.

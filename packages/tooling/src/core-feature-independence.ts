@@ -2,7 +2,7 @@
  * Guard: core must not name the features built on top of it.
  *
  * Core is the loop. A feature such as the code cell is an extension of the
- * loop, so core carries it through agnostic seams -- `BranchToolLayer`,
+ * loop, so core carries it through agnostic seams -- `BranchToolFeature`,
  * `InnerOperationReceipts`, `ToolCallRecoveryService` -- and never imports it.
  *
  * No site is exempt. Core takes a `BranchToolFeature` as input, and every

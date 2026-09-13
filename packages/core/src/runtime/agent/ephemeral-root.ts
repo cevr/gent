@@ -28,7 +28,6 @@ import { PromptPresenterLive } from "../prompt-presenter-live.js"
 import { RuntimeEnvironment } from "../runtime-environment.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { BranchToolLayer } from "./branch-tool-layer.js"
 import { ToolRunner } from "./tool-runner.js"
 
 interface EphemeralAgentRootConfig {
@@ -205,7 +204,7 @@ export const makeEphemeralAgentRootLayerFactory: Effect.Effect<
     // The feature's storage and its per-branch factory arrive together by
     // construction: storage alone gives a child agent the tables with nothing
     // to run against them.
-    const branchToolLayer = Layer.succeed(BranchToolLayer, branchTools.branchLayer)
+    const branchToolLayer = Layer.succeed(CurrentBranchToolFeature, branchTools)
     const clusterRunnerLayer = Layer.provide(
       SingleRunner.layer({ runnerStorage: "memory" }),
       Layer.merge(storageLayer, parentCryptoLayer),

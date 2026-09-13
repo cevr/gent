@@ -33,7 +33,6 @@ import {
   CurrentBranchToolFeature,
   type BranchToolFeature,
 } from "../runtime/agent/branch-tool-feature.js"
-import { BranchToolLayer } from "../runtime/agent/branch-tool-layer.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import {
   decodeInteractionDecision,
@@ -398,7 +397,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.mergeAll(
       // The app names the branch-tool feature it ships. The loop builds its
       // layer without knowing what it is.
-      Layer.succeed(BranchToolLayer, config.branchTools.branchLayer),
       Layer.succeed(CurrentBranchToolFeature, config.branchTools),
       platformServicesLive,
       runtimeEnvironmentLive,

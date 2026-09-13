@@ -35,11 +35,11 @@
 // The feature contract itself: what a root installs, and what the loop reads.
 export {
   type BranchToolFeature,
+  type BranchToolLayerFactory,
+  BranchToolWork,
   CurrentBranchToolFeature,
   noBranchTools,
 } from "../runtime/agent/branch-tool-feature.js"
-export { BranchToolLayer, type BranchToolLayerFactory } from "../runtime/agent/branch-tool-layer.js"
-export { BranchToolWork } from "../runtime/agent/branch-tool-work.js"
 export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
 
 // Storage the feature contributes and reads.

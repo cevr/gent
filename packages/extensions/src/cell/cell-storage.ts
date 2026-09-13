@@ -155,7 +155,7 @@ export const cellRetainedBindings = Layer.effect(
 )
 
 /**
- * The cell's branch-scoped layer, as the loop's `BranchToolLayer` factory.
+ * The cell's branch-scoped layer, as the feature's per-branch factory.
  *
  * The cell kernel lives for the life of a branch: one worker process holding a
  * namespace across turns. It is built with the loop and torn down with it.

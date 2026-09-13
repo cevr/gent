@@ -27,8 +27,6 @@ import { waitFor } from "../../src/test-utils/fixtures"
 import { messageSingleText } from "../../src/domain/message-part-projection"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
-import { BranchToolLayer } from "../../src/runtime/agent/branch-tool-layer"
-import { BranchToolWork } from "../../src/runtime/agent/branch-tool-work"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -98,6 +96,7 @@ import {
 } from "../../src/runtime/session-runtime"
 import { BunCrypto, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
 import {
+  BranchToolWork,
   CurrentBranchToolFeature,
   noBranchTools,
   type BranchToolFeature,
@@ -2171,9 +2170,9 @@ describe("ephemeral service propagation", () => {
         // build and still run turns -- it would just silently lose every
         // dispatching tool. Build what the factory returns and look for the
         // kernel's own service.
-        const branchToolLayer = yield* BranchToolLayer
+        const branchTools = yield* CurrentBranchToolFeature
         const built = yield* Layer.build(
-          branchToolLayer({
+          branchTools.branchLayer({
             sessionId: SessionId.make("ephemeral-branch-kernel"),
             branchId: BranchId.make("ephemeral-branch-kernel-branch"),
             turnInterruption: neverInterrupted,
