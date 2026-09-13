@@ -10,9 +10,6 @@ import {
   messagePartsTextLines,
   projectMessagesWithToolInteractions,
   messagePartsToolCallParts,
-  messagePartsToolCalls,
-  messagePartsToolResultParts,
-  messagePartsToolResults,
   messageSingleText,
   responsePartToAssistantMessagePart,
   responsePartToToolResultPart,
@@ -72,21 +69,7 @@ describe("message part projection", () => {
     expect(messagePartsImages(parts)).toEqual([
       { image: "data:image/png;base64,abc", mediaType: "image/png", rawMediaType: "image/png" },
     ])
-    expect(messagePartsToolCalls(parts)).toEqual([
-      { id: "tc-projection", toolName: "read", input: { path: "README.md" } },
-    ])
-    expect(messagePartsToolResults(parts)).toEqual([
-      {
-        id: "tc-projection",
-        toolName: "read",
-        value: { ok: true },
-        summary: '{"ok":true}',
-        text: '{\n  "ok": true\n}',
-        isError: false,
-      },
-    ])
     expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
-    expect(messagePartsToolResultParts(parts)).toEqual([toolResultPart])
     expect(messagePartsSearchText(parts)).toBe(
       'hello\nimage/png data:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
     )

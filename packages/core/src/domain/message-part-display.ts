@@ -163,37 +163,11 @@ export const messagePartsImages = (
     return [image]
   })
 
-export const messagePartsToolCalls = (
-  parts: ReadonlyArray<MessagePart>,
-): ReadonlyArray<ToolCallPartProjection> =>
-  parts.flatMap((part) => {
-    const toolCall = messagePartToolCall(part)
-    if (Predicate.isUndefined(toolCall)) return []
-    return [toolCall]
-  })
-
 export const messagePartsToolCallParts = (
   parts: ReadonlyArray<MessagePart>,
 ): ReadonlyArray<Prompt.ToolCallPart> =>
   parts.flatMap((part) => {
     if (part.type === "tool-call") return [part]
-    return []
-  })
-
-export const messagePartsToolResults = (
-  parts: ReadonlyArray<MessagePart>,
-): ReadonlyArray<ToolResultPartProjection> =>
-  parts.flatMap((part) => {
-    const toolResult = messagePartToolResult(part)
-    if (Predicate.isUndefined(toolResult)) return []
-    return [toolResult]
-  })
-
-export const messagePartsToolResultParts = (
-  parts: ReadonlyArray<MessagePart>,
-): ReadonlyArray<Prompt.ToolResultPart> =>
-  parts.flatMap((part) => {
-    if (part.type === "tool-result") return [part]
     return []
   })
 

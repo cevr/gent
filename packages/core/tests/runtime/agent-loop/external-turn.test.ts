@@ -28,7 +28,6 @@ import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src
 import {
   messagePartsText,
   messagePartsToolCallParts,
-  messagePartsToolResultParts,
 } from "../../../src/domain/message-part-projection"
 import {
   AgentDefinition,
@@ -41,6 +40,14 @@ import { ExternalToolRunner, TurnError } from "../../../src/domain/driver"
 import type { AgentEvent } from "../../../src/domain/event"
 import { EventEnvelope, EventId, EventStore } from "../../../src/domain/event"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
+
+const messagePartsToolResultParts = (
+  parts: Message["parts"],
+): ReadonlyArray<Prompt.ToolResultPart> =>
+  parts.flatMap((part) => {
+    if (part.type === "tool-result") return [part]
+    return []
+  })
 import { Permission } from "../../../src/domain/permission"
 import { SqliteStorage, type StorageError } from "../../../src/storage/sqlite-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
