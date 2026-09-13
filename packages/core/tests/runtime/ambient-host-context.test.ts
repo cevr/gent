@@ -9,7 +9,7 @@
 import { Cause, Effect, Exit } from "effect"
 import { describe, expect, it } from "effect-bun-test"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
-import { makeAmbientExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
+import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
 import { ApprovalService } from "../../src/runtime/approval-service.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
 
@@ -20,7 +20,7 @@ const request = { text: "Approve?", metadata: {} }
 const resolved = resolveExtensions([])
 
 const ambientContext = Effect.gen(function* () {
-  const provider = yield* makeAmbientExtensionHostContextProvider({
+  const provider = yield* makeExtensionHostContextProvider({
     extensionRegistry: { extensionHooks: resolved.extensionHooks, getResolved: () => resolved },
   })
   return provider.forRun({ sessionId, branchId })

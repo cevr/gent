@@ -30,7 +30,7 @@ export interface SearchResult {
   readonly createdAt: number
 }
 
-export interface SearchStorageService {
+interface SearchStorageService {
   readonly searchMessages: (
     query: string,
     options?: {

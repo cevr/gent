@@ -827,3 +827,25 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   still fails on an unwired child. `branch-tool-layer.ts` and
   `branch-tool-work.ts` folded into `branch-tool-feature.ts`: three files,
   two references and one derived binding became one file and one reference.
+
+## Host context: one constructor, absence handled once (2026-09-13)
+
+- `make-extension-host-context.ts` carried a hand-written "unavailable"
+  adapter for each of ten services (44 dying stubs, every method of every
+  interface, most never reached by the facade), a fourteen-field explicit
+  deps record with its own constructor used only by one test, an ambient
+  constructor with an `overrides` merge, a `Context.Reference` for the host
+  platform that nothing bound, and a `capabilityContext` that `forRun`
+  accepted and never read. 520 → 330 lines.
+- Now one constructor takes the registry, the host platform and the loop's
+  follow-up queue; every other facet is `Effect.serviceOption` wrapped by one
+  helper that runs the call or dies naming the service. The absence test
+  ("ApprovalService not available") is unchanged. The survivor test builds
+  the context over real SQLite storage instead of a 76-line stub record; five
+  service interfaces that only the stubs named are no longer exported.
+- Closed without change: the continuation budget in
+  `agent-loop.turn-execution.ts` is one helper with two callers and a bounded
+  count; deleting it brings back the "empty reply reads as an answer" bug.
+  The branch summary is read by the TUI branch picker, so `summarizeBranch`
+  stays; `BranchSummarized` is a write-only event but removing a persisted
+  tag risks replay decode, so it stays too.

@@ -18,7 +18,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { makeAmbientExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
+import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
 import { makeCellToolHost } from "../../src/cell/cell-tool-host.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
 import { CellResponse } from "../../src/cell/cell-protocol.js"
@@ -273,7 +273,7 @@ it.scopedLive(
             yield* (yield* ToolCallBindingStorage).save({ ...cell, binding: identity.value })
           }
           if (state === "waiting") {
-            const host = yield* makeAmbientExtensionHostContextProvider({
+            const host = yield* makeExtensionHostContextProvider({
               extensionRegistry: profile.registryService,
             })
             const selected = yield* captureCurrentToolBinding({

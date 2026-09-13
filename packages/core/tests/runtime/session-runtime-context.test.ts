@@ -16,7 +16,7 @@ import {
 } from "../../src/runtime/session-runtime-context"
 import {
   ExtensionHostContextProvider,
-  makeAmbientExtensionHostContextProvider,
+  makeExtensionHostContextProvider,
 } from "../../src/runtime/make-extension-host-context"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
@@ -98,7 +98,6 @@ describe("resolveSessionEnvironment", () => {
         yield* Effect.gen(function* () {
           const sessionStorage = yield* SessionStorage
           const extensionRegistry = yield* ExtensionRegistry
-          const platform = yield* RuntimeEnvironment
           const profileCache = yield* SessionProfileCache
           const now = dateFromMillis(1_767_225_600_000)
           yield* sessionStorage.createSession(
@@ -109,9 +108,8 @@ describe("resolveSessionEnvironment", () => {
               updatedAt: now,
             }),
           )
-          const hostProvider = yield* makeAmbientExtensionHostContextProvider({
+          const hostProvider = yield* makeExtensionHostContextProvider({
             extensionRegistry,
-            overrides: { platform },
           })
           const resolved = yield* resolveSessionEnvironment({
             sessionId: SessionId.make("session-runtime-context-profile"),
@@ -161,10 +159,8 @@ describe("resolveSessionEnvironment", () => {
       )
       yield* Effect.gen(function* () {
         const extensionRegistry = yield* ExtensionRegistry
-        const platform = yield* RuntimeEnvironment
-        const hostProvider = yield* makeAmbientExtensionHostContextProvider({
+        const hostProvider = yield* makeExtensionHostContextProvider({
           extensionRegistry,
-          overrides: { platform },
         })
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("missing-session"),
@@ -200,14 +196,12 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const platform = yield* RuntimeEnvironment
         const failingSessionStorage: SessionStorageService = {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
-        const hostProvider = yield* makeAmbientExtensionHostContextProvider({
+        const hostProvider = yield* makeExtensionHostContextProvider({
           extensionRegistry,
-          overrides: { platform },
         })
         const exit = yield* Effect.exit(
           resolveSessionEnvironment({
@@ -293,7 +287,6 @@ describe("resolveSessionEnvironment", () => {
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const platform = yield* RuntimeEnvironment
         const defaultDriverRegistry = yield* DriverRegistry
         const profileDriverRegistry = yield* Layer.build(profileDriverRegistryLayer).pipe(
           Effect.map((ctx) => Context.get(ctx, DriverRegistry)),
@@ -323,9 +316,8 @@ describe("resolveSessionEnvironment", () => {
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
         }
-        const hostProvider = yield* makeAmbientExtensionHostContextProvider({
+        const hostProvider = yield* makeExtensionHostContextProvider({
           extensionRegistry,
-          overrides: { platform },
         })
         const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.make("session-runtime-context-driver"),

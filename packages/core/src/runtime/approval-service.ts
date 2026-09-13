@@ -22,7 +22,7 @@ import {
 } from "../domain/interaction-request.js"
 import type { GentPlatform } from "./gent-platform.js"
 
-export interface ApprovalServiceApi extends InteractionService {}
+interface ApprovalServiceApi extends InteractionService {}
 
 export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceApi>()(
   "@gent/core/src/runtime/approval-service/ApprovalService",

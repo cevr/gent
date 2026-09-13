@@ -29,7 +29,7 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids.js"
 import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { makeAmbientExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
+import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
 import { makeCellToolHost, resumeCellToolOperation } from "../../src/cell/cell-tool-host.js"
 import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
 import { recoverCellExecution } from "../../src/cell/cell-recovery.js"
@@ -85,7 +85,7 @@ const prepareCell = Effect.gen(function* () {
 
 const currentHostParams = Effect.gen(function* () {
   const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
-  const hostProvider = yield* makeAmbientExtensionHostContextProvider({
+  const hostProvider = yield* makeExtensionHostContextProvider({
     extensionRegistry: profile.registryService,
   })
   const turnProfile = {

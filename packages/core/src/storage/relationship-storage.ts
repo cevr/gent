@@ -21,7 +21,7 @@ import {
 } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
-export interface RelationshipStorageService {
+interface RelationshipStorageService {
   readonly getChildSessions: (
     parentSessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>

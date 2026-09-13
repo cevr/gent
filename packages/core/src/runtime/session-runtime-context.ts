@@ -77,7 +77,6 @@ const resolveActiveRuntimeBindings = (params: {
     if (Option.isNone(params.profile)) {
       return {
         extensionRegistry: hostProvider.defaultExtensionRegistry,
-        capabilityContext: hostProvider.defaultCapabilityContext,
         driverRegistry: params.defaults.driverRegistry,
         permission: params.defaults.permission,
         baseSections: params.defaults.baseSections,
@@ -117,17 +116,7 @@ const buildSessionEnvironment = (params: {
       }),
     })
     const capabilityContext = Option.fromUndefinedOr(params.bindings.capabilityContext)
-    const hostCtx = Option.match(capabilityContext, {
-      onNone: () =>
-        hostProvider.forRun(runParams, {
-          extensionRegistry: params.bindings.extensionRegistry,
-        }),
-      onSome: (value) =>
-        hostProvider.forRun(runParams, {
-          extensionRegistry: params.bindings.extensionRegistry,
-          capabilityContext: value,
-        }),
-    })
+    const hostCtx = hostProvider.forRun(runParams, params.bindings.extensionRegistry)
     const environment = {
       cwd: hostCtx.cwd,
       extensionRegistry: params.bindings.extensionRegistry,

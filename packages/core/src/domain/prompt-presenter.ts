@@ -12,7 +12,7 @@ import type { InteractionPendingError } from "./interaction-request"
 // `runtime/prompt-presenter-live.ts` because it depends on runtime
 // services (ApprovalService, RuntimeEnvironment).
 
-export interface PromptPresenterService {
+interface PromptPresenterService {
   readonly present: (params: {
     sessionId: SessionId
     branchId: BranchId

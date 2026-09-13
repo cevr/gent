@@ -43,7 +43,7 @@ import type { SessionOperationStorage } from "../../storage/session-operation-st
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
   ExtensionHostContextProvider,
-  makeAmbientExtensionHostContextProvider,
+  makeExtensionHostContextProvider,
 } from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -275,16 +275,13 @@ export const makeAgentLoopBehavior = (
       )
     const permissionService = yield* Effect.serviceOption(Permission)
 
-    const hostProvider = yield* makeAmbientExtensionHostContextProvider({
+    const hostProvider = yield* makeExtensionHostContextProvider({
       extensionRegistry,
-      overrides: {
-        host,
-        sessionControl: {
-          queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
-            followUp.enqueue(input),
-          dequeueFollowUp: (input): Effect.Effect<boolean, AgentLoopError> =>
-            followUp.dequeue(input),
-        },
+      host,
+      sessionControl: {
+        queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
+          followUp.enqueue(input),
+        dequeueFollowUp: (input): Effect.Effect<boolean, AgentLoopError> => followUp.dequeue(input),
       },
     })
 

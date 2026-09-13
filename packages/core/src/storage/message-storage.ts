@@ -33,7 +33,7 @@ class MessageTable extends Model.Class<MessageTable>("MessageTable")({
   metadata: Schema.NullOr(Schema.String),
 }) {}
 
-export interface MessageStorageService {
+interface MessageStorageService {
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
   readonly createMessageIfAbsent: (message: Message) => Effect.Effect<Message, StorageError>
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.

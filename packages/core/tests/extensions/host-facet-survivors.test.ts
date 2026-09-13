@@ -10,103 +10,22 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Schema } from "effect"
-import {
-  makeExtensionHostContextProvider,
-  type MakeExtensionHostContextDeps,
-} from "../../src/runtime/make-extension-host-context.js"
+import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
+import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
+import { SessionStorage } from "../../src/storage/session-storage.js"
+import { BranchStorage } from "../../src/storage/branch-storage.js"
+import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
 import { requireAgent, ExtensionContext, ExtensionServiceError } from "@gent/core/extensions/api"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
-import { testExtensionHostContext, testToolContext } from "../../src/test-utils/index.js"
+import { testToolContext } from "../../src/test-utils/index.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
 const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
-
-const die = (label: string) => () => Effect.die(`${label} not wired in test`)
-
-const baseDeps = (overrides: {
-  listBranches: MakeExtensionHostContextDeps["branchStorage"]["listBranches"]
-}): MakeExtensionHostContextDeps => ({
-  platform: {
-    cwd: "/tmp",
-    home: "/tmp",
-    platform: "test",
-  },
-  host: testExtensionHostContext().host,
-  approvalService: {
-    present: die("ApprovalService.present"),
-    pendingRequestId: die("ApprovalService.pendingRequestId"),
-    storeResolution: die("ApprovalService.storeResolution"),
-    respond: die("ApprovalService.respond"),
-    rehydrate: die("ApprovalService.rehydrate"),
-  },
-  promptPresenter: {
-    present: die("PromptPresenter.present"),
-    confirm: die("PromptPresenter.confirm"),
-    review: die("PromptPresenter.review"),
-  },
-  extensionRegistry: {
-    extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
-    getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
-  },
-  sessionStorage: {
-    getSession: die("getSession"),
-    updateSession: die("updateSession"),
-    createSession: die("createSession"),
-    deleteSession: die("deleteSession"),
-    getLastSessionByCwd: die("getLastSessionByCwd"),
-    listSessions: die("listSessions")(),
-  },
-  branchStorage: {
-    listBranches: overrides.listBranches,
-    createBranch: die("createBranch"),
-    getBranch: die("getBranch"),
-    deleteBranch: die("deleteBranch"),
-    updateBranchSummary: die("updateBranchSummary"),
-    countMessages: die("countMessages"),
-    countMessagesByBranches: die("countMessagesByBranches"),
-  },
-  messageStorage: {
-    listMessages: die("listMessages"),
-    createMessage: die("createMessage"),
-    createMessageIfAbsent: die("createMessageIfAbsent"),
-    getMessage: die("getMessage"),
-    deleteMessages: die("deleteMessages"),
-    updateMessageTurnDuration: die("updateMessageTurnDuration"),
-  },
-  relationshipStorage: {
-    getChildSessions: die("getChildSessions"),
-    getSessionAncestors: die("getSessionAncestors"),
-    getSessionDetail: die("getSessionDetail"),
-  },
-  searchStorage: {
-    searchMessages: () => Effect.succeed([]),
-  },
-  agentRunner: {
-    run: die("agentRunner.run"),
-    start: die("agentRunner.start"),
-    inspect: die("agentRunner.inspect"),
-    list: die("agentRunner.list"),
-    cancel: die("agentRunner.cancel"),
-  },
-  sessionMutations: {
-    renameSession: die("renameSession"),
-    createSessionBranch: die("createSessionBranch"),
-    forkSessionBranch: die("forkSessionBranch"),
-    switchActiveBranch: die("switchActiveBranch"),
-    deleteSession: die("deleteSession"),
-    updateReasoningLevel: die("updateReasoningLevel"),
-  },
-  sessionControl: {
-    queueFollowUp: die("queueFollowUp"),
-    dequeueFollowUp: die("dequeueFollowUp"),
-  },
-  activeLoops: { list: die("listActiveLoops")() },
-})
 
 describe("host facet survivors after C9.5 prune", () => {
   it.live("requireAgent fails with typed ExtensionServiceError when the agent is missing", () =>
@@ -138,35 +57,32 @@ describe("host facet survivors after C9.5 prune", () => {
 
   it.live("ctx.Session.listBranches returns branches for the current session", () =>
     Effect.gen(function* () {
-      const session = new Session({
-        id: SESSION_ID,
-        name: "test",
-        cwd: "/tmp",
-        activeBranchId: BRANCH_ID,
-        createdAt: FIXTURE_DATE,
-        updatedAt: FIXTURE_DATE,
-      })
-      void session
-      const branch = new Branch({
-        id: BRANCH_ID,
-        sessionId: SESSION_ID,
-        createdAt: FIXTURE_DATE,
-      })
-      const deps = baseDeps({
-        listBranches: (id) => {
-          if (id === SESSION_ID) {
-            return Effect.succeed([branch])
-          }
-          return Effect.succeed([])
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* sessions.createSession(
+        new Session({
+          id: SESSION_ID,
+          name: "test",
+          cwd: "/tmp",
+          createdAt: FIXTURE_DATE,
+          updatedAt: FIXTURE_DATE,
+        }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: BRANCH_ID, sessionId: SESSION_ID, createdAt: FIXTURE_DATE }),
+      )
+      const provider = yield* makeExtensionHostContextProvider({
+        extensionRegistry: {
+          extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
+          getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
         },
       })
-      const ctx = makeExtensionHostContextProvider(deps).forRun({
-        sessionId: SESSION_ID,
-        branchId: BRANCH_ID,
-      })
-      const branches = yield* ctx.Session.listBranches
-      expect(branches).toHaveLength(1)
-      expect(branches[0]!.id).toBe(BRANCH_ID)
-    }),
+      const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID })
+      const listed = yield* ctx.Session.listBranches
+      expect(listed).toHaveLength(1)
+      expect(listed[0]!.id).toBe(BRANCH_ID)
+    }).pipe(
+      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
+    ),
   )
 })
