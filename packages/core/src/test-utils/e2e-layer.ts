@@ -28,6 +28,7 @@ import { makeServerRootLayer } from "../server/server-root.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,
+  testObservability,
   testEnvironment,
   testIdentity,
   testOverrides,
@@ -161,6 +162,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   }
 
   return makeServerRootLayer({
+    observability: testObservability,
     dependencies: {
       ...testEnvironment,
       persistenceMode: Option.fromUndefinedOr(config.storagePath).pipe(

@@ -58,18 +58,16 @@ import { DEFAULT_HEADLESS_TOOL_RENDERERS } from "./headless-tool-renderers"
 import {
   Gent,
   GentConnectionError,
-  probeServerLockEntryIdentity,
-  type GentClientBundle,
-} from "@gent/sdk"
-import {
-  readServerLock,
-  validateServerLockEntry,
-  removeServerLock,
-  isPidAlive,
   getLocalHostname,
+  isPidAlive,
+  probeServerLockEntryIdentity,
+  readServerLock,
+  removeServerLock,
   signalIfIdentityOwned,
+  validateServerLockEntry,
+  type GentClientBundle,
   type ServerLockEntry,
-} from "@gent/core-internal/server/server-lock.js"
+} from "@gent/sdk"
 import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientTransportLayer } from "./extensions/client-transport"

@@ -5,9 +5,9 @@
 
 import { Config, Context, Effect, FileSystem, Layer, Option, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import { dateFromMillis } from "../domain/message.js"
-import { GentPlatform } from "../runtime/gent-platform.js"
-import { runProcess } from "../utils/run-process.js"
+import { dateFromMillis } from "@gent/core-internal/domain/message.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { runProcess } from "@gent/core-internal/utils/run-process.js"
 
 /** True when execPath is a compiled gent binary, not a generic runtime like bun. */
 const isCompiledBinary = (exe: string): boolean => !exe.endsWith("/bun") && !exe.includes("/.bun/")
@@ -63,7 +63,7 @@ interface BuildFingerprintApi {
 }
 
 export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintApi>()(
-  "@gent/core/src/server/build-fingerprint/BuildFingerprint",
+  "@gent/sdk/src/build-fingerprint/BuildFingerprint",
 ) {
   static Live: Layer.Layer<
     BuildFingerprint,

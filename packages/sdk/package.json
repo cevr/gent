@@ -10,10 +10,17 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests"
   },
   "dependencies": {
+    "@effect/opentelemetry": "4.0.0-rc.112",
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/core-internal": "workspace:*",
-    "@gent/extensions": "workspace:*"
+    "@gent/extensions": "workspace:*",
+    "@opentelemetry/api": "^1.9",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@opentelemetry/sdk-trace-node": "^2.11.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0"
   },
   "peerDependencies": {
     "effect": "catalog:"

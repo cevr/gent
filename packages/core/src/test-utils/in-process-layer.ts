@@ -13,7 +13,13 @@ import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "./language-m
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { makeServerRootLayer } from "../server/server-root.js"
 import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
-import { testAgentsExtension, testEnvironment, testIdentity, testOverrides } from "./test-root.js"
+import {
+  testAgentsExtension,
+  testObservability,
+  testEnvironment,
+  testIdentity,
+  testOverrides,
+} from "./test-root.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
@@ -32,6 +38,7 @@ const buildLayer = (
   config: InProcessLayerConfig,
 ) =>
   makeServerRootLayer({
+    observability: testObservability,
     dependencies: {
       ...testEnvironment,
       persistenceMode: "memory",

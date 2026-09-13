@@ -218,6 +218,7 @@ const makeJsonFileLogger = (path: string) =>
 // =============================================================================
 
 import { buildLogPaths, ensureLogDir } from "./log-paths.js"
+import { GentTracerLive } from "./tracer.js"
 
 const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
@@ -237,7 +238,7 @@ const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileS
  * path matches the launcher's resolved cwd. Falling back to ambient env
  * risked the two ends hashing different identities.
  */
-export const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
+const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
   Layer.unwrap(
     Effect.gen(function* () {
       const defaultLogFile = buildLogPaths(cwd).log
@@ -276,7 +277,7 @@ export const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.Fi
 export const GentLoggerPretty: Layer.Layer<never> = Logger.layer([prettyLogger])
 
 /** Minimum log level — filters out Trace/Debug in non-dev. */
-export const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
+const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
     const envOpt = yield* Config.option(Config.string("GENT_LOG_LEVEL"))
     const env = Option.getOrUndefined(envOpt)
@@ -301,3 +302,7 @@ export const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
     ),
   ),
 )
+
+/** File logger under `/tmp/gent/logs`, the `GENT_LOG_LEVEL` floor, and OTLP tracing when configured. */
+export const GentObservability = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
+  Layer.mergeAll(GentLogger(cwd), GentLogLevel, GentTracerLive)

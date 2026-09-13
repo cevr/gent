@@ -1042,7 +1042,7 @@ Logging conventions:
 
 Log destinations:
 
-- `/tmp/gent.log` — server-side JSON (via `GentLogger`)
+- `/tmp/gent/logs/` — server-side JSON (via the SDK's `GentObservability`)
 - `/tmp/gent-client.log` — TUI-side JSON (via `clientLog`)
 - `/tmp/gent-trace.log` — span traces (via `GentTracerLive`)
 

@@ -9,8 +9,6 @@ import { ConnectionTracker, type ConnectionTrackerService } from "./connection-t
 import { ServerIdentity, type ServerIdentityApi } from "./server-identity.js"
 import { buildServerRoutes } from "./server-routes.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
-import { GentLogger, GentLogLevel } from "../runtime/logger.js"
-import { GentTracerLive } from "../runtime/tracer.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // `SessionMutations` and `SessionRuntime` are not provided here: production
@@ -37,6 +35,8 @@ type ServerRootServices =
 
 interface ServerRootConfig {
   readonly dependencies: DependenciesConfig
+  /** Logger, log level, and tracer for this root; the composition root owns the vendor wiring. */
+  readonly observability: Layer.Layer<never, never, FileSystem>
   readonly identity: Omit<ServerIdentityApi, "startedAt"> & {
     readonly startedAt?: number
   }
@@ -63,9 +63,7 @@ export const buildServerRoot = (
     const scope = yield* Effect.scope
     const depsLive = createDependencies(config.dependencies).pipe(
       Layer.provide(ServerRootPlatformLayer),
-      Layer.provide(GentLogger(config.dependencies.cwd)),
-      Layer.provide(GentLogLevel),
-      Layer.provide(GentTracerLive),
+      Layer.provide(config.observability),
     )
     const startedAt = config.identity.startedAt ?? (yield* Clock.currentTimeMillis)
     const identity = {

@@ -13,10 +13,10 @@ import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
 
-import { LOG_DIR, buildLogPaths } from "@gent/core-internal/runtime/log-paths"
+import { LOG_DIR, buildLogPaths } from "@gent/sdk"
 
 // Client log path derives from `process.cwd()` — same source the launcher
-// threads into `GentLogger(cwd)` for the server. Both ends hash the same
+// threads into `GentObservability(cwd)` for the server. Both ends hash the same
 // cwd, so a single gent instance writes client + server logs under one
 // filename prefix.
 export const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client

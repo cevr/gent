@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Console, Context, Effect, Layer } from "effect"
 import { MinimumLogLevel } from "effect/References"
-import { GentLoggerPretty } from "../../src/runtime/logger"
-import { buildLogPaths, LOG_DIR } from "../../src/runtime/log-paths"
+import { GentLoggerPretty } from "../src/logger"
+import { buildLogPaths, LOG_DIR } from "../src/log-paths"
 
 describe("buildLogPaths", () => {
   it.effect("returns a deterministic shape under the central log dir", () =>

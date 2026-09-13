@@ -21,7 +21,8 @@ import { seedDebugSession } from "@gent/core-internal/test-utils/debug-session.j
 import { provideWorkspaceIdHeader } from "@gent/core-internal/server/workspace-rpc.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
-import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
+import { BuildFingerprint } from "./build-fingerprint.js"
+import { GentObservability } from "./logger.js"
 import { GentConnectionError } from "@gent/core/protocol"
 import {
   workspaceHeadersForCwd,
@@ -36,7 +37,7 @@ import {
   ServerLockEntry,
   serverLockIdentityOf,
   signalIfIdentityOwned,
-} from "@gent/core-internal/server/server-lock.js"
+} from "./server-lock.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
@@ -240,6 +241,7 @@ const buildOwnedServer = (
         }),
       )
       const serverRoot = yield* buildServerRoot({
+        observability: GentObservability(options.cwd),
         dependencies: {
           cwd: options.cwd,
           home,

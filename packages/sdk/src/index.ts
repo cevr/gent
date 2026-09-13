@@ -37,6 +37,20 @@ export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 
 // Server identity probe (shared by resolveServer + CLI `server stop`)
 export { probeServerLockEntryIdentity } from "./server.js"
+// Server discovery: the shared lock file and the build fingerprint clients compare against
+export {
+  BuildFingerprint,
+  getLocalHostname,
+  isPidAlive,
+  readServerLock,
+  removeServerLock,
+  ServerLockEntry,
+  signalIfIdentityOwned,
+  validateServerLockEntry,
+} from "./server-lock.js"
+// Observability for a composition root, and the log paths a client shares with its server
+export { GentObservability } from "./logger.js"
+export { buildLogPaths, LOG_DIR } from "./log-paths.js"
 export { ShippedExtensions } from "./shipped-extensions.js"
 
 // Message types

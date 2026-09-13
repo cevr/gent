@@ -6,7 +6,7 @@ import { Clock, Config, Console, Context, Deferred, Effect, Layer, Option } from
 import { seedDebugSession } from "@gent/core-internal/test-utils/debug-session.js"
 import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import { BuildFingerprint } from "@gent/core-internal/server/build-fingerprint.js"
+import { BuildFingerprint, GentObservability } from "@gent/sdk"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
@@ -101,6 +101,7 @@ const program = Effect.scoped(
     const startedAt = yield* Clock.currentTimeMillis
 
     const serverRoot = yield* buildServerRoot({
+      observability: GentObservability(config.cwd),
       dependencies: {
         cwd: config.cwd,
         home: config.home,

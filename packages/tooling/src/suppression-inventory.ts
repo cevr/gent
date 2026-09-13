@@ -209,7 +209,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line strictEffectProvide:off test entry point",
   },
   {
-    file: "packages/core/src/runtime/log-paths.ts",
+    file: "packages/sdk/src/log-paths.ts",
     line: 13,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",

@@ -1132,3 +1132,15 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
 - `defineStateResource` / `ExtensionState` wrapped a `Ref` in four methods
   for one example. The example and docs now show `defineResource` with
   `Layer.effect(Tag, Ref.make(...))`, which is the same thing said once.
+
+## Server discovery and observability belong to the composition root (2026-09-13)
+
+- `server/server-lock.ts` and `server/build-fingerprint.ts` (270 lines) had
+  no caller inside core; the SDK, the TUI, and `apps/server` read them, and
+  the lock test already lived in `packages/sdk/tests`. Both moved to
+  `packages/sdk/src` and the SDK index exports the discovery names.
+- `runtime/{logger,tracer,log-paths}.ts` (412 lines) were reached only from
+  `buildServerRoot`, and carried seven OpenTelemetry dependencies the loop
+  never calls. `ServerRootConfig.observability` is now a required layer the
+  root supplies: the SDK and `apps/server` pass `GentObservability(cwd)`,
+  the test roots pass `Layer.empty`. The seven dependencies left core.

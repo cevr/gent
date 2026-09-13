@@ -8,7 +8,7 @@
  */
 
 import { Predicate, Effect, FileSystem, Path, Schema } from "effect"
-import { GentPlatform } from "../runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 export { BuildFingerprint } from "./build-fingerprint.js"
 
