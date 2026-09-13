@@ -55,22 +55,9 @@ export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
 
 // ── Failure type ──
 
-const DriverFailureModelStruct = Schema.TaggedStruct("model", {
-  id: DriverFailureId,
-})
-const DriverFailureExternalStruct = Schema.TaggedStruct("external", {
-  id: DriverFailureId,
-})
-
 /** Failure raised when a driver lookup or dispatch fails. */
-export const DriverFailureRef = Schema.Union([
-  DriverFailureModelStruct,
-  DriverFailureExternalStruct,
-]).pipe(Schema.toTaggedUnion("_tag"))
-export type DriverFailureRef = Schema.Schema.Type<typeof DriverFailureRef>
-
 export class DriverError extends Schema.TaggedError<DriverError>()("DriverError", {
-  driver: DriverFailureRef,
+  driver: DriverFailureId,
   reason: Schema.String,
 }) {}
 

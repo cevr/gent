@@ -435,74 +435,24 @@ export const makeSerializedEventDelivery = (
       })
   })
 
-const matchEventSessionId = AgentEvent.match({
-  SessionStarted: (e) => e.sessionId,
-  MessageReceived: (e) => e.message.sessionId,
-  StreamStarted: (e) => e.sessionId,
-  StreamChunk: (e) => e.sessionId,
-  StreamEnded: (e) => e.sessionId,
-  TurnCompleted: (e) => e.sessionId,
-  ModelContextProjected: (e) => e.sessionId,
-  ToolCallStarted: (e) => e.sessionId,
-  ToolCallSucceeded: (e) => e.sessionId,
-  ToolCallFailed: (e) => e.sessionId,
-  InteractionPresented: (e) => e.sessionId,
-  InteractionResolved: (e) => e.sessionId,
-  ErrorOccurred: (e) => e.sessionId,
-  ProviderRetrying: (e) => e.sessionId,
-  SessionNameUpdated: (e) => e.sessionId,
-  SessionSettingsUpdated: (e) => e.sessionId,
-  BranchCreated: (e) => e.sessionId,
-  BranchSwitched: (e) => e.sessionId,
-  AgentSwitched: (e) => e.sessionId,
-  AgentRunSpawned: (e) => e.parentSessionId,
-  AgentRunSucceeded: (e) => e.parentSessionId,
-  AgentRunFailed: (e) => e.parentSessionId,
-  ExtensionStateChanged: (e) => e.sessionId,
-  StreamSynchronized: (e) => e.sessionId,
-})
+// Every variant names its session as `sessionId`, except the message
+// envelope and the child-run receipts, which name the parent.
+export const getEventSessionId = (event: AgentEvent): SessionId => {
+  if (event._tag === "MessageReceived") return event.message.sessionId
+  if ("parentSessionId" in event) return event.parentSessionId
+  return event.sessionId
+}
 
-export const getEventSessionId = (event: AgentEvent): SessionId => matchEventSessionId(event)
-
-const matchEventBranchId = AgentEvent.match({
-  SessionStarted: (e) => e.branchId,
-  MessageReceived: (e) => e.message.branchId,
-  StreamStarted: (e) => e.branchId,
-  StreamChunk: (e) => e.branchId,
-  StreamEnded: (e) => e.branchId,
-  TurnCompleted: (e) => e.branchId,
-  ModelContextProjected: (e) => e.branchId,
-  ToolCallStarted: (e) => e.branchId,
-  ToolCallSucceeded: (e) => e.branchId,
-  ToolCallFailed: (e) => e.branchId,
-  InteractionPresented: (e) => e.branchId,
-  InteractionResolved: (e) => e.branchId,
-  ErrorOccurred: (e) => e.branchId,
-  ProviderRetrying: (e) => e.branchId,
-  SessionNameUpdated: () =>
-    // oxlint-disable-next-line effect/noNullish -- Session-name events have no branch identity by design.
-    undefined,
-  SessionSettingsUpdated: () =>
-    // oxlint-disable-next-line effect/noNullish -- Session-settings events have no branch identity by design.
-    undefined,
-  BranchCreated: (e) => e.branchId,
-  // BranchSwitched has no `branchId` field — `from`/`to` are both per-branch.
-  // Returning `undefined` lets branch-scoped subscribers see the switch on
-  // either side, matching the prior structural-narrowing behavior.
-  BranchSwitched: () =>
-    // oxlint-disable-next-line effect/noNullish -- Branch-switch events have no single branch identity.
-    undefined,
-  AgentSwitched: (e) => e.branchId,
-  AgentRunSpawned: (e) => e.branchId,
-  AgentRunSucceeded: (e) => e.branchId,
-  AgentRunFailed: (e) => e.branchId,
-  ExtensionStateChanged: (e) => e.branchId,
-  StreamSynchronized: (e) => e.branchId,
-})
-
+// Session-level events and `BranchSwitched` (whose `from`/`to` are both
+// per-branch) carry no single branch identity, so branch-scoped
+// subscribers see them on every branch.
 // oxlint-disable-next-line effect/noNullish -- Some event variants intentionally have no branch identity.
-export const getEventBranchId = (event: AgentEvent): BranchId | undefined =>
-  matchEventBranchId(event)
+export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
+  if (event._tag === "MessageReceived") return event.message.branchId
+  if ("branchId" in event) return event.branchId
+  // oxlint-disable-next-line effect/noNullish -- Some event variants intentionally have no branch identity.
+  return undefined
+}
 
 export const matchesEventFilter = (
   env: EventEnvelope,

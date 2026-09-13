@@ -120,7 +120,7 @@ describe("ClientProvider session lifecycle", () => {
           list: () =>
             Effect.fail({
               _tag: "DriverError",
-              driver: { _tag: "model", id: "openai" },
+              driver: "openai",
               reason: "catalog filter failed",
             }),
         },
@@ -134,7 +134,7 @@ describe("ClientProvider session lifecycle", () => {
       const error = yield* Effect.promise(() =>
         waitForAgentError(setup, () => Option.fromNullishOr(client.error())),
       )
-      expect(error).toBe("Driver model: openai: catalog filter failed")
+      expect(error).toBe("Driver openai: catalog filter failed")
     }),
   )
   it.live("switchSession activates the target session immediately and seeds the target agent", () =>

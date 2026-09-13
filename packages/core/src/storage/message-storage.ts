@@ -47,7 +47,7 @@ export const sanitizeFts5Query = (raw: string): string => {
     .join(" ")
 }
 
-interface MessageSearchResult {
+export interface MessageSearchResult {
   readonly sessionId: string
   // oxlint-disable-next-line effect/noNullish -- This storage result mirrors a nullable SQL session name.
   readonly sessionName: string | null

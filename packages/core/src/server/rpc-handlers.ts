@@ -452,7 +452,6 @@ const RpcHandlers = GentRpcs.toLayer(
             const found = yield* driverRegistry.getModel(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
-                entity: "driver",
                 message: `Unknown model driver "${driver.id}"`,
               })
             }
@@ -461,7 +460,6 @@ const RpcHandlers = GentRpcs.toLayer(
             const found = yield* driverRegistry.getExternal(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
-                entity: "driver",
                 message: `Unknown external driver "${driver.id}"`,
               })
             }
@@ -491,7 +489,6 @@ const RpcHandlers = GentRpcs.toLayer(
             const session = yield* sessionStorage.getSession(SessionId.make(sessionId))
             if (Predicate.isUndefined(session)) {
               return yield* new NotFoundError({
-                entity: "session",
                 message: "Session not found",
               })
             }

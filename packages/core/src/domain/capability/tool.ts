@@ -147,10 +147,6 @@ export const getToolPrompt = (
   return { promptSnippet, promptGuidelines }
 }
 
-export const getToolEffect = <Input, Output, Error>(
-  tool: ToolCapability<Input, Output, Error>,
-): GentToolMetadata<Input, Output, Error>["effect"] => getToolMetadata(tool).effect
-
 /** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields as a
  *  standalone leaf with no shared capability parent.
  *

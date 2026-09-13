@@ -11,14 +11,13 @@ import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds } from "effect-encore"
 import {
-  ExtensionHostSearchResult,
   extensionServiceError,
   type ExtensionHostContext,
   type ExtensionServiceError,
 } from "../domain/extension-services.js"
 import { InteractionPendingError } from "../domain/interaction-request.js"
 import { AgentRunnerService, type AgentName } from "../domain/agent.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
 import type { ExtensionHostPlatform } from "../domain/extension.js"
 import { ApprovalService } from "./approval-service.js"
@@ -210,17 +209,6 @@ export const makeExtensionHostContextProvider = (
           ).pipe(Effect.mapError(sessionError("renameCurrent"))),
         search: (query, options) =>
           messages((storage) => storage.searchMessages(query, options)).pipe(
-            Effect.map((results) =>
-              results.map((result) =>
-                ExtensionHostSearchResult.make({
-                  sessionId: SessionId.make(result.sessionId),
-                  sessionName: result.sessionName,
-                  branchId: BranchId.make(result.branchId),
-                  snippet: result.snippet,
-                  createdAt: result.createdAt,
-                }),
-              ),
-            ),
             Effect.mapError(sessionError("search")),
           ),
         queueFollowUp: (params) =>

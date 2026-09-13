@@ -31,12 +31,6 @@ const ModelsDevModel = Schema.Struct({
 type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
 
-const CacheLoad = Schema.TaggedUnion({
-  Missing: {},
-  Canonical: { models: Schema.Array(Model) },
-})
-type CacheLoad = Schema.Schema.Type<typeof CacheLoad>
-
 const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing> =>
   Option.fromUndefinedOr(value).pipe(Option.map(({ input, output }) => ({ input, output })))
 
@@ -82,20 +76,14 @@ const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
   function* (cachePath: string) {
     const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(cachePath)
-    if (!exists) return CacheLoad.cases.Missing.make({})
+    if (!exists) return EMPTY_MODELS
     const content = yield* fs
       .readFileString(cachePath)
       .pipe(Effect.catchEager(() => Effect.succeed("")))
-    if (content.trim().length === 0) return CacheLoad.cases.Missing.make({})
-
-    const canonical = decodeCachedModels(content)
-    if (canonical._tag === "Some") {
-      return CacheLoad.cases.Canonical.make({ models: canonical.value })
-    }
-
-    return CacheLoad.cases.Missing.make({})
+    if (content.trim().length === 0) return EMPTY_MODELS
+    return Option.getOrElse(decodeCachedModels(content), () => EMPTY_MODELS)
   },
-  Effect.catchEager(() => Effect.succeed(CacheLoad.cases.Missing.make({}))),
+  Effect.catchEager(() => Effect.succeed(EMPTY_MODELS)),
 )
 
 const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
@@ -157,14 +145,6 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const fsAndPathContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
       const cachePath = path.join(runtimeEnvironment.home, CACHE_RELATIVE)
 
-      const loadFromDisk = Effect.fn("ModelRegistry.loadFromDisk")(function* () {
-        const cache = yield* readCachedModels(cachePath)
-        if (cache._tag === "Canonical") {
-          return cache.models
-        }
-        return EMPTY_MODELS
-      })
-
       const fetchRemote = Effect.fn("ModelRegistry.fetchRemote")(function* () {
         const res = yield* http
           .get(`${MODELS_URL}/api.json`, { headers: { "User-Agent": "gent" } })
@@ -192,7 +172,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const loadRaw = SynchronizedRef.modifyEffect(cacheRef, (cur) =>
         Effect.gen(function* () {
           if (Option.isSome(cur)) return [cur, cur]
-          const disk = yield* loadFromDisk()
+          const disk = yield* readCachedModels(cachePath)
           if (disk.length > 0) return [Option.some(disk), Option.some(disk)]
           const remote = yield* fetchRemote().pipe(
             Effect.timeout(10_000),

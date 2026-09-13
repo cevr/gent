@@ -25,7 +25,14 @@ import type {
   ApprovalRequest,
   InteractionPendingError,
 } from "./interaction-request.js"
-import { BranchId, ExtensionId, SessionId, type RequestId, type ToolCallId } from "./ids.js"
+import {
+  ExtensionId,
+  type BranchId,
+  type RequestId,
+  type SessionId,
+  type ToolCallId,
+} from "./ids.js"
+import type { MessageSearchResult } from "../storage/message-storage.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 
 export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceError>()(
@@ -63,16 +70,6 @@ const mapError = <A, E, R>(
 ): Effect.Effect<A, ExtensionServiceError, R> =>
   effect.pipe(Effect.mapError(extensionServiceError(service, operation)))
 
-export class ExtensionHostSearchResult extends Schema.Class<ExtensionHostSearchResult>(
-  "ExtensionHostSearchResult",
-)({
-  sessionId: SessionId,
-  sessionName: Schema.NullOr(Schema.String),
-  branchId: BranchId,
-  snippet: Schema.String,
-  createdAt: Schema.Finite,
-}) {}
-
 export interface ExtensionSessionService {
   readonly getSession: (
     sessionId?: SessionId,
@@ -99,7 +96,7 @@ export interface ExtensionSessionService {
       readonly dateBefore?: number
       readonly limit?: number
     },
-  ) => Effect.Effect<ReadonlyArray<ExtensionHostSearchResult>, ExtensionServiceError>
+  ) => Effect.Effect<ReadonlyArray<MessageSearchResult>, ExtensionServiceError>
   readonly queueFollowUp: (params: {
     readonly sourceId: string
     readonly content: string

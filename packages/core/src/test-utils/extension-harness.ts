@@ -14,7 +14,7 @@ import {
   type ExtensionContextService,
   type ExtensionHostContext,
 } from "../domain/extension-services.js"
-import { getToolEffect } from "../domain/capability/tool.js"
+import { getToolMetadata } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
@@ -210,4 +210,4 @@ export const runToolWithCtx = <Input, Output, Error>(
   input: Input,
   ctx: ExtensionContextService,
 ): Effect.Effect<Output, Error, never> =>
-  getToolEffect(tool)(input).pipe(Effect.provideService(ExtensionContext, ctx))
+  getToolMetadata(tool).effect(input).pipe(Effect.provideService(ExtensionContext, ctx))

@@ -22,11 +22,11 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
   const sessionRuntime = yield* SessionRuntime
   const session = yield* sessionStorage.getSession(input.sessionId)
   if (Predicate.isUndefined(session)) {
-    return yield* new NotFoundError({ message: "Session not found", entity: "session" })
+    return yield* new NotFoundError({ message: "Session not found" })
   }
   const branch = yield* branchStorage.getBranch(input.branchId)
   if (Predicate.isUndefined(branch) || branch.sessionId !== input.sessionId) {
-    return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
+    return yield* new NotFoundError({ message: "Branch not found" })
   }
 
   const snapshotState = yield* storageTransaction(
@@ -47,7 +47,6 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     Effect.mapError(
       (cause) =>
         new InvalidStateError({
-          operation: "session.getSnapshot",
           message: `Failed to read session runtime state: ${cause.message}`,
         }),
     ),

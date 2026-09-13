@@ -278,7 +278,6 @@ const makeSessionMutationsService: Effect.Effect<
         ) {
           return yield* new NotFoundError({
             message: "parentBranchId requires parentSessionId",
-            entity: "session",
           })
         }
         if (!Predicate.isUndefined(input.parentSessionId)) {
@@ -286,7 +285,6 @@ const makeSessionMutationsService: Effect.Effect<
           if (Predicate.isUndefined(parent)) {
             return yield* new NotFoundError({
               message: `Parent session not found: ${input.parentSessionId}`,
-              entity: "session",
             })
           }
         }
@@ -301,7 +299,6 @@ const makeSessionMutationsService: Effect.Effect<
           ) {
             return yield* new NotFoundError({
               message: `Parent branch not found in parent session: ${input.parentBranchId}`,
-              entity: "branch",
             })
           }
         }
@@ -396,7 +393,7 @@ const makeSessionMutationsService: Effect.Effect<
       Effect.gen(function* () {
         const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
         if (Predicate.isUndefined(fromBranch) || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
+          return yield* new NotFoundError({ message: "Branch not found" })
         }
 
         const messages = yield* messageStorage.listMessages(input.fromBranchId)
@@ -404,7 +401,6 @@ const makeSessionMutationsService: Effect.Effect<
         if (targetIndex === -1) {
           return yield* new NotFoundError({
             message: "Message not found in branch",
-            entity: "message",
           })
         }
 
@@ -455,21 +451,18 @@ const makeSessionMutationsService: Effect.Effect<
         if (Predicate.isUndefined(session)) {
           return yield* new NotFoundError({
             message: "Current session not found",
-            entity: "session",
           })
         }
         const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
         if (Predicate.isUndefined(fromBranch) || fromBranch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({
             message: `Branch "${input.fromBranchId}" not found in current session`,
-            entity: "branch",
           })
         }
         const toBranch = yield* branchStorage.getBranch(input.toBranchId)
         if (Predicate.isUndefined(toBranch) || toBranch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({
             message: `Branch "${input.toBranchId}" not found in current session`,
-            entity: "branch",
           })
         }
         yield* sessionStorage.updateSession(
@@ -565,7 +558,7 @@ const makeSessionMutationsService: Effect.Effect<
     updateReasoningLevel: Effect.fn("SessionMutations.updateReasoningLevel")(function* (input) {
       const session = yield* sessionStorage.getSession(input.sessionId)
       if (Predicate.isUndefined(session)) {
-        return yield* new NotFoundError({ message: "Session not found", entity: "session" })
+        return yield* new NotFoundError({ message: "Session not found" })
       }
       yield* transactWithEvent(
         sessionStorage.updateSession(

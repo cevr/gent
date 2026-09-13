@@ -36,7 +36,7 @@ export const formatError = (error: UiError): string => {
     case "ProviderAuthError":
       return `Auth: ${error.message}`
     case "DriverError":
-      return `Driver ${error.driver._tag}: ${error.driver.id}: ${error.reason}`
+      return `Driver ${error.driver}: ${error.reason}`
     case "ExtensionProtocolError":
       return `Extension protocol: ${error.message}`
     case "RpcClientError":

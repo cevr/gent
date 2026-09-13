@@ -33,7 +33,7 @@ describe("formatError", () => {
   })
 
   test("NotFoundError → prefixed", () => {
-    const err = new NotFoundError({ message: "session abc", entity: "session" })
+    const err = new NotFoundError({ message: "session abc" })
     expect(formatError(err)).toBe("Not found: session abc")
   })
 
@@ -49,9 +49,9 @@ describe("formatError", () => {
 
   test("DriverError → driver and reason", () => {
     const err = new DriverError({
-      driver: { _tag: "model", id: DriverFailureId.make("openai") },
+      driver: DriverFailureId.make("openai"),
       reason: "catalog filter failed",
     })
-    expect(formatError(err)).toBe("Driver model: openai: catalog filter failed")
+    expect(formatError(err)).toBe("Driver openai: catalog filter failed")
   })
 })
