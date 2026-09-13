@@ -1398,3 +1398,21 @@ arm (`message-image-conversion.ts` deleted). `ToolOutput.type` was set at
 every call site and read by none. `ProjectionError` had no thrower;
 `ToolCallRecoveryOutcome.Incomplete` had no constructor. Core is 29,039
 LOC at `27e28c62`.
+
+## Ninth pass: structural identity and seams with no adapter (2026-09-13)
+
+Two commits. `59495bd5`: the two 24-arm `AgentEvent.match` tables for
+session and branch identity become structural reads with the two named
+exceptions; `NotFoundError.entity` (15 writers, 0 readers),
+`InvalidStateError.operation`, and `DriverFailureRef` (one variant never
+built, the tag printed as a constant) are gone; `CacheLoad` is the
+`Option` it was; `ExtensionHostSearchResult` is the storage row it copied;
+`getToolEffect` is folded into its one test-helper caller. `082ed5ed`:
+prompt section markers (emitted into every prompt for a codemode slot that
+no longer exists, parsed by nothing) deleted with `withSectionMarkers`
+from the public API; `evaluatePermissionRules` loses `defaultAction`
+(production always passed `"allow"`); `RequestInput.extensionId` (30 test
+writers, 0 production) deleted, tests bind through `defineRequests` or
+`bindRequestCapabilityExtension`. `Permission.Live(rules)` stays: it is
+the rules-only adapter and the user asked for test variants as statics on
+the Tag. Core is 28,887 LOC at `082ed5ed`.
