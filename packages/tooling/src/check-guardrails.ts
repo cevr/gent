@@ -7,6 +7,7 @@ import {
   findSdkPublicExportFindings,
 } from "./core-public-exports"
 import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
+import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
 import { declaredCoreExports, findCoreDeadExports, identifiersIn } from "./core-dead-exports"
@@ -92,6 +93,7 @@ const program = Effect.gen(function* () {
       for (const finding of [
         ...findPlatformDuplicationViolations(file, text),
         ...findCoreFeatureIndependenceFindings(file, text),
+        ...findRetiredReconcilerFindings(file, text),
         ...findCoreVendorModelPins(file, text),
         ...findAliasTestLayers(file, text),
       ]) {
