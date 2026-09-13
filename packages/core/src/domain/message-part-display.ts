@@ -2,7 +2,6 @@ import { Option, Predicate, Result, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentRunToolCallSchema, type AgentRunToolCall } from "./agent.js"
 import { ToolCallId } from "./ids.js"
-import { filePartDataToDisplay } from "./message-image-conversion.js"
 import {
   type Message,
   type MessagePart,
@@ -13,9 +12,7 @@ import {
 import { stringifyOutput, summarizeOutput } from "./tool-output.js"
 
 interface ImagePartProjection {
-  readonly image: string
   readonly mediaType: string
-  readonly rawMediaType: string
 }
 
 interface ToolCallPartProjection {
@@ -72,32 +69,28 @@ const stringifyDisplayValue = (value: JsonEncoderInput): string => {
 }
 
 // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messagePartText = (part: MessagePart): string | undefined => {
+const messagePartText = (part: MessagePart): string | undefined => {
   if (part.type === "text") return part.text
   // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
   return undefined
 }
 
 // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messagePartReasoning = (part: MessagePart): string | undefined => {
+const messagePartReasoning = (part: MessagePart): string | undefined => {
   if (part.type === "reasoning") return part.text
   // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
   return undefined
 }
 
 // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messagePartImage = (part: MessagePart): ImagePartProjection | undefined => {
+const messagePartImage = (part: MessagePart): ImagePartProjection | undefined => {
   // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
   if (part.type !== "file" || !part.mediaType.startsWith("image/")) return undefined
-  return {
-    image: filePartDataToDisplay(part),
-    mediaType: part.mediaType,
-    rawMediaType: part.mediaType,
-  }
+  return { mediaType: part.mediaType }
 }
 
 // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined => {
+const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined => {
   // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
   if (part.type !== "tool-call") return undefined
   return {
@@ -382,11 +375,7 @@ const messagePartSearchText = (part: MessagePart): string => {
   if (!Predicate.isUndefined(reasoning)) return reasoning
 
   const image = messagePartImage(part)
-  if (!Predicate.isUndefined(image)) {
-    return [image.rawMediaType, image.image]
-      .filter((value) => !Predicate.isUndefined(value) && value !== "")
-      .join(" ")
-  }
+  if (!Predicate.isUndefined(image)) return image.mediaType
 
   const toolCall = messagePartToolCall(part)
   if (!Predicate.isUndefined(toolCall)) {

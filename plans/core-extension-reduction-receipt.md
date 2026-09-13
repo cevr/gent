@@ -1351,3 +1351,20 @@ fields, no transforms), so the guard and the function are gone.
 `estimateToolSchemaTokens` already called directly. The two handler
 aliases `cleanupLoop` and `currentRuntimeState` are inlined; `GetState`
 had already bypassed the second.
+
+## Seventh pass, group F: the last test-utils edge and a base64 index (2026-09-13)
+
+`server/dependencies.ts` was the one production file in core that imported
+`test-utils/`: `providerMode` mapped a four-case string to a debug
+`LanguageModelLayers` layer, while the SDK root already maps its own spec
+to the same layers and hands core `languageModelLayerOverride`. The
+server app now does the same in `apps/server/src/main.ts`, so
+`providerMode`, the string resolution, and the import are gone;
+`makeModelResolverLayer` is one `Option.match`. `messagePartImage` built a
+full `data:` base64 string that only `messagePartSearchText` read, and
+that reader wrote every pasted image verbatim into `messages_fts`; the
+projection is now `{ mediaType }`, the search token is the media type, and
+`filePartDataToDisplay` is deleted. The four single-part helpers
+(`messagePartText`/`Reasoning`/`Image`/`ToolCall`) had one consumer, the
+TUI's segment builder, which now switches on `part.type`; the helpers are
+file-private and `protocol.ts` drops the four names.

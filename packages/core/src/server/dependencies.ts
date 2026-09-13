@@ -12,7 +12,6 @@ import type { GentExtension, ExtensionSetupServices } from "../domain/extension.
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner } from "../runtime/agent/agent-runner.js"
 import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
@@ -90,9 +89,8 @@ export interface DependenciesConfig {
    */
   authDirectory?: string
   persistenceMode?: "disk" | "memory"
-  providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
-  /** Language model layer override. When set, bypasses providerMode string and uses this layer directly.
+  /** Language model layer override. When set, replaces the auth-backed live resolver.
    *  Must be a fully-provided layer (no requirements, no errors). */
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
   /** Extensions to load. Composition roots pass this in. */
@@ -164,25 +162,12 @@ const makeModelRegistryLayer = <A, E, R>(
 
 const makeModelResolverLayer = <A, E, R>(
   config: DependenciesConfig,
-  providerMode: NonNullable<DependenciesConfig["providerMode"]>,
   authDeps: Layer.Layer<A, E, R>,
-) => {
-  if (!Predicate.isUndefined(config.languageModelLayerOverride)) {
-    return ModelResolver.fromLanguageModel(config.languageModelLayerOverride)
-  }
-  if (providerMode === "debug-scripted") {
-    return ModelResolver.fromLanguageModel(LanguageModelLayers.debug())
-  }
-  if (providerMode === "debug-failing") {
-    return ModelResolver.fromLanguageModel(LanguageModelLayers.failing)
-  }
-  if (providerMode === "debug-slow") {
-    return ModelResolver.fromLanguageModel(
-      LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs }),
-    )
-  }
-  return Layer.provide(ModelResolver.Live, authDeps)
-}
+) =>
+  Option.match(Option.fromUndefinedOr(config.languageModelLayerOverride), {
+    onNone: () => Layer.provide(ModelResolver.Live, authDeps),
+    onSome: ModelResolver.fromLanguageModel,
+  })
 
 const makeToolRunnerLayer = <A, E, R>(
   override: Option.Option<NonNullable<DependencyOverrides["toolRunnerLayer"]>>,
@@ -240,10 +225,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   const persistenceMode: NonNullable<DependenciesConfig["persistenceMode"]> = Option.getOrElse(
     Option.fromUndefinedOr(config.persistenceMode),
     () => "disk",
-  )
-  const providerMode: NonNullable<DependenciesConfig["providerMode"]> = Option.getOrElse(
-    Option.fromUndefinedOr(config.providerMode),
-    () => "live",
   )
 
   const storageLive = makeStorageLayer(config, persistenceMode)
@@ -305,7 +286,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
-  const modelResolverLive = makeModelResolverLayer(config, providerMode, authDeps)
+  const modelResolverLive = makeModelResolverLayer(config, authDeps)
 
   const eventPublisherLive = EventPublisherLive
   const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)

@@ -7,16 +7,21 @@ import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import { BuildFingerprint, GentObservability, seedDebugSession } from "@gent/sdk"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
+import {
+  DebugSlowLanguageModelDelayMs,
+  LanguageModelLayers,
+} from "@gent/core-internal/test-utils/language-model.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
-type ProviderMode = "debug-scripted" | "debug-failing" | "debug-slow" | "live"
-
-const resolveProviderMode = (value: Option.Option<string>): ProviderMode => {
-  if (Option.contains(value, "debug-scripted")) return "debug-scripted"
-  if (Option.contains(value, "debug-failing")) return "debug-failing"
-  if (Option.contains(value, "debug-slow")) return "debug-slow"
-  return "live"
+/** GENT_PROVIDER_MODE picks a debug language model; anything else is the live resolver. */
+const resolveLanguageModelLayer = (value: Option.Option<string>) => {
+  if (Option.contains(value, "debug-scripted")) return Option.some(LanguageModelLayers.debug())
+  if (Option.contains(value, "debug-failing")) return Option.some(LanguageModelLayers.failing)
+  if (Option.contains(value, "debug-slow")) {
+    return Option.some(LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs }))
+  }
+  return Option.none()
 }
 
 const resolveRuntimeConfig = Effect.gen(function* () {
@@ -63,7 +68,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     hostname: osInfo.hostname,
     pid,
     persistenceMode,
-    providerMode: resolveProviderMode(providerOpt),
+    languageModelLayer: resolveLanguageModelLayer(providerOpt),
     isManaged: Option.getOrUndefined(serverModeOpt) === "shared",
     isDebug: Option.getOrUndefined(debugModeOpt) === "1",
     shell: shellOpt,
@@ -110,7 +115,7 @@ const program = Effect.scoped(
         dbPath: config.dbPath,
         authDirectory: Option.getOrUndefined(config.authDirectory),
         persistenceMode: config.persistenceMode,
-        providerMode: config.providerMode,
+        languageModelLayerOverride: Option.getOrUndefined(config.languageModelLayer),
         extensions: BuiltinExtensions,
         branchTools: CellBranchTools,
       },

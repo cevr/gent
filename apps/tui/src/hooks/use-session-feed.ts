@@ -11,10 +11,6 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Clock, Effect, Equal, Fiber, Option, Predicate, Schedule, Stream } from "effect"
 import {
   assistantMessageIdForTurn,
-  messagePartImage,
-  messagePartReasoning,
-  messagePartText,
-  messagePartToolCall,
   projectMessage,
   type ActiveInteraction,
   type AgentEvent,
@@ -131,32 +127,25 @@ const buildSegments = (
     toolInteractions.map((interaction) => [String(interaction.id), interaction]),
   )
   for (const part of parts) {
-    const text = Option.fromNullishOr(messagePartText(part))
-    if (Option.isSome(text)) {
-      segments.push({ _tag: "text", content: text.value })
-      continue
-    }
-
-    const reasoning = Option.fromNullishOr(messagePartReasoning(part))
-    if (Option.isSome(reasoning)) {
-      segments.push({ _tag: "reasoning", content: reasoning.value })
-      continue
-    }
-
-    const image = Option.fromNullishOr(messagePartImage(part))
-    if (Option.isSome(image)) {
-      segments.push({ _tag: "image", image: { mediaType: image.value.mediaType } })
-      continue
-    }
-
-    const tc = Option.fromNullishOr(messagePartToolCall(part))
-    if (Option.isSome(tc)) {
-      const toolCall = Option.fromNullishOr(interactionsById.get(tc.value.id))
-      if (Option.isNone(toolCall)) continue
-      segments.push({
-        _tag: "tool-call",
-        toolCall: toolCall.value,
-      })
+    switch (part.type) {
+      case "text":
+        segments.push({ _tag: "text", content: part.text })
+        break
+      case "reasoning":
+        segments.push({ _tag: "reasoning", content: part.text })
+        break
+      case "file":
+        if (part.mediaType.startsWith("image/")) {
+          segments.push({ _tag: "image", image: { mediaType: part.mediaType } })
+        }
+        break
+      case "tool-call": {
+        const toolCall = Option.fromNullishOr(interactionsById.get(part.id))
+        if (Option.isSome(toolCall)) segments.push({ _tag: "tool-call", toolCall: toolCall.value })
+        break
+      }
+      default:
+        break
     }
   }
   return segments

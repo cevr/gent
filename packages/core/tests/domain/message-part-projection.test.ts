@@ -67,12 +67,10 @@ describe("message part projection", () => {
     expect(messagePartsTextLines(parts)).toEqual(["hello"])
     expect(messageSingleText(parts)).toBeUndefined()
     expect(messagePartsReasoning(parts)).toBe("")
-    expect(messagePartsImages(parts)).toEqual([
-      { image: "data:image/png;base64,abc", mediaType: "image/png", rawMediaType: "image/png" },
-    ])
+    expect(messagePartsImages(parts)).toEqual([{ mediaType: "image/png" }])
     expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
     expect(messagePartsSearchText(parts)).toBe(
-      'hello\nimage/png data:image/png;base64,abc\nread {"path":"README.md"}\nread {"ok":true}',
+      'hello\nimage/png\nread {"path":"README.md"}\nread {"ok":true}',
     )
   })
 

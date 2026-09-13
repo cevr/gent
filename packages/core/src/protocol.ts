@@ -32,10 +32,6 @@ export {
   projectMessage,
 } from "./domain/message.js"
 export {
-  messagePartImage,
-  messagePartReasoning,
-  messagePartText,
-  messagePartToolCall,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
