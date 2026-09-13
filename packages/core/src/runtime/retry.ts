@@ -1,27 +1,18 @@
-import { Cause, Clock, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect"
-import { ProviderError } from "../domain/provider-error.js"
-import type { ProviderAuthError } from "../domain/driver.js"
+import { Cause, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
+import type { ProviderAuthError } from "../domain/driver.js"
+import { ProviderError } from "../domain/provider-error.js"
 
-// Retry Config Schema
-
-const RetryConfig = Schema.Struct({
-  initialDelay: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
-    description: "Initial delay in milliseconds",
-  }),
-  maxDelay: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
-    description: "Maximum delay in milliseconds",
-  }),
-  backoffFactor: Schema.Finite.check(Schema.isGreaterThan(0)).annotate({
-    description: "Multiplier for exponential backoff",
-  }),
-  maxAttempts: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
-    description: "Maximum retry attempts",
-  }),
-})
-type RetryConfig = typeof RetryConfig.Type
-
-// Default config
+interface RetryConfig {
+  /** Delay before the first retry, in milliseconds. */
+  readonly initialDelay: number
+  /** Upper bound of any delay, in milliseconds. */
+  readonly maxDelay: number
+  /** Multiplier applied to the delay after each attempt. */
+  readonly backoffFactor: number
+  /** Attempts in total, the first call included. */
+  readonly maxAttempts: number
+}
 
 export const DEFAULT_RETRY_CONFIG: RetryConfig = {
   initialDelay: 2000,
@@ -30,108 +21,50 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
   maxAttempts: 3,
 }
 
-const retryableMessageSnippets = [
-  "rate limit",
-  "429",
-  "too many requests",
-  "overloaded",
-  "529",
-  "500",
-  "502",
-  "503",
-  "504",
-  "internal server error",
-  "bad gateway",
-  "service unavailable",
-  "gateway timeout",
-]
+/**
+ * A request the provider accepted can still end with an error event inside
+ * the stream. The provider libraries pass that event through as a raw part,
+ * so its wire identifier is the only signal: Anthropic names the error type,
+ * OpenAI names a code.
+ */
+const TransientStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literals(["overloaded_error", "api_error", "rate_limit_error"]),
+  }),
+  Schema.Struct({ code: Schema.Literals(["server_error", "rate_limit_exceeded"]) }),
+])
 
-const StatusCause = Schema.Struct({ status: Schema.Finite })
+type ProviderOrAuthError = ProviderError | ProviderAuthError
 
-const hasRetryableStatus = (cause: unknown) => {
-  if (!Schema.is(StatusCause)(cause)) return false
-  const status = cause.status
-  return status === 429 || status === 529 || (status >= 500 && status < 600)
-}
-
-// Check if error is retryable
-
-// oxlint-disable-next-line effect/noUnknownParameters -- Provider failures arrive as unknown values at this retry boundary.
-export const isRetryable = (error: unknown): boolean => {
+/** Only a transient `ProviderError` is retried; a credential failure escapes. */
+const isRetryable = (error: ProviderOrAuthError): error is ProviderError => {
   if (!Schema.is(ProviderError)(error)) return false
-
-  // Check if cause is an AiError — use typed retryability
-  if (AiError.isAiError(error.cause)) {
-    return error.cause.isRetryable
-  }
-
-  // Fallback to string matching for non-AiError causes
-  const message = error.message.toLowerCase()
-  if (retryableMessageSnippets.some((snippet) => message.includes(snippet))) return true
-  return hasRetryableStatus(error.cause)
+  if (AiError.isAiError(error.cause)) return error.cause.isRetryable
+  return Schema.is(TransientStreamEvent)(error.cause)
 }
 
-// Extract retry-after from error/headers.
-
-const ErrorCause = Schema.Struct({ cause: Schema.optional(Schema.Unknown) })
-const HeadersCause = Schema.Struct({ headers: Schema.instanceOf(Headers) })
-
-// oxlint-disable-next-line effect/noUnknownParameters -- Provider failures arrive as unknown values at this retry boundary.
-export const getRetryAfterOption = (error: unknown, nowMs: number): Option.Option<number> => {
-  const decodedError = Schema.decodeUnknownOption(ErrorCause)(error)
-  if (Option.isNone(decodedError)) return Option.none()
-
-  return Option.match(Option.fromUndefinedOr(decodedError.value.cause), {
-    onNone: () => Option.none(),
-    onSome: (errorCause) => {
-      if (AiError.isAiError(errorCause)) {
-        if (!Predicate.isUndefined(errorCause.retryAfter)) {
-          return Option.some(Duration.toMillis(errorCause.retryAfter))
-        }
-        return Option.none()
-      }
-
-      if (!Schema.is(HeadersCause)(errorCause)) return Option.none()
-      const retryAfter = errorCause.headers.get("retry-after")
-      if (Predicate.isNull(retryAfter) || retryAfter === "") return Option.none()
-      // Could be seconds or HTTP date.
-      const seconds = parseInt(retryAfter, 10)
-      if (!Number.isNaN(seconds)) return Option.some(seconds * 1000)
-      // Try parsing as date.
-      const dateMs = Date.parse(retryAfter)
-      if (!Number.isNaN(dateMs)) return Option.some(Math.max(0, dateMs - nowMs))
-      return Option.none()
-    },
-  })
+const retryAfterMs = (error: ProviderError): Option.Option<number> => {
+  if (!AiError.isAiError(error.cause)) return Option.none()
+  return Option.map(Option.fromUndefinedOr(error.cause.retryAfter), Duration.toMillis)
 }
-
-// oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters -- This public helper preserves the established absent retry-after API and accepts provider failures at the retry boundary.
-// Calculate delay for attempt — private. `retryProviderCall` is the only consumer;
-// unit coverage flows through `retryProviderCall({ onRetry })` reporting the
-// computed delay (see retry-progress test).
 
 /** Upper bound of the random spread added to a backoff delay, as a fraction of it. */
-export const RETRY_JITTER_FRACTION = 0.25
+const JITTER_FRACTION = 0.25
 
-export const getRetryDelay = (
+/** `attempt` counts completed failures; `jitter` is a uniform sample in [0, 1). */
+const retryDelay = (
   attempt: number,
   error: ProviderError,
-  nowMs: number,
-  config: RetryConfig = DEFAULT_RETRY_CONFIG,
-  /** Uniform sample in [0, 1). Spreads concurrent retries; never exceeds `maxDelay`. */
-  jitter = 0,
-): number => {
-  // Check retry-after header first
-  const retryAfter = getRetryAfterOption(error, nowMs)
-  if (Option.isSome(retryAfter)) {
-    return Math.min(retryAfter.value, config["maxDelay"])
-  }
-
-  // Exponential backoff with bounded jitter
-  const base = config["initialDelay"] * Math.pow(config["backoffFactor"], attempt)
-  const delay = Math.round(base * (1 + RETRY_JITTER_FRACTION * jitter))
-  return Math.min(delay, config["maxDelay"])
-}
+  config: RetryConfig,
+  jitter: number,
+): number =>
+  Option.match(retryAfterMs(error), {
+    onSome: (ms) => Math.min(ms, config.maxDelay),
+    onNone: () => {
+      const base = config.initialDelay * config.backoffFactor ** attempt
+      return Math.min(Math.round(base * (1 + JITTER_FRACTION * jitter)), config.maxDelay)
+    },
+  })
 
 interface RetryAttemptInfo {
   readonly attempt: number
@@ -140,15 +73,11 @@ interface RetryAttemptInfo {
   readonly error: ProviderError
 }
 
-// Retry wrapper for provider calls.
-//
-// Accepts `ProviderError | ProviderAuthError` because driver credential
-// failures surface as `ProviderAuthError` — those are not transient and
-// must escape without retry. The schedule re-inspects the tag and only
-// retries transient `ProviderError` values.
-
-type ProviderOrAuthError = ProviderError | ProviderAuthError
-
+/**
+ * Retry a provider call on transient failure. The provider's own retry-after
+ * wins over the backoff; both are capped at `maxDelay`. `onRetry` runs before
+ * each wait with the delay the schedule will take.
+ */
 export const retryProviderCall =
   <R2 = never>(
     config: RetryConfig = DEFAULT_RETRY_CONFIG,
@@ -159,8 +88,7 @@ export const retryProviderCall =
     effect: Effect.Effect<A, ProviderOrAuthError, R>,
   ) => Effect.Effect<A, ProviderOrAuthError, R | R2>) =>
   <A, R>(effect: Effect.Effect<A, ProviderOrAuthError, R>) => {
-    // meta.attempt is 1-indexed: 1 after first failure, 2 after second, etc.
-    // Allow retries while attempt < maxAttempts (i.e. maxAttempts-1 retries total)
+    // meta.attempt is 1-indexed: 1 after the first failure, 2 after the second.
     const schedule = Schedule.fromStepWithMetadata<
       ProviderOrAuthError,
       number,
@@ -170,17 +98,13 @@ export const retryProviderCall =
       never
     >(
       Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) => {
-        if (meta.attempt >= config.maxAttempts) {
-          return Cause.done(meta.attempt)
-        }
-        if (!Schema.is(ProviderError)(meta.input)) {
+        if (meta.attempt >= config.maxAttempts || !isRetryable(meta.input)) {
           return Cause.done(meta.attempt)
         }
         const error = meta.input
         return Effect.gen(function* () {
-          const nowMs = yield* Clock.currentTimeMillis
           const jitter = yield* Random.next
-          const delayMs = getRetryDelay(meta.attempt - 1, error, nowMs, config, jitter)
+          const delayMs = retryDelay(meta.attempt - 1, error, config, jitter)
           if (!Predicate.isUndefined(options?.onRetry)) {
             yield* options.onRetry({
               attempt: meta.attempt,
@@ -194,8 +118,7 @@ export const retryProviderCall =
       }),
     )
 
-    return Effect.retry(effect, {
-      schedule,
-      while: (error) => isRetryable(error),
-    }).pipe(Effect.withSpan("provider.retry"))
+    return Effect.retry(effect, { schedule, while: isRetryable }).pipe(
+      Effect.withSpan("provider.retry"),
+    )
   }

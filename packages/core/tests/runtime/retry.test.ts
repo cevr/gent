@@ -1,171 +1,153 @@
-import { describe, test, expect, it } from "effect-bun-test"
-import { dateFromMillis } from "../../src/domain/message"
-import { Clock, Effect, Fiber, Option } from "effect"
+/**
+ * Provider retry: which failures are retried, how long the schedule waits,
+ * and what it reports. The only interface is `retryProviderCall`.
+ */
+import { describe, expect, it } from "effect-bun-test"
+import { Duration, Effect, Exit, Fiber } from "effect"
 import { TestClock } from "effect/testing"
-import {
-  isRetryable,
-  getRetryAfterOption,
-  getRetryDelay,
-  DEFAULT_RETRY_CONFIG,
-  RETRY_JITTER_FRACTION,
-  retryProviderCall,
-} from "../../src/runtime/retry"
+import * as AiError from "effect/unstable/ai/AiError"
+import { ProviderAuthError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/provider-error"
+import { DEFAULT_RETRY_CONFIG, retryProviderCall } from "../../src/runtime/retry"
 
-describe("getRetryDelay", () => {
-  const config = { initialDelay: 1000, maxDelay: 60_000, backoffFactor: 2, maxAttempts: 3 }
-  const error = new ProviderError({ message: "overloaded", model: "test" })
-  test("backoff delays spread by a bounded jitter and never exceed the maximum", () => {
-    expect(getRetryDelay(0, error, 0, config, 0)).toBe(1000)
-    const spread = getRetryDelay(0, error, 0, config, 0.999)
-    expect(spread).toBeGreaterThan(1000)
-    expect(spread).toBeLessThanOrEqual(1000 * (1 + RETRY_JITTER_FRACTION))
-    expect(getRetryDelay(1, error, 0, config, 0.5)).toBe(2250)
-    expect(getRetryDelay(0, error, 0, { ...config, maxDelay: 1100 }, 0.999)).toBe(1100)
+const fast = { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 1, maxAttempts: 3 }
+
+const rateLimited = (retryAfter: Duration.Duration) =>
+  new ProviderError({
+    message: "Rate limit",
+    model: "test",
+    cause: AiError.make({
+      module: "Test",
+      method: "streamText",
+      reason: new AiError.RateLimitError({ retryAfter }),
+    }),
   })
+
+const invalidKey = new ProviderError({
+  message: "Invalid API key",
+  model: "test",
+  cause: AiError.make({
+    module: "Test",
+    method: "streamText",
+    reason: new AiError.AuthenticationError({ kind: "InvalidKey" }),
+  }),
 })
 
-describe("getRetryAfterOption", () => {
-  test("parses retry-after seconds from Headers", () => {
-    const headers = new Headers({ "retry-after": "5" })
-    const error = { cause: { headers } }
-    expect(getRetryAfterOption(error, 0)).toEqual(Option.some(5000))
-  })
-  it.live("parses retry-after date from Headers", () =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis
-      const future = dateFromMillis(now + 10_000)
-      const headers = new Headers({ "retry-after": future.toUTCString() })
-      const error = { cause: { headers } }
-      const result = getRetryAfterOption(error, now)
-      expect(Option.isSome(result)).toBe(true)
-      // Should be roughly 10 seconds from now (within tolerance)
-      if (Option.isSome(result)) expect(Math.abs(result.value - 10000)).toBeLessThan(2000)
+const streamEvent = (cause: { type: string } | { code: string }) =>
+  new ProviderError({ message: "stream ended with an error event", model: "test", cause })
+
+/** Fails `failures` times with `error`, then succeeds; records every retry delay. */
+const failThenSucceed = (error: ProviderOrAuth, failures: number, config = fast) => {
+  const delays: Array<number> = []
+  let calls = 0
+  const run = Effect.gen(function* () {
+    calls += 1
+    if (calls <= failures) return yield* error
+    return "ok"
+  }).pipe(
+    retryProviderCall(config, {
+      onRetry: ({ delayMs }) => Effect.sync(() => void delays.push(delayMs)),
     }),
   )
-  test("returns undefined for empty retry-after header", () => {
-    const headers = new Headers()
-    const error = { cause: { headers } }
-    expect(getRetryAfterOption(error, 0)).toEqual(Option.none())
-  })
-})
-describe("Retry Logic", () => {
-  test("isRetryable detects rate limits", () => {
-    const rateLimitError = new ProviderError({
-      message: "Rate limit exceeded (429)",
-      model: "test",
-    })
-    expect(isRetryable(rateLimitError)).toBe(true)
-  })
-  test("isRetryable detects overload", () => {
-    const overloadError = new ProviderError({
-      message: "Service overloaded",
-      model: "test",
-    })
-    expect(isRetryable(overloadError)).toBe(true)
-  })
-  test("isRetryable detects 500 errors", () => {
-    const serverError = new ProviderError({
-      message: "Internal server error 500",
-      model: "test",
-    })
-    expect(isRetryable(serverError)).toBe(true)
-  })
-  test("isRetryable returns false for non-retryable errors", () => {
-    const authError = new ProviderError({
-      message: "Invalid API key",
-      model: "test",
-    })
-    expect(isRetryable(authError)).toBe(false)
-  })
-  it.effect("retryProviderCall computes HTTP-date retry-after delay from TestClock", () =>
+  return { run, delays, calls: () => calls }
+}
+type ProviderOrAuth = ProviderError | ProviderAuthError
+
+describe("provider retry", () => {
+  it.effect("waits the provider's retry-after before retrying a typed rate limit", () =>
     Effect.gen(function* () {
-      // Plant a retry-after HTTP-date 30s past TestClock's current time.
-      // The schedule's new Clock.currentTimeMillis read must observe the
-      // test clock, otherwise the delay would equal (httpDate - wallNow)
-      // and the assertion below would fail by minutes-or-hours.
-      const nowMs = yield* Clock.currentTimeMillis
-      const future = dateFromMillis(nowMs + 30_000)
-      const headers = new Headers({ "retry-after": future.toUTCString() })
-      const attempts: Array<number> = []
-      let callCount = 0
-      const fiber = yield* Effect.forkChild(
-        Effect.gen(function* () {
-          callCount += 1
-          if (callCount < 2) {
-            return yield* new ProviderError({
-              message: "Rate limit",
-              model: "test",
-              cause: { headers },
-            })
-          }
-          return "ok"
-        }).pipe(
-          retryProviderCall(
-            { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 60_000, maxAttempts: 3 },
-            {
-              onRetry: ({ delayMs }) =>
-                Effect.sync(() => {
-                  attempts.push(delayMs)
-                }),
-            },
-          ),
-        ),
-      )
-      // Drive the schedule's sleep deterministically.
-      yield* TestClock.adjust("31 seconds")
-      const exit = yield* Fiber.await(fiber)
-      expect(exit._tag).toBe("Success")
-      // Tolerance accounts for HTTP-date second-precision truncation.
-      expect(attempts.length).toBe(1)
-      expect(Math.abs(attempts[0]! - 30_000)).toBeLessThan(2_000)
+      const { run, delays } = failThenSucceed(rateLimited(Duration.seconds(30)), 1, {
+        ...fast,
+        maxDelay: 60_000,
+      })
+      const fiber = yield* Effect.forkChild(run)
+      yield* TestClock.adjust("30 seconds")
+      expect(yield* Fiber.join(fiber)).toBe("ok")
+      expect(delays).toEqual([30_000])
     }),
   )
 
-  it.live("retryProviderCall reports retry progress", () =>
+  it.effect("caps the provider's retry-after at the configured maximum", () =>
     Effect.gen(function* () {
-      const attempts: Array<{
-        attempt: number
-        maxAttempts: number
-        delayMs: number
-        error: string
-      }> = []
-      let callCount = 0
+      const { run, delays } = failThenSucceed(rateLimited(Duration.minutes(10)), 1, {
+        ...fast,
+        maxDelay: 5_000,
+      })
+      const fiber = yield* Effect.forkChild(run)
+      yield* TestClock.adjust("5 seconds")
+      expect(yield* Fiber.join(fiber)).toBe("ok")
+      expect(delays).toEqual([5_000])
+    }),
+  )
+
+  it.effect("backs off exponentially with bounded jitter for a mid-stream overload", () =>
+    Effect.gen(function* () {
+      const { run, delays } = failThenSucceed(streamEvent({ type: "overloaded_error" }), 2, {
+        initialDelay: 1000,
+        maxDelay: 60_000,
+        backoffFactor: 2,
+        maxAttempts: 3,
+      })
+      const fiber = yield* Effect.forkChild(run)
+      yield* TestClock.adjust("1250 millis")
+      yield* TestClock.adjust("2500 millis")
+      expect(yield* Fiber.join(fiber)).toBe("ok")
+      expect(delays).toHaveLength(2)
+      expect(delays[0]).toBeGreaterThanOrEqual(1000)
+      expect(delays[0]).toBeLessThanOrEqual(1250)
+      expect(delays[1]).toBeGreaterThanOrEqual(2000)
+      expect(delays[1]).toBeLessThanOrEqual(2500)
+    }),
+  )
+
+  it.live("retries an OpenAI stream error code and reports each attempt", () =>
+    Effect.gen(function* () {
+      const attempts: Array<{ attempt: number; maxAttempts: number; error: string }> = []
+      let calls = 0
       const result = yield* Effect.gen(function* () {
-        callCount += 1
-        if (callCount < 3) {
-          return yield* new ProviderError({
-            message: "Rate limit exceeded (429)",
-            model: "test",
-          })
-        }
+        calls += 1
+        if (calls < 3) return yield* streamEvent({ code: "server_error" })
         return "ok"
       }).pipe(
-        retryProviderCall(
-          { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 1, maxAttempts: 3 },
-          {
-            onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
-              Effect.sync(() => {
-                attempts.push({ attempt, maxAttempts, delayMs, error: error.message })
-              }),
-          },
-        ),
+        retryProviderCall(fast, {
+          onRetry: ({ attempt, maxAttempts, error }) =>
+            Effect.sync(() => void attempts.push({ attempt, maxAttempts, error: error.message })),
+        }),
       )
       expect(result).toBe("ok")
       expect(attempts).toEqual([
-        {
-          attempt: 1,
-          maxAttempts: 3,
-          delayMs: 1,
-          error: "Rate limit exceeded (429)",
-        },
-        {
-          attempt: 2,
-          maxAttempts: 3,
-          delayMs: 1,
-          error: "Rate limit exceeded (429)",
-        },
+        { attempt: 1, maxAttempts: 3, error: "stream ended with an error event" },
+        { attempt: 2, maxAttempts: 3, error: "stream ended with an error event" },
       ])
+    }),
+  )
+
+  it.live("gives up after the last attempt and fails with the provider error", () =>
+    Effect.gen(function* () {
+      const { run, delays, calls } = failThenSucceed(streamEvent({ type: "api_error" }), 5)
+      const exit = yield* Effect.exit(run)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls()).toBe(3)
+      expect(delays).toHaveLength(2)
+    }),
+  )
+
+  it.live("a credential failure escapes without a retry", () =>
+    Effect.gen(function* () {
+      const typed = failThenSucceed(invalidKey, 1)
+      expect(Exit.isFailure(yield* Effect.exit(typed.run))).toBe(true)
+      expect(typed.calls()).toBe(1)
+
+      const auth = failThenSucceed(new ProviderAuthError({ message: "no credentials" }), 1)
+      expect(Exit.isFailure(yield* Effect.exit(auth.run))).toBe(true)
+      expect(auth.calls()).toBe(1)
+
+      const untyped = failThenSucceed(
+        new ProviderError({ message: "Rate limit exceeded (429)", model: "test" }),
+        1,
+      )
+      expect(Exit.isFailure(yield* Effect.exit(untyped.run))).toBe(true)
+      expect(untyped.calls()).toBe(1)
     }),
   )
 })

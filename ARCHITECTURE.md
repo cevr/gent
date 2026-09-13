@@ -258,8 +258,13 @@ Shape:
   model work. Clients replaying `ToolCallStarted` never keep a stale running
   projection. Ambiguous side effects are not replayed; the exact binding replay
   rules decide whether a native call runs again or fails.
-- Narrow retry: `retryProviderCall` retries retryable provider failures with
+- Narrow retry: `retryProviderCall` retries transient provider failures with
   bounded exponential backoff plus jitter, and only before observable output.
+  Transient means the provider library's typed `AiError` says so, or a
+  mid-stream error event carries a transient wire identifier (Anthropic
+  `overloaded_error`, `api_error`, `rate_limit_error`; OpenAI `server_error`,
+  `rate_limit_exceeded`). A typed rate limit's `retryAfter` replaces the
+  backoff. Nothing is inferred from message text.
   After partial output the partial assistant message stays, a durable
   continuation instruction (`<turn>:continuation:<step>`, `customType`
   `continuation`) follows it, and the same turn runs one more model step. Two

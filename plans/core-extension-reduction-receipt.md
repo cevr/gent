@@ -801,3 +801,19 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   the file, and the `savedPath` field on both schemas are gone. The test that
   asserted the file's contents is deleted; the delivery test no longer expects
   a "Full output" line.
+
+## Retry taxonomy (2026-09-13)
+
+- `runtime/retry.ts` classified failures by thirteen lowercase substrings
+  ("429", "500", "overloaded", ...), a `{ status }` cause shape and a
+  `{ headers: Headers }` cause with an HTTP-date `retry-after`. Both provider
+  libraries map every HTTP failure to a typed `AiError` with `isRetryable` and
+  `retryAfter`, so none of those shapes reach the retry. The one raw value
+  that does is a mid-stream error event, which the libraries pass through
+  unchanged; it carries a wire identifier, not a status or a header.
+- Now: typed `AiError` → its own `isRetryable`; a raw cause → a schema of
+  the five transient wire identifiers; anything else escapes. 201 → 124
+  lines, one exported function plus the default config. The four internals
+  the tests reached (`isRetryable`, `getRetryAfterOption`, `getRetryDelay`,
+  the jitter constant) are private; six tests drive `retryProviderCall`
+  through `TestClock` instead.
