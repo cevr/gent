@@ -16,7 +16,7 @@ import {
   type ExtensionServiceError,
 } from "../domain/extension-services.js"
 import { InteractionPendingError } from "../domain/interaction-request.js"
-import { AgentRunnerService, type AgentName } from "../domain/agent.js"
+import { AgentRunnerService } from "../domain/agent.js"
 import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
 import type { ExtensionHostPlatform } from "../domain/extension.js"
@@ -64,7 +64,6 @@ interface ExtensionHostContextInput {
 interface MakeExtensionHostContextRunInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly agentName?: AgentName
   /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
   readonly sessionCwd?: string
 }
@@ -141,7 +140,6 @@ export const makeExtensionHostContextProvider = (
     ): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
-      agentName: runInfo.agentName,
       cwd: runInfo.sessionCwd ?? platform.cwd,
       home: platform.home,
       host,

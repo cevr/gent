@@ -464,5 +464,3 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       }),
     )
 }
-
-export { attachToolBindingIdentity } from "./tool-binding-replay.js"

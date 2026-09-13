@@ -96,11 +96,7 @@ import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import type { CurrentExtensionHostContext } from "./current-extension-host-context.js"
-import {
-  buildQueuedTurnItem,
-  awaitTurnCompletion,
-  turnFailureBaseline,
-} from "./agent-loop.actor-state.js"
+import { awaitTurnCompletion, turnFailureBaseline } from "./agent-loop.actor-state.js"
 import {
   AgentLoop,
   type DrainQueueInput,
@@ -380,13 +376,14 @@ export const buildAgentLoopActorHandlers = (config: {
           metadata: input.metadata,
         })
       yield* ensureTarget(message)
-      return buildQueuedTurnItem({
+      const item: QueuedTurnItem = {
         message,
         agentOverride: input.agentOverride,
         runSpec: input.runSpec,
         interactive: input.interactive,
         wake: input.wake,
-      })
+      }
+      return item
     })
 
     /**
@@ -636,7 +633,12 @@ export const buildAgentLoopActorHandlers = (config: {
         yield* ensureTarget(operation.message)
         yield* markWrite
         if (yield* turnAlreadyCompleted(operation.message.id)) return Option.none<Reserved>()
-        const item = buildQueuedTurnItem(operation)
+        const item: QueuedTurnItem = {
+          message: operation.message,
+          agentOverride: operation.agentOverride,
+          runSpec: operation.runSpec,
+          interactive: operation.interactive,
+        }
         const reserved = yield* reserve(item)
         if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
         return reserved

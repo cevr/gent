@@ -10,8 +10,8 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { AllowAllPermission } from "../../src/domain/permission"
 import {
-  resolveSessionEnvironment,
-  type SessionEnvironmentDefaults,
+  resolveTurnProfile,
+  type TurnProfileDefaults,
 } from "../../src/runtime/session-runtime-context"
 import {
   ExtensionHostContextProvider,
@@ -39,7 +39,7 @@ const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
   modelDrivers: new Map(),
   externalDrivers: new Map(),
 })
-describe("resolveSessionEnvironment", () => {
+describe("resolveTurnProfile", () => {
   it.scopedLive(
     "uses the stored session cwd to resolve profile-scoped permission and host context",
     () =>
@@ -112,7 +112,7 @@ describe("resolveSessionEnvironment", () => {
             host: testHostFacts().host,
             extensionRegistry,
           })
-          const resolved = yield* resolveSessionEnvironment({
+          const resolved = yield* resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-profile"),
             branchId: BranchId.make("branch-runtime-context-profile"),
             profileCache,
@@ -122,10 +122,8 @@ describe("resolveSessionEnvironment", () => {
               baseSections: [],
             },
           }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
-          expect(resolved.session).toBeDefined()
-          expect(resolved.environment.cwd).toBe(secondary)
-          expect(resolved.environment.hostCtx.cwd).toBe(secondary)
-          expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
+          expect(resolved.turnHostCtx.cwd).toBe(secondary)
+          expect(yield* resolved.turnPermission.check("bash", { command: "ls -la" })).toBe(
             "allowed",
           )
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -148,7 +146,7 @@ describe("resolveSessionEnvironment", () => {
           externalDrivers: new Map(),
         }),
       ).pipe(Effect.scoped)
-      const defaults: SessionEnvironmentDefaults = {
+      const defaults: TurnProfileDefaults = {
         driverRegistry: Context.get(driverRegistryContext, DriverRegistry),
         permission: defaultPermission,
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
@@ -164,18 +162,14 @@ describe("resolveSessionEnvironment", () => {
           host: testHostFacts().host,
           extensionRegistry,
         })
-        const resolved = yield* resolveSessionEnvironment({
+        const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
           defaults,
         }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
-        expect(resolved.session).toBeUndefined()
-        expect(resolved.environment.cwd).toBe("/tmp/runtime-context-default")
-        expect(resolved.environment.hostCtx.cwd).toBe("/tmp/runtime-context-default")
-        expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
-          "denied",
-        )
-        expect(resolved.environment.baseSections).toEqual([
+        expect(resolved.turnHostCtx.cwd).toBe("/tmp/runtime-context-default")
+        expect(yield* resolved.turnPermission.check("bash", { command: "ls -la" })).toBe("denied")
+        expect(resolved.turnBaseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -207,7 +201,7 @@ describe("resolveSessionEnvironment", () => {
           extensionRegistry,
         })
         const exit = yield* Effect.exit(
-          resolveSessionEnvironment({
+          resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
             defaults: {
@@ -222,7 +216,7 @@ describe("resolveSessionEnvironment", () => {
         )
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
-          expect(exit.value.session).toBeUndefined()
+          expect(exit.value.turnHostCtx.cwd).toBe("/tmp/runtime-context-fail")
         }
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
@@ -296,7 +290,7 @@ describe("resolveSessionEnvironment", () => {
           host: testHostFacts().host,
           extensionRegistry,
         })
-        const resolved = yield* resolveSessionEnvironment({
+        const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
           profileCache: fakeProfileCache,
@@ -306,10 +300,9 @@ describe("resolveSessionEnvironment", () => {
             baseSections: [],
           },
         }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
-        const fromProfile = yield* resolved.environment.driverRegistry.getExternal("profile-driver")
+        const fromProfile = yield* resolved.turnDriverRegistry.getExternal("profile-driver")
         const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
-        expect(resolved.session).toBeDefined()
-        expect(resolved.environment.cwd).toBe("/tmp/profile-driver-scope")
+        expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
         expect(fromProfile?.id).toBe("profile-driver")
         expect(fromDefault).toBeUndefined()
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.

@@ -39,7 +39,7 @@ import type { MessageStorage } from "../storage/message-storage.js"
 import type { SessionStorage } from "../storage/session-storage.js"
 import type { SessionOperationStorage } from "../storage/session-operation-storage.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
-import { entityIdOf, listWorkspaceLoops, parseEntityId } from "./agent/agent-loop.entity-id.js"
+import { entityIdOf, listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
 import { followUpMessageIdForSource } from "./agent/agent-loop.protocol.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import type { ExtensionRegistry } from "./extensions/registry.js"
@@ -339,23 +339,13 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     sessionId: SessionId,
   ) {
     const workspaceId = yield* CurrentWorkspaceId
-    const branchIds = yield* actorState.listEntityIds.pipe(
-      Effect.flatMap((entityIds) =>
-        Effect.forEach(entityIds, (entityId) => parseEntityId(entityId).pipe(Effect.option), {
-          concurrency: SESSION_TERMINATION_CONCURRENCY,
-        }),
-      ),
-      Effect.map((targets) =>
-        targets.flatMap((target) => {
-          if (
-            Option.isSome(target) &&
-            target.value.workspaceId === workspaceId &&
-            target.value.sessionId === sessionId
-          ) {
-            return [target.value.branchId]
-          }
-          return []
-        }),
+    const branchIds = yield* listWorkspaceLoops({
+      workspaceId,
+      entityIds: yield* actorState.listEntityIds,
+      concurrency: SESSION_TERMINATION_CONCURRENCY,
+    }).pipe(
+      Effect.map((loops) =>
+        loops.filter((loop) => loop.sessionId === sessionId).map((loop) => loop.branchId),
       ),
     )
     yield* Effect.forEach(

@@ -12,7 +12,6 @@
  */
 
 import { Effect, Option, Predicate, Schema, Stream } from "effect"
-import type { AgentName, RunSpec } from "../../domain/agent.js"
 import type { AgentLoopBehavior } from "./agent-loop.behavior.js"
 import {
   AgentLoopError,
@@ -21,21 +20,6 @@ import {
   type LoopState,
   type QueuedTurnItem,
 } from "./agent-loop.state.js"
-import type { MessageType } from "./agent-loop.protocol.js"
-
-export const buildQueuedTurnItem = (operation: {
-  readonly message: MessageType
-  readonly agentOverride?: AgentName
-  readonly runSpec?: RunSpec
-  readonly interactive?: boolean
-  readonly wake?: boolean
-}): QueuedTurnItem => ({
-  message: operation.message,
-  agentOverride: operation.agentOverride,
-  runSpec: operation.runSpec,
-  interactive: operation.interactive,
-  wake: operation.wake,
-})
 
 type MessageId = QueuedTurnItem["message"]["id"]
 

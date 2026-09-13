@@ -64,7 +64,7 @@ import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { AllowAllPermission, Permission } from "../../domain/permission.js"
-import { resolveSessionEnvironment } from "../session-runtime-context.js"
+import { resolveTurnProfile as resolveSessionTurnProfile } from "../session-runtime-context.js"
 import {
   buildIdleState,
   emptyLoopQueueState,
@@ -284,7 +284,7 @@ export const makeAgentLoopBehavior = (
     const defaultPermission = Option.getOrElse(permissionService, () => AllowAllPermission)
 
     const resolveTurnProfile = provideAgentLoopRuntimeContext(runtimeContext)(
-      resolveSessionEnvironment({
+      resolveSessionTurnProfile({
         sessionId,
         branchId,
         profileCache,
@@ -294,19 +294,6 @@ export const makeAgentLoopBehavior = (
           baseSections,
         },
       }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),
-    ).pipe(
-      Effect.map(({ environment }) => {
-        const profile: AgentLoopTurnProfile = {
-          turnExtensionRegistry: environment.extensionRegistry,
-          turnDriverRegistry: environment.driverRegistry,
-          turnPermission: environment.permission,
-          turnBaseSections: environment.baseSections,
-          turnHostCtx: environment.hostCtx,
-          turnCapabilityContext: environment.capabilityContext,
-          turnGenerationId: environment.generationId,
-        }
-        return profile
-      }),
     )
 
     const loopScope = yield* Effect.scope
