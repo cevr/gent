@@ -1498,3 +1498,21 @@ it (`6413ac1f`). Fourteenth-pass NO FINDING: `resolveTurnSource` split
 and `agent-loop.queue.ts` merges (coherent modules with one importer),
 docblocks (every one states a why), `ExtensionProtocolError` (tests match
 its tag). Core is 28,119 LOC, 4 files fewer.
+
+## Fifteenth pass: the test-only resource assembly path (2026-09-13)
+
+`buildExtensionLayers` and `buildResourceServiceLayer` deleted (the
+ephemeral runtime's lifecycle-skip path; only tests called them, and they
+now read the registry off the profile's own context); the declaration-time
+`resolveExtensions` and the `config`/`resolved`/`extensionSectionInputs`
+fields nothing read are gone, and `RuntimeProfileInputs.config` with them;
+`persistAuthTo` is shared by the model resolver and provider auth; the four
+interaction codec wrappers are one `jsonCodec` helper; the `ToolName`,
+`CommandId`, `ActorId` brands and the `trackingApprovalService` /
+`testObservability` test-utils are deleted. Fifteenth-pass NO FINDING:
+`ConfigService.set`/`addPermissionRule` (no production caller, but the
+write vehicle for the config merge tests; a client write RPC is the honest
+fix), `RuntimeEnvironment.Test` (same reasoning as `Permission.Live`), the
+small domain files (each states a layering rule), `request-dedup` tuning
+knobs (the LRU proof), storage methods (all traced to shipped callers). Core
+is 27940 LOC at 09d3290d.
