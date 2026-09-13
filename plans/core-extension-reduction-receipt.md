@@ -1445,3 +1445,17 @@ recorded no-op, an anti-squash policy), ToolCallSucceeded/Failed tags
 compileCapabilityWinners/Entries (different keys), AgentLoopBehavior
 members, AgentLoopTurnProfile fields, ChildCompletionDelivery.deliver,
 TurnStepResult stop literals, initialQueueFailure. Core is 28,646 LOC.
+
+## Twelfth pass: one turn profile from the session context (2026-09-13)
+
+`SessionEnvironment`, `ResolvedSessionEnvironment`, `ActiveRuntimeBindings`
+and their three builders collapsed into `resolveTurnProfile`, which returns
+`AgentLoopTurnProfile` directly (the behavior no longer remaps seven fields);
+the dead `agentName` threading through the session context and
+`MakeExtensionHostContextRunInfo` deleted (no writer); `buildQueuedTurnItem`
+became two inline literals; the three per-component entity-id decoders
+became `decodeComponent(schema, label)`; `terminateRuntimeSession` reuses
+`listWorkspaceLoops`; the tool-runner re-export of
+`attachToolBindingIdentity` dropped. Skipped: moving `replayHook` +
+`registerContributions` into the e2e layer (net-zero move). Core is 28,477
+LOC at `db7538aa`.
