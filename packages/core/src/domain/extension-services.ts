@@ -194,18 +194,6 @@ export interface ExtensionInteractionService {
     readonly content: string
     readonly title?: string
   }) => Effect.Effect<void, ExtensionServiceError | InteractionPendingError>
-  readonly confirm: (params: {
-    readonly content: string
-    readonly title?: string
-  }) => Effect.Effect<"yes" | "no", ExtensionServiceError | InteractionPendingError>
-  readonly review: (params: {
-    readonly content: string
-    readonly title?: string
-    readonly fileNameSeed: string
-  }) => Effect.Effect<
-    { readonly decision: "yes" | "no" | "edit"; readonly path: string; readonly content?: string },
-    ExtensionServiceError | InteractionPendingError
-  >
 }
 
 interface ExtensionProcessService {

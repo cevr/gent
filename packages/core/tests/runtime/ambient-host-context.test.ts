@@ -6,12 +6,18 @@
  * only if something calls it. That keeps a deployment that ships no approval
  * flow from having to provide a stub for one.
  */
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { describe, expect, it } from "effect-bun-test"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
 import { ApprovalService } from "../../src/runtime/approval-service.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
+import { EventPublisherLive } from "../../src/domain/event-publisher.js"
+import { EventStore } from "../../src/domain/event.js"
+import { MessageStorage } from "../../src/storage/message-storage.js"
+import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
+import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
+import { ensureStorageParents } from "../../src/test-utils/index.js"
 
 const sessionId = SessionId.make("ambient-host-session")
 const branchId = BranchId.make("ambient-host-branch")
@@ -60,6 +66,36 @@ describe("ambient extension host context", () => {
         respond: () => Effect.void,
         rehydrate: () => Effect.void,
       }),
+    ),
+  )
+
+  it.scopedLive("present stores a hidden assistant message and delivers it", () =>
+    Effect.gen(function* () {
+      const ctx = yield* ambientContext
+      const store = yield* EventStore
+      const delivered = yield* store
+        .subscribe({ sessionId, branchId })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* ensureStorageParents({ sessionId, branchId })
+
+      yield* ctx.Interaction.present({ title: "Goal", content: "Ship it" })
+
+      const messages = yield* (yield* MessageStorage).listMessages(branchId)
+      expect(messages.map((m) => [m.role, m.metadata])).toStrictEqual([
+        ["assistant", { customType: "prompt-present", hidden: true }],
+      ])
+      const envelopes = yield* Fiber.join(delivered)
+      expect(envelopes.map((envelope) => envelope.event._tag)).toStrictEqual(["MessageReceived"])
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          EventPublisherLive,
+          Layer.mergeAll(
+            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+            EventStore.Memory,
+          ),
+        ),
+      ),
     ),
   )
 })

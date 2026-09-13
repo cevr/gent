@@ -31,8 +31,6 @@ const makeCtx = (overrides: {
     Interaction: {
       approve: overrides.approve ?? dieStub("interaction.approve"),
       present: dieStub("interaction.present"),
-      confirm: dieStub("interaction.confirm"),
-      review: dieStub("interaction.review"),
     },
   })
 

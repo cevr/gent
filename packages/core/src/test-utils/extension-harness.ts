@@ -146,8 +146,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
   const Interaction: ExtensionContextService["Interaction"] = {
     approve: dieStub("Interaction.approve"),
     present: dieStub("Interaction.present"),
-    confirm: dieStub("Interaction.confirm"),
-    review: dieStub("Interaction.review"),
   }
   const process: ExtensionContextService["Process"] = {
     randomId: host.randomId,

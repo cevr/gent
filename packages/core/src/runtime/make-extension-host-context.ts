@@ -6,7 +6,9 @@
  * so a root that ships no approval flow provides no stub for one.
  */
 
-import { Context, Effect, Option, Schema } from "effect"
+import { Context, DateTime, Effect, Option, Schema } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds } from "effect-encore"
 import {
   ExtensionHostSearchResult,
@@ -16,18 +18,19 @@ import {
 } from "../domain/extension-services.js"
 import { InteractionPendingError } from "../domain/interaction-request.js"
 import { AgentRunnerService, type AgentName } from "../domain/agent.js"
-import { BranchId, SessionId } from "../domain/ids.js"
+import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import { ApprovalService } from "./approval-service.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
-import type { MessageMetadata } from "../domain/message.js"
+import { Message, type MessageMetadata } from "../domain/message.js"
+import { EventPublisher } from "../domain/event-publisher.js"
+import { MessageReceived } from "../domain/event.js"
 import { SessionMutations } from "../domain/session-mutations.js"
 import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
 import { listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
@@ -151,7 +154,8 @@ export const makeExtensionHostContextProvider = (
     const host = input.host ?? unavailableExtensionPlatform
     const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
     const approval = yield* facet(ApprovalService, "ApprovalService")
-    const presenter = yield* facet(PromptPresenter, "PromptPresenter")
+    const publisher = yield* facet(EventPublisher, "EventPublisher")
+    const sql = yield* facet(SqlClient.SqlClient, "SqlClient")
     const sessions = yield* facet(SessionStorage, "SessionStorage")
     const branches = yield* facet(BranchStorage, "BranchStorage")
     const messages = yield* facet(MessageStorage, "MessageStorage")
@@ -302,38 +306,34 @@ export const makeExtensionHostContextProvider = (
               service.present(params, { sessionId: runInfo.sessionId, branchId: runInfo.branchId }),
             ),
           ),
+        // A presented note is a hidden assistant message: stored, then delivered.
         present: (params) =>
           mapInteraction(
             "present",
-            presenter((service) =>
-              service.present({
+            Effect.gen(function* () {
+              const text = Option.match(Option.fromUndefinedOr(params.title), {
+                onNone: () => params.content,
+                onSome: (title) => `# ${title}\n\n${params.content}`,
+              })
+              const message = Message.cases.regular.make({
+                id: MessageId.make(yield* host.randomId),
                 sessionId: runInfo.sessionId,
                 branchId: runInfo.branchId,
-                ...params,
-              }),
-            ),
-          ),
-        confirm: (params) =>
-          mapInteraction(
-            "confirm",
-            presenter((service) =>
-              service.confirm({
-                sessionId: runInfo.sessionId,
-                branchId: runInfo.branchId,
-                ...params,
-              }),
-            ),
-          ),
-        review: (params) =>
-          mapInteraction(
-            "review",
-            presenter((service) =>
-              service.review({
-                sessionId: runInfo.sessionId,
-                branchId: runInfo.branchId,
-                ...params,
-              }),
-            ),
+                role: "assistant",
+                parts: [Prompt.textPart({ text })],
+                createdAt: yield* DateTime.nowAsDate,
+                metadata: { customType: "prompt-present", hidden: true },
+              })
+              const envelope = yield* sql((client) =>
+                messages((store) => store.createMessage(message)).pipe(
+                  Effect.andThen(
+                    publisher((events) => events.append(MessageReceived.make({ message }))),
+                  ),
+                  client.withTransaction,
+                ),
+              )
+              yield* publisher((events) => events.deliver(envelope))
+            }),
           ),
       },
     })

@@ -10,7 +10,6 @@ import { EventPublisherLive, type EventPublisher } from "../domain/event-publish
 import type { PromptSection } from "../domain/prompt.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { Permission } from "../domain/permission.js"
-import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
@@ -415,21 +414,12 @@ export const createDependencies = (config: DependenciesConfig) => {
     baseServicesLive,
   )
 
-  const promptPresenterLive = Layer.provide(
-    PromptPresenterLive,
-    Layer.merge(approvalServiceLive, baseServicesLive),
-  )
   const toolRunnerLive = makeToolRunnerLayer(
     Option.fromUndefinedOr(config.overrides?.toolRunnerLayer),
     Layer.merge(baseServicesLive, approvalServiceLive),
   )
 
-  const allDeps = Layer.mergeAll(
-    baseServicesLive,
-    approvalServiceLive,
-    toolRunnerLive,
-    promptPresenterLive,
-  )
+  const allDeps = Layer.mergeAll(baseServicesLive, approvalServiceLive, toolRunnerLive)
 
   // Recover pending interaction requests from storage by rehydrating the
   // approval presenter state. The actor mailbox owns cold turn replay; this

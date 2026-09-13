@@ -169,8 +169,6 @@ const stubCtx = testToolContext({
   Interaction: {
     approve: () => Effect.succeed({ approved: true }),
     present: dieStub("present"),
-    confirm: dieStub("confirm"),
-    review: dieStub("review"),
   },
 })
 const withSession = (

@@ -1023,3 +1023,22 @@ messageId)` returns when the loop no longer holds the message (not starting,
   `response-part-normalization`, `message-image-conversion`). Two exports
   that only the barrel re-exported (`dataUrlToBytes`,
   `UrlBackedImageNotSupportedError`) are module-private now.
+
+## Confirm and review are prompt-tool concerns (2026-09-13)
+
+- `PromptPresenter` was a core Tag (65 lines) plus a runtime Live layer
+  (144 lines) wired in `dependencies.ts` and exposed as three facet methods
+  (`present`, `confirm`, `review`) on `ctx.Interaction`. Two consumers: the
+  `prompt` tool used all three; the `goal` tool used `present`.
+- `confirm` was one `approve` call with a `mode: "confirm"` metadata; `review`
+  was a file write plus one `approve` call with `mode: "review"`. Both are now
+  inline in `interaction-tools/prompt.ts` over `ctx.Interaction.approve`,
+  `ctx.Files`, and `ctx.cwd`. The Tag, the Live layer, and the wiring are
+  deleted. `ctx.Interaction` keeps `approve` and `present`.
+- `present` (a hidden assistant message stored in a transaction, then
+  delivered) stays a host facet: it needs `MessageStorage`, `EventPublisher`,
+  and `SqlClient`, none of which an extension may reach. It is implemented in
+  `make-extension-host-context.ts` over the facets already resolved there and
+  now has a runtime test in `ambient-host-context.test.ts`.
+- Six test stubs lost their `confirm`/`review` lines; the prompt-tool tests
+  now exercise the real file write under `.gent/prompts/`.

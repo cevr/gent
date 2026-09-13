@@ -45,8 +45,6 @@ const defaultSession = (): ExtensionSessionService => ({
 const defaultInteraction = (): ExtensionInteractionService => ({
   approve: () => die("Interaction.approve"),
   present: () => die("Interaction.present"),
-  confirm: () => die("Interaction.confirm"),
-  review: () => die("Interaction.review"),
 })
 
 export const testExtensionHostContext = (

@@ -13,8 +13,6 @@ const makeCtx = (
   const interaction = {
     approve: () => decision,
     present: () => Effect.die("not wired"),
-    confirm: () => Effect.die("not wired"),
-    review: () => Effect.die("not wired"),
   }
   return {
     ctx: testToolContext({
