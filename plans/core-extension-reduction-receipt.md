@@ -1158,3 +1158,12 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
 - `fake-fetch` stays in core test-utils: under `packages/extensions/tests`
   the test-only lint forbids its `runPromise`, and a shipped `src/` home would
   be worse.
+
+## The message store searches its own index (2026-09-13)
+
+- `storage/search-storage.ts` (121 lines) was a one-method Tag whose only
+  production reader was the `ctx.Session.search` facet, itself used by one
+  tool. `MessageStorage` already wrote `messages_fts` on every insert and
+  `SessionStorage` pruned it on delete; the reader lived in a third module.
+  `MessageStorage.searchMessages` now reads the index the same store writes.
+  One Tag, one layer line, and one facet binding fewer.

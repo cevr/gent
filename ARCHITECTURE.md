@@ -975,7 +975,7 @@ tests/
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
 ├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
-├── storage/       # sqlite-storage, search-storage
+├── storage/       # sqlite-storage and the focused sub-storages
 └── test-utils/    # sequence
 ```
 

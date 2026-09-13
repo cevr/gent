@@ -4,7 +4,7 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Predicate, Context, Effect, Layer, Schema } from "effect"
+import { Predicate, Context, Effect, Layer, Option, Schema } from "effect"
 import { Model } from "effect/unstable/schema"
 import { MessageRole, type Message } from "../domain/message.js"
 import { messagePartsSearchText } from "../domain/message-part-display.js"
@@ -33,12 +33,48 @@ class MessageTable extends Model.Class<MessageTable>("MessageTable")({
   metadata: Schema.NullOr(Schema.String),
 }) {}
 
+/**
+ * Sanitize user input for safe FTS5 MATCH queries.
+ * Removes special syntax chars and wraps each token in double quotes
+ * so they're treated as literal terms (quoting neutralizes FTS5 operators).
+ */
+export const sanitizeFts5Query = (raw: string): string => {
+  // Remove FTS5 special characters: *, ^, quotes, parentheses, colons, plus, minus, braces
+  const cleaned = raw.replace(/[*^"'(){}:+-]/g, " ")
+  return cleaned
+    .split(/\s+/)
+    .filter((t) => t.length > 0)
+    .map((t) => `"${t}"`)
+    .join(" ")
+}
+
+interface MessageSearchResult {
+  readonly sessionId: string
+  // oxlint-disable-next-line effect/noNullish -- This storage result mirrors a nullable SQL session name.
+  readonly sessionName: string | null
+  readonly branchId: string
+  readonly snippet: string
+  readonly createdAt: number
+}
+
+interface MessageSearchOptions {
+  readonly sessionId?: string
+  readonly dateAfter?: number
+  readonly dateBefore?: number
+  readonly limit?: number
+}
+
 interface MessageStorageService {
   readonly createMessage: (message: Message) => Effect.Effect<Message, StorageError>
   readonly createMessageIfAbsent: (message: Message) => Effect.Effect<Message, StorageError>
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
   readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+  /** Full-text search over the workspace's messages; the same store writes the index. */
+  readonly searchMessages: (
+    query: string,
+    options?: MessageSearchOptions,
+  ) => Effect.Effect<ReadonlyArray<MessageSearchResult>, StorageError>
   readonly updateMessageTurnDuration: (
     messageId: MessageId,
     durationMs: number,
@@ -176,6 +212,53 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               return yield* decodeStoredMessage(entry.row, entry.partJsons)
             },
             Effect.mapError(mapError("Failed to get message")),
+          ),
+
+          searchMessages: Effect.fn("MessageStorage.searchMessages")(
+            function* (query, options) {
+              const limit = Option.getOrElse(Option.fromUndefinedOr(options?.limit), () => 20)
+              const ftsQuery = sanitizeFts5Query(query)
+              if (ftsQuery.length === 0) return []
+              const workspaceId = yield* CurrentWorkspaceId
+              const conditions = [sql`s.workspace_id = ${workspaceId}`]
+              if (!Predicate.isUndefined(options?.sessionId)) {
+                conditions.push(sql`m.session_id = ${options.sessionId}`)
+              }
+              if (!Predicate.isUndefined(options?.dateAfter)) {
+                conditions.push(sql`m.created_at > ${options.dateAfter}`)
+              }
+              if (!Predicate.isUndefined(options?.dateBefore)) {
+                conditions.push(sql`m.created_at < ${options.dateBefore}`)
+              }
+              const rows = yield* sql<{
+                session_id: string
+                // oxlint-disable-next-line effect/noNullish -- Raw SQL rows preserve the database NULL representation.
+                session_name: string | null
+                branch_id: string
+                snippet_text: string
+                created_at: number
+              }>`SELECT
+                  m.session_id,
+                  s.name as session_name,
+                  m.branch_id,
+                  snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet_text,
+                  m.created_at
+                FROM messages_fts fts
+                JOIN messages m ON m.id = fts.message_id
+                JOIN sessions s ON s.id = m.session_id
+                WHERE messages_fts MATCH ${ftsQuery}
+                  AND ${sql.and(conditions)}
+                ORDER BY m.created_at DESC
+                LIMIT ${limit}`
+              return rows.map((row) => ({
+                sessionId: row.session_id,
+                sessionName: row.session_name,
+                branchId: row.branch_id,
+                snippet: row.snippet_text,
+                createdAt: row.created_at,
+              }))
+            },
+            Effect.mapError(mapError("Failed to search messages")),
           ),
 
           listMessages: Effect.fn("MessageStorage.listMessages")(

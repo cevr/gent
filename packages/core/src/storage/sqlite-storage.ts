@@ -6,7 +6,6 @@ import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 import { InteractionStorage } from "./interaction-storage.js"
-import { SearchStorage } from "./search-storage.js"
 import { SessionStorage } from "./session-storage.js"
 import { BranchStorage } from "./branch-storage.js"
 import { MessageStorage } from "./message-storage.js"
@@ -53,7 +52,6 @@ const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient
 type FocusedStorage =
   | SqlClient.SqlClient
   | InteractionStorage
-  | SearchStorage
   | SessionStorage
   | BranchStorage
   | MessageStorage
@@ -94,7 +92,6 @@ const provideFocusedRepositories = <A, E, R>(
     Layer.provide(ToolCallBindingStorage.Live, base),
     Layer.provide(encoreSqlMessageStorage(), Layer.merge(base, BunCrypto.layer)),
     interactionStorage,
-    Layer.provide(SearchStorage.Live, base),
   )
 }
 

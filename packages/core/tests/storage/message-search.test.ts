@@ -4,10 +4,9 @@ import { test as bunTest } from "bun:test"
 import { Effect, Layer } from "effect"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { RelationshipStorage } from "../../src/storage/relationship-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
+import { MessageStorage, sanitizeFts5Query } from "../../src/storage/message-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
-import { SearchStorage, sanitizeFts5Query } from "../../src/storage/search-storage"
 import { dateFromMillis, Session, Branch, Message } from "../../src/domain/message"
 import { SessionId, BranchId, MessageId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
@@ -82,7 +81,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "implement the authentication flow")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("authentication")
       expect(results.length).toBeGreaterThan(0)
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
@@ -93,7 +92,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "chunk projection keyword")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("projection keyword")
 
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
@@ -104,7 +103,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "assistant", "the database migration is complete")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("migration")
       expect(results.length).toBeGreaterThan(0)
       expect(results[0]!.snippet).toBeDefined()
@@ -119,7 +118,7 @@ describe("searchMessages", () => {
       yield* addMessage(sessionId, branchId, "user", "old unique searchterm alpha", oldDate)
       yield* addMessage(sessionId, branchId, "user", "new unique searchterm beta", recentDate)
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("searchterm", {
         dateAfter: FIXED_NOW_MILLIS - ONE_DAY_MILLIS,
       })
@@ -134,7 +133,7 @@ describe("searchMessages", () => {
       yield* addMessage(first.sessionId, first.branchId, "user", "shared-session-filter-term")
       yield* addMessage(second.sessionId, second.branchId, "user", "shared-session-filter-term")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("shared-session-filter-term", {
         sessionId: first.sessionId,
       })
@@ -165,7 +164,7 @@ describe("searchMessages", () => {
         "workspace isolated search term",
       ).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_B))
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore
         .searchMessages("workspace isolated search term")
         .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
@@ -184,7 +183,7 @@ describe("searchMessages", () => {
       yield* addMessage(sessionId, branchId, "user", "datebefore searchterm beta", recentDate)
 
       const cutoff = FIXED_NOW_MILLIS - ONE_DAY_MILLIS
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("datebefore searchterm", {
         dateBefore: cutoff,
       })
@@ -200,14 +199,14 @@ describe("searchMessages", () => {
         yield* addMessage(sessionId, branchId, "user", `limitword item ${i}`)
       }
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("limitword", { limit: 2 })
       expect(results.length).toBeLessThanOrEqual(2)
     }))
 
   test("returns empty array for no matches", () =>
     Effect.gen(function* () {
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("xyznonexistentkeyword999")
       expect(results).toEqual([])
     }))
@@ -217,7 +216,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture({ sessionName: "My Test Session" })
       yield* addMessage(sessionId, branchId, "user", "unique namedtest content")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("namedtest")
       const match = results.find((r) => r.sessionId === sessionId)
       expect(match).toBeDefined()
@@ -229,7 +228,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "hello world or something")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       // "hello OR" → '"hello" "OR"' — matches because message contains "or"
       const results = yield* searchStore.searchMessages("hello OR")
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
@@ -240,7 +239,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "cats and dogs not animals")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       // Operators treated as literal words — message contains "and", "not"
       const results = yield* searchStore.searchMessages("cats AND NOT dogs")
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
@@ -251,7 +250,7 @@ describe("searchMessages", () => {
       const { sessionId, branchId } = yield* createFixture()
       yield* addMessage(sessionId, branchId, "user", "special punctuation test here")
 
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       // Quotes, asterisks, and other FTS5 syntax chars should be stripped safely
       const results = yield* searchStore.searchMessages('"special" test*')
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
@@ -259,14 +258,14 @@ describe("searchMessages", () => {
 
   test("returns empty array for query that is only operators", () =>
     Effect.gen(function* () {
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("OR AND NOT")
       expect(results).toEqual([])
     }))
 
   test("returns empty array for empty query", () =>
     Effect.gen(function* () {
-      const searchStore = yield* SearchStorage
+      const searchStore = yield* MessageStorage
       const results = yield* searchStore.searchMessages("")
       expect(results).toEqual([])
     }))

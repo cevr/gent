@@ -26,7 +26,6 @@ import type { ExtensionRegistryService } from "./extensions/registry.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { SearchStorage } from "../storage/search-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { Message, type MessageMetadata } from "../domain/message.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -131,7 +130,6 @@ export const makeExtensionHostContextProvider = (
     const branches = yield* facet(BranchStorage, "BranchStorage")
     const messages = yield* facet(MessageStorage, "MessageStorage")
     const relationships = yield* facet(RelationshipStorage, "RelationshipStorage")
-    const search = yield* facet(SearchStorage, "SearchStorage")
     const agents = yield* facet(AgentRunnerService, "AgentRunnerService")
     const mutations = yield* facet(SessionMutations, "SessionMutations")
     // Enumerating a workspace's loops needs only the actor state registry,
@@ -215,7 +213,7 @@ export const makeExtensionHostContextProvider = (
             service.renameSession({ sessionId: runInfo.sessionId, name }),
           ).pipe(Effect.mapError(sessionError("renameCurrent"))),
         search: (query, options) =>
-          search((storage) => storage.searchMessages(query, options)).pipe(
+          messages((storage) => storage.searchMessages(query, options)).pipe(
             Effect.map((results) =>
               results.map((result) =>
                 ExtensionHostSearchResult.make({
