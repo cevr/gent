@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { dateFromMillis, Message } from "../../src/domain/message"
-import { estimateTokens } from "../../src/runtime/context-estimation"
+import { estimateTokens } from "../../src/runtime/model-context"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))

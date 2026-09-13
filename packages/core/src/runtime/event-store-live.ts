@@ -13,6 +13,7 @@ import {
 } from "../domain/session-pubsub-registry.js"
 import { EventStorage, type EventStorageError } from "../storage/event-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
+import { omitUndefined } from "../domain/guards.js"
 
 const toEventStoreError =
   (message: string) =>
@@ -32,9 +33,8 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
         append: Effect.fn("EventStore.append")(function* (event) {
           yield* rejectStreamMarker(event)
           const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
-          const appendOptions = Option.match(currentSpan, {
-            onNone: () => ({}),
-            onSome: (span) => ({ traceId: span.traceId }),
+          const appendOptions = omitUndefined({
+            traceId: Option.getOrUndefined(Option.map(currentSpan, (span) => span.traceId)),
           })
           const envelope = yield* eventStorage
             .appendEvent(event, appendOptions)

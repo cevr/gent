@@ -1294,3 +1294,17 @@ state module ignored its parameter and had no caller;
 and `invalidateKey` had no reader, so the deduper is a plain function.
 `DependencyOverrides.eventStoreMode` had one writer that wrote the default,
 so the field and `makeBaseEventStoreLayer` are gone.
+
+## Sixth pass, group B: one way to drop an absent field (2026-09-13)
+
+Twenty sites wrote the same four-line `Option.match(x, { onNone: () => ({}),
+onSome: (v) => ({ k: v }) })` to omit an undefined key before a schema
+constructor. `config-service.ts` already held the general form privately as
+`definedFields`. It is now `omitUndefined` in `domain/guards.ts`, on the
+extension api barrel, and every site is one object literal.
+`turn-resolve.ts` `applyAgentOverrides` went from 31 lines to 12. The
+duplicate `isRecord` in `model-registry.ts` uses the shared guard.
+`context-estimation.ts` held one estimator whose only consumer,
+`model-context.ts`, already declared the same JSON encoder and the same
+chars/4 rule; `estimateTokens` now lives beside the other two estimators
+and the file is gone.

@@ -9,6 +9,7 @@ import {
   Schema,
 } from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
+import { omitUndefined } from "../../domain/guards.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ExtensionId, RpcId } from "../../domain/ids.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
@@ -305,29 +306,17 @@ const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): 
   const displayName = Option.flatMap(slash, (value) => Option.fromUndefinedOr(value.name))
   const category = Option.flatMap(slash, (value) => Option.fromUndefinedOr(value.category))
   const keybind = Option.flatMap(slash, (value) => Option.fromUndefinedOr(value.keybind))
-  return Object.assign(
-    {
-      name,
-      extensionId,
-      capabilityId: String(cap.id),
-    },
-    Option.match(displayName, {
-      onNone: () => ({}),
-      onSome: (value) => ({ displayName: value }),
+  return {
+    name,
+    extensionId,
+    capabilityId: String(cap.id),
+    ...omitUndefined({
+      displayName: Option.getOrUndefined(displayName),
+      description: Option.getOrUndefined(description),
+      category: Option.getOrUndefined(category),
+      keybind: Option.getOrUndefined(keybind),
     }),
-    Option.match(description, {
-      onNone: () => ({}),
-      onSome: (value) => ({ description: value }),
-    }),
-    Option.match(category, {
-      onNone: () => ({}),
-      onSome: (value) => ({ category: value }),
-    }),
-    Option.match(keybind, {
-      onNone: () => ({}),
-      onSome: (value) => ({ keybind: value }),
-    }),
-  )
+  }
 }
 
 /** Compile prevalidated extensions into an immutable resolved snapshot. */

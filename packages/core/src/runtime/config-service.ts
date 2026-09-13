@@ -12,6 +12,7 @@ import {
 } from "effect"
 import { AgentName, AgentRunOverridesSchema, DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
+import { omitUndefined } from "../domain/guards.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 
 // User config schema - stored at ~/.gent/config.json
@@ -39,15 +40,6 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   agents: Schema.optional(Schema.Record(AgentName, AgentRunOverridesSchema)),
 }) {}
 
-/** Drop explicit `undefined` so a partial update cannot erase a stored field. */
-const definedFields = (fields: Partial<UserConfig>): Partial<UserConfig> => {
-  const kept: Partial<UserConfig> = {}
-  for (const [key, value] of Object.entries(fields)) {
-    if (!Predicate.isUndefined(value)) Object.assign(kept, { [key]: value })
-  }
-  return kept
-}
-
 /** An empty list or record is stored as an absent field. */
 const nonEmpty = <A>(items: ReadonlyArray<A>) =>
   Option.getOrUndefined(Option.liftPredicate(items, (list) => list.length > 0))
@@ -58,7 +50,7 @@ const nonEmptyRecord = <A>(record: Readonly<Record<AgentName, A>>) =>
 /** Pure user-config transitions shared by the live and in-memory services. */
 const configUpdates = {
   set: (current: UserConfig, partial: Partial<UserConfig>): UserConfig =>
-    new UserConfig({ ...current, ...definedFields(partial) }),
+    new UserConfig({ ...current, ...omitUndefined(partial) }),
   addPermissionRule: (current: UserConfig, rule: PermissionRule): UserConfig =>
     new UserConfig({ ...current, permissions: [...(current.permissions ?? []), rule] }),
   removePermissionRule: (current: UserConfig, tool: string, pattern?: string): UserConfig =>

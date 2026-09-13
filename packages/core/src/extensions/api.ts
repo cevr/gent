@@ -132,7 +132,7 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
-export { isRecord, isRecordArray } from "../domain/guards.js"
+export { isRecord, isRecordArray, omitUndefined } from "../domain/guards.js"
 export { headTailChars } from "../domain/head-tail.js"
 // ── Public API ──
 

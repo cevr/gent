@@ -7,6 +7,7 @@ import {
   request,
   tool,
   type TurnAfterInput,
+  omitUndefined,
 } from "@gent/core/extensions/api"
 import {
   GOAL_CONTEXT_MESSAGE_TYPE,
@@ -105,10 +106,7 @@ const createGoal = (input: CreateGoalInput) =>
           branchId: ctx.branchId,
           objective,
           status: "active",
-          ...Option.match(tokenBudget, {
-            onNone: () => ({}),
-            onSome: (budget) => ({ tokenBudget: budget }),
-          }),
+          ...omitUndefined({ tokenBudget: Option.getOrUndefined(tokenBudget) }),
           tokensUsed: 0,
           timeUsedMs: 0,
           continuationsUsed: 0,
@@ -160,9 +158,10 @@ const setStatus = (change: StatusChange) =>
           ...current.value,
           status: change.status,
           continuationsUsed,
-          ...Option.match(tokenBudget, {
-            onNone: () => ({}),
-            onSome: (budget) => ({ tokenBudget: current.value.tokensUsed + budget }),
+          ...omitUndefined({
+            tokenBudget: Option.getOrUndefined(
+              Option.map(tokenBudget, (budget) => current.value.tokensUsed + budget),
+            ),
           }),
           updatedAt: yield* now,
         }
@@ -351,14 +350,7 @@ const toolResult = (goal: Option.Option<GoalState>, report?: string) =>
     onNone: (): typeof GoalToolResult.Type => ({}),
     onSome: (value): typeof GoalToolResult.Type => ({
       goal: value,
-      ...Option.match(remainingTokens(value), {
-        onNone: () => ({}),
-        onSome: (remaining) => ({ remainingTokens: remaining }),
-      }),
-      ...Option.match(Option.fromUndefinedOr(report), {
-        onNone: () => ({}),
-        onSome: (text) => ({ report: text }),
-      }),
+      ...omitUndefined({ remainingTokens: Option.getOrUndefined(remainingTokens(value)), report }),
     }),
   })
 

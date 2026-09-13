@@ -1,4 +1,5 @@
 import { Effect, Option, Predicate } from "effect"
+import { omitUndefined } from "../../domain/guards.js"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
@@ -73,38 +74,17 @@ const applyAgentOverrides = (
       ),
   })
 
-  return AgentDefinition.make(
-    Object.assign(
-      { ...agent },
-      Option.match(override, {
-        onNone: () => ({}),
-        onSome: (value) =>
-          Object.assign(
-            {},
-            Option.match(Option.fromUndefinedOr(value.modelId), {
-              onNone: () => ({}),
-              onSome: (model) => ({ model }),
-            }),
-            Option.match(Option.fromUndefinedOr(value.allowedTools), {
-              onNone: () => ({}),
-              onSome: (allowedTools) => ({ allowedTools }),
-            }),
-            Option.match(Option.fromUndefinedOr(value.deniedTools), {
-              onNone: () => ({}),
-              onSome: (deniedTools) => ({ deniedTools }),
-            }),
-            Option.match(Option.fromUndefinedOr(value.reasoningEffort), {
-              onNone: () => ({}),
-              onSome: (reasoningEffort) => ({ reasoningEffort }),
-            }),
-          ),
-      }),
-      Option.match(systemPromptAddendum, {
-        onNone: () => ({}),
-        onSome: (value) => ({ systemPromptAddendum: value }),
-      }),
-    ),
-  )
+  const value = Option.getOrUndefined(override)
+  return AgentDefinition.make({
+    ...agent,
+    ...omitUndefined({
+      model: value?.modelId,
+      allowedTools: value?.allowedTools,
+      deniedTools: value?.deniedTools,
+      reasoningEffort: value?.reasoningEffort,
+      systemPromptAddendum: Option.getOrUndefined(systemPromptAddendum),
+    }),
+  })
 }
 
 export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {

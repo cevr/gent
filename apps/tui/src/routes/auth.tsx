@@ -3,6 +3,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste } from "@opentui/solid"
 import { Effect, Fiber, Option } from "effect"
 import type { SessionId } from "@gent/core/protocol"
+import { omitUndefined } from "@gent/core-internal/domain/guards.js"
 import { LinkOpener } from "../services/link-opener"
 import { useTheme } from "../theme/index"
 import { useRuntime } from "../hooks/use-runtime"
@@ -107,17 +108,9 @@ export function Auth(props: AuthProps) {
     const agentName = Option.fromNullishOr(clientCtx.agent())
     clientCtx.log.info("auth:load-start")
     send(AuthEvent.cases.LoadStarted.make({}))
-    const providerRequest = Option.match(agentName, {
-      onNone: () =>
-        Option.match(sessionId, {
-          onNone: () => ({}),
-          onSome: (value) => ({ sessionId: value }),
-        }),
-      onSome: (value) =>
-        Option.match(sessionId, {
-          onNone: () => ({ agentName: value }),
-          onSome: (id) => ({ agentName: value, sessionId: id }),
-        }),
+    const providerRequest = omitUndefined({
+      agentName: Option.getOrUndefined(agentName),
+      sessionId: Option.getOrUndefined(sessionId),
     })
     cast(
       Effect.all([

@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Schema, SynchronizedRef, FileSystem, Path } from "effect"
+import { isRecord, omitUndefined } from "../domain/guards.js"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { Auth } from "../domain/auth.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
@@ -36,8 +37,6 @@ const CacheLoad = Schema.TaggedUnion({
 })
 type CacheLoad = Schema.Schema.Type<typeof CacheLoad>
 
-const isRecord = Schema.is(Schema.JsonObject)
-
 const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing> =>
   Option.fromUndefinedOr(value).pipe(Option.map(({ input, output }) => ({ input, output })))
 
@@ -63,23 +62,15 @@ const parseModelsDev = (data: Schema.Json): readonly Model[] => {
       const id = ModelId.make(`${providerId}/${modelKey}`)
 
       models.push(
-        Model.make(
-          Object.assign(
-            {
-              id,
-              name,
-              provider: ProviderId.make(providerId),
-            },
-            Option.match(contextLength, {
-              onNone: () => ({}),
-              onSome: (value) => ({ contextLength: value }),
-            }),
-            Option.match(pricing, {
-              onNone: () => ({}),
-              onSome: (value) => ({ pricing: value }),
-            }),
-          ),
-        ),
+        Model.make({
+          id,
+          name,
+          provider: ProviderId.make(providerId),
+          ...omitUndefined({
+            contextLength: Option.getOrUndefined(contextLength),
+            pricing: Option.getOrUndefined(pricing),
+          }),
+        }),
       )
     }
   }

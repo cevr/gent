@@ -28,6 +28,7 @@ import {
   type ReasoningEffort,
 } from "@gent/core/protocol"
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
+import { omitUndefined } from "@gent/core-internal/domain/guards.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { useRequiredContext } from "../utils/solid-context"
@@ -499,10 +500,7 @@ export function ClientProvider(props: ClientProviderProps) {
           return
         }
 
-        const request = Option.match(sessionId, {
-          onNone: () => ({}),
-          onSome: (value) => ({ sessionId: value }),
-        })
+        const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
         cast(
           client.extension.listStatus(request).pipe(
             Effect.tap((nextHealth) =>

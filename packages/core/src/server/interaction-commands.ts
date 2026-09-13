@@ -1,4 +1,4 @@
-import { Predicate, Effect, Layer, Context, Option } from "effect"
+import { Predicate, Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -9,6 +9,7 @@ import type { GentRpcError } from "./errors.js"
 import type { BranchStorage } from "../storage/branch-storage.js"
 import type { SessionStorage } from "../storage/session-storage.js"
 import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
+import { omitUndefined } from "../domain/guards.js"
 
 export interface RespondInteractionInput {
   readonly requestId: InteractionRequestId
@@ -62,10 +63,7 @@ export class InteractionCommands extends Context.Service<
           const decision = {
             approved: input.approved,
             notes: input.notes,
-            ...Option.match(Option.fromUndefinedOr(input.editedContent), {
-              onNone: () => ({}),
-              onSome: (editedContent) => ({ editedContent }),
-            }),
+            ...omitUndefined({ editedContent: input.editedContent }),
           }
           // 1. Store resolution durably so re-entering present() finds it
           yield* approvalService.storeResolution(input.requestId, decision)

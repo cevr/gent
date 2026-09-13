@@ -2,7 +2,6 @@ import { Option, Result, Schema } from "effect"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import { Message, MessageRole } from "../domain/message.js"
 import { MessageId, ToolCallId } from "../domain/ids.js"
-import { estimateTokens } from "./context-estimation.js"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"
 
 /** Output budget used by the native model request and its context projection. */
@@ -11,6 +10,33 @@ export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
+
+/** Estimate the tokens occupied by a run of messages: ~4 chars per token. */
+export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
+  let chars = 0
+  for (const msg of messages) {
+    for (const part of msg.parts) {
+      switch (part.type) {
+        case "text":
+          chars += part.text.length
+          break
+        case "tool-call":
+          chars += encodeJson(part.params).length
+          break
+        case "tool-result":
+          chars += encodeJson(part.result).length
+          break
+        case "file":
+          chars += 1000 // ~250 tokens estimate for image references
+          break
+        case "reasoning":
+          chars += part.text.length
+          break
+      }
+    }
+  }
+  return Math.ceil(chars / 4)
+}
 
 /** Estimate the tokens occupied by the resolved system prompt. */
 export const estimateSystemPromptTokens = (systemPrompt: string): number =>

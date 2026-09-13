@@ -8,8 +8,11 @@ import {
   messagesInCurrentWindow,
   windowMarkerMessage,
 } from "../../src/runtime/model-context-window"
-import { estimateTokens } from "../../src/runtime/context-estimation"
-import { ModelContextBudget, projectModelContext } from "../../src/runtime/model-context"
+import {
+  estimateTokens,
+  ModelContextBudget,
+  projectModelContext,
+} from "../../src/runtime/model-context"
 
 const sessionId = SessionId.make("window-session")
 const branchId = BranchId.make("window-branch")

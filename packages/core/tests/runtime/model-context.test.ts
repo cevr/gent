@@ -3,8 +3,8 @@ import { Option, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { dateFromMillis, Message, type MessagePart } from "../../src/domain/message"
-import { estimateTokens } from "../../src/runtime/context-estimation"
 import {
+  estimateTokens,
   ModelContextBudget,
   ModelContextError,
   ModelContextProjection,
