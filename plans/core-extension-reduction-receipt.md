@@ -1167,3 +1167,10 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   `SessionStorage` pruned it on delete; the reader lived in a third module.
   `MessageStorage.searchMessages` now reads the index the same store writes.
   One Tag, one layer line, and one facet binding fewer.
+
+## One integration root (2026-09-13)
+
+- `in-process-layer.ts` restated the E2E root with two differences: the
+  stub tool runner and a debug model. `E2ELayerConfig.toolRunner: "test"`
+  carries the first; `baseLocalLayer` and `baseLocalLayerWithProvider` are
+  now adapters over `createE2ELayer` and their eight callers are unchanged.

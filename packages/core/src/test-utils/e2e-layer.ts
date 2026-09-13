@@ -25,6 +25,7 @@ import { ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
 import { makeServerRootLayer } from "../server/server-root.js"
+import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,
@@ -61,6 +62,8 @@ export interface E2ELayerConfig {
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
+  /** `"test"` installs the stub tool runner; default runs the live one. */
+  readonly toolRunner?: "test" | "live"
   /** Auth override. Use for public RPC auth failure-path tests. */
   readonly authLayer?: Layer.Layer<Auth>
   /**
@@ -160,6 +163,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   if (config.subagentRunner !== "live") {
     subagentRunnerLayer = Option.some(stubAgentRunnerLayer(config.subagentRunner))
   }
+  let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
+  if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
   return makeServerRootLayer({
     observability: testObservability,
@@ -180,6 +185,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
         sessionProfileCacheLayer: config.sessionProfileCacheLayer,
         agentRunnerLayer: Option.getOrUndefined(subagentRunnerLayer),
+        toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
         extraLayers: config.extraLayers,
       },
     },
