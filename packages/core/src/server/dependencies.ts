@@ -17,7 +17,7 @@ import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { DebugSlowLanguageModelDelayMs, LanguageModelLayers } from "../test-utils/language-model.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { InProcessRunner, type AgentRunnerConfig } from "../runtime/agent/agent-runner.js"
+import { InProcessRunner } from "../runtime/agent/agent-runner.js"
 import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
 import { AgentLoopLiveActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
@@ -287,24 +287,12 @@ const makeSessionProfileCacheLayer = <A, E, R>(
 
 const makeAgentRuntimeLayer = <A, E, R>(
   config: DependenciesConfig,
-  getBaseSectionsSeed: () => Option.Option<ReadonlyArray<PromptSection>>,
   allWithRuntime: Layer.Layer<A, E, R>,
 ) => {
   const override = config.overrides?.agentRunnerLayer
   if (!Predicate.isUndefined(override)) return override
   return Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const baseSectionsSeed = getBaseSectionsSeed()
-        if (Option.isNone(baseSectionsSeed)) {
-          return yield* new BootstrapError({ seed: "baseSections" })
-        }
-        const runnerConfig: AgentRunnerConfig = {
-          baseSections: baseSectionsSeed.value,
-        }
-        return InProcessRunner(runnerConfig).pipe(Layer.provideMerge(ChildCompletionDelivery.Live))
-      }),
-    ),
+    InProcessRunner.pipe(Layer.provideMerge(ChildCompletionDelivery.Live)),
     allWithRuntime,
   )
 }
@@ -506,7 +494,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const allWithRuntime = Layer.mergeAll(allDeps, sessionMutationsLive, sessionRuntimeLive)
 
-  const agentRuntimeLive = makeAgentRuntimeLayer(config, () => baseSectionsSeed, allWithRuntime)
+  const agentRuntimeLive = makeAgentRuntimeLayer(config, allWithRuntime)
   const runtimeWithHandlers = Layer.provideMerge(
     Layer.unwrap(
       Effect.gen(function* () {

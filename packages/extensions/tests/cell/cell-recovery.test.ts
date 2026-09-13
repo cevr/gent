@@ -11,7 +11,7 @@ import {
 } from "@gent/core-internal/domain/agent.js"
 import { ControlChildAgent } from "../../src/delegate/child-agent-tools.js"
 import { DelegateTool } from "../../src/delegate/delegate-tool.js"
-import { makeDurableAgentRunRuntime } from "@gent/core-internal/runtime/agent/agent-runner.durable.js"
+import { admitChildSession } from "@gent/core-internal/runtime/agent/agent-runner.js"
 import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-storage.js"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-projection.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -248,7 +248,7 @@ it.scopedLive(
               input: { agent: DEFAULT_AGENT_NAME, prompt },
             })
             const toolCallId = admitted.operation.toolCallId
-            yield* (yield* makeDurableAgentRunRuntime).createDurableAgentRunSession({
+            yield* admitChildSession({
               agent: { name: DEFAULT_AGENT_NAME },
               prompt,
               cwd: "/tmp",

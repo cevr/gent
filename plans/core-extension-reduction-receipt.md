@@ -945,3 +945,27 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   `session-metrics.test.ts` (known sum equals the stream totals; a step
   without usage leaves the receipt absent). The cell foreground test still
   reads `metadata.toolCalls` unchanged.
+
+## One runner file (2026-09-13)
+
+- `agent-runner.durable.ts` (460 lines) and `agent-runner.ts` were one
+  module split by a 50-line `DurableAgentRunRuntime` interface with one
+  adapter. The runner re-mapped `StorageError`/`EventStoreError` to
+  `AgentRunError` at four call sites, re-provided services the durable half
+  had already yielded, and wrapped two event constructors in named helpers.
+- Now `agent-runner.ts` alone: `admitChildSession` (exported, module-level
+  `Effect.fn` that yields its services; the one admission path for `start`,
+  `run`, and the cell recovery test) and `getSessionDepth`; `inspect`,
+  `cancel`, `list`, `start`, `run` in the layer. Errors become
+  `AgentRunError` once, at the source (`asAgentRunError`).
+  `AgentRunSucceeded`/`AgentRunFailed` are built inline from one receipt
+  record. `inspect` no longer opens a transaction or re-reads the branch
+  row: the start row and the session row are the ownership check.
+- Deleted: `AgentRunnerConfig` (`baseSections` was never read;
+  `timeoutMs` had one test and no caller), `runWithTimeout`,
+  `publishAgentSwitch` (an `AgentSwitched main→agent` event nobody
+  consumed), and the `BootstrapError` branch in `makeAgentRuntimeLayer`.
+  `InProcessRunner` is a plain `Layer`. `read_session` drops its
+  "ephemeral runs are not persisted" hint: every run is a session now.
+- Tests: the timeout case is gone with the config; three admission tests
+  call `admitChildSession` and `AgentRunnerService` directly.

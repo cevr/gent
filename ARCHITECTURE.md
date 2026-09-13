@@ -317,7 +317,6 @@ Shape:
   durable attempt accounting; this metadata alone does not enforce a budget.
 - interactions are cold machine states, not blocked fibers
 - machine inspection events are published as diagnostics
-- `AgentRunnerConfig` is a plain interface passed to `InProcessRunner`, not a service
 
 Do not rebuild business logic from inspection events. They are receipts, not inputs.
 

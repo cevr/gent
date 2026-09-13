@@ -105,16 +105,14 @@ export const ReadSessionTool = tool({
   execute: Effect.fn("ReadSessionTool.execute")(function* (params: typeof ReadSessionParams.Type) {
     const ctx = yield* ExtensionContext
     const session = ctx.Session
-    const tree = yield* session.getDetail(SessionId.make(params.sessionId)).pipe(
-      Effect.mapError((e) => {
-        let message = `Failed to load session: ${e.message}`
-        if (e.message.includes("Session not found:")) {
-          message +=
-            ". Ephemeral helper-agent runs are not persisted and cannot be read back with read_session."
-        }
-        return new ReadSessionError({ message, cause: e })
-      }),
-    )
+    const tree = yield* session
+      .getDetail(SessionId.make(params.sessionId))
+      .pipe(
+        Effect.mapError(
+          (e) =>
+            new ReadSessionError({ message: `Failed to load session: ${e.message}`, cause: e }),
+        ),
+      )
 
     const targetBranchId = Option.fromNullishOr(params.branchId).pipe(
       Option.orElse(() =>
