@@ -23,7 +23,7 @@ import { Effect } from "effect"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer, type E2ELayerConfig } from "./e2e-layer.js"
 
-export interface RpcHarnessConfig extends Pick<
+interface RpcHarnessConfig extends Pick<
   E2ELayerConfig,
   | "providerLayer"
   | "extensions"

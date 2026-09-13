@@ -21,7 +21,7 @@ import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/provider-error.js"
 import { CurrentResolveModelAssertion } from "../providers/model-resolver.js"
 
-export type LanguageModelToolMap = Record<string, AiTool.Any>
+type LanguageModelToolMap = Record<string, AiTool.Any>
 export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = LanguageModelToolMap> =
   Response.StreamPart<Tools>
 
@@ -41,7 +41,7 @@ export interface SequenceStep {
   readonly gated?: boolean
 }
 
-export interface SequenceLanguageModelControls {
+interface SequenceLanguageModelControls {
   readonly waitForCall: (index: number) => Effect.Effect<void>
   readonly emitAll: (index: number) => Effect.Effect<void>
   readonly callCount: Effect.Effect<number>
@@ -208,7 +208,7 @@ const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => 
   )
 }
 
-export const makeLanguageModelLayer = (params: {
+const makeLanguageModelLayer = (params: {
   readonly streamText: (
     options: ProviderOptions,
   ) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>

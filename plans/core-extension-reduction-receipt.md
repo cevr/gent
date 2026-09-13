@@ -1202,3 +1202,15 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   `serviceOption`. The seam is between two extensions, so the contract lives
   with the asker: `extensions/src/compaction/tool-contracts.ts`. Core loses
   66 lines and two names from the `branch-tools` barrel.
+
+## One receipt shape for the four durable mutations (2026-09-13)
+
+- `SessionOperationStorage` had four get/save pairs (`getCreateSession`,
+  `saveCreateBranch`, …) that differed only in operation name and codec, and
+  `session-mutations-live.ts` repeated the same pre-check, in-transaction
+  re-check, and save around each. The storage now has `getReceipt` and
+  `saveReceipt` over a `DurableOperation<A>` descriptor, and the mutations
+  have one `once(operation, input, subject, work)` helper. Validation reads
+  moved inside the guarded work: the replay-after-restart tests pin that a
+  receipt wins before any current-state lookup. Net −69 lines.
+- Eight test-utils names no other file named lost their `export`.

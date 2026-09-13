@@ -11,7 +11,10 @@ import { MessageStorage } from "../../src/storage/message-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
-import { SessionOperationStorage } from "../../src/storage/session-operation-storage"
+import {
+  DurableOperations,
+  SessionOperationStorage,
+} from "../../src/storage/session-operation-storage"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import { AgentSwitched } from "../../src/domain/event"
 import { AgentName } from "../../src/domain/agent"
@@ -422,11 +425,12 @@ describe("Sessions", () => {
           },
         ],
       })
-      yield* operations.saveCreateSession(RequestId.make("projection-cascade-request"), {
-        sessionId,
-        branchId,
-        name: "Projection cascade",
-      })
+      yield* operations.saveReceipt(
+        DurableOperations.createSession,
+        RequestId.make("projection-cascade-request"),
+        { sessionId, branchId, name: "Projection cascade" },
+        { sessionId, branchId },
+      )
 
       yield* sessions.deleteSession(sessionId)
 

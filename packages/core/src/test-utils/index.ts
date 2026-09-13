@@ -45,7 +45,7 @@ export interface CallRecord {
 
 // Sequence Recorder Service
 
-export interface SequenceRecorderService {
+interface SequenceRecorderService {
   readonly record: (call: Omit<CallRecord, "timestamp">) => Effect.Effect<void>
   readonly getCalls: Effect.Effect<ReadonlyArray<CallRecord>>
   readonly clear: Effect.Effect<void>
@@ -211,7 +211,7 @@ export const assertSequence = (
 // ── Test Extension Host ──
 
 /** Facts the test extension host reports to `setup` Effects. */
-export interface TestExtensionHostFacts {
+interface TestExtensionHostFacts {
   readonly cwd: string
   readonly source: string
   readonly home: string

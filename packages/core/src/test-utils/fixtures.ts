@@ -18,7 +18,7 @@ export const makeTempDirectoryScoped = (prefix: string) =>
     (dir) => Effect.sync(() => fs.rmSync(dir, { recursive: true, force: true })),
   )
 
-export interface WorkerEnvOptions {
+interface WorkerEnvOptions {
   readonly providerMode?: string
   readonly includeAuthFiles?: boolean
   // oxlint-disable-next-line effect/noNullish -- Process environments use undefined values for absent entries.

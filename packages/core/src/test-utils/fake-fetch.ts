@@ -49,7 +49,7 @@ type FakeFetchFn = (
   init?: globalThis.RequestInit,
 ) => Promise<Response>
 
-export const makeFakeFetch =
+const makeFakeFetch =
   (
     state: FakeFetchState,
     responder: (req: CapturedRequest) => {

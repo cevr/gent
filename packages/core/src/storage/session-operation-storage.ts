@@ -5,10 +5,6 @@ import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "../domain
 import { StorageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
-const CREATE_SESSION_OPERATION = "session.create"
-const CREATE_BRANCH_OPERATION = "branch.create"
-const FORK_BRANCH_OPERATION = "branch.fork"
-const SWITCH_BRANCH_OPERATION = "branch.switch"
 const START_AGENT_OPERATION = "agent.start"
 const CANCEL_TURN_OPERATION = "turn.cancel"
 const CHILD_MODEL_BUDGET_OPERATION = "agent.model-budget"
@@ -54,10 +50,6 @@ export const StoredCreateSessionResult = Schema.Struct({
 })
 export type StoredCreateSessionResult = typeof StoredCreateSessionResult.Type
 
-const StoredCreateSessionResultJson = Schema.fromJsonString(StoredCreateSessionResult)
-const encodeStoredCreateSessionResult = Schema.encodeEffect(StoredCreateSessionResultJson)
-const decodeStoredCreateSessionResult = Schema.decodeUnknownEffect(StoredCreateSessionResultJson)
-
 export const StoredBranchResult = Schema.Struct({
   branchId: BranchId,
 })
@@ -70,13 +62,31 @@ export const StoredSwitchBranchResult = Schema.Struct({
 })
 export type StoredSwitchBranchResult = typeof StoredSwitchBranchResult.Type
 
-const StoredBranchResultJson = Schema.fromJsonString(StoredBranchResult)
-const encodeStoredBranchResult = Schema.encodeEffect(StoredBranchResultJson)
-const decodeStoredBranchResult = Schema.decodeUnknownEffect(StoredBranchResultJson)
+/**
+ * A mutation whose result is kept per request id, so a retry replays the
+ * receipt instead of repeating the work.
+ */
+export interface DurableOperation<A> {
+  readonly name: string
+  readonly json: Schema.Codec<A, string>
+}
 
-const StoredSwitchBranchResultJson = Schema.fromJsonString(StoredSwitchBranchResult)
-const encodeStoredSwitchBranchResult = Schema.encodeEffect(StoredSwitchBranchResultJson)
-const decodeStoredSwitchBranchResult = Schema.decodeUnknownEffect(StoredSwitchBranchResultJson)
+const durableOperation = <A, I>(name: string, result: Schema.Codec<A, I>): DurableOperation<A> => ({
+  name,
+  json: Schema.fromJsonString(result),
+})
+
+export const DurableOperations = {
+  createSession: durableOperation("session.create", StoredCreateSessionResult),
+  createBranch: durableOperation("branch.create", StoredBranchResult),
+  forkBranch: durableOperation("branch.fork", StoredBranchResult),
+  switchBranch: durableOperation("branch.switch", StoredSwitchBranchResult),
+}
+
+interface OperationSubject {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
 
 interface SessionOperationStorageService {
   /** None: no admitted child. Some(false): exhausted. A successful reservation is never refunded. */
@@ -103,37 +113,16 @@ interface SessionOperationStorageService {
     requestId: RequestId,
     result: StoredAgentStartResult,
   ) => Effect.Effect<void, StorageError>
-  readonly getCreateSession: (
+  readonly getReceipt: <A>(
+    operation: DurableOperation<A>,
     requestId: RequestId,
     // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
-  ) => Effect.Effect<StoredCreateSessionResult | undefined, StorageError>
-  readonly saveCreateSession: (
+  ) => Effect.Effect<A | undefined, StorageError>
+  readonly saveReceipt: <A>(
+    operation: DurableOperation<A>,
     requestId: RequestId,
-    result: StoredCreateSessionResult,
-  ) => Effect.Effect<void, StorageError>
-  readonly getCreateBranch: (
-    requestId: RequestId,
-    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
-  ) => Effect.Effect<StoredBranchResult | undefined, StorageError>
-  readonly saveCreateBranch: (
-    requestId: RequestId,
-    result: StoredBranchResult,
-  ) => Effect.Effect<void, StorageError>
-  readonly getForkBranch: (
-    requestId: RequestId,
-    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
-  ) => Effect.Effect<StoredBranchResult | undefined, StorageError>
-  readonly saveForkBranch: (
-    requestId: RequestId,
-    result: StoredBranchResult,
-  ) => Effect.Effect<void, StorageError>
-  readonly getSwitchBranch: (
-    requestId: RequestId,
-    // oxlint-disable-next-line effect/noNullish -- Idempotency lookup uses undefined when no row exists.
-  ) => Effect.Effect<StoredSwitchBranchResult | undefined, StorageError>
-  readonly saveSwitchBranch: (
-    requestId: RequestId,
-    result: StoredSwitchBranchResult,
+    result: A,
+    subject: OperationSubject,
   ) => Effect.Effect<void, StorageError>
 }
 
@@ -172,7 +161,7 @@ export class SessionOperationStorage extends Context.Service<
         requestId: string,
         result: A,
         encode: (value: A) => Effect.Effect<string, unknown>,
-        subject: { readonly sessionId: SessionId; readonly branchId: BranchId },
+        subject: OperationSubject,
       ) {
         const workspaceId = yield* CurrentWorkspaceId
         const resultJson = yield* encode(result)
@@ -387,97 +376,33 @@ export class SessionOperationStorage extends Context.Service<
             ),
           Effect.mapError(mapError("Failed to save agent-start receipt")),
         ),
-        getCreateSession: Effect.fn("SessionOperationStorage.getCreateSession")(
-          function* (requestId) {
+        getReceipt: Effect.fn("SessionOperationStorage.getReceipt")(
+          function* <A>(operation: DurableOperation<A>, requestId: RequestId) {
             return yield* getOperation(
-              CREATE_SESSION_OPERATION,
+              operation.name,
               requestId,
-              decodeStoredCreateSessionResult,
+              Schema.decodeUnknownEffect(operation.json),
             )
           },
-          Effect.mapError(mapError("Failed to get create-session operation result")),
+          Effect.mapError(mapError("Failed to get operation receipt")),
         ),
 
-        saveCreateSession: Effect.fn("SessionOperationStorage.saveCreateSession")(
-          function* (requestId, result) {
+        saveReceipt: Effect.fn("SessionOperationStorage.saveReceipt")(
+          function* <A>(
+            operation: DurableOperation<A>,
+            requestId: RequestId,
+            result: A,
+            subject: OperationSubject,
+          ) {
             yield* saveOperation(
-              CREATE_SESSION_OPERATION,
+              operation.name,
               requestId,
               result,
-              encodeStoredCreateSessionResult,
-              { sessionId: result.sessionId, branchId: result.branchId },
+              Schema.encodeEffect(operation.json),
+              subject,
             )
           },
-          Effect.mapError(mapError("Failed to save create-session operation result")),
-        ),
-
-        getCreateBranch: Effect.fn("SessionOperationStorage.getCreateBranch")(
-          function* (requestId) {
-            return yield* getOperation(CREATE_BRANCH_OPERATION, requestId, decodeStoredBranchResult)
-          },
-          Effect.mapError(mapError("Failed to get create-branch operation result")),
-        ),
-
-        saveCreateBranch: Effect.fn("SessionOperationStorage.saveCreateBranch")(
-          function* (requestId, result) {
-            const sessionId = yield* sessionIdForBranch(result.branchId)
-            yield* saveOperation(
-              CREATE_BRANCH_OPERATION,
-              requestId,
-              result,
-              encodeStoredBranchResult,
-              { sessionId, branchId: result.branchId },
-            )
-          },
-          Effect.mapError(mapError("Failed to save create-branch operation result")),
-        ),
-
-        getForkBranch: Effect.fn("SessionOperationStorage.getForkBranch")(
-          function* (requestId) {
-            return yield* getOperation(FORK_BRANCH_OPERATION, requestId, decodeStoredBranchResult)
-          },
-          Effect.mapError(mapError("Failed to get fork-branch operation result")),
-        ),
-
-        saveForkBranch: Effect.fn("SessionOperationStorage.saveForkBranch")(
-          function* (requestId, result) {
-            const sessionId = yield* sessionIdForBranch(result.branchId)
-            yield* saveOperation(
-              FORK_BRANCH_OPERATION,
-              requestId,
-              result,
-              encodeStoredBranchResult,
-              {
-                sessionId,
-                branchId: result.branchId,
-              },
-            )
-          },
-          Effect.mapError(mapError("Failed to save fork-branch operation result")),
-        ),
-
-        getSwitchBranch: Effect.fn("SessionOperationStorage.getSwitchBranch")(
-          function* (requestId) {
-            return yield* getOperation(
-              SWITCH_BRANCH_OPERATION,
-              requestId,
-              decodeStoredSwitchBranchResult,
-            )
-          },
-          Effect.mapError(mapError("Failed to get switch-branch operation result")),
-        ),
-
-        saveSwitchBranch: Effect.fn("SessionOperationStorage.saveSwitchBranch")(
-          function* (requestId, result) {
-            yield* saveOperation(
-              SWITCH_BRANCH_OPERATION,
-              requestId,
-              result,
-              encodeStoredSwitchBranchResult,
-              { sessionId: result.sessionId, branchId: result.toBranchId },
-            )
-          },
-          Effect.mapError(mapError("Failed to save switch-branch operation result")),
+          Effect.mapError(mapError("Failed to save operation receipt")),
         ),
       } satisfies SessionOperationStorageService
     }),
