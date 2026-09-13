@@ -1535,3 +1535,28 @@ a `RunContext` copy; `setStartingState` and the exported
 `requireCurrentAgent`; `makeRunSpec` is `omitUndefined` (`d3b3f3ff`).
 Sixteenth-pass NO FINDING: the compactor's `hash` parameter stays (it
 crosses the extension seam). Core is 27,790 LOC at `d3b3f3ff`.
+
+## Seventeenth pass: server and storage (2026-09-13)
+
+Storage: eight identical `mapError` closures are `storageError` in
+`domain/storage-error.ts` (a StorageError passes through), and the
+tool-call-binding read mapper is that function; the four `Model.Class`
+tables plus `SqlModel.makeRepository` blocks existed for one insert each
+while every other statement was raw SQL, so the inserts are raw SQL
+(`fcf100d6`). Server: twelve handlers share `rpc(method, effect, fields,
+requestId)` for the wide-event tap and boundary; `once` delivers the
+envelope it produced and returns `{ result, fresh }`; `createBranchResult`
+(an identity) and `CreateBranchResult` deleted; `RequestIdSchema` and
+`ListAuthProvidersInput` aliases gone with their docblocks moved to the
+owning schemas; `summarizeToolOutput` deleted in favour of
+`summarizeOutput(part.result)` (`81df9093`). Seventeenth-pass NO
+FINDING: `session-utils.ts`/`extension-health.ts` merges (line-neutral),
+`ConnectionTracker`/`ServerIdentity` (real optional services), every RPC
+entry has a shipped client except `session.delete`, `searchMessages` and
+the relationship/operation storage methods (all traced to shipped callers),
+`SqliteStorage` Live/Memory/Test (three real implementations), the
+`inWorkspace` forwarders (a generic mapper needs `as`). Test-vehicle-only,
+left for the user: the `session.delete` chain (~120 LOC, a real product
+capability with no client), `DependencyOverrides.modelRegistryLayer`,
+`makeServerRootLayer`. Explorer verdict: one more storage pass at most;
+providers/ and domain/ are clean. Core is 27,656 LOC.
