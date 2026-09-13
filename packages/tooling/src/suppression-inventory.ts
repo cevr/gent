@@ -221,18 +221,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.",
   },
   {
-    file: "packages/core/src/runtime/agent/ephemeral-root.ts",
-    line: 85,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit extension-layer recovery membrane",
-  },
-  {
-    file: "packages/core/src/runtime/agent/ephemeral-root.ts",
-    line: 108,
-    kind: "effect-diagnostics",
-    text: ": // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous upstream shape feeds the recovery membrane",
-  },
-  {
     file: "packages/core/src/runtime/agent/tool-runner.ts",
     line: 280,
     kind: "effect-diagnostics",

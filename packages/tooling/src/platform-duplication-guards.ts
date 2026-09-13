@@ -139,14 +139,6 @@ const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
-const bannedAgentRunnerCompositionPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern:
-      /\b(?:SqliteStorage\.MemoryWithSql|SingleRunner\.layer|SessionRuntime\.Live|ResourceManagerLive|buildExtensionLayers|PromptPresenterLive|EventStoreLive)\b/,
-    message: "AgentRunner must use the ephemeral child root preset",
-  },
-]
-
 const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern: /@gent\/core-internal\//,
@@ -299,9 +291,6 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   if (serverRootConsumerFiles.has(file)) patterns.push(...bannedServerRootConsumerPatterns)
   if (file === "packages/core/src/server/transport-contract.ts") {
     patterns.push(...bannedTransportContractPatterns)
-  }
-  if (file === "packages/core/src/runtime/agent/agent-runner.ts") {
-    patterns.push(...bannedAgentRunnerCompositionPatterns)
   }
   return patterns
 }

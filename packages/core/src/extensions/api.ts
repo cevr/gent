@@ -63,7 +63,6 @@ export {
   AgentRunResult,
   AgentRunToolCallSchema,
   ChildAgentRegistryEntry,
-  getDurableAgentRunSessionId,
   AgentRunError,
 } from "../domain/agent.js"
 export { requireAgent, requireCurrentAgent } from "../domain/extension-services.js"

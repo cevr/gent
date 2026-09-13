@@ -27,7 +27,6 @@ import { makeDurableAgentRunRuntime } from "../../src/runtime/agent/agent-runner
 import { waitFor } from "../../src/test-utils/fixtures"
 import { messageSingleText } from "../../src/domain/message-part-projection"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { makeEphemeralAgentRootLayerFactory } from "../../src/runtime/agent/ephemeral-root"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -74,7 +73,6 @@ import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { loadAgentRunSuccessData } from "../../src/runtime/agent/agent-runner.metadata"
 import {
-  defineResource,
   defineExtension,
   ExtensionContext,
   ExtensionHost,
@@ -95,7 +93,7 @@ import {
   type SessionRuntimeService,
   type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
-import { BunCrypto, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   BranchToolWork,
   CurrentBranchToolFeature,
@@ -103,7 +101,6 @@ import {
   type BranchToolFeature,
 } from "../../src/runtime/agent/branch-tool-feature"
 import { eraseResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
-import { neverInterrupted } from "../../src/runtime/agent/turn-interruption.js"
 const bashStubTool = tool({
   id: "bash",
   description: "Stub bash tool for tests",
@@ -190,7 +187,7 @@ const makeLiveAgentRunnerLayer = (
     BunPlatformLive,
     ConfigService.Test(),
     ModelRegistry.Test(),
-    ephemeralParentServices,
+    parentServices,
     AgentLoopSessionGovernance.Live,
   )
   const sessionRuntimeLayer = Layer.effect(
@@ -231,7 +228,6 @@ const waitForCompletion = <E, R>(
     timeoutMs,
     "child completion",
   )
-// Extra services the parent context needs for ephemeral child runtime
 /** A branch-tool feature whose per-branch layer provides one recognizable service. */
 const probeBranchTools: BranchToolFeature<never> = {
   migrations: {},
@@ -240,7 +236,7 @@ const probeBranchTools: BranchToolFeature<never> = {
     eraseResourceLayer(Layer.succeed(BranchToolWork, BranchToolWork.of({ cancel: Effect.void }))),
 }
 
-const ephemeralParentDeps = Layer.mergeAll(
+const runnerDeps = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   BunPlatformLive,
   Permission.Live([], "allow"),
@@ -248,7 +244,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   ConfigService.Test(),
   ModelRegistry.Test(),
 )
-const ephemeralParentServices = Layer.mergeAll(
+const parentServices = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   Permission.Live([], "allow"),
   RuntimeEnvironment.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -313,93 +309,97 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     }),
   )
 describe("helper run spec propagation", () => {
-  it.scopedLive("an ephemeral child with inherited history sees the parent branch messages", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-        {
-          ...textStep("pelican"),
-          assertOptions: (options) => {
-            const texts = [...Prompt.make(options.prompt).content].flatMap((message) => {
-              if (message.role === "system") return []
-              return message.content
-                .filter((part): part is Prompt.TextPart => part.type === "text")
-                .map((part) => part.text)
-            })
-            expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
-            expect(texts.some((text) => text.includes("Noted."))).toBe(true)
-            // Hidden rows are outside the parent's own model view, so the child skips them too.
-            expect(texts.some((text) => text.includes("hidden bookkeeping"))).toBe(false)
-            expect(texts[texts.length - 1]).toContain("What is the codeword?")
+  it.scopedLive(
+    "a private child with inherited history sees the parent branch messages and leaves no session behind",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("pelican"),
+            assertOptions: (options) => {
+              const texts = [...Prompt.make(options.prompt).content].flatMap((message) => {
+                if (message.role === "system") return []
+                return message.content
+                  .filter((part): part is Prompt.TextPart => part.type === "text")
+                  .map((part) => part.text)
+              })
+              expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
+              expect(texts.some((text) => text.includes("Noted."))).toBe(true)
+              // Hidden rows are outside the parent's own model view, so the child skips them too.
+              expect(texts.some((text) => text.includes("hidden bookkeeping"))).toBe(false)
+              expect(texts[texts.length - 1]).toContain("What is the codeword?")
+            },
           },
-        },
-      ])
-      const layer = makeLiveAgentRunnerLayer(providerLayer)
-      yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const messages = yield* MessageStorage
-        const runner = yield* AgentRunnerService
-        const now = dateFromMillis(1_767_225_600_000)
-        const sessionId = SessionId.make("parent-history")
-        const branchId = BranchId.make("parent-history-branch")
-        yield* sessions.createSession(
-          new Session({ id: sessionId, name: "Parent", createdAt: now, updatedAt: now }),
-        )
-        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
-        yield* messages.createMessage(
-          Message.cases.regular.make({
-            id: MessageId.make("parent-history:user:1"),
-            sessionId,
-            branchId,
-            role: "user",
-            parts: [Prompt.textPart({ text: "The codeword is pelican" })],
-            createdAt: now,
-          }),
-        )
-        yield* messages.createMessage(
-          Message.cases.regular.make({
-            id: MessageId.make("parent-history:assistant:1"),
-            sessionId,
-            branchId,
-            role: "assistant",
-            parts: [Prompt.textPart({ text: "Noted." })],
-            createdAt: dateFromMillis(1_767_225_601_000),
-          }),
-        )
-        yield* messages.createMessage(
-          Message.cases.regular.make({
-            id: MessageId.make("parent-history:hidden:1"),
-            sessionId,
-            branchId,
-            role: "user",
-            parts: [Prompt.textPart({ text: "hidden bookkeeping" })],
-            createdAt: dateFromMillis(1_767_225_602_000),
-            metadata: { hidden: true },
-          }),
-        )
-        const observed = yield* Ref.make<ReadonlyArray<string>>([])
-        const result = yield* runner.run({
-          agent: builtinAgent,
-          prompt: "What is the codeword?",
-          parentSessionId: sessionId,
-          parentBranchId: branchId,
-          cwd: process.cwd(),
-          runSpec: makeRunSpec({ persistence: "ephemeral", history: "inherit" }),
-          observe: (event) => {
-            if (event._tag !== "StreamChunk") return Effect.void
-            return Ref.update(observed, (chunks) => [...chunks, event.chunk])
-          },
-        })
-        expect(result._tag).toBe("success")
-        if (result._tag === "success") expect(result.text).toContain("pelican")
-        // The observer saw the child's stream as it happened.
-        expect((yield* Ref.get(observed)).join("")).toContain("pelican")
-        // The parent branch keeps its three messages; the child never writes there.
-        expect((yield* messages.listMessages(branchId)).length).toBe(3)
-        yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-    }).pipe(Effect.provide(BunServices.layer)),
+        ])
+        const layer = makeLiveAgentRunnerLayer(providerLayer)
+        yield* Effect.gen(function* () {
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const messages = yield* MessageStorage
+          const runner = yield* AgentRunnerService
+          const now = dateFromMillis(1_767_225_600_000)
+          const sessionId = SessionId.make("parent-history")
+          const branchId = BranchId.make("parent-history-branch")
+          yield* sessions.createSession(
+            new Session({ id: sessionId, name: "Parent", createdAt: now, updatedAt: now }),
+          )
+          yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("parent-history:user:1"),
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "The codeword is pelican" })],
+              createdAt: now,
+            }),
+          )
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("parent-history:assistant:1"),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [Prompt.textPart({ text: "Noted." })],
+              createdAt: dateFromMillis(1_767_225_601_000),
+            }),
+          )
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("parent-history:hidden:1"),
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "hidden bookkeeping" })],
+              createdAt: dateFromMillis(1_767_225_602_000),
+              metadata: { hidden: true },
+            }),
+          )
+          const observed = yield* Ref.make<ReadonlyArray<string>>([])
+          const result = yield* runner.run({
+            agent: builtinAgent,
+            prompt: "What is the codeword?",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            cwd: process.cwd(),
+            runSpec: makeRunSpec({ history: "inherit", visibility: "private" }),
+            observe: (event) => {
+              if (event._tag !== "StreamChunk") return Effect.void
+              return Ref.update(observed, (chunks) => [...chunks, event.chunk])
+            },
+          })
+          expect(result._tag).toBe("success")
+          if (result._tag === "success") expect(result.text).toContain("pelican")
+          // The observer saw the child's stream as it happened.
+          expect((yield* Ref.get(observed)).join("")).toContain("pelican")
+          // The parent branch keeps its three messages; the child never writes there.
+          expect((yield* messages.listMessages(branchId)).length).toBe(3)
+          // A private run deletes its own session once the answer is read.
+          expect((yield* sessions.listSessions).map((session) => session.id)).toEqual([sessionId])
+          yield* controls.assertDone
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+      }).pipe(Effect.provide(BunServices.layer)),
   )
   it.scopedLive("durable helper-agent runSpec reaches the provider through AgentRunner", () =>
     Effect.gen(function* () {
@@ -443,7 +443,6 @@ describe("helper run spec propagation", () => {
           parentBranchId: BranchId.make("parent-runspec-branch"),
           cwd: process.cwd(),
           runSpec: {
-            persistence: "durable",
             tags: ["auto-loop"],
             overrides: {
               modelId: ModelId.make("custom/model"),
@@ -1018,7 +1017,7 @@ describe("AgentRunner", () => {
             new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
           )
           const toolCallId = ToolCallId.make("limited-start-tool")
-          const runSpec = makeRunSpec({ persistence: "durable", parentToolCallId: toolCallId })
+          const runSpec = makeRunSpec({ parentToolCallId: toolCallId })
           const base = {
             agent: { name: DEFAULT_AGENT_NAME },
             prompt: "bounded child",
@@ -1118,7 +1117,7 @@ describe("AgentRunner", () => {
           toolCallId,
           admission: {
             requestId: RequestId.make("model-limit-start"),
-            runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: toolCallId }),
+            runSpec: makeRunSpec({ parentToolCallId: toolCallId }),
           },
         }
         const child = yield* runner.createDurableAgentRunSession(input)
@@ -1237,7 +1236,6 @@ describe("AgentRunner", () => {
         parentSessionId,
         parentBranchId: BranchId.make("missing-branch"),
         cwd: "/tmp",
-        runSpec: { persistence: "durable" },
       })
       expect(result._tag).toBe("error")
       if (result._tag === "error")
@@ -1269,7 +1267,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({}).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
@@ -1297,7 +1295,6 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          runSpec: { persistence: "durable" },
         })
         const calls = yield* recorder.getCalls
         assertSequence(calls, [
@@ -1369,7 +1366,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({}).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
@@ -1396,7 +1393,6 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          runSpec: { persistence: "durable" },
         })
         expect(result._tag).toBe("error")
         const sessionsResult = yield* sessions.listSessions
@@ -1426,7 +1422,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({}).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       yield* Effect.gen(function* () {
@@ -1453,7 +1449,6 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          runSpec: { persistence: "durable" },
         })
         // Without retry, failure propagates as error result
         expect(result._tag).toBe("error")
@@ -1478,7 +1473,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({ timeoutMs: 5 }).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
@@ -1505,7 +1500,6 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          runSpec: { persistence: "durable" },
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
@@ -1515,141 +1509,7 @@ describe("AgentRunner", () => {
       }
     }),
   )
-  it.live("ephemeral helper runs do not persist child sessions", () =>
-    Effect.gen(function* () {
-      const eventStoreLayer = EventStore.Memory
-      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        textStep("ephemeral response"),
-      ])
-      const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-        eventStoreLayer,
-        eventPublisherLayer,
-        testRegistryLayer,
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        sessionRuntimeStub(),
-        ephemeralParentDeps,
-      )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(deps),
-      )
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const runner = yield* AgentRunnerService
-        const now = dateFromMillis(1_767_225_600_000)
-        const session = new Session({
-          id: SessionId.make("parent-session-ephemeral"),
-          name: "Parent",
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: BranchId.make("parent-branch-ephemeral"),
-          sessionId: session.id,
-          createdAt: now,
-        })
-        yield* sessions.createSession(session)
-        yield* branches.createBranch(branch)
-        const runResult = yield* runner.run({
-          agent: builtinAgent,
-          prompt: "scan repo",
-          parentSessionId: session.id,
-          parentBranchId: branch.id,
-          cwd: process.cwd(),
-          runSpec: { persistence: "ephemeral" },
-        })
-        const sessionsResult = yield* sessions.listSessions
-        return { runResult, sessionsResult }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-      expect(result.runResult._tag).toBe("success")
-      if (result.runResult._tag === "success") {
-        expect(result.runResult.persistence).toBe("ephemeral")
-        expect(result.runResult.text).toContain("ephemeral response")
-      }
-      expect(result.sessionsResult.map((session) => session.id)).toEqual([
-        SessionId.make("parent-session-ephemeral"),
-      ])
-    }),
-  )
-  it.live("ephemeral helper runs mirror child tool events into the parent store", () =>
-    Effect.gen(function* () {
-      const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-      )
-      const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
-      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        toolCallStep("bash", { command: "pwd" }, { toolCallId: ToolCallId.make("tc-ephemeral") }),
-        textStep("tool finished"),
-      ])
-      const deps = Layer.mergeAll(
-        storageLayer,
-        eventStoreLayer,
-        eventPublisherLayer,
-        testRegistryLayer,
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        sessionRuntimeStub(),
-        ephemeralParentDeps,
-      )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(deps),
-      )
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const events = yield* EventStorage
-        const runner = yield* AgentRunnerService
-        const now = dateFromMillis(1_767_225_600_000)
-        const session = new Session({
-          id: SessionId.make("parent-session-mirror"),
-          name: "Parent",
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: BranchId.make("parent-branch-mirror"),
-          sessionId: session.id,
-          createdAt: now,
-        })
-        yield* sessions.createSession(session)
-        yield* branches.createBranch(branch)
-        const runResult = yield* runner.run({
-          agent: builtinAgent,
-          prompt: "run helper with one tool",
-          parentSessionId: session.id,
-          parentBranchId: branch.id,
-          cwd: process.cwd(),
-          runSpec: { persistence: "ephemeral" },
-        })
-        if (runResult._tag !== "success") {
-          return { runResult, childTags: [] satisfies string[] }
-        }
-        const childEvents = yield* events.listEvents({ sessionId: session.id })
-        return {
-          runResult,
-          childTags: childEvents.map((event) => event.event._tag),
-        }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-      expect(result.runResult._tag).toBe("success")
-      expect(result.childTags).toContain("ToolCallStarted")
-      expect(result.childTags).toContain("ToolCallSucceeded")
-    }),
-  )
-  it.live("durable override persists child sessions for helper agents", () =>
+  it.live("a child session persists after the run", () =>
     Effect.gen(function* () {
       const eventStoreLayer = EventStore.Memory
       const eventPublisherLayer = withEventPublisher(eventStoreLayer)
@@ -1666,7 +1526,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({}).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
@@ -1693,7 +1553,6 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          runSpec: { persistence: "durable" },
         })
         const sessionsResult = yield* sessions.listSessions
         return { runResult, sessionsResult }
@@ -1701,7 +1560,6 @@ describe("AgentRunner", () => {
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
       expect(result.runResult._tag).toBe("success")
       if (result.runResult._tag === "success") {
-        expect(result.runResult.persistence).toBe("durable")
       }
       expect(result.sessionsResult).toHaveLength(2)
     }),
@@ -1745,7 +1603,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({}).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
@@ -1774,7 +1632,6 @@ describe("AgentRunner", () => {
           parentSessionId: SessionId.make("parent-reasoning"),
           parentBranchId: BranchId.make("branch-reasoning"),
           cwd: "/tmp",
-          runSpec: { persistence: "durable" },
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
@@ -1825,7 +1682,7 @@ describe("AgentRunner", () => {
       )
       const runnerLayer = InProcessRunner({}).pipe(
         Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+        Layer.provide(Layer.merge(deps, runnerDeps)),
       )
       const layer = Layer.mergeAll(deps, runnerLayer)
       const result = yield* Effect.gen(function* () {
@@ -1854,7 +1711,6 @@ describe("AgentRunner", () => {
           parentSessionId: SessionId.make("parent-mixed"),
           parentBranchId: BranchId.make("branch-mixed"),
           cwd: "/tmp",
-          runSpec: { persistence: "durable" },
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
@@ -1911,7 +1767,6 @@ describe("agent runner metadata", () => {
           sessionId,
           branchId,
           agentName: DEFAULT_AGENT_NAME,
-          persistence: "durable",
         })
         expect(result.usage).toEqual(sample.expected)
       }
@@ -1999,7 +1854,6 @@ describe("agent runner metadata", () => {
         branchId,
         sessionId,
         agentName: DEFAULT_AGENT_NAME,
-        persistence: "ephemeral",
       })
       expect(result.toolCalls).toEqual([
         { toolName: "scalar-tool", args: {}, isError: false },
@@ -2130,339 +1984,5 @@ describe("session depth guard", () => {
         expect(error.message).toContain("ancestry is missing or incomplete")
       }),
     ),
-  )
-})
-describe("ephemeral service propagation", () => {
-  const makeEphemeralLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
-    const storageLayer = Layer.orDie(
-      SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    )
-    const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
-    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-    const deps = Layer.mergeAll(
-      storageLayer,
-      eventStoreLayer,
-      eventPublisherLayer,
-      testRegistryLayer,
-      providerLayer,
-      ModelResolver.fromLanguageModel(providerLayer),
-      sessionRuntimeStub(),
-      ephemeralParentDeps,
-    )
-    const runnerLayer = InProcessRunner({}).pipe(
-      Layer.provide(ChildCompletionDelivery.Silent),
-      Layer.provide(deps),
-    )
-    return Layer.mergeAll(deps, runnerLayer)
-  }
-  const setupParentSession = (id: SessionId) =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const now = dateFromMillis(1_767_225_600_000)
-      yield* sessions.createSession(
-        new Session({ id, name: "Parent", createdAt: now, updatedAt: now }),
-      )
-      yield* branches.createBranch(
-        new Branch({ id: BranchId.make(`${id}-branch`), sessionId: id, createdAt: now }),
-      )
-    })
-  it.live("ephemeral publisher suppresses duplicate committed delivery", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
-      const parentDeps = Layer.mergeAll(
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        testRegistryLayer,
-        ephemeralParentDeps,
-        BunFileSystem.layer,
-        BunPath.layer,
-      )
-      const layer = Layer.unwrap(
-        Effect.gen(function* () {
-          const extensionRegistry = yield* ExtensionRegistry
-          const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
-          return makeEphemeralAgentRootLayer({
-            config: { baseSections: [] },
-            extensionRegistry,
-          })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(parentDeps)),
-      )
-      yield* Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        const events = yield* EventStore
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const sessionId = SessionId.make("ephemeral-duplicate-delivery")
-        const branchId = BranchId.make("ephemeral-duplicate-delivery-branch")
-        const now = dateFromMillis(1_767_225_600_000)
-        yield* sessions.createSession(
-          new Session({ id: sessionId, name: "Child", createdAt: now, updatedAt: now }),
-        )
-        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
-        const envelope = yield* publisher.append(
-          AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("ephemeral-duplicate-tool-call"),
-            toolName: "bash",
-          }),
-        )
-        yield* publisher.deliver(envelope)
-        const duplicate = yield* Effect.forkScoped(
-          events
-            .subscribe({ sessionId, branchId, after: envelope.id })
-            .pipe(Stream.take(1), Stream.runCollect),
-        )
-        yield* publisher.deliver(envelope)
-        const deliveredAgain = yield* Fiber.join(duplicate).pipe(Effect.timeoutOption("25 millis"))
-        expect(deliveredAgain._tag).toBe("None")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.scoped, Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds")),
-  )
-  it.live("an ephemeral child agent gets the branch tool kernel, not just its storage", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
-      const parentDeps = Layer.mergeAll(
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        testRegistryLayer,
-        ephemeralParentDeps,
-        BunFileSystem.layer,
-        BunPath.layer,
-      )
-      const layer = Layer.unwrap(
-        Effect.gen(function* () {
-          const extensionRegistry = yield* ExtensionRegistry
-          const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
-          return makeEphemeralAgentRootLayer({
-            config: { baseSections: [] },
-            extensionRegistry,
-          })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(parentDeps)),
-      )
-      yield* Effect.gen(function* () {
-        // The reference has a do-nothing default, so an unwired child would still
-        // build and still run turns -- it would just silently lose every
-        // dispatching tool. Build what the factory returns and look for the
-        // kernel's own service.
-        const branchTools = yield* CurrentBranchToolFeature
-        const built = yield* Layer.build(
-          branchTools.branchLayer({
-            sessionId: SessionId.make("ephemeral-branch-kernel"),
-            branchId: BranchId.make("ephemeral-branch-kernel-branch"),
-            turnInterruption: neverInterrupted,
-          }),
-        )
-        expect(Option.isSome(Context.getOption(built, BranchToolWork))).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.scoped, Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds")),
-  )
-  it.live("ephemeral agent writes to ephemeral storage, not parent", () =>
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        textStep("ephemeral text output"),
-      ])
-      const layer = makeEphemeralLayer(providerLayer)
-      yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const runner = yield* AgentRunnerService
-        yield* setupParentSession(SessionId.make("parent-svc-prop"))
-        const result = yield* runner.run({
-          agent: builtinAgent,
-          prompt: "test service propagation",
-          parentSessionId: SessionId.make("parent-svc-prop"),
-          parentBranchId: BranchId.make("parent-svc-prop-branch"),
-          cwd: process.cwd(),
-          runSpec: { persistence: "ephemeral" },
-        })
-        expect(result._tag).toBe("success")
-        if (result._tag === "success") {
-          expect(result.text).toContain("ephemeral text output")
-        }
-        // Parent storage should only have the parent session
-        const sessionsResult = yield* sessions.listSessions
-        expect(sessionsResult.map((s) => s.id)).toEqual([SessionId.make("parent-svc-prop")])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds")),
-  )
-  it.live("ephemeral agent auto-approves interactions", () =>
-    Effect.gen(function* () {
-      const approveTool = tool({
-        id: "approve_test",
-        description: "Tests approval",
-        params: Schema.Struct({ text: Schema.String }),
-        output: Schema.Struct({ approved: Schema.Boolean }),
-        execute: Effect.fn("approve_test")(function* () {
-          const ctx = yield* ExtensionContext
-          const decision = yield* ctx.Interaction.approve({
-            text: "approve this?",
-            metadata: { type: "prompt", mode: "confirm" },
-          })
-          return { approved: decision.approved }
-        }),
-      })
-      const toolRegistry = ExtensionRegistry.fromResolved(
-        resolveExtensions([
-          {
-            manifest: { id: ExtensionId.make("agents") },
-            scope: "builtin",
-            sourcePath: "test",
-            contributions: {
-              agents: AllBuiltinAgents,
-              tools: [approveTool],
-            },
-          },
-        ]),
-      )
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        toolCallStep("approve_test", { text: "test" }),
-        textStep("approved"),
-      ])
-      const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-      )
-      const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
-      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const deps = Layer.mergeAll(
-        storageLayer,
-        eventStoreLayer,
-        eventPublisherLayer,
-        toolRegistry,
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        sessionRuntimeStub(),
-        ephemeralParentDeps,
-      )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(deps),
-      )
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      yield* Effect.gen(function* () {
-        const runner = yield* AgentRunnerService
-        yield* setupParentSession(SessionId.make("parent-approve"))
-        const result = yield* runner.run({
-          agent: builtinAgent,
-          prompt: "test auto-approve",
-          parentSessionId: SessionId.make("parent-approve"),
-          parentBranchId: BranchId.make("parent-approve-branch"),
-          cwd: process.cwd(),
-          runSpec: {
-            persistence: "ephemeral",
-            overrides: { allowedTools: ["approve_test"] },
-          },
-        })
-        // Should succeed — approval was auto-resolved, tool ran, text followed
-        expect(result._tag).toBe("success")
-        if (result._tag === "success") {
-          expect(result.text).toContain("approved")
-        }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds")),
-  )
-
-  it.live("ephemeral agent rebuilds resource services without rerunning process lifecycle", () =>
-    Effect.gen(function* () {
-      let starts = 0
-      class ProbeService extends Context.Service<
-        ProbeService,
-        { readonly read: Effect.Effect<string> }
-      >()("@gent/core/tests/runtime/agent-runner.test/ProbeService") {}
-      const probeTool = tool({
-        id: "probe_resource",
-        description: "Reads a resource-backed service",
-        params: Schema.Struct({}),
-        output: Schema.Struct({ value: Schema.String }),
-        execute: Effect.fn("probe_resource")(function* () {
-          const probe = yield* ProbeService
-          return { value: yield* probe.read }
-        }),
-      })
-      const registryLayer = ExtensionRegistry.fromResolved(
-        resolveExtensions([
-          {
-            manifest: { id: ExtensionId.make("agents") },
-            scope: "builtin",
-            sourcePath: "test",
-            contributions: {
-              agents: AllBuiltinAgents,
-            },
-          },
-          {
-            manifest: { id: ExtensionId.make("resource-probe") },
-            scope: "builtin",
-            sourcePath: "test",
-            contributions: {
-              resources: [
-                defineResource({
-                  id: "test/agent-runner/resource-probe",
-                  scope: "process",
-                  layer: Layer.succeed(
-                    ProbeService,
-                    ProbeService.of({ read: Effect.succeed("service-ok") }),
-                  ),
-                  start: Effect.sync(() => {
-                    starts += 1
-                  }),
-                }),
-              ],
-              tools: [probeTool],
-            },
-          },
-        ]),
-      )
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        toolCallStep("probe_resource", {}),
-        textStep("done"),
-      ])
-      const storageLayer = Layer.orDie(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-      )
-      const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
-      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-      const deps = Layer.mergeAll(
-        storageLayer,
-        eventStoreLayer,
-        eventPublisherLayer,
-        registryLayer,
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        sessionRuntimeStub(),
-        ephemeralParentDeps,
-      )
-      const runnerLayer = InProcessRunner({}).pipe(
-        Layer.provide(ChildCompletionDelivery.Silent),
-        Layer.provide(deps),
-      )
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      yield* Effect.gen(function* () {
-        const runner = yield* AgentRunnerService
-        yield* setupParentSession(SessionId.make("parent-resource-probe"))
-        const result = yield* runner.run({
-          agent: builtinAgent,
-          prompt: "test resource service",
-          parentSessionId: SessionId.make("parent-resource-probe"),
-          parentBranchId: BranchId.make("parent-resource-probe-branch"),
-          cwd: process.cwd(),
-          runSpec: {
-            persistence: "ephemeral",
-            overrides: { allowedTools: ["probe_resource"] },
-          },
-        })
-        expect(result._tag).toBe("success")
-        if (result._tag === "success") {
-          expect(result.text).toContain("done")
-        }
-        expect(starts).toBe(0)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-    }).pipe(Effect.timeout("4 seconds")),
   )
 })

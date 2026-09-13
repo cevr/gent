@@ -168,7 +168,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       // Schema-encoded results keep `undefined` for optional fields such as the
-      // delegate metadata session id of an ephemeral child. That is not JSON.
+      // delegate metadata session id of a private child. That is not JSON.
       const Metadata = Schema.Struct({
         sessionId: Schema.optional(Schema.String),
         agentName: Schema.String,

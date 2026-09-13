@@ -3,7 +3,6 @@ import type {
   AgentRunResult as AgentRunResultType,
   AgentRunToolCall,
   AgentName,
-  AgentPersistence,
 } from "../../domain/agent.js"
 import { AgentRunResult, AgentRunToolCallSchema } from "../../domain/agent.js"
 import type { EventEnvelope } from "../../domain/event.js"
@@ -21,12 +20,11 @@ type AgentRunSuccess = Extract<AgentRunResultType, { readonly _tag: "success" }>
 
 const decodeToolArgs = Schema.decodeUnknownOption(AgentRunToolCallSchema.fields.args)
 
-export interface AgentRunMetadataRuntime {
+interface AgentRunMetadataRuntime {
   readonly loadAgentRunSuccessData: (params: {
     branchId: BranchId
     sessionId: SessionId
     agentName: AgentName
-    persistence: AgentPersistence
   }) => Effect.Effect<AgentRunSuccess, StorageError, never>
 }
 
@@ -142,7 +140,6 @@ export const loadAgentRunSuccessData = (params: {
   branchId: BranchId
   sessionId: SessionId
   agentName: AgentName
-  persistence: AgentPersistence
 }) =>
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
@@ -155,7 +152,6 @@ export const loadAgentRunSuccessData = (params: {
       text: responseText,
       sessionId: params.sessionId,
       agentName: params.agentName,
-      persistence: params.persistence,
       usage: meta.usage,
       toolCalls: meta.toolCalls,
     })

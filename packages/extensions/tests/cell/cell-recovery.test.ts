@@ -257,7 +257,7 @@ it.scopedLive(
               toolCallId,
               admission: {
                 requestId: RequestId.make(toolCallId),
-                runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: toolCallId }),
+                runSpec: makeRunSpec({ parentToolCallId: toolCallId }),
               },
             })
           }

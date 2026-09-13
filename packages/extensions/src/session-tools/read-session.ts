@@ -141,7 +141,7 @@ export const ReadSessionTool = tool({
         agent,
         prompt,
         runSpec: makeRunSpec({
-          persistence: "ephemeral",
+          visibility: "private",
           parentToolCallId: ctx.toolCallId,
           overrides: { systemPromptAddendum: EXTRACT_ADDENDUM, allowedTools: [] },
         }),

@@ -1,14 +1,4 @@
-import {
-  Cause,
-  type Crypto,
-  Duration,
-  Effect,
-  type FileSystem,
-  Layer,
-  Predicate,
-  type Path,
-} from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Predicate, Stream } from "effect"
 import type { SqlClient } from "effect/unstable/sql"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import { AgentSwitched, EventStore } from "../../domain/event.js"
@@ -19,36 +9,27 @@ import {
   AgentRunResult,
   DEFAULT_AGENT_NAME,
   makeRunSpec,
-  resolveRunPersistence,
   type AgentName,
 } from "../../domain/agent.js"
-import { SessionId, BranchId } from "../../domain/ids.js"
-import type { Message } from "../../domain/message.js"
+import { MessageId, type SessionId, type BranchId } from "../../domain/ids.js"
+import type { PromptSection } from "../../domain/prompt.js"
+import type { GentPlatform } from "../gent-platform.js"
 import type { BranchStorage } from "../../storage/branch-storage.js"
-import type { SessionStorage } from "../../storage/session-storage.js"
+import { SessionStorage } from "../../storage/session-storage.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import type { RelationshipStorage } from "../../storage/relationship-storage.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
-import { GentPlatform } from "../gent-platform.js"
-import type { ProcessRunner } from "../../utils/run-process.js"
 import { SessionRuntime } from "../session-runtime.js"
-import type { ModelResolver } from "../../providers/model-resolver.js"
-import type { RuntimeEnvironment } from "../runtime-environment.js"
-import type { ConfigService } from "../config-service.js"
-import type { ModelRegistry } from "../model-registry.js"
 import { makeDurableAgentRunRuntime } from "./agent-runner.durable.js"
 import { ChildCompletionDelivery } from "./child-completion.js"
-import { runEphemeralAgent, type AgentRunnerConfig } from "./agent-runner.ephemeral.js"
-import {
-  EphemeralAgentRootLayerFactoryService,
-  makeEphemeralAgentRootLayerFactory,
-} from "./ephemeral-root.js"
 import { makeAgentRunMetadataRuntime } from "./agent-runner.metadata.js"
-import { normalizeRunSpec, handleAgentRunFailure } from "./agent-runner.run-spec.js"
-export type { AgentRunnerConfig } from "./agent-runner.ephemeral.js"
 export { getSessionDepth } from "./agent-runner.durable.js"
+
+export interface AgentRunnerConfig {
+  readonly baseSections?: ReadonlyArray<PromptSection>
+  readonly timeoutMs?: number
+}
 
 export const InProcessRunner = (
   runnerConfig: AgentRunnerConfig,
@@ -65,36 +46,24 @@ export const InProcessRunner = (
   | EventStore
   | EventPublisher
   | SessionRuntime
-  | ExtensionRegistry
-  | ModelResolver
-  | RuntimeEnvironment
-  | FileSystem.FileSystem
-  | Path.Path
-  | ConfigService
-  | ModelRegistry
-  | ChildProcessSpawner.ChildProcessSpawner
   | GentPlatform
-  | ProcessRunner
-  | Crypto.Crypto
   | ChildCompletionDelivery
 > =>
   Layer.effect(
     AgentRunnerService,
     Effect.gen(function* () {
-      const baseEventStore = yield* EventStore
-      const parentMessageStorage = yield* MessageStorage
+      const eventStore = yield* EventStore
+      const messageStorage = yield* MessageStorage
       const eventPublisher = yield* EventPublisher
       const sessionRuntime = yield* SessionRuntime
+      const sessionStorage = yield* SessionStorage
       const eventStorage = yield* EventStorage
-      const extensionRegistry = yield* ExtensionRegistry
       const durableRuntime = yield* makeDurableAgentRunRuntime
       const metadataRuntime = yield* makeAgentRunMetadataRuntime
-      const makeEphemeralAgentRootLayer = yield* makeEphemeralAgentRootLayerFactory
       const delivery = yield* ChildCompletionDelivery
       // Startup recovery runs beside the server, not before it.
       yield* Effect.forkScoped(delivery.reconcile)
 
-      const platform = yield* GentPlatform
       const publishAgentSwitch = (params: {
         sessionId: SessionId
         branchId: BranchId
@@ -108,6 +77,18 @@ export const InProcessRunner = (
             toAgent: params.agentName,
           }),
         )
+
+      // A private child is gone once its answer is read: no loop, no rows, no
+      // live events. Each step is best effort; a leftover row is not a failed run.
+      const forgetPrivateSession = (sessionId: SessionId) =>
+        Effect.all(
+          [
+            sessionRuntime.terminateSession(sessionId),
+            sessionStorage.deleteSession(sessionId),
+            eventStore.removeSession(sessionId),
+          ],
+          { discard: true },
+        ).pipe(Effect.ignore)
 
       const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) => {
         if (Predicate.isUndefined(runnerConfig.timeoutMs)) return effect
@@ -185,133 +166,120 @@ export const InProcessRunner = (
           ),
         ),
         run: Effect.fn("AgentRunner.run")(function* (params) {
-          const persistence = resolveRunPersistence(params.runSpec)
-          const normalizedRunSpec = normalizeRunSpec(params.runSpec)
-          const toolCallId = params.runSpec?.parentToolCallId
+          const runSpec = params.runSpec
+          const toolCallId = runSpec?.parentToolCallId
+          // A private run leaves no trace on the parent: no spawn or completion
+          // events, and its session is deleted once the answer is read.
+          const isPrivate = runSpec?.visibility === "private"
+          const agentName = params.agent.name
 
-          const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-            return Effect.succeed(
-              AgentRunResult.cases.error.make({
-                error: Cause.pretty(cause),
-                agentName: params.agent.name,
-                persistence,
-              }),
-            )
+          const admitted = yield* durableRuntime
+            .createDurableAgentRunSession({
+              ...params,
+              toolCallId,
+              visibility: runSpec?.visibility,
+            })
+            .pipe(Effect.exit)
+          if (Exit.isFailure(admitted)) {
+            if (Cause.hasInterruptsOnly(admitted.cause)) return yield* Effect.interrupt
+            return AgentRunResult.cases.error.make({
+              error: Cause.pretty(admitted.cause),
+              agentName,
+            })
           }
+          const { sessionId, branchId } = admitted.value
 
-          if (persistence === "ephemeral") {
-            const sessionId = SessionId.make(yield* platform.randomId)
-            const branchId = BranchId.make(yield* platform.randomId)
+          const run = Effect.gen(function* () {
+            yield* WideEvent.set({ childSessionId: sessionId })
             // An inheriting child starts from what the caller's model sees now:
             // hidden rows stay out, as they do in the parent's own turn.
-            let seedMessages: ReadonlyArray<Message> = []
-            if (normalizedRunSpec?.history === "inherit") {
-              seedMessages = yield* parentMessageStorage.listMessages(params.parentBranchId).pipe(
-                Effect.map((messages) =>
-                  messages.filter((message) => message.metadata?.hidden !== true),
-                ),
-                Effect.mapError((cause) => new AgentRunError({ message: cause.message, cause })),
-              )
-            }
-            return yield* runEphemeralAgent({
-              seedMessages,
-              observe: params.observe,
-              runnerConfig,
-              durableRuntime,
-              metadataRuntime,
-              parentSessionId: params.parentSessionId,
-              parentBranchId: params.parentBranchId,
-              toolCallId,
-              cwd: params.cwd,
-              agentName: params.agent.name,
-              prompt: params.prompt,
-              runSpec: normalizedRunSpec,
-              persistence,
-              parentBaseEventStore: baseEventStore,
-              sessionId,
-              branchId,
-              extensionRegistry,
-            }).pipe(
-              Effect.provideService(
-                EphemeralAgentRootLayerFactoryService,
-                makeEphemeralAgentRootLayer,
-              ),
-            )
-          }
-
-          return yield* durableRuntime.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
-            Effect.flatMap(({ sessionId, branchId }) => {
-              const run = Effect.gen(function* () {
-                yield* WideEvent.set({ childSessionId: sessionId })
-
-                yield* publishAgentSwitch({
-                  sessionId,
-                  branchId,
-                  agentName: params.agent.name,
-                })
-
-                let durableRunSpec = normalizedRunSpec
-                if (Predicate.isNotUndefined(toolCallId)) {
-                  durableRunSpec = makeRunSpec({
-                    ...normalizedRunSpec,
-                    parentToolCallId: toolCallId,
-                  })
-                }
-                yield* runWithTimeout(
-                  sessionRuntime.runPrompt({
+            if (runSpec?.history === "inherit") {
+              const seed = yield* messageStorage.listMessages(params.parentBranchId)
+              yield* Effect.forEach(
+                seed.filter((message) => message.metadata?.hidden !== true),
+                (message, index) =>
+                  messageStorage.createMessage({
+                    ...message,
+                    id: MessageId.make(`${branchId}:seed:${index}`),
                     sessionId,
                     branchId,
-                    agentName: params.agent.name,
-                    prompt: params.prompt,
-                    interactive: false,
-                    runSpec: durableRunSpec,
                   }),
-                )
+                { discard: true },
+              )
+            }
+            // The observer sees the child's events as they happen; its failures never fail the run.
+            const observer = yield* Option.match(Option.fromUndefinedOr(params.observe), {
+              onNone: () => Effect.succeed(Option.none<Fiber.Fiber<void>>()),
+              onSome: (notify) =>
+                eventStore.subscribe({ sessionId, branchId }).pipe(
+                  Stream.runForEach((envelope) =>
+                    notify(envelope.event).pipe(Effect.catchEager(() => Effect.void)),
+                  ),
+                  Effect.catchEager(() => Effect.void),
+                  Effect.forkChild,
+                  Effect.asSome,
+                ),
+            })
+            yield* publishAgentSwitch({ sessionId, branchId, agentName })
+            yield* runWithTimeout(
+              sessionRuntime.runPrompt({
+                sessionId,
+                branchId,
+                agentName,
+                prompt: params.prompt,
+                interactive: false,
+                runSpec: makeRunSpec({ ...runSpec, parentToolCallId: toolCallId }),
+              }),
+            ).pipe(
+              Effect.ensuring(
+                Option.match(observer, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
+              ),
+            )
 
-                const success = yield* metadataRuntime.loadAgentRunSuccessData({
-                  branchId,
-                  sessionId,
-                  agentName: params.agent.name,
-                  persistence,
-                })
-                let preview = success.text
-                if (preview.length > 200) preview = preview.slice(0, 200) + "…"
-                yield* durableRuntime.publishAgentRunSucceeded({
-                  parentSessionId: params.parentSessionId,
-                  parentBranchId: params.parentBranchId,
-                  toolCallId,
-                  sessionId,
-                  agentName: params.agent.name,
-                  usage: success.usage,
-                  preview,
-                })
-
-                yield* WideEvent.set({
-                  usage: success.usage,
-                  toolCallCount: success.toolCalls?.length ?? 0,
-                })
-
-                return AgentRunResult.cases.success.make(success)
-              }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
-
-              return run.pipe(
-                handleAgentRunFailure(
-                  {
+            const success = yield* metadataRuntime.loadAgentRunSuccessData({
+              branchId,
+              sessionId,
+              agentName,
+            })
+            if (!isPrivate) {
+              let preview = success.text
+              if (preview.length > 200) preview = preview.slice(0, 200) + "…"
+              yield* durableRuntime.publishAgentRunSucceeded({
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                toolCallId,
+                sessionId,
+                agentName,
+                usage: success.usage,
+                preview,
+              })
+            }
+            yield* WideEvent.set({
+              usage: success.usage,
+              toolCallCount: success.toolCalls?.length ?? 0,
+            })
+            return AgentRunResult.cases.success.make(success)
+          }).pipe(
+            withWideEvent(agentRunBoundary(agentName, params.parentSessionId)),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+              return Effect.gen(function* () {
+                const error = Cause.pretty(cause)
+                if (!isPrivate) {
+                  yield* durableRuntime.publishAgentRunFailed({
                     parentSessionId: params.parentSessionId,
                     parentBranchId: params.parentBranchId,
                     toolCallId,
                     sessionId,
-                    agentName: params.agent.name,
-                    persistence,
-                    spanName: "AgentRunner.inProcess",
-                  },
-                  durableRuntime.publishAgentRunFailed,
-                ),
-              )
+                    agentName,
+                  })
+                }
+                return AgentRunResult.cases.error.make({ error, sessionId, agentName })
+              })
             }),
-            Effect.catchCause(handleUnexpectedFailure),
           )
+          if (!isPrivate) return yield* run
+          return yield* run.pipe(Effect.ensuring(forgetPrivateSession(sessionId)))
         }),
       })
     }),

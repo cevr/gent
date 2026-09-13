@@ -14,6 +14,7 @@ import {
   AgentRunFailed,
   AgentRunSpawned,
   AgentRunSucceeded,
+  type EventEnvelope,
   type EventStoreError,
   type TurnCompleted,
 } from "../../domain/event.js"
@@ -54,9 +55,11 @@ interface DurableAgentRunInput {
   toolCallId?: ToolCallId
   cwd: string
   admission?: { readonly requestId: RequestId; readonly runSpec?: RunSpec }
+  /** `private` admits the child without a spawn receipt on the parent branch. */
+  visibility?: RunSpec["visibility"]
 }
 
-export interface DurableAgentRunRuntime {
+interface DurableAgentRunRuntime {
   readonly cancel: (
     params: Parameters<DurableAgentRunRuntime["inspect"]>[0],
   ) => Effect.Effect<void, AgentRunError | StorageError, EventStorage | SessionRuntime>
@@ -89,15 +92,6 @@ export interface DurableAgentRunRuntime {
     { sessionId: SessionId; branchId: BranchId },
     AgentRunError | EventStoreError | StorageError
   >
-  readonly publishAgentRunSpawned: (params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    toolCallId?: ToolCallId
-    sessionId: SessionId
-    childBranchId: BranchId
-    agentName: AgentName
-    prompt: string
-  }) => Effect.Effect<void, EventStoreError>
   readonly publishAgentRunSucceeded: (params: {
     parentSessionId: SessionId
     parentBranchId: BranchId
@@ -248,17 +242,22 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
               createdAt: now,
             }),
           )
-          const envelope = yield* eventPublisher.append(
-            AgentRunSpawned.make({
-              parentSessionId: params.parentSessionId,
-              childSessionId: sessionId,
-              agentName: params.agent.name,
-              prompt: params.prompt,
-              toolCallId: params.toolCallId,
-              branchId: params.parentBranchId,
-              childBranchId: branchId,
-            }),
-          )
+          let envelope = Option.none<EventEnvelope>()
+          if (params.visibility !== "private") {
+            envelope = Option.some(
+              yield* eventPublisher.append(
+                AgentRunSpawned.make({
+                  parentSessionId: params.parentSessionId,
+                  childSessionId: sessionId,
+                  agentName: params.agent.name,
+                  prompt: params.prompt,
+                  toolCallId: params.toolCallId,
+                  branchId: params.parentBranchId,
+                  childBranchId: branchId,
+                }),
+              ),
+            )
+          }
           if (Predicate.isNotUndefined(params.admission)) {
             yield* operations.saveAgentStart(params.admission.requestId, {
               sessionId,
@@ -266,34 +265,13 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
               input: startInput,
             })
           }
-          return { sessionId, branchId, envelope: Option.some(envelope) }
+          return { sessionId, branchId, envelope }
         }),
       )
       if (Option.isSome(committed.envelope)) yield* eventPublisher.deliver(committed.envelope.value)
 
       return { sessionId: committed.sessionId, branchId: committed.branchId }
     })
-
-  const publishAgentRunSpawned = (params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    toolCallId?: ToolCallId
-    sessionId: SessionId
-    childBranchId: BranchId
-    agentName: AgentName
-    prompt: string
-  }) =>
-    eventPublisher.publish(
-      AgentRunSpawned.make({
-        parentSessionId: params.parentSessionId,
-        childSessionId: params.sessionId,
-        agentName: params.agentName,
-        prompt: params.prompt,
-        toolCallId: params.toolCallId,
-        branchId: params.parentBranchId,
-        childBranchId: params.childBranchId,
-      }),
-    )
 
   const publishAgentRunSucceeded = (params: {
     parentSessionId: SessionId
@@ -464,14 +442,8 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
     start: Effect.fn("AgentRunner.startDurable")(function* (
       params: Parameters<DurableAgentRunRuntime["start"]>[0],
     ) {
-      if (params.admission.runSpec?.persistence === "ephemeral") {
-        return yield* new AgentRunError({
-          message: "Durable child start cannot use ephemeral persistence",
-        })
-      }
       const runSpec = makeRunSpec({
         ...params.admission.runSpec,
-        persistence: "durable",
         parentToolCallId: params.toolCallId,
       })
       const child = yield* createDurableAgentRunSession({
@@ -482,7 +454,6 @@ export const makeDurableAgentRunRuntime: Effect.Effect<
       return child
     }),
     createDurableAgentRunSession,
-    publishAgentRunSpawned,
     publishAgentRunSucceeded,
     publishAgentRunFailed,
   }

@@ -161,8 +161,6 @@ Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
 
-Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call the resolver — they forward an already-resolved `ExtensionRegistry` from the parent and only rebuild the per-run mutable bits (storage, pub/sub engine, state runtime) for isolation. That divergence is structural, not duplication.
-
 `compileBaseSections(profile)` combines static core and extension prompt sections.
 Per-turn projection hooks resolve dynamic prompt content inside the extension
 service context.
@@ -189,7 +187,7 @@ Shape:
   The mailbox request can return before the model finishes. The worker releases
   keep-alive on completion, failure, or interruption so idle entities can expire.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
-- `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
+- `AgentRunner` is the helper-agent boundary. Every child is a session in the one runtime; a run with `visibility: "private"` admits without a spawn receipt, publishes no completion receipt, and deletes its session once the answer is read.
 - Durable child admission uses one shared ancestry check. Missing or incomplete
   ancestry is an error, not root depth. A parent at the depth limit cannot spawn.
   This check is not a concurrency or token budget and does not add child handles.
@@ -211,14 +209,13 @@ Shape:
   Capacity comes from stored start receipts without a matching completed user
   turn, not live actors. Unstarted and unknown outcomes retain reservations.
   A fresh runner sees the same count. This limit applies to the private durable
-  start path, not legacy blocking or ephemeral runs, and is not a token budget.
+  start path, not foreground `run`, and is not a token budget.
   Deleting completion evidence does not silently release an uncertain reservation.
 - The durable runner's private `start` operation joins child creation to
   `SessionRuntime.sendUserMessage` with admission completion. Its command ID is
   derived from the stable start request. The same receipt and command are reused
   on retry. It returns child session/branch IDs while the actor owns execution.
-  It requires durable persistence and sets parent tool identity from the host
-  input. This operation is not yet exposed to extensions or cells and does not
+  It sets parent tool identity from the host input. This operation is not yet exposed to extensions or cells and does not
   implement child budgets.
 - The durable runner's private `inspect` operation accepts the start request ID
   and parent session/branch. It checks the workspace-scoped receipt before child
@@ -298,7 +295,7 @@ Shape:
   task success or a complete child outcome. Actor Idle is not completion proof.
 - New turn-stream start/end receipts include the user-message ID and model-step
   number. Model, external, failure, and interruption paths keep that identity.
-  Historical and forwarded ephemeral receipts can omit it and must not be treated
+  Historical receipts can omit it and must not be treated
   as exact per-turn budget evidence. Token-budget enforcement remains unfinished;
   compaction invokes a separate model and needs accounting within the same policy.
 - Context compaction is a seam, not a core feature. The loop checks the window,
@@ -358,7 +355,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   model, reasoning, tool selection, and added instructions, and always denies
   the child the delegation tools: fan-out is the caller's decision, and a
   project prompt that addresses "the orchestrator" reaches children too. The host still fixes
-  durable persistence and the parent/tool address. Control returns pending or
+  the parent/tool address. Control returns pending or
   the original completed-turn flags, not task success. Absent completion flags
   are omitted from the JSON result. For a recovered Unknown delegate operation,
   its inner toolCallId is the child requestId. The parent can inspect or cancel
@@ -384,16 +381,13 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   capture the completed service context, so recursive calls have an agent runner.
   Interaction recovery starts after handler registration. No second actor owner
   or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
-- Default persistence is durable.
-- One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as `read_session` goal extraction pass `persistence: "ephemeral"` explicitly. An ephemeral run may pass `history: "inherit"` to seed its private branch with a copy of the parent branch's messages; `/btw` uses this for tool-less side questions that never write back to the parent.
+- One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as `read_session` goal extraction pass `visibility: "private"`. A run may pass `history: "inherit"` to seed its branch with a copy of the parent branch's visible messages; `/btw` uses this for tool-less side questions that never write back to the parent.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
-- Durable runs persist a child session/branch and can be revisited with `read_session`.
-- Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
+- Foreground runs persist a child session/branch and can be revisited with `read_session`. Private runs leave no session behind; they return text/usage/tool-call metadata only.
 - Child metadata reads only the requested branch. Stream totals remain unknown
   if any stored stream has missing or invalid usage, or if the sum exceeds safe
   integer precision. Explicit zero is retained; no stream receipts means unknown.
   These are reported stream totals, not full model-attempt budget accounting.
-- Callers that need durable history must opt in explicitly with `persistence: "durable"`.
 
 ### Interactions (Cold Pattern)
 
@@ -956,20 +950,6 @@ or ask/reply infrastructure inside extension authoring.
 - Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
 - TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/goal` is an event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
-
-**Ephemeral runtime builder**:
-
-`agent-runner.ts` builds ephemeral child runs by snapshotting the parent context
-with `Layer.succeedContext(...)`, merging child-owned override families with
-`Layer.provideMerge`, and wrapping the final merged layer in `Layer.fresh`.
-Each override family, such as `storage`, `eventStore`, or `eventPublisher`,
-maps to a required child layer; matching child Tags occlude parent Tags through
-last-writer-wins context merge.
-
-Ephemeral children reuse the parent-resolved extension registry and rebuild
-resource service layers with `buildExtensionLayers(..., { lifecycle: "skip" })`.
-That keeps extension services available inside the child runtime while leaving
-process resource `start`/`stop` lifecycle ownership with profile resolution.
 
 ## Testing
 

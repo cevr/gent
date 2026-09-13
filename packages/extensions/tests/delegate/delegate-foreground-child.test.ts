@@ -1,5 +1,5 @@
 /**
- * Foreground delegation runs a real ephemeral child. The child's loop
+ * Foreground delegation runs a real child session. The child's loop
  * state must land in the child's own storage: a write against the
  * parent database has no matching session row and fails the foreign
  * key, which surfaced live as "Failed to persist loop queue".
@@ -14,7 +14,7 @@ import { isToolResultFor } from "../helpers/tool-event.js"
 
 describe("foreground delegation with a real child", () => {
   it.live(
-    "returns the child's text from an ephemeral run of the current agent",
+    "returns the child's text from a run of the current agent",
     () =>
       Effect.scoped(
         Effect.gen(function* () {

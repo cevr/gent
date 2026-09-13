@@ -52,7 +52,6 @@ describe("Delegate Tool", () => {
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
-            persistence: "ephemeral",
           }),
         ),
     })
@@ -62,10 +61,12 @@ describe("Delegate Tool", () => {
         Effect.map((result) => {
           expect("output" in result).toBe(true)
           if (!("output" in result)) return
-          expect(result.output).toBe(`${DEFAULT_AGENT_NAME}:hello`)
+          expect(result.output).toBe(
+            `${DEFAULT_AGENT_NAME}:hello\n\nFull session: session://child-session`,
+          )
           const metadata = Option.fromUndefinedOr(result.metadata)
           if (Option.isSome(metadata) && "sessionId" in metadata.value) {
-            expect(Option.fromUndefinedOr(metadata.value.sessionId)).toEqual(Option.none())
+            expect(metadata.value.sessionId).toBe(SessionId.make("child-session"))
           }
         }),
       ),
@@ -103,7 +104,6 @@ describe("Delegate Tool", () => {
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
-            persistence: "ephemeral",
           }),
         ),
     })
@@ -113,15 +113,14 @@ describe("Delegate Tool", () => {
         Effect.map((result) => {
           expect("output" in result).toBe(true)
           if (!("output" in result)) return
-          // Delegate is fire-and-forget ephemeral by design — no durable session ref is shown.
-          expect(result.output).toBe("helper:hello")
+          expect(result.output).toBe("helper:hello\n\nFull session: session://child-session")
         }),
       ),
     )
   })
 
-  it.live("foreground delegation runs a durable child so its cell and resources work", () => {
-    let capturedRunSpec = Option.none<{ persistence?: string }>()
+  it.live("foreground delegation ties the child to the calling tool call", () => {
+    let capturedRunSpec = Option.none<{ parentToolCallId?: string }>()
     const ctx = makeCtx({
       agentRun: (params) => {
         capturedRunSpec = Option.fromUndefinedOr(params.runSpec)
@@ -130,7 +129,6 @@ describe("Delegate Tool", () => {
             text: "ok",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,
-            persistence: "ephemeral",
           }),
         )
       },
@@ -141,9 +139,9 @@ describe("Delegate Tool", () => {
         Effect.map(() => {
           expect(
             Option.flatMap(capturedRunSpec, (runSpec) =>
-              Option.fromUndefinedOr(runSpec.persistence),
+              Option.fromUndefinedOr(runSpec.parentToolCallId),
             ),
-          ).toEqual(Option.some("durable"))
+          ).toEqual(Option.some(ctx.toolCallId))
         }),
       ),
     )

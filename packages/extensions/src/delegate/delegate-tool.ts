@@ -7,7 +7,6 @@ import {
   AgentRunToolCallSchema,
   defineExtension,
   ExtensionHost,
-  getDurableAgentRunSessionId,
   makeRunSpec,
   RequestId,
   requireCurrentAgent,
@@ -102,22 +101,16 @@ export const DelegateTool = tool({
         agent,
         prompt: params.todo,
         requestId,
-        runSpec: makeRunSpec({
-          persistence: "durable",
-          overrides: childOverrides(params.overrides),
-        }),
+        runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
       })
       return DelegateResult.cases.running.make({ requestId, ...child })
     }
 
-    // Foreground mode: a durable child in this runtime, awaited here. Durable
-    // keeps the child on the session profile, so its cell and resources work;
-    // the ephemeral root is for tool-less helper runs only.
+    // Foreground mode: a child session in this runtime, awaited here.
     const result = yield* ctx.Agent.run({
       agent,
       prompt: params.todo,
       runSpec: makeRunSpec({
-        persistence: "durable",
         parentToolCallId: ctx.toolCallId,
         overrides: childOverrides(params.overrides),
       }),
@@ -125,11 +118,11 @@ export const DelegateTool = tool({
 
     if (result._tag === "error") {
       return DelegateResult.cases.error.make({
-        error: appendSessionRef(result.error, getDurableAgentRunSessionId(result)),
+        error: appendSessionRef(result.error, result.sessionId),
       })
     }
 
-    const sessionId = getDurableAgentRunSessionId(result)
+    const sessionId = result.sessionId
     const parts = [result.text]
     if (Predicate.isNotUndefined(sessionId)) {
       parts.push(`\n\nFull session: session://${sessionId}`)

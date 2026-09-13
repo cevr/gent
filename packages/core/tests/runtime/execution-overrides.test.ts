@@ -20,7 +20,7 @@ describe("run spec CLI serialization", () => {
 
   test("round-trips through JSON encode/decode", () => {
     const runSpec = {
-      persistence: "ephemeral",
+      visibility: "private",
       overrides: {
         modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
         allowedTools: ["grep", "read"],

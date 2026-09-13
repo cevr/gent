@@ -890,3 +890,25 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
 - New RPC acceptance test `delegate-background-child.test.ts` drives
   background delegation through the real runner and waits for the
   child-completion message and the parent's follow-up turn.
+
+## Every child is a session (2026-09-13)
+
+- `agent-runner.ephemeral.ts`, `ephemeral-root.ts`, and `agent-runner.run-spec.ts`
+  are gone (−770 lines of core). The ephemeral runtime rebuilt a second
+  composition root per helper run: parent context snapshot, in-memory SQLite,
+  its own event store and publisher, `Layer.fresh`, and a resource rebuild that
+  skipped process lifecycle. It existed for `/btw` and `read_session` only.
+- `RunSpec.persistence` is replaced by `visibility: "parent" | "private"`. A
+  private run is admitted like any child but writes no `AgentRunSpawned`,
+  publishes no `AgentRunSucceeded`/`AgentRunFailed`, and deletes its own
+  session (loop terminated, rows cascaded, live events dropped) once the
+  answer is read. `history: "inherit"` copies the parent branch's visible
+  messages into the child branch before the prompt.
+- Foreground `delegate` no longer chooses a persistence; every foreground
+  child is a session and the result carries its `session://` ref.
+  `getDurableAgentRunSessionId` is deleted with the choice.
+- The platform-duplication guard "AgentRunner must use the ephemeral child
+  root preset" and the two `ephemeral-root.ts` suppression entries are gone.
+- Tests: the ephemeral service-propagation suite (five tests) and two
+  ephemeral-persistence tests in `agent-runner.test.ts` are deleted; the
+  inherit test now asserts the private child's session is gone afterwards.

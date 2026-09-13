@@ -1,5 +1,5 @@
 /**
- * `/btw` side questions. Each ask runs an ephemeral child of the current
+ * `/btw` side questions. Each ask runs a private child of the current
  * agent on a copy of this branch's history, with tools off and low
  * reasoning. Nothing from the side conversation lands on the branch; the
  * client replays earlier side turns inside the next prompt.
@@ -158,7 +158,6 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
           agent,
           prompt: sideQuestionPrompt({ question, previous: input.previous }),
           runSpec: makeRunSpec({
-            persistence: "ephemeral",
             history: "inherit",
             visibility: "private",
             overrides: {

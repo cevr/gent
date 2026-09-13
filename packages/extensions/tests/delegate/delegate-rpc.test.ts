@@ -34,7 +34,6 @@ describe("DelegateExtension via model turn", () => {
                   text: `subagent:${params.agent.name}:${params.prompt}`,
                   sessionId: SessionId.make("delegate-child-session"),
                   agentName: params.agent.name,
-                  persistence: "ephemeral",
                 }),
               ),
           }

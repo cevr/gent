@@ -125,7 +125,6 @@ export class ChildCompletionDelivery extends Context.Service<
           sessionId: child.sessionId,
           branchId: child.branchId,
           agentName: child.input.agentName,
-          persistence: "durable",
         })
         yield* sessionRuntime.queueFollowUp({
           sourceId,

@@ -21,9 +21,6 @@ export const ReasoningEffort = Schema.Literals([
 export type ReasoningEffort = typeof ReasoningEffort.Type
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
-export const AgentPersistence = Schema.Literals(["durable", "ephemeral"])
-export type AgentPersistence = typeof AgentPersistence.Type
-
 // Agent driver — discriminated reference into `DriverRegistry`.
 //
 // Optional: when omitted, the loop resolves a model driver from the agent's
@@ -143,15 +140,14 @@ export const resolveAgentDriver = (
 
 // ── RunSpec — per-run dispatch configuration ──
 //
-// Per `composability-not-flags`, separates per-run concerns from agent identity:
-//   - `persistence`   — durable vs ephemeral storage (was on AgentDefinition)
+// Separates per-run concerns from agent identity:
+//   - `history`       — whether the child starts from the caller's branch history
+//   - `visibility`    — whether the child leaves a trace on the parent
 //   - `overrides`     — per-turn model/tool/prompt overrides
 //   - `tags`          — RunContext annotations
 //   - `parentToolCallId` — links a child run to the tool call that spawned it
 //
-// Replaces the old `AgentExecutionOverrides` interface, which conflated
-// "what to override" with "how to invoke". Spawn callers always pass a
-// `RunSpec` (possibly empty) instead of a flat positional bag.
+// Every child is a durable session driven by the same loop as its parent.
 
 export const AgentRunOverridesSchema = Schema.Struct({
   modelId: Schema.optional(ModelId),
@@ -162,17 +158,19 @@ export const AgentRunOverridesSchema = Schema.Struct({
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
-/** Whether an ephemeral run starts from the caller's branch history or from nothing. */
+/** Whether a run starts from a copy of the caller's branch history or from nothing. */
 const AgentRunHistory = Schema.Literals(["none", "inherit"])
 type AgentRunHistory = typeof AgentRunHistory.Type
 
-/** `private` keeps an ephemeral run out of the parent's event stream and output store. */
+/**
+ * `private` keeps a run off the parent's event stream, and its session is
+ * deleted when the run ends. Side questions and one-shot extractions rely on it.
+ */
 const AgentRunVisibility = Schema.Literals(["parent", "private"])
 type AgentRunVisibility = typeof AgentRunVisibility.Type
 
 export const RunSpecSchema = Schema.Struct({
-  persistence: Schema.optional(AgentPersistence),
-  /** `inherit` copies the parent branch's messages into an ephemeral child before its prompt. */
+  /** `inherit` copies the parent branch's visible messages into the child before its prompt. */
   history: Schema.optional(AgentRunHistory),
   visibility: Schema.optional(AgentRunVisibility),
   overrides: Schema.optional(AgentRunOverridesSchema),
@@ -185,7 +183,6 @@ interface RunSpecInput extends RunSpec {}
 
 export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
   const spec: { -readonly [K in keyof RunSpec]: RunSpec[K] } = {}
-  if (Predicate.isNotUndefined(input.persistence)) spec.persistence = input.persistence
   if (Predicate.isNotUndefined(input.history)) spec.history = input.history
   if (Predicate.isNotUndefined(input.visibility)) spec.visibility = input.visibility
   if (Predicate.isNotUndefined(input.overrides)) spec.overrides = input.overrides
@@ -194,10 +191,6 @@ export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
     spec.parentToolCallId = input.parentToolCallId
   return spec
 }
-
-/** Resolve persistence for a run — explicit RunSpec wins; default `durable`. */
-export const resolveRunPersistence = (runSpec?: RunSpec): AgentPersistence =>
-  runSpec?.persistence ?? "durable"
 
 // Agent run depth
 
@@ -231,7 +224,6 @@ const AgentRunSuccessStruct = Schema.TaggedStruct("success", {
   text: Schema.String,
   sessionId: SessionId,
   agentName: AgentName,
-  persistence: Schema.optional(AgentPersistence),
   usage: Schema.optional(AgentRunUsageSchema),
   toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
 })
@@ -239,19 +231,12 @@ const AgentRunFailureStruct = Schema.TaggedStruct("error", {
   error: Schema.String,
   sessionId: Schema.optional(SessionId),
   agentName: Schema.optional(AgentName),
-  persistence: Schema.optional(AgentPersistence),
 })
 
 export const AgentRunResult = Schema.Union([AgentRunSuccessStruct, AgentRunFailureStruct]).pipe(
   Schema.toTaggedUnion("_tag"),
 )
 export type AgentRunResult = Schema.Schema.Type<typeof AgentRunResult>
-
-export const getDurableAgentRunSessionId = (
-  result: AgentRunResult,
-): AgentRunResult["sessionId"] => {
-  if ((result.persistence ?? "durable") === "durable") return result.sessionId
-}
 
 export class AgentRunError extends Schema.TaggedError<AgentRunError>()("AgentRunError", {
   message: Schema.String,
@@ -304,9 +289,9 @@ export interface AgentRunner {
     parentSessionId: SessionId
     parentBranchId: BranchId
     cwd: string
-    /** Per-run dispatch config. `persistence`, `overrides`, `tags`, `parentToolCallId`. */
+    /** Per-run dispatch config. `history`, `visibility`, `overrides`, `tags`, `parentToolCallId`. */
     runSpec?: RunSpec
-    /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
+    /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. */
     observe?: (event: AgentEvent) => EffectNs.Effect<void>
   }) => EffectNs.Effect<AgentRunResult, AgentRunError>
 }
