@@ -58,7 +58,6 @@ export {
   GentConnectionError,
   type GentLifecycle,
   SessionSnapshot,
-  SessionTreeNode,
   SlashCommandInfo,
   type SteerCommand,
 } from "./server/transport-contract.js"

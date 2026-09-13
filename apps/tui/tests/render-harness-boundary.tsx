@@ -20,7 +20,7 @@ import { ComposerDraftsProvider } from "../src/components/composer-drafts"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
-import { AgentName, BranchId, SessionId, dateFromMillis } from "@gent/core/protocol"
+import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
 import type { ClientLog } from "../src/utils/client-logger"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 
@@ -53,18 +53,6 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       list: () => noRpcError([]),
       get: () => noRpcError(nullValue),
       delete: () => noRpcError(absent),
-      getChildren: () => noRpcError([]),
-      getTree: () =>
-        noRpcError({
-          session: {
-            id: SessionId.make("session-test"),
-            activeBranchId: BranchId.make("branch-test"),
-            name: "Test Session",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
-          },
-          children: [],
-        }),
       getSnapshot: () =>
         noRpcError({
           sessionId: SessionId.make("session-test"),

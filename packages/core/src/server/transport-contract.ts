@@ -23,18 +23,12 @@ import {
   RequestId,
   SessionId,
 } from "../domain/ids.js"
-import {
-  Branch,
-  BranchTreeNode,
-  ProjectedMessage,
-  Session,
-  SessionTreeNode,
-} from "../domain/message.js"
+import { Branch, BranchTreeNode, ProjectedMessage, Session } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
-export { Branch, BranchTreeNode, Session, SessionTreeNode }
+export { Branch, BranchTreeNode, Session }
 export type { SessionRuntimeState } from "../runtime/session-runtime.js"
 
 /**

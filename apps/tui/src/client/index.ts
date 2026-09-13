@@ -7,7 +7,6 @@ export {
   type Session as DomainSession,
   type Branch,
   type BranchTreeNode,
-  type SessionTreeNode,
   type SteerCommand,
   type AuthProviderInfo,
   type AuthMethod,

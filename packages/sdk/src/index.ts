@@ -20,7 +20,6 @@ export type {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   SteerCommand,
-  SessionTreeNode,
 } from "@gent/core/protocol"
 
 // Client constructors

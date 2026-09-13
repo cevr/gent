@@ -167,27 +167,6 @@ export class Branch extends Schema.Class<Branch>("Branch")({
   createdAt: DateFromNumber,
 }) {}
 
-// Session Tree Node - recursive structure for session hierarchy
-
-export interface SessionTreeNode {
-  session: Session
-  children: readonly SessionTreeNode[]
-}
-
-interface SessionTreeNodeEncoded {
-  session: Schema.Codec.Encoded<typeof Session>
-  children: readonly SessionTreeNodeEncoded[]
-}
-
-export const SessionTreeNode: Schema.Codec<SessionTreeNode, SessionTreeNodeEncoded> = Schema.Struct(
-  {
-    session: Session,
-    children: Schema.Array(
-      Schema.suspend((): Schema.Codec<SessionTreeNode, SessionTreeNodeEncoded> => SessionTreeNode),
-    ),
-  },
-)
-
 export interface BranchTreeNode {
   branch: Branch
   messageCount: number

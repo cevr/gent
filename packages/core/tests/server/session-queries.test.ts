@@ -148,66 +148,6 @@ describe("session queries", () => {
     }).pipe(Effect.timeout("4 seconds"), Effect.provide(sessionQueriesActorFailureLayer)),
   )
 
-  it.live("getChildSessions returns only direct descendants", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* makeClient()
-        const root = yield* client.session.create({ name: "Root", cwd: process.cwd() })
-        const childA = yield* client.session.create({
-          name: "Child A",
-          cwd: process.cwd(),
-          parentSessionId: root.sessionId,
-          parentBranchId: root.branchId,
-        })
-        yield* client.session.create({
-          name: "Grandchild",
-          cwd: process.cwd(),
-          parentSessionId: childA.sessionId,
-          parentBranchId: childA.branchId,
-        })
-        yield* client.session.create({
-          name: "Child B",
-          cwd: process.cwd(),
-          parentSessionId: root.sessionId,
-          parentBranchId: root.branchId,
-        })
-
-        const children = yield* client.session.getChildren({ parentSessionId: root.sessionId })
-
-        expect(children).toHaveLength(2)
-        expect(children.every((child) => child.parentSessionId === root.sessionId)).toBe(true)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-
-  it.live("getSessionTree returns the recursive session hierarchy", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* makeClient()
-        const root = yield* client.session.create({ name: "Root", cwd: process.cwd() })
-        const child = yield* client.session.create({
-          name: "Child",
-          cwd: process.cwd(),
-          parentSessionId: root.sessionId,
-          parentBranchId: root.branchId,
-        })
-        yield* client.session.create({
-          name: "Grandchild",
-          cwd: process.cwd(),
-          parentSessionId: child.sessionId,
-          parentBranchId: child.branchId,
-        })
-
-        const tree = yield* client.session.getTree({ sessionId: root.sessionId })
-
-        expect(tree.session.id).toBe(root.sessionId)
-        expect(tree.children).toHaveLength(1)
-        expect(tree.children[0]?.session.id).toBe(child.sessionId)
-        expect(tree.children[0]?.children).toHaveLength(1)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-
   it.live("createSession rejects a missing parent session through the public API", () =>
     Effect.scoped(
       Effect.gen(function* () {

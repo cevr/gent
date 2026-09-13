@@ -21,7 +21,6 @@ import { SessionProfileCache } from "../runtime/session-profile.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, NotFoundError } from "./errors.js"
@@ -83,7 +82,6 @@ const invalidateExternalDriversFor = (
     }
   })
 
-type ParentSessionPayload = { readonly parentSessionId: SessionId }
 type BranchPayload = { readonly branchId: BranchId }
 type OptionalSessionPayload = { readonly sessionId?: SessionId }
 type SessionIdPayload = { readonly sessionId: SessionId }
@@ -146,7 +144,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
-    const relationshipStorage = yield* RelationshipStorage
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
     const serverIdentity = yield* ServerIdentity
     // Touching these Tags at layer-build keeps their requirements visible on the
@@ -252,15 +249,6 @@ const RpcHandlers = GentRpcs.toLayer(
         mutations.deleteSession(sessionId).pipe(
           Effect.tap(() => WideEvent.set({ sessionId })),
           withWideEvent(WideEventBoundary.rpc("session.delete")),
-        ),
-
-      "session.getChildren": ({ parentSessionId }: ParentSessionPayload) =>
-        relationshipStorage.getChildSessions(parentSessionId),
-
-      "session.getTree": ({ sessionId }: SessionIdPayload) =>
-        queries.getSessionTree(sessionId).pipe(
-          Effect.tap(() => WideEvent.set({ sessionId })),
-          withWideEvent(WideEventBoundary.rpc("session.getTree")),
         ),
 
       "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>

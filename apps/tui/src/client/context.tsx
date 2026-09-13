@@ -73,7 +73,6 @@ import type {
   Branch,
   BranchTreeNode,
   ExtensionHealthSnapshot,
-  SessionTreeNode,
   SteerCommand,
 } from "@gent/sdk"
 import {
@@ -196,7 +195,6 @@ export interface ClientSessionValue {
   // eslint-disable-next-line effect/noNullish -- RPC branch creation accepts an omitted name.
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
-  getSessionTree: (sessionId: SessionId) => Effect.Effect<SessionTreeNode, GentClientRpcError>
   // eslint-disable-next-line effect/noNullish -- RPC branch forking accepts an omitted name.
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
@@ -878,8 +876,6 @@ export function ClientProvider(props: ClientProviderProps) {
       }
       return yield* client.branch.getTree({ sessionId: currentSession.value.sessionId })
     }),
-
-    getSessionTree: (sessionId) => client.session.getTree({ sessionId }),
 
     forkBranch: (messageId, name) => {
       const currentSession = sessionOption()

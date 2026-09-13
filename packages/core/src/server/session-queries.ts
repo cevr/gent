@@ -1,12 +1,9 @@
 import { Context, Effect, Layer, Option, Predicate } from "effect"
-import type { SessionId } from "../domain/ids.js"
-import type { Session, SessionTreeNode } from "../domain/message.js"
 import { projectMessagesWithToolInteractions } from "../domain/message-part-display.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
 import { InvalidStateError, NotFoundError, type GentRpcError } from "./errors.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -14,9 +11,6 @@ import { SessionSnapshot } from "./transport-contract.js"
 import type { GetSessionSnapshotInput } from "./transport-contract.js"
 
 interface SessionQueriesService {
-  readonly getSessionTree: (
-    rootSessionId: SessionId,
-  ) => Effect.Effect<SessionTreeNode, GentRpcError>
   readonly getSessionSnapshot: (
     input: GetSessionSnapshotInput,
   ) => Effect.Effect<SessionSnapshot, GentRpcError>
@@ -32,33 +26,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
       const eventStorage = yield* EventStorage
-      const relationshipStorage = yield* RelationshipStorage
       const storageTransaction = yield* makeStorageTransaction
       const sessionRuntime = yield* SessionRuntime
-
-      const buildSessionTreeNode = (
-        session: Session,
-      ): Effect.Effect<SessionTreeNode, GentRpcError> =>
-        Effect.gen(function* () {
-          const children = yield* relationshipStorage.getChildSessions(session.id)
-          return {
-            session,
-            children: yield* Effect.forEach(children, buildSessionTreeNode, { concurrency: 5 }),
-          }
-        })
-
-      const getSessionTree = Effect.fn("SessionQueries.getSessionTree")(function* (
-        rootSessionId: SessionId,
-      ) {
-        const rootSession = yield* sessionStorage.getSession(rootSessionId)
-        if (Predicate.isUndefined(rootSession)) {
-          return yield* new NotFoundError({
-            message: `Session not found: ${rootSessionId}`,
-            entity: "session",
-          })
-        }
-        return yield* buildSessionTreeNode(rootSession)
-      })
 
       const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
         input: GetSessionSnapshotInput,
@@ -135,7 +104,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       })
 
       return {
-        getSessionTree,
         getSessionSnapshot,
       } satisfies SessionQueriesService
     }),

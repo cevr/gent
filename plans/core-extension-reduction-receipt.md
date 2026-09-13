@@ -1256,3 +1256,13 @@ toolSurface` was set by no driver. The codemode prompt slot they were
   the one operation and the reconciler is no longer exported.
 - Core's `toResponseFinishReason` had one caller, its own test; the ACP
   extension already carries the identical mapping for its own use.
+
+## Two session RPCs no client called (2026-09-13)
+
+- `session.getTree` was declared on the TUI client and wired, and read by
+  nothing; `session.getChildren` was called only by a core test. Both are
+  gone with `SessionTreeNode`, `SessionQueries.getSessionTree`, and their
+  barrel names in the protocol, SDK, and TUI client.
+- Kept: `session.delete` (a store you cannot delete from is a missing
+  capability, and any RPC client can call it) and `runtime.status` (the
+  only probe of the connection tracker; the lifecycle tests use it).

@@ -1,7 +1,7 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
-import { Branch, BranchTreeNode, Message, Session, SessionTreeNode } from "../../domain/message.js"
+import { Branch, BranchTreeNode, Message, Session } from "../../domain/message.js"
 import { ReasoningEffort } from "../../domain/agent.js"
 import { SessionRuntimeStateSchema } from "../../runtime/session-runtime.js"
 import { GentRpcError } from "../errors.js"
@@ -44,16 +44,6 @@ export class SessionRpcs extends RpcGroup.make(
   }),
   Rpc.make("session.delete", {
     payload: { sessionId: SessionId },
-    error: GentRpcError,
-  }),
-  Rpc.make("session.getChildren", {
-    payload: { parentSessionId: SessionId },
-    success: Schema.Array(Session),
-    error: GentRpcError,
-  }),
-  Rpc.make("session.getTree", {
-    payload: { sessionId: SessionId },
-    success: SessionTreeNode,
     error: GentRpcError,
   }),
   Rpc.make("session.getSnapshot", {

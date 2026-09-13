@@ -31,7 +31,6 @@ import {
   type Session,
   type SessionId,
   type SessionSnapshot,
-  type SessionTreeNode,
   type SteerCommand,
   type ToolInteraction,
 } from "@gent/core/protocol"
@@ -73,7 +72,6 @@ export type {
   Branch,
   BranchTreeNode,
   SessionSnapshot,
-  SessionTreeNode,
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
