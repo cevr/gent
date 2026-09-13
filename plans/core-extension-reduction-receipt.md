@@ -1368,3 +1368,33 @@ projection is now `{ mediaType }`, the search token is the media type, and
 (`messagePartText`/`Reasoning`/`Image`/`ToolCall`) had one consumer, the
 TUI's segment builder, which now switches on `part.type`; the helpers are
 file-private and `protocol.ts` drops the four names.
+
+## Harness fix between passes: the output cap and the replayed continuation (2026-09-13)
+
+Gamut runs 16a and 16 (sonnet-sonnet at `c50961e5`) ended with no
+delegation: steps 5, 6, and 7 each stopped at exactly 4,096 output tokens
+with zero tool calls. Every model request carried `maxTokens: 4096`, the
+same constant the context projection reserves, and a Sonnet orchestrator
+writing one cell with six delegate prompts never fit. The truncated tool
+call was discarded, the leading text ("Let me delegate the 6 tasks
+concurrently.") was reported as the reply, and the turn completed. The
+hint is gone (`a28acda4`): each provider adapter already falls back to the
+model's own output limit when the hint is absent. A step that finishes
+with reason `length` and no tool call now spends a continuation with a
+"retry in smaller steps" prompt. The second bug in the same run: the
+continuation prompt is persisted as a user message with no `TurnCompleted`
+of its own, so the incomplete-turn resume replayed it after the assistant
+reply and Anthropic rejected the transcript as assistant prefill.
+Continuation messages are excluded from that resume. Both regressions are
+pinned by tests that fail with the fix disabled.
+
+## Eighth pass: one projection, no computed-then-ignored fields (2026-09-13)
+
+`domain/response-to-prompt.ts` (`27e28c62`) carried two spellings of the
+assistant part union, two `undefined`-returning wrappers over the Option
+projections, and three prompt builders that only tests called; one
+projection remains and the image conversion is inlined into its `file`
+arm (`message-image-conversion.ts` deleted). `ToolOutput.type` was set at
+every call site and read by none. `ProjectionError` had no thrower;
+`ToolCallRecoveryOutcome.Incomplete` had no constructor. Core is 29,039
+LOC at `27e28c62`.
