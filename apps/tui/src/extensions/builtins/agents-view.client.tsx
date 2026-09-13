@@ -113,7 +113,10 @@ export const makeAgentsController = (
   const [pending, setPending] = createSignal(Option.none<string>())
 
   const select = (row: Option.Option<AgentRowEntry>) => {
-    if (Option.isNone(row)) {
+    // A detail read goes through the loop actor, and an actor read spawns the
+    // entity: asking a stored session what it is doing would make it live.
+    // Only rows that already have a loop are asked.
+    if (Option.isNone(row) || !row.value.live) {
       setPending(Option.none())
       setDetail(Option.none())
       return
@@ -300,11 +303,15 @@ export function AgentsPane(
     onSelect: (row: AgentRowEntry) => void
     /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
     onToggle: () => void
+    /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
+    onDelete: (row: AgentRowEntry) => void
   },
 ) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(FilterListState.initial())
+  // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
+  const [armed, setArmed] = createSignal(Option.none<string>())
   let scrollRef: Option.Option<ScrollBoxRenderable> = Option.none()
 
   const isCurrent = (row: AgentRowEntry): boolean =>
@@ -355,9 +362,16 @@ export function AgentsPane(
   useScopedKeyboard(
     (event) => {
       if (event.name === "escape") {
+        if (Option.isSome(armed())) {
+          setArmed(Option.none())
+          return true
+        }
         props.onClose()
         return true
       }
+
+      if (event.ctrl === true && event.name === "x") return armOrDelete()
+      setArmed(Option.none())
 
       if (event.name === "backspace") {
         const next = transitionFilterList(state(), FilterListEvent.cases.Backspace.make({}))
@@ -466,8 +480,30 @@ export function AgentsPane(
 
   const items = () => paneItems(visible())
 
+  // First Ctrl+X arms the selected row; the second deletes it. The shell's own
+  // loop is never a target: the pane would be deleting the session it lives on.
+  const armOrDelete = (): boolean => {
+    const selected = Option.fromNullishOr(visible()[state().selectedIndex])
+    if (Option.isNone(selected) || isCurrent(selected.value)) return true
+    if (Option.contains(armed(), selected.value.sessionId)) {
+      setArmed(Option.none())
+      props.onDelete(selected.value)
+      return true
+    }
+    setArmed(Option.some(selected.value.sessionId))
+    return true
+  }
+
+  const lineColor = (row: AgentRowEntry, section: AgentRowEntry["section"], selected: boolean) => {
+    if (Option.contains(armed(), row.sessionId)) return theme.error
+    return colorFor(section, selected)
+  }
+
   /** `<marker><indent><glyph> name · agent  ·  activity` padded so the age sits on the right edge. */
   const rowLine = (row: AgentRowEntry, selected: boolean): string => {
+    if (Option.contains(armed(), row.sessionId)) {
+      return "^x again to delete this session and its children"
+    }
     const age = ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
@@ -532,7 +568,7 @@ export function AgentsPane(
                     backgroundColor={background()}
                     paddingLeft={1}
                   >
-                    <text style={{ fg: colorFor(section(), selected()) }}>
+                    <text style={{ fg: lineColor(item.row, section(), selected()) }}>
                       <span style={{ fg: glyphColorFor(section(), selected()) }}>
                         {rowLine(item.row, selected()).slice(0, 1)}
                       </span>
@@ -554,7 +590,9 @@ export function AgentsPane(
         </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
-        <ChromePanel.Footer>↑↓ move ↵ open esc close ^t hide</ChromePanel.Footer>
+        <ChromePanel.Footer>
+          {"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
+        </ChromePanel.Footer>
       </box>
     </Show>
   )
@@ -612,6 +650,18 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
               controller.setOpen(next)
               if (next) controller.refresh("")
             }}
+            onDelete={(row) =>
+              shell.cast(
+                transport.deleteSession(row.sessionId).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("agents.delete failed").pipe(
+                      Effect.annotateLogs({ sessionId: row.sessionId, error: String(cause) }),
+                    ),
+                  ),
+                  Effect.andThen(Effect.sync(() => controller.refresh(""))),
+                ),
+              )
+            }
             onSelect={(row) => {
               controller.setOpen(false)
               // Rows are already keyed per branch, so there is no active-branch

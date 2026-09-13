@@ -13,11 +13,11 @@ import type { AgentRowEntry } from "@gent/extensions/client"
 import { makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-transport"
 
-const row = (id: string): AgentRowEntry => ({
+const row = (id: string, live = true): AgentRowEntry => ({
   sessionId: SessionId.make(id),
   branchId: BranchId.make(`${id}-branch`),
-  section: "inactive",
-  live: false,
+  section: "idle",
+  live,
   depth: 0,
 })
 
@@ -104,6 +104,34 @@ describe("Agents controller detail", () => {
       expect(result.controller.detail()).toEqual(Option.none())
 
       result.dispose()
+    }),
+  )
+})
+
+describe("Agents controller stored rows", () => {
+  it.scopedLive("never asks a stored session for detail, since the read would spawn its loop", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const asked: Array<string> = []
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Effect.succeed([]),
+          (key) => {
+            asked.push(key.sessionId)
+            return Effect.succeed(detail(1))
+          },
+          (effect) => {
+            cast(effect)
+          },
+          () => Option.none(),
+        )
+        controller.select(Option.some(row("stored", false)))
+        const seen = controller.detail()
+        dispose()
+        return seen
+      })
+      expect(asked).toEqual([])
+      expect(result).toEqual(Option.none())
     }),
   )
 })

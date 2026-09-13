@@ -79,6 +79,8 @@ export interface ClientTransportDefinition {
   readonly agentDetail: (
     key: ActiveExtensionSession,
   ) => Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError>
+  /** Delete a session and its descendants; their loops stop and their rows go. */
+  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ClientTransportRequestError>
 }
 
 export interface ClientShellTransportDefinition {
@@ -119,6 +121,7 @@ export const makeClientTransportLayer = (
     onExtensionStateChanged: payload.onExtensionStateChanged,
     onSessionEvent: payload.onSessionEvent,
     agentDetail: (key) => agentDetailAt(payload, key),
+    deleteSession: (sessionId) => deleteSessionAt(payload, sessionId),
   }
   return Layer.succeed(ClientTransport, transport)
 }
@@ -211,6 +214,21 @@ const requestExtensionAt = <Input, Output>(
  * The snapshot also carries the full projected message list; a detail line has
  * no use for it, so the extension surface never sees it.
  */
+const deleteSessionAt = (
+  transport: ClientShellTransportDefinition,
+  sessionId: SessionId,
+): Effect.Effect<void, ClientTransportRequestError> =>
+  Effect.tryPromise({
+    try: () => transport.runtime.run(transport.client.session.delete({ sessionId })),
+    catch: (cause) =>
+      new ClientTransportRequestError({
+        extensionId: "@gent/tui/client-transport",
+        tag: "session.delete",
+        message: `session delete failed: ${String(cause)}`,
+        cause,
+      }),
+  }).pipe(Effect.asVoid)
+
 const agentDetailAt = (
   transport: ClientShellTransportDefinition,
   key: ActiveExtensionSession,

@@ -25,7 +25,7 @@ import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
-import { makeServerRootLayer } from "../server/server-root.js"
+import { buildServerRoot } from "../server/server-root.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import {
@@ -170,7 +170,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
   let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
   if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
-  return makeServerRootLayer({
+  const root = buildServerRoot({
     observability: Layer.empty,
     dependencies: {
       ...testEnvironment,
@@ -193,5 +193,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       },
     },
     identity: testIdentity(config.storagePath),
-  }).pipe(Layer.provide(BunServices.layer))
+  })
+  return Layer.unwrap(root.pipe(Effect.map((built) => built.coreServicesLive))).pipe(
+    Layer.provide(BunServices.layer),
+  )
 }

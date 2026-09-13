@@ -88,8 +88,3 @@ export const buildServerRoot = (
       rpcHandlersContext,
     }
   })
-
-export const makeServerRootLayer = (
-  config: ServerRootConfig,
-): Layer.Layer<ServerRootServices, DependencyError, FileSystem> =>
-  Layer.unwrap(buildServerRoot(config).pipe(Effect.map((root) => root.coreServicesLive)))

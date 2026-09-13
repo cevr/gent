@@ -52,6 +52,7 @@ describe("Agents pane navigation", () => {
               selected = Option.some(value)
             }}
             onToggle={() => {}}
+            onDelete={() => {}}
             onClose={() => setOpen(false)}
           />
         )),
@@ -109,6 +110,7 @@ describe("Agents pane navigation", () => {
             }}
             onSelect={() => {}}
             onToggle={() => {}}
+            onDelete={() => {}}
             onClose={() => {}}
           />
         )),
@@ -160,6 +162,7 @@ describe("Agents pane navigation", () => {
             }}
             onSelect={() => {}}
             onToggle={() => {}}
+            onDelete={() => {}}
             onClose={() => {}}
           />
         )),
@@ -198,6 +201,7 @@ describe("Agents pane navigation", () => {
               toggles++
               setOpen((current) => !current)
             }}
+            onDelete={() => {}}
             onClose={() => setOpen(false)}
           />
         )),
@@ -214,6 +218,46 @@ describe("Agents pane navigation", () => {
       setup.mockInput.pressKey("t", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
       expect(open()).toBe(false)
+    }),
+  )
+})
+
+describe("Agents pane delete", () => {
+  it.live("Ctrl+X arms the row in place and a second press deletes it", () =>
+    Effect.gen(function* () {
+      const deleted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <AgentsPane
+            open={true}
+            controller={{
+              rows: () => [row("doomed", "Alpha", 0)],
+              current: () => Option.none(),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => true,
+              setOpen: () => {},
+            }}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={(target) => deleted.push(target.sessionId)}
+            onClose={() => {}}
+          />
+        )),
+      )
+
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("^x again to delete")
+      expect(deleted).toEqual([])
+
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(deleted).toEqual(["doomed"])
+      expect(renderFrame(setup)).not.toContain("^x again")
     }),
   )
 })
