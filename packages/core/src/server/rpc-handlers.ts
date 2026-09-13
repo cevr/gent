@@ -28,6 +28,7 @@ import { buildExtensionHealthSnapshot } from "./extension-health.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionCommands } from "./session-commands.js"
+import { SessionMutations } from "../domain/session-mutations.js"
 import { SessionQueries } from "./session-queries.js"
 import { getBranchTree } from "./session-utils.js"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
@@ -132,6 +133,7 @@ const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
     const queries = yield* SessionQueries
     const commands = yield* SessionCommands
+    const mutations = yield* SessionMutations
     const eventStore = yield* EventStore
     const interactions = yield* InteractionCommands
     const configService = yield* ConfigService
@@ -219,7 +221,7 @@ const RpcHandlers = GentRpcs.toLayer(
           .pipe(Effect.map(Option.fromUndefinedOr), Effect.map(Option.getOrNull)),
 
       "session.delete": ({ sessionId }: SessionIdPayload) =>
-        commands.deleteSession(sessionId).pipe(
+        mutations.deleteSession(sessionId).pipe(
           Effect.tap(() => WideEvent.set({ sessionId })),
           withWideEvent(WideEventBoundary.rpc("session.delete")),
         ),
@@ -243,7 +245,7 @@ const RpcHandlers = GentRpcs.toLayer(
         sessionId,
         reasoningLevel,
       }: UpdateSessionReasoningLevelInput) =>
-        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }).pipe(
+        mutations.updateReasoningLevel({ sessionId, reasoningLevel }).pipe(
           Effect.tap(() => WideEvent.set({ sessionId, reasoningLevel })),
           withWideEvent(WideEventBoundary.rpc("session.updateReasoningLevel")),
         ),

@@ -5,11 +5,7 @@ import type { BranchId, MessageId, RequestId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
 import type { StorageError } from "./storage-error.js"
 
-export type SessionMutationError =
-  | StorageError
-  | EventStoreError
-  | InvalidStateError
-  | NotFoundError
+type SessionMutationError = StorageError | EventStoreError | InvalidStateError | NotFoundError
 
 export interface SessionMutationsService {
   readonly renameSession: (input: {

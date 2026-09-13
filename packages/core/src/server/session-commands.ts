@@ -1,7 +1,7 @@
 import { Predicate, DateTime, Effect, Layer, Context, Option, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { SessionMutations, type SessionMutationError } from "../domain/session-mutations.js"
+import { SessionMutations } from "../domain/session-mutations.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session } from "../domain/message.js"
 import { messagePartsTextLines } from "../domain/message-part-projection.js"
@@ -32,7 +32,6 @@ import type {
   ForkBranchInput,
   SendMessageInput,
   SwitchBranchInput,
-  UpdateSessionReasoningLevelInput,
 } from "./transport-contract.js"
 
 type CreateSessionResult = {
@@ -45,34 +44,22 @@ type CreateBranchResult = {
   readonly branchId: BranchId
 }
 
-type UpdateSessionReasoningLevelResult = {
-  readonly reasoningLevel: UpdateSessionReasoningLevelInput["reasoningLevel"]
-}
-
-// Common error union for SessionCommands mutations: storage/event errors plus
-// the typed business errors surfaced from validation paths.
-type SessionCommandError = SessionMutationError
-
-// SessionCommands is the RPC-facing surface: dedup-wrapped session creates,
-// branch operations with summarization, and session runtime commands. Bodies
-// that mutate purely-durable state (rename, child-session create,
-// branch/message delete) live on `SessionMutations`, an internal RPC-facing
-// service shared with this module so there is exactly one implementation of
-// each durable mutation. Extensions do not see this surface.
+// SessionCommands is the RPC-facing surface for the commands that carry a
+// request id: dedup-wrapped session creates, branch operations with
+// summarization, and message sends. Mutations without a request id (rename,
+// delete, reasoning level) are called on `SessionMutations` directly, so each
+// durable mutation has exactly one implementation. Extensions do not see this
+// surface.
 interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
   ) => Effect.Effect<CreateSessionResult, GentRpcError>
-  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionCommandError>
   readonly createBranch: (
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchResult, GentRpcError>
   readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, GentRpcError>
   readonly forkBranch: (input: ForkBranchInput) => Effect.Effect<CreateBranchResult, GentRpcError>
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentRpcError>
-  readonly updateSessionReasoningLevel: (
-    input: UpdateSessionReasoningLevelInput,
-  ) => Effect.Effect<UpdateSessionReasoningLevelResult, GentRpcError>
 }
 
 interface SessionCommandsDedupControlService {
@@ -234,14 +221,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return parts.join("").trim()
       })
 
-      const createSession: (
-        input: CreateSessionInput,
-      ) => Effect.Effect<CreateSessionResult, GentRpcError> = Effect.fn(
-        "SessionCommands.createSession",
-      )(function* (input: CreateSessionInput) {
-        return yield* dedupCreateSession(input)
-      })
-
       const sendInitialPrompt = Effect.fn("SessionCommands.sendInitialPrompt")(function* (
         operation: StoredCreateSessionResult,
         requestId: Option.Option<string>,
@@ -372,12 +351,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return createSessionResult(committed.result)
       })
 
-      const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
-        input: CreateBranchInput,
-      ) {
-        return yield* dedupCreateBranch(input)
-      })
-
       const doCreateBranch = Effect.fn("SessionCommands.doCreateBranch")(function* (
         input: CreateBranchInput,
       ) {
@@ -387,11 +360,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           requestId: input.requestId,
         })
       })
-
-      const switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, GentRpcError> =
-        Effect.fn("SessionCommands.switchBranch")(function* (input: SwitchBranchInput) {
-          yield* dedupSwitchBranch(input)
-        })
 
       const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
         input: SwitchBranchInput,
@@ -423,14 +391,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
       })
 
-      const forkBranch: (
-        input: ForkBranchInput,
-      ) => Effect.Effect<CreateBranchResult, GentRpcError> = Effect.fn(
-        "SessionCommands.forkBranch",
-      )(function* (input: ForkBranchInput) {
-        return yield* dedupForkBranch(input)
-      })
-
       const doForkBranch = Effect.fn("SessionCommands.doForkBranch")(function* (
         input: ForkBranchInput,
       ) {
@@ -441,12 +401,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           requestId: input.requestId,
         })
-      })
-
-      const sendMessage: (input: SendMessageInput) => Effect.Effect<void, GentRpcError> = Effect.fn(
-        "SessionCommands.sendMessage",
-      )(function* (input: SendMessageInput) {
-        yield* dedupSendMessage(input)
       })
 
       const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (
@@ -470,17 +424,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       })
 
       return {
-        createSession,
-        // SessionEnded is not emitted on delete — FK cascade would immediately
-        // remove the persisted event. Delete is destructive and rare. The
-        // cascade + runtime-state cleanup live on SessionMutations; this is a
-        // thin delegation.
-        deleteSession: (sessionId) => mutations.deleteSession(sessionId),
-        createBranch,
-        switchBranch,
-        forkBranch,
-        sendMessage,
-        updateSessionReasoningLevel: mutations.updateReasoningLevel,
+        createSession: dedupCreateSession,
+        createBranch: dedupCreateBranch,
+        switchBranch: dedupSwitchBranch,
+        forkBranch: dedupForkBranch,
+        sendMessage: dedupSendMessage,
       } satisfies SessionCommandsService
     }),
   )

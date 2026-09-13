@@ -849,3 +849,11 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   The branch summary is read by the TUI branch picker, so `summarizeBranch`
   stays; `BranchSummarized` is a write-only event but removing a persisted
   tag risks replay decode, so it stays too.
+
+## SessionCommands carries only request-id commands (2026-09-13)
+
+- `deleteSession` and `updateSessionReasoningLevel` on `SessionCommands` were
+  one-line delegations to `SessionMutations`; the RPC handlers and the two
+  tests now call `SessionMutations` directly. The five `Effect.fn` wrappers
+  whose bodies were `yield* dedupX(input)` added a span over a span; the
+  deduped functions are the service. −70 lines, one fewer error alias.

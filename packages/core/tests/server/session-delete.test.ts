@@ -133,6 +133,7 @@ describe("session.delete", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
+        const mutations = yield* SessionMutations
         const eventStore = yield* EventStore
 
         const parent = yield* commands.createSession({ cwd: "/tmp/delete-parent" })
@@ -163,7 +164,7 @@ describe("session.delete", () => {
           grandchild.branchId,
         )
 
-        yield* commands.deleteSession(parent.sessionId)
+        yield* mutations.deleteSession(parent.sessionId)
 
         yield* Deferred.await(parentClosed).pipe(Effect.timeout("5 seconds"))
         yield* Deferred.await(childClosed).pipe(Effect.timeout("5 seconds"))
@@ -183,11 +184,12 @@ describe("session.delete", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
+        const mutations = yield* SessionMutations
         const sessions = yield* SessionStorage
 
         const parent = yield* commands.createSession({ cwd: "/tmp/race-parent" })
 
-        yield* commands.deleteSession(parent.sessionId)
+        yield* mutations.deleteSession(parent.sessionId)
 
         expect(yield* sessions.getSession(parent.sessionId)).toBeUndefined()
         expect(yield* sessions.getSession(lateChildSessionId)).toBeUndefined()
@@ -250,7 +252,7 @@ describe("session.delete", () => {
     const runtimeRestored: Array<SessionId> = []
     return Effect.scoped(
       Effect.gen(function* () {
-        const commands = yield* SessionCommands
+        const mutations = yield* SessionMutations
         const sessions = yield* SessionStorage
         const branches = yield* BranchStorage
         const sessionId = SessionId.make("delete-failure-session")
@@ -264,7 +266,7 @@ describe("session.delete", () => {
           now: FIXED_NOW,
         })
 
-        const exit = yield* Effect.exit(commands.deleteSession(sessionId))
+        const exit = yield* Effect.exit(mutations.deleteSession(sessionId))
 
         expect(exit._tag).toBe("Failure")
         expect(runtimeTerminated).toEqual([sessionId])

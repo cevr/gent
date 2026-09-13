@@ -218,7 +218,7 @@ describe("session command persistence", () => {
 
   it.live("rolls back reasoning setting when event publication fails", () =>
     Effect.gen(function* () {
-      const commands = yield* SessionCommands
+      const mutations = yield* SessionMutations
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-settings-rollback")
@@ -235,7 +235,7 @@ describe("session command persistence", () => {
       })
 
       const exit = yield* Effect.exit(
-        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel: "high" }),
+        mutations.updateReasoningLevel({ sessionId, reasoningLevel: "high" }),
       )
 
       expect(exit._tag).toBe("Failure")
