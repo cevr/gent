@@ -19,7 +19,6 @@ class BranchTable extends Model.Class<BranchTable>("BranchTable")({
   parent_branch_id: Schema.NullOr(BranchId),
   parent_message_id: Schema.NullOr(MessageId),
   name: Schema.NullOr(Schema.String),
-  summary: Schema.NullOr(Schema.String),
   created_at: Schema.Finite,
 }) {}
 
@@ -30,10 +29,6 @@ export interface BranchStorageService {
   readonly listBranches: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
-  readonly updateBranchSummary: (
-    branchId: BranchId,
-    summary: string,
-  ) => Effect.Effect<void, StorageError>
   readonly countMessages: (branchId: BranchId) => Effect.Effect<number, StorageError>
   readonly countMessagesByBranches: (
     branchIds: readonly BranchId[],
@@ -88,7 +83,6 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
               parent_branch_id: toSqlNull(branch.parentBranchId),
               parent_message_id: toSqlNull(branch.parentMessageId),
               name: toSqlNull(branch.name),
-              summary: toSqlNull(branch.summary),
               created_at: branch.createdAt.getTime(),
             })
             return branch
@@ -100,7 +94,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
           function* (id) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.summary, b.created_at
+              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
               FROM branches b
               JOIN sessions s ON s.id = b.session_id
               WHERE b.id = ${id} AND s.workspace_id = ${workspaceId}`
@@ -116,7 +110,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.summary, b.created_at
+              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
               FROM branches b
               JOIN sessions s ON s.id = b.session_id
               WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}
@@ -124,18 +118,6 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             return yield* Effect.forEach(rows, branchFromRow)
           },
           Effect.mapError(mapError("Failed to list branches")),
-        ),
-
-        updateBranchSummary: Effect.fn("BranchStorage.updateBranchSummary")(
-          function* (branchId, summary) {
-            const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE branches
-              SET summary = ${summary}
-              WHERE id = ${branchId}
-                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
-          },
-          Effect.asVoid,
-          Effect.mapError(mapError("Failed to update branch summary")),
         ),
 
         countMessages: Effect.fn("BranchStorage.countMessages")(

@@ -106,7 +106,6 @@ const initialMigration = Effect.gen(function* () {
       parent_branch_id TEXT,
       parent_message_id TEXT,
       name TEXT,
-      summary TEXT,
       created_at INTEGER NOT NULL,
       UNIQUE (id, session_id),
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,

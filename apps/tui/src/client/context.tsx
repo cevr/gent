@@ -204,7 +204,7 @@ export interface ClientSessionValue {
 
   // Branch navigation (fire-and-forget)
   // eslint-disable-next-line effect/noNullish -- RPC branch switching accepts an omitted summary flag.
-  switchBranch: (branchId: BranchId, summarize?: boolean) => void
+  switchBranch: (branchId: BranchId) => void
 }
 
 export interface ClientAgentValue {
@@ -922,7 +922,7 @@ export function ClientProvider(props: ClientProviderProps) {
       })
     }),
 
-    switchBranch: (branchId, summarize) => {
+    switchBranch: (branchId) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return
       const s = currentSession.value
@@ -935,7 +935,6 @@ export function ClientProvider(props: ClientProviderProps) {
             fromBranchId: s.branchId,
             toBranchId: branchId,
             requestId,
-            summarize,
           })
         }).pipe(
           Effect.tapError((err) =>

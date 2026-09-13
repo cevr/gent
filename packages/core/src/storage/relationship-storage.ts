@@ -97,7 +97,7 @@ export class RelationshipStorage extends Context.Service<
             const session = yield* sessionFromRow(sessionRow)
 
             const branchRows =
-              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.summary, b.created_at
+              yield* sql<BranchRow>`SELECT b.id, b.session_id, b.parent_branch_id, b.parent_message_id, b.name, b.created_at
                 FROM branches b
                 JOIN sessions s ON s.id = b.session_id
                 WHERE b.session_id = ${sessionId} AND s.workspace_id = ${workspaceId}

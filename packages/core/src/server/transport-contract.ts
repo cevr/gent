@@ -71,7 +71,6 @@ export const SwitchBranchInput = Schema.Struct({
   sessionId: SessionId,
   fromBranchId: BranchId,
   toBranchId: BranchId,
-  summarize: Schema.optional(Schema.Boolean),
   /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
   requestId: Schema.optional(RequestIdSchema),
 })

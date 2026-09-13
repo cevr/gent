@@ -279,19 +279,12 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "branch.getTree": ({ sessionId }: SessionIdPayload) => getBranchTree(sessionId),
 
-      "branch.switch": ({
-        sessionId,
-        fromBranchId,
-        toBranchId,
-        summarize,
-        requestId,
-      }: SwitchBranchInput) =>
+      "branch.switch": ({ sessionId, fromBranchId, toBranchId, requestId }: SwitchBranchInput) =>
         commands
           .switchBranch({
             sessionId,
             fromBranchId,
             toBranchId,
-            summarize,
             requestId,
           })
           .pipe(

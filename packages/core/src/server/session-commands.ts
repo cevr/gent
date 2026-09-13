@@ -1,25 +1,16 @@
-import { Predicate, DateTime, Effect, Layer, Context, Option, Stream } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { Predicate, DateTime, Effect, Layer, Context, Option } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionMutations } from "../domain/session-mutations.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { Branch, Message, Session } from "../domain/message.js"
-import { messagePartsTextLines } from "../domain/message-part-projection.js"
-import { BranchSummarized, SessionStarted } from "../domain/event.js"
+import { BranchId, SessionId } from "../domain/ids.js"
+import { Branch, Session } from "../domain/message.js"
+import { SessionStarted } from "../domain/event.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
 import {
   SessionOperationStorage,
   type StoredCreateSessionResult,
 } from "../storage/session-operation-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
-import { ModelResolver } from "../providers/model-resolver.js"
-import { DEFAULT_MODEL_ID, resolveDefaultAgentModel } from "../domain/agent.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { toPrompt } from "../providers/ai-transcript.js"
-import * as AiError from "effect/unstable/ai/AiError"
-import { ProviderError } from "../domain/provider-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -81,24 +72,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
     Effect.gen(function* () {
       const sessionStorage = yield* SessionStorage
       const branchStorage = yield* BranchStorage
-      const messageStorage = yield* MessageStorage
       const storageTransaction = yield* makeStorageTransaction
       const sessionOperationStorage = yield* SessionOperationStorage
       const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
-      const modelResolver = yield* ModelResolver
-      const extensionRegistry = yield* ExtensionRegistry
-
-      /**
-       * Branch summaries run on whatever model this install is already
-       * configured to use, rather than a vendor SKU pinned in core. Falls back
-       * to `DEFAULT_MODEL_ID` when no default agent is registered.
-       */
-      const summaryModelId = () =>
-        Option.getOrElse(
-          resolveDefaultAgentModel([...extensionRegistry.getResolved().agents.values()]),
-          () => DEFAULT_MODEL_ID,
-        )
       const platform = yield* GentPlatform
       // SessionCommands delegates pure-mutation bodies that do not carry RPC
       // request IDs to SessionMutations. Request-id-bearing branch operations
@@ -155,70 +132,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const dedupSwitchBranch = yield* makeRequestDeduper<SwitchBranchInput, void, GentRpcError>({
         body: (input) => doSwitchBranch(input),
         keyOf: (input) => Option.fromUndefinedOr(input.requestId),
-      })
-
-      const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
-        branchId: BranchId,
-      ) {
-        const messages = yield* messageStorage.listMessages(branchId)
-        if (messages.length === 0) return ""
-        const firstMessage = messages[0]
-        if (Predicate.isUndefined(firstMessage)) return ""
-
-        const conversation = messages
-          .slice(-50)
-          .map((message) => {
-            const text = messagePartsTextLines(message.parts).join("\n")
-            if (text !== "") {
-              return `${message.role}: ${text}`
-            }
-            return ""
-          })
-          .filter((line) => line.trim().length > 0)
-          .join("\n\n")
-
-        if (conversation === "") return ""
-
-        const summaryMessage = Message.cases.regular.make({
-          id: MessageId.make(yield* platform.randomId),
-          sessionId: firstMessage.sessionId,
-          branchId,
-          role: "user",
-          parts: [
-            Prompt.textPart({
-              text: `Summarize this branch concisely. Focus on decisions, open questions, and current state. Keep it short and actionable.\n\nBranch conversation (recent):\n${conversation}`,
-            }),
-          ],
-          createdAt: yield* DateTime.nowAsDate,
-        })
-
-        const parts: string[] = []
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const modelId = summaryModelId()
-            const model = yield* modelResolver.resolve({
-              modelId,
-              hints: { maxTokens: 400 },
-            })
-            const stream = model.streamText({ prompt: toPrompt([summaryMessage]) }).pipe(
-              Stream.mapError((error: Parameters<typeof AiError.isAiError>[0]) => {
-                let message = String(error)
-                if (AiError.isAiError(error)) message = error.message
-                return new ProviderError({
-                  message,
-                  model: modelId,
-                  cause: error,
-                })
-              }),
-            )
-            yield* Stream.runForEach(stream, (part) =>
-              Effect.sync(() => {
-                if (part.type === "text-delta") parts.push(part.delta)
-              }),
-            )
-          }),
-        )
-        return parts.join("").trim()
       })
 
       const sendInitialPrompt = Effect.fn("SessionCommands.sendInitialPrompt")(function* (
@@ -364,25 +277,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const doSwitchBranch = Effect.fn("SessionCommands.doSwitchBranch")(function* (
         input: SwitchBranchInput,
       ) {
-        // The summarize side-effect lives on SessionCommands because it
-        // depends on model resolution and is intentionally outside the durable
-        // mutation tx.
-        if (input.summarize !== false && input.fromBranchId !== input.toBranchId) {
-          const summary = yield* summarizeBranch(input.fromBranchId).pipe(
-            Effect.catchEager(() => Effect.succeed("")),
-          )
-          if (summary !== "") {
-            yield* branchStorage.updateBranchSummary(input.fromBranchId, summary)
-            yield* eventPublisher.publish(
-              BranchSummarized.make({
-                sessionId: input.sessionId,
-                branchId: input.fromBranchId,
-                summary,
-              }),
-            )
-          }
-        }
-
         yield* mutations.switchActiveBranch({
           sessionId: input.sessionId,
           fromBranchId: input.fromBranchId,

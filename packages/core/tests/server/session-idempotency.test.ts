@@ -311,14 +311,12 @@ describe("requestId idempotency", () => {
         sessionId,
         fromBranchId,
         toBranchId,
-        summarize: false,
         requestId: "req-switch-1",
       })
       yield* commands.switchBranch({
         sessionId,
         fromBranchId,
         toBranchId,
-        summarize: false,
         requestId: "req-switch-1",
       })
 
@@ -418,14 +416,12 @@ describe("requestId idempotency", () => {
           sessionId: created.sessionId,
           fromBranchId: created.branchId,
           toBranchId: target.branchId,
-          summarize: false,
           requestId: "req-rpc-switch-branch",
         })
         yield* client.branch.switch({
           sessionId: created.sessionId,
           fromBranchId: created.branchId,
           toBranchId: target.branchId,
-          summarize: true,
           requestId: "req-rpc-switch-branch",
         })
         const session = yield* client.session.get({ sessionId: created.sessionId })
@@ -872,7 +868,6 @@ describe("requestId idempotency", () => {
           sessionId,
           fromBranchId,
           toBranchId,
-          summarize: false,
           requestId: "req-switch-branch-restart",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -890,7 +885,6 @@ describe("requestId idempotency", () => {
           sessionId,
           fromBranchId,
           toBranchId,
-          summarize: false,
           requestId: "req-switch-branch-restart",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.

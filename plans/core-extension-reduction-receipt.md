@@ -912,3 +912,19 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
 - Tests: the ephemeral service-propagation suite (five tests) and two
   ephemeral-persistence tests in `agent-runner.test.ts` are deleted; the
   inherit test now asserts the private child's session is gone afterwards.
+
+## Branch summarization removed (2026-09-13)
+
+- On every branch switch the server built a prompt from the last 50
+  messages, resolved the default model, streamed a summary, wrote
+  `branches.summary`, and published `BranchSummarized`. The TUI never passed
+  `summarize`, so the default fired a model call on each switch. The only
+  reader was the branch picker line suffix. No event consumer.
+- Deleted: `SessionCommands.summarizeBranch` and its model/registry/platform
+  dependencies, `BranchSummarized`, `BranchStorage.updateBranchSummary`, the
+  `summary` field on `Branch` and its row, the `summarize` flag on
+  `SwitchBranchInput` and the TUI client, `branch-summary.test.ts`.
+  Existing databases keep the unused column. −296 lines.
+- Feature note: the branch picker now shows name and message count only. A
+  model-written branch summary is extension work (a branch-switch hook plus
+  a widget), not loop work.

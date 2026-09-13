@@ -212,11 +212,6 @@ export const AgentEvent = Schema.TaggedUnion({
     fromBranchId: BranchId,
     toBranchId: BranchId,
   },
-  BranchSummarized: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    summary: Schema.String,
-  },
   AgentSwitched: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -331,8 +326,6 @@ export const BranchCreated = AgentEvent.cases.BranchCreated
 export type BranchCreated = typeof AgentEvent.cases.BranchCreated.Type
 export const BranchSwitched = AgentEvent.cases.BranchSwitched
 export type BranchSwitched = typeof AgentEvent.cases.BranchSwitched.Type
-export const BranchSummarized = AgentEvent.cases.BranchSummarized
-export type BranchSummarized = typeof AgentEvent.cases.BranchSummarized.Type
 export const AgentSwitched = AgentEvent.cases.AgentSwitched
 export type AgentSwitched = typeof AgentEvent.cases.AgentSwitched.Type
 export const AgentRunSpawned = AgentEvent.cases.AgentRunSpawned
@@ -456,7 +449,6 @@ const matchEventSessionId = AgentEvent.match({
   SessionSettingsUpdated: (e) => e.sessionId,
   BranchCreated: (e) => e.sessionId,
   BranchSwitched: (e) => e.sessionId,
-  BranchSummarized: (e) => e.sessionId,
   AgentSwitched: (e) => e.sessionId,
   AgentRunSpawned: (e) => e.parentSessionId,
   AgentRunSucceeded: (e) => e.parentSessionId,
@@ -495,7 +487,6 @@ const matchEventBranchId = AgentEvent.match({
   BranchSwitched: () =>
     // oxlint-disable-next-line effect/noNullish -- Branch-switch events have no single branch identity.
     undefined,
-  BranchSummarized: (e) => e.branchId,
   AgentSwitched: (e) => e.branchId,
   AgentRunSpawned: (e) => e.branchId,
   AgentRunSucceeded: (e) => e.branchId,

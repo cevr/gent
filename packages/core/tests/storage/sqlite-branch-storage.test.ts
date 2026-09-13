@@ -80,27 +80,4 @@ describe("Branches", () => {
       expect(exit._tag).toBe("Failure")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
-  it.live("updates branch summary", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      yield* sessions.createSession(
-        new Session({
-          id: SessionId.make("summary-session"),
-          createdAt: FIXED_NOW,
-          updatedAt: FIXED_NOW,
-        }),
-      )
-      yield* branches.createBranch(
-        new Branch({
-          id: BranchId.make("summary-branch"),
-          sessionId: SessionId.make("summary-session"),
-          createdAt: FIXED_NOW,
-        }),
-      )
-      yield* branches.updateBranchSummary(BranchId.make("summary-branch"), "Short summary")
-      const retrieved = yield* branches.getBranch(BranchId.make("summary-branch"))
-      expect(retrieved?.summary).toBe("Short summary")
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
 })

@@ -164,7 +164,6 @@ export class Branch extends Schema.Class<Branch>("Branch")({
   parentBranchId: Schema.optional(BranchId),
   parentMessageId: Schema.optional(MessageId),
   name: Schema.optional(Schema.String),
-  summary: Schema.optional(Schema.String),
   createdAt: DateFromNumber,
 }) {}
 

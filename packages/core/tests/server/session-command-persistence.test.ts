@@ -161,7 +161,6 @@ describe("session command persistence", () => {
           sessionId,
           fromBranchId,
           toBranchId,
-          summarize: false,
         }),
       )
 

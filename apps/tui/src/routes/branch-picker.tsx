@@ -226,11 +226,6 @@ export function BranchPicker(props: BranchPickerProps) {
                 Option.flatMap(readyState(), (current) =>
                   Option.fromNullishOr(current.messageCounts.get(branch.id)),
                 )
-              const summary = () => {
-                const value = Option.fromNullishOr(branch.summary)
-                if (Option.isNone(value) || value.value.length === 0) return ""
-                return ` - ${value.value.replace(/\s+/g, " ")}`
-              }
               const backgroundColor = () => {
                 if (isSelected()) return theme.primary
                 return "transparent"
@@ -239,7 +234,7 @@ export function BranchPicker(props: BranchPickerProps) {
                 if (isSelected()) return theme.selectedListItemText
                 return theme.text
               }
-              const line = () => `${formatBranchLabel(branch, count())}${summary()}`
+              const line = () => formatBranchLabel(branch, count())
               return (
                 <box
                   id={`branch-picker-${index()}`}

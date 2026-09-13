@@ -60,7 +60,6 @@ export const BranchRow = Schema.Struct({
   parent_branch_id: Schema.NullOr(BranchId),
   parent_message_id: Schema.NullOr(MessageId),
   name: Schema.NullOr(Schema.String),
-  summary: Schema.NullOr(Schema.String),
   created_at: Schema.Finite,
 })
 export type BranchRow = typeof BranchRow.Type
@@ -131,7 +130,6 @@ const rowToBranch = (row: BranchRow) =>
       parentBranchId: Option.getOrUndefined(Option.fromNullishOr(row.parent_branch_id)),
       parentMessageId: Option.getOrUndefined(Option.fromNullishOr(row.parent_message_id)),
       name: Option.getOrUndefined(Option.fromNullishOr(row.name)),
-      summary: Option.getOrUndefined(Option.fromNullishOr(row.summary)),
       createdAt,
     })
   })
