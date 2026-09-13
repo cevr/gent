@@ -221,6 +221,16 @@ export const buildAgentLoopActorHandlers = (config: {
 
     const cleanupLoop = (loop: AgentLoopBehavior) => closeBehavior(loop)
 
+    /** A failed behavior call closes the loop before the error reaches the caller. */
+    const orCleanup =
+      (handle: AgentLoopBehavior) =>
+      <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+        effect.pipe(
+          Effect.catchEager((error) =>
+            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
+
     const currentRuntimeState = (loop: AgentLoopBehavior) => loop.runtimeState
 
     // Typed reentrant-only handle lookup. The only legitimate caller is the
@@ -415,13 +425,7 @@ export const buildAgentLoopActorHandlers = (config: {
         queueOnly: !wasAlreadyWarm,
       })
       if (Option.isSome(reservedStart)) {
-        yield* handle
-          .startTurn(item)
-          .pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
+        yield* handle.startTurn(item).pipe(orCleanup(handle))
       }
       if (!wasAlreadyWarm) {
         if (
@@ -613,25 +617,33 @@ export const buildAgentLoopActorHandlers = (config: {
     )
     yield* Actor.registerState(registeredState)
 
+    /**
+     * Admit one submitted turn: target check, warm mark, reservation, and the
+     * start when the reservation grants it. Returns the reservation so the
+     * caller can wait on what it was granted.
+     */
+    const admitTurn = <Reserved>(
+      handle: AgentLoopBehavior,
+      operation: TurnSubmissionInput,
+      reserve: (item: QueuedTurnItem) => Effect.Effect<Option.Option<Reserved>, AgentLoopError>,
+    ) =>
+      Effect.gen(function* () {
+        yield* ensureTarget(operation.message)
+        yield* markWrite
+        const item = buildQueuedTurnItem(operation)
+        const reserved = yield* reserve(item)
+        if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
+        return reserved
+      })
+
+    const reserveStart = (handle: AgentLoopBehavior) => (item: QueuedTurnItem) =>
+      handle.reserveStartOrQueueFollowUp(item, { queueOnly: false })
+
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      yield* ensureTarget(operation.message)
-      yield* markWrite
-      const item = buildQueuedTurnItem(operation)
-      const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-        queueOnly: false,
-      })
-      if (Option.isSome(reservedStart)) {
-        yield* handle
-          .startTurn(item)
-          .pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
-      }
+      yield* admitTurn(handle, operation, reserveStart(handle))
     })
 
     const waitForMessageTurnCompleted = Effect.fn("AgentLoopActor.waitForMessageTurnCompleted")(
@@ -667,21 +679,7 @@ export const buildAgentLoopActorHandlers = (config: {
     ) {
       const handle = yield* ensureStarted
       const baseline = yield* turnBaseline(handle)
-      yield* ensureTarget(operation.message)
-      yield* markWrite
-      const item = buildQueuedTurnItem(operation)
-      const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-        queueOnly: false,
-      })
-      if (Option.isSome(reservedStart)) {
-        yield* handle
-          .startTurn(item)
-          .pipe(
-            Effect.catchEager((error) =>
-              cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
-      }
+      yield* admitTurn(handle, operation, reserveStart(handle))
       // This turn is done when *its* message is completed, which can happen
       // while the loop stays busy with a follow-up, so Idle is not the signal
       // here -- only failure is shared with `awaitTurnCompletion`.
@@ -691,30 +689,14 @@ export const buildAgentLoopActorHandlers = (config: {
           waitForTurnFailureAfterEpoch(handle, baseline.turnFailure),
           handle.persistenceFailure,
         ),
-      ).pipe(
-        Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
-      )
+      ).pipe(orCleanup(handle))
     })
 
     const runTurn = Effect.fn("AgentLoopActor.runTurn")(function* (operation: TurnSubmissionInput) {
       const handle = yield* ensureStarted
-      yield* ensureTarget(operation.message)
-      yield* markWrite
-      const item = buildQueuedTurnItem(operation)
-      const start = yield* handle.reserveRunStartOrQueueFollowUp(item)
+      const start = yield* admitTurn(handle, operation, handle.reserveRunStartOrQueueFollowUp)
       if (Option.isNone(start)) return
-
-      yield* handle
-        .startTurn(item)
-        .pipe(
-          Effect.catchEager((error) =>
-            cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-          ),
-        )
-
-      yield* awaitTurnCompletion(handle, start.value).pipe(
-        Effect.catchEager((error) => cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error)))),
-      )
+      yield* awaitTurnCompletion(handle, start.value).pipe(orCleanup(handle))
     })
 
     const isCancellation = Predicate.or(
@@ -744,36 +726,18 @@ export const buildAgentLoopActorHandlers = (config: {
 
       switch (command._tag) {
         case "SwitchAgent":
-          yield* handle
-            .switchAgent(command.agent)
-            .pipe(
-              Effect.catchEager((error) =>
-                cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-              ),
-            )
+          yield* handle.switchAgent(command.agent).pipe(orCleanup(handle))
           return
 
         case "Cancel":
         case "Interrupt":
           if (isActiveLoopState(projectedState)) {
-            yield* handle
-              .interrupt(command.messageId)
-              .pipe(
-                Effect.catchEager((error) =>
-                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                ),
-              )
+            yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
             return
           }
           const loopState = yield* handle.snapshot
           if (isActiveLoopState(loopState)) {
-            yield* handle
-              .interrupt(command.messageId)
-              .pipe(
-                Effect.catchEager((error) =>
-                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                ),
-              )
+            yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
           }
           return
 
@@ -843,24 +807,12 @@ export const buildAgentLoopActorHandlers = (config: {
                 const message = yield* latestIncompleteUserTurn
                 if (Option.isNone(message)) return
                 const baseline = yield* turnBaseline(handle)
-                yield* handle
-                  .startTurn({ message: message.value })
-                  .pipe(
-                    Effect.catchEager((error) =>
-                      cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                    ),
-                  )
+                yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
                 yield* awaitTurnCompletion(handle, baseline)
                 return
               }
             }
-            yield* handle
-              .respondInteraction(operation.requestId)
-              .pipe(
-                Effect.catchEager((error) =>
-                  cleanupLoop(handle).pipe(Effect.andThen(Effect.fail(error))),
-                ),
-              )
+            yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
           }).pipe(provideActorWorkspace),
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
