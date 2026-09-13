@@ -18,32 +18,15 @@ export const makeTempDirectoryScoped = (prefix: string) =>
     (dir) => Effect.sync(() => fs.rmSync(dir, { recursive: true, force: true })),
   )
 
-interface WorkerEnvOptions {
-  readonly providerMode?: string
-  readonly includeAuthFiles?: boolean
-  // oxlint-disable-next-line effect/noNullish -- Process environments use undefined values for absent entries.
-  readonly extra?: Readonly<Record<string, string | undefined>>
-}
-
 /** Create a worker environment with data dir, auth files, and provider mode */
-export const createWorkerEnv = (
-  root: string,
-  { providerMode, includeAuthFiles = true, extra }: WorkerEnvOptions = {},
-): Record<string, string> => {
+export const createWorkerEnv = (root: string, providerMode?: string): Record<string, string> => {
   const dataDir = path.join(root, "data")
   fs.mkdirSync(dataDir, { recursive: true })
 
   const env = Record.empty<string, string>()
   env["GENT_DATA_DIR"] = dataDir
   if (!Predicate.isUndefined(providerMode)) env["GENT_PROVIDER_MODE"] = providerMode
-  if (includeAuthFiles) {
-    env["GENT_AUTH_DIRECTORY"] = path.join(root, "auth")
-  }
-  if (!Predicate.isUndefined(extra)) {
-    for (const [key, value] of Object.entries(extra)) {
-      if (Predicate.isString(value)) env[key] = value
-    }
-  }
+  env["GENT_AUTH_DIRECTORY"] = path.join(root, "auth")
   return env
 }
 

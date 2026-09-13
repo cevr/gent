@@ -26,10 +26,13 @@ import {
 import { Branch, BranchTreeNode, ProjectedMessage, Session } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
-import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
+import {
+  SessionRuntimeMetrics,
+  SessionRuntimeStateSchema,
+} from "../runtime/agent/agent-loop.state.js"
 
 export { Branch, BranchTreeNode, Session }
-export type { SessionRuntimeState } from "../runtime/session-runtime.js"
+export type { SessionRuntimeState } from "../runtime/agent/agent-loop.state.js"
 
 /**
  * Client-generated request ID for end-to-end correlation and transport-retry

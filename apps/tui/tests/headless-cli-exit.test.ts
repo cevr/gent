@@ -47,7 +47,7 @@ describe("headless CLI", () => {
         const path = yield* Path.Path
         const appDir = path.resolve(import.meta.dir, "..")
         const homeDir = yield* makeTempDir
-        const env = createWorkerEnv(homeDir, { providerMode: "debug-scripted" })
+        const env = createWorkerEnv(homeDir, "debug-scripted")
         yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
         // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
         const proc = Bun.spawn(

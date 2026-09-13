@@ -16,7 +16,8 @@ import {
   type StoredAgentStartResult,
 } from "../../storage/session-operation-storage.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
-import { followUpMessageIdForSource, SessionRuntime } from "../session-runtime.js"
+import { SessionRuntime } from "../session-runtime.js"
+import { followUpMessageIdForSource } from "./agent-loop.protocol.js"
 
 /** Follow-up source for one child completion. The parent message id derives from it. */
 const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:complete`

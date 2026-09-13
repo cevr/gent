@@ -11,7 +11,7 @@
  */
 
 export { WideEvent, WideEventBoundary, withWideEvent, WideEventLogger } from "effect-wide-event"
-export type { WideEventContext, WideEventEnvelope, LogEvent } from "effect-wide-event"
+export type { LogEvent } from "effect-wide-event"
 
 import type { WideEventContext } from "effect-wide-event"
 import type { SessionId, BranchId } from "../domain/ids.js"

@@ -27,7 +27,6 @@ export const toTestFailure = (cause: unknown) => {
 const defaultConfig: InProcessLayerConfig = {
   agents: AllBuiltinAgents,
 }
-type HarnessProviderMode = "debug-scripted" | "debug-slow"
 type HarnessLayerError =
   | BootstrapError
   | Config.ConfigError
@@ -35,11 +34,10 @@ type HarnessLayerError =
   | StorageError
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
-export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
-  _baseLocalLayer(defaultConfig, providerMode) satisfies Layer.Layer<
-    RpcHandlersContext,
-    HarnessLayerError
-  >
+const baseLocalLayer = _baseLocalLayer(defaultConfig) satisfies Layer.Layer<
+  RpcHandlersContext,
+  HarnessLayerError
+>
 export const baseLocalLayerWithProvider = (
   providerLayer: Parameters<typeof _baseLocalLayerWithProvider>[0],
 ) =>
@@ -64,12 +62,10 @@ export interface SignalTransportCase {
   ) => Promise<A>
 }
 
-const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
+const makeDirectCase = (): TransportCase => ({
   name: "direct",
   run: (assertion) =>
-    Effect.runPromise(
-      Effect.scoped(Gent.test(baseLocalLayer(providerMode)).pipe(Effect.flatMap(assertion))),
-    ),
+    Effect.runPromise(Effect.scoped(Gent.test(baseLocalLayer).pipe(Effect.flatMap(assertion)))),
 })
 
 const makeDirectSignalCase = (): SignalTransportCase => ({
@@ -86,9 +82,7 @@ const makeDirectSignalCase = (): SignalTransportCase => ({
     ),
 })
 
-const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted") => [
-  makeDirectCase(providerMode),
-]
+const makeTransportCases = () => [makeDirectCase()]
 
 export const transportCases = makeTransportCases()
 // Lifecycle/queue assertions need streams paused mid-flight. Signal provider

@@ -83,10 +83,12 @@ import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,
   SessionRuntimeError,
-  SessionRuntimeStateSchema,
   type SessionRuntimeService,
-  type SessionRuntimeState,
 } from "../../src/runtime/session-runtime"
+import {
+  SessionRuntimeStateSchema,
+  type SessionRuntimeState,
+} from "../../src/runtime/agent/agent-loop.state"
 import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   BranchToolWork,

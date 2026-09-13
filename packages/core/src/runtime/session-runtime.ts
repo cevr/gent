@@ -59,11 +59,6 @@ import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { resolveExistingSessionBranch } from "./session-runtime-context.js"
 import { AgentLoopError } from "./agent/agent-loop.state.js"
 import type { SessionRuntimeMetrics, SessionRuntimeState } from "./agent/agent-loop.state.js"
-export {
-  SessionRuntimeMetrics,
-  SessionRuntimeStateSchema,
-  type SessionRuntimeState,
-} from "./agent/agent-loop.state.js"
 import type { ProcessRunner } from "./run-process.js"
 
 export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
@@ -273,7 +268,6 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
 }
 
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
-export { followUpMessageIdForSource }
 const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
 
 const wrapStreamSessionRuntimeError = (
@@ -512,45 +506,24 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       ),
 
     respondInteraction: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const workspaceId = yield* CurrentWorkspaceId
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            const payload = AgentLoopActor.RespondInteraction.make({
-              ...input,
-              workspaceId,
-            })
-            yield* ref.execute(payload)
-          }),
-        ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("respondInteraction failed", cause))),
+      actorCommand("respondInteraction", input, (ref, { workspaceId }) =>
+        ref.execute(AgentLoopActor.RespondInteraction.make({ ...input, workspaceId })),
       ),
 
     queueFollowUp: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() => queueFollowUpThroughActor(input)),
-        Effect.catchCause((cause) => Effect.fail(wrapError("queueFollowUp failed", cause))),
-      ),
+      actorCommand("queueFollowUp", input, () => queueFollowUpThroughActor(input)),
 
     dequeueFollowUp: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const workspaceId = yield* CurrentWorkspaceId
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.RemoveFollowUp.make({
-                workspaceId,
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                commandId: ActorCommandId.make(yield* platform.randomId),
-                messageId: followUpMessageIdForSource({ workspaceId, ...input }),
-              }),
-            )
+      actorCommand("dequeueFollowUp", input, (ref, { workspaceId, commandId }) =>
+        ref.execute(
+          AgentLoopActor.RemoveFollowUp.make({
+            workspaceId,
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            commandId,
+            messageId: followUpMessageIdForSource({ workspaceId, ...input }),
           }),
         ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("dequeueFollowUp failed", cause))),
       ),
 
     requestExtension: (input) =>

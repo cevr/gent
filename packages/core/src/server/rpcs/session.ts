@@ -3,7 +3,7 @@ import { Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { Branch, BranchTreeNode, Message, Session } from "../../domain/message.js"
 import { ReasoningEffort } from "../../domain/agent.js"
-import { SessionRuntimeStateSchema } from "../../runtime/session-runtime.js"
+import { SessionRuntimeStateSchema } from "../../runtime/agent/agent-loop.state.js"
 import { GentRpcError } from "../errors.js"
 import {
   CreateBranchInput,

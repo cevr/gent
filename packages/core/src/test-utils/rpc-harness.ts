@@ -23,23 +23,7 @@ import { Effect } from "effect"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer, type E2ELayerConfig } from "./e2e-layer.js"
 
-interface RpcHarnessConfig extends Pick<
-  E2ELayerConfig,
-  | "providerLayer"
-  | "extensions"
-  | "agents"
-  | "extensionInputs"
-  | "branchTools"
-  | "subagentRunner"
-  | "approvalLayer"
-  | "durableApproval"
-  | "storagePath"
-  | "sessionProfileCacheLayer"
-  | "extraLayers"
-  | "authLayer"
-  | "configServiceLayer"
-  | "layerOverrides"
-> {
+interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
   /** Working directory passed to the seeded session.create call. Defaults to `/tmp`. */
   readonly cwd?: string
 }
@@ -59,11 +43,7 @@ interface RpcHarnessConfig extends Pick<
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
     const { cwd, ...layerConfig } = config
-    const layer = createE2ELayer({
-      ...layerConfig,
-      agents: layerConfig.agents ?? [],
-      extensionInputs: layerConfig.extensionInputs ?? [],
-    })
+    const layer = createE2ELayer(layerConfig)
     const { client, runtime } = yield* Gent.test(layer)
     const { sessionId, branchId } = yield* client.session.create({
       cwd: cwd ?? "/tmp",

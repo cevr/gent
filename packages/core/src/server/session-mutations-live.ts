@@ -64,28 +64,6 @@ const createSessionResult = (operation: StoredCreateSessionResult): CreateSessio
   name: operation.name,
 })
 
-const cleanupSessionRuntimeState = Effect.fn("SessionMutations.cleanupSessionRuntimeState")(
-  function* (sessionId: SessionId) {
-    const sessionRuntime = yield* SessionRuntime
-    yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.orDie)
-  },
-)
-
-const restoreSessionRuntimeState = Effect.fn("SessionMutations.restoreSessionRuntimeState")(
-  function* (sessionId: SessionId) {
-    const governance = yield* AgentLoopSessionGovernance
-    const workspaceId = yield* CurrentWorkspaceId
-    yield* governance.clearTerminated(workspaceId, sessionId).pipe(Effect.orDie)
-  },
-)
-
-const forgetDeletedSessionRuntimeState = Effect.fn(
-  "SessionMutations.forgetDeletedSessionRuntimeState",
-)(function* (sessionId: SessionId) {
-  const eventStore = yield* EventStore
-  yield* eventStore.removeSession(sessionId)
-})
-
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
@@ -146,9 +124,8 @@ const makeSessionMutationsService: Effect.Effect<
   const eventPublisher = yield* EventPublisher
   const platform = yield* GentPlatform
   const sessionRuntime = yield* SessionRuntime
-  const sessionRuntimeContext = yield* Effect.context<
-    SessionRuntime | EventStore | AgentLoopSessionGovernance
-  >()
+  const governance = yield* AgentLoopSessionGovernance
+  const eventStore = yield* EventStore
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -190,11 +167,14 @@ const makeSessionMutationsService: Effect.Effect<
   })
 
   const cleanupSessionRuntimeStateForMutation = (sessionId: SessionId) =>
-    cleanupSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
+    sessionRuntime.terminateSession(sessionId).pipe(Effect.orDie)
   const restoreSessionRuntimeStateForMutation = (sessionId: SessionId) =>
-    restoreSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
+    CurrentWorkspaceId.pipe(
+      Effect.flatMap((workspaceId) => governance.clearTerminated(workspaceId, sessionId)),
+      Effect.orDie,
+    )
   const forgetDeletedSessionRuntimeStateForMutation = (sessionId: SessionId) =>
-    forgetDeletedSessionRuntimeState(sessionId).pipe(Effect.provideContext(sessionRuntimeContext))
+    eventStore.removeSession(sessionId)
 
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,

@@ -136,30 +136,6 @@ const makeClusterRunnerLayer = (persistenceMode: "disk" | "memory") => {
   return SingleRunner.layer({ runnerStorage })
 }
 
-const makeAuthLayer = (config: DependenciesConfig, authDirectory: string) => {
-  const override = config.overrides?.authLayer
-  if (!Predicate.isUndefined(override)) return override
-  return Auth.Live(authDirectory)
-}
-
-const makeConfigServiceLayer = (
-  config: DependenciesConfig,
-  runtimeEnvironmentLive: Layer.Layer<RuntimeEnvironment>,
-) => {
-  const override = config.overrides?.configServiceLayer
-  if (!Predicate.isUndefined(override)) return override
-  return Layer.provide(ConfigService.Live, runtimeEnvironmentLive)
-}
-
-const makeModelRegistryLayer = <A, E, R>(
-  config: DependenciesConfig,
-  liveDeps: Layer.Layer<A, E, R>,
-) => {
-  const override = config.overrides?.modelRegistryLayer
-  if (!Predicate.isUndefined(override)) return override
-  return Layer.provide(ModelRegistry.Live, liveDeps)
-}
-
 const makeModelResolverLayer = <A, E, R>(
   config: DependenciesConfig,
   authDeps: Layer.Layer<A, E, R>,
@@ -168,51 +144,6 @@ const makeModelResolverLayer = <A, E, R>(
     onNone: () => Layer.provide(ModelResolver.Live, authDeps),
     onSome: ModelResolver.fromLanguageModel,
   })
-
-const makeToolRunnerLayer = <A, E, R>(
-  override: Option.Option<NonNullable<DependencyOverrides["toolRunnerLayer"]>>,
-  liveDeps: Layer.Layer<A, E, R>,
-) => Option.getOrElse(override, () => Layer.provide(ToolRunner.Live, liveDeps))
-
-const makeApprovalServiceLayer = <A, E, R>(
-  override: Option.Option<NonNullable<DependencyOverrides["approvalLayer"]>>,
-  baseServicesLive: Layer.Layer<A, E, R>,
-) =>
-  Layer.provide(
-    Option.getOrElse(override, () => ApprovalService.Live),
-    baseServicesLive,
-  )
-
-const makeSessionProfileCacheLayer = <A, E, R>(
-  config: DependenciesConfig,
-  resolverDeps: Layer.Layer<A, E, R>,
-) => {
-  const override = config.overrides?.sessionProfileCacheLayer
-  if (!Predicate.isUndefined(override)) return override
-  return Layer.provide(
-    SessionProfileCache.Live({
-      home: config.home,
-      platform: config.platform,
-      shell: config.shell,
-      osVersion: config.osVersion,
-      disabledExtensions: config.disabledExtensions,
-      extensions: config.extensions,
-    }),
-    resolverDeps,
-  )
-}
-
-const makeAgentRuntimeLayer = <A, E, R>(
-  config: DependenciesConfig,
-  allWithRuntime: Layer.Layer<A, E, R>,
-) => {
-  const override = config.overrides?.agentRunnerLayer
-  if (!Predicate.isUndefined(override)) return override
-  return Layer.provide(
-    InProcessRunner.pipe(Layer.provideMerge(ChildCompletionDelivery.Live)),
-    allWithRuntime,
-  )
-}
 
 export const createDependencies = (config: DependenciesConfig) => {
   let baseSectionsSeed = Option.none<ReadonlyArray<PromptSection>>()
@@ -239,17 +170,28 @@ export const createDependencies = (config: DependenciesConfig) => {
     Option.fromUndefinedOr(config.authDirectory),
     () => `${config.home}/.gent/auth`,
   )
-  const authLive = makeAuthLayer(config, authDirectory)
+  const authLive = config.overrides?.authLayer ?? Auth.Live(authDirectory)
 
-  const configServiceLive = makeConfigServiceLayer(config, runtimeEnvironmentLive)
+  const configServiceLive =
+    config.overrides?.configServiceLayer ??
+    Layer.provide(ConfigService.Live, runtimeEnvironmentLive)
 
   // SessionProfileCache is the sole live profile owner. The launch registry
   // resolves its profile through that same cache entry instead of building a
   // startup-only resource layer beside the cache.
-  const sessionProfileCacheLive = makeSessionProfileCacheLayer(
-    config,
-    Layer.mergeAll(configServiceLive, runtimeEnvironmentLive, platformServicesLive),
-  )
+  const sessionProfileCacheLive =
+    config.overrides?.sessionProfileCacheLayer ??
+    Layer.provide(
+      SessionProfileCache.Live({
+        home: config.home,
+        platform: config.platform,
+        shell: config.shell,
+        osVersion: config.osVersion,
+        disabledExtensions: config.disabledExtensions,
+        extensions: config.extensions,
+      }),
+      Layer.mergeAll(configServiceLive, runtimeEnvironmentLive, platformServicesLive),
+    )
 
   const extensionRegistryLive = Layer.provideMerge(
     Layer.unwrap(
@@ -277,10 +219,12 @@ export const createDependencies = (config: DependenciesConfig) => {
     ),
     Layer.merge(storageLive, Layer.merge(sessionProfileCacheLive, platformServicesLive)),
   )
-  const modelRegistryLive = makeModelRegistryLayer(
-    config,
-    Layer.mergeAll(runtimeEnvironmentLive, extensionRegistryLive, authLive),
-  )
+  const modelRegistryLive =
+    config.overrides?.modelRegistryLayer ??
+    Layer.provide(
+      ModelRegistry.Live,
+      Layer.mergeAll(runtimeEnvironmentLive, extensionRegistryLive, authLive),
+    )
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
@@ -316,15 +260,14 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
 
   // ApprovalService — single handler for all interaction types
-  const approvalServiceLive = makeApprovalServiceLayer(
-    Option.fromUndefinedOr(config.overrides?.approvalLayer),
+  const approvalServiceLive = Layer.provide(
+    config.overrides?.approvalLayer ?? ApprovalService.Live,
     baseServicesLive,
   )
 
-  const toolRunnerLive = makeToolRunnerLayer(
-    Option.fromUndefinedOr(config.overrides?.toolRunnerLayer),
-    Layer.merge(baseServicesLive, approvalServiceLive),
-  )
+  const toolRunnerLive =
+    config.overrides?.toolRunnerLayer ??
+    Layer.provide(ToolRunner.Live, Layer.merge(baseServicesLive, approvalServiceLive))
 
   const allDeps = Layer.mergeAll(baseServicesLive, approvalServiceLive, toolRunnerLive)
 
@@ -391,7 +334,12 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const allWithRuntime = Layer.mergeAll(allDeps, sessionMutationsLive, sessionRuntimeLive)
 
-  const agentRuntimeLive = makeAgentRuntimeLayer(config, allWithRuntime)
+  const agentRuntimeLive =
+    config.overrides?.agentRunnerLayer ??
+    Layer.provide(
+      InProcessRunner.pipe(Layer.provideMerge(ChildCompletionDelivery.Live)),
+      allWithRuntime,
+    )
   const runtimeWithHandlers = Layer.provideMerge(
     Layer.unwrap(
       Effect.gen(function* () {
