@@ -45,7 +45,7 @@ import {
   persistAssistantPartsWithBindings,
   persistMessageReceived,
   persistToolParts,
-  reconcileToolProjections,
+  recordToolOutcome,
   ToolResultReplayError,
   type AssistantResponsePart,
   type ToolResponsePart,
@@ -222,15 +222,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                 },
               }),
             )
-            yield* persistToolParts({
+            yield* recordToolOutcome({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
-              messageId: toolResultMessageId,
-              parts: failureParts,
-            }).pipe(Effect.orDie)
-            yield* reconcileToolProjections({
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
+              toolResultMessageId: toolResultMessageId,
               assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
               parts: failureParts,
             }).pipe(Effect.orDie)
@@ -282,15 +277,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (Predicate.isNotUndefined(executed)) return [executed]
         return []
       })
-      yield* persistToolParts({
+      yield* recordToolOutcome({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
-        messageId: toolResultMessageId,
-        parts: toolResults,
-      })
-      yield* reconcileToolProjections({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
+        toolResultMessageId: toolResultMessageId,
         assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
         parts: toolResults,
       })
@@ -824,15 +814,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               }),
             )
             const parts = [...recoveredResults, ...failureParts]
-            yield* persistToolParts({
+            yield* recordToolOutcome({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
-              messageId: toolResultMessageIdForTurn(params.messageId, pendingStep),
-              parts,
-            }).pipe(Effect.orDie)
-            yield* reconcileToolProjections({
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
+              toolResultMessageId: toolResultMessageIdForTurn(params.messageId, pendingStep),
               assistantMessageId: pendingAssistant.value.id,
               parts,
             }).pipe(Effect.orDie)

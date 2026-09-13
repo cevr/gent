@@ -22,7 +22,7 @@ import { captureCurrentToolBinding, resolveReplayToolBinding } from "./tool-bind
 import {
   persistAssistantPartsWithBindings,
   persistToolParts,
-  reconcileToolProjections,
+  recordToolOutcome,
 } from "./turn-persistence.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import {
@@ -185,15 +185,10 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
                 result: { error: error.message, reason: error.reason },
               }),
             ]
-            yield* persistToolParts({
+            yield* recordToolOutcome({
               sessionId: params.sessionId,
               branchId: params.branchId,
-              messageId: params.toolResultMessageId,
-              parts,
-            })
-            yield* reconcileToolProjections({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
+              toolResultMessageId: params.toolResultMessageId,
               assistantMessageId: params.assistantMessageId,
               parts,
             })
@@ -261,15 +256,10 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
                 }),
               ]
             })
-            yield* persistToolParts({
+            yield* recordToolOutcome({
               sessionId: params.sessionId,
               branchId: params.branchId,
-              messageId: params.toolResultMessageId,
-              parts,
-            })
-            yield* reconcileToolProjections({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
+              toolResultMessageId: params.toolResultMessageId,
               assistantMessageId: params.assistantMessageId,
               parts,
             })

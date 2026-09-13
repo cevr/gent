@@ -111,22 +111,6 @@ const publishEventOrDie = (event: AgentEvent) =>
     yield* eventPublisher.publish(event).pipe(Effect.orDie)
   })
 
-export const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
-  switch (stopReason) {
-    case "stop":
-    case "length":
-    case "content-filter":
-    case "tool-calls":
-    case "error":
-    case "pause":
-    case "other":
-    case "unknown":
-      return stopReason
-    default:
-      return "unknown"
-  }
-}
-
 export const collectNormalizedResponse = (params: {
   responseParts: ReadonlyArray<Response.AnyPart>
   streamFailed: boolean

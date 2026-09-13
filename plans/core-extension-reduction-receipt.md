@@ -1237,7 +1237,7 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
 
 - `SystemPromptInput.driverSource`, `driverToolSurface`, and `sections`
   were written by the loop and read by no hook; `ExternalDriverContribution.
-  toolSurface` was set by no driver. The codemode prompt slot they were
+toolSurface` was set by no driver. The codemode prompt slot they were
   built for does not exist. All four are gone, with `resolveDriverToolSurface`
   and `ResolvedTurn.driverSource`.
 - `BranchStorage.countMessages`, `SessionStorage.getLastSessionByCwd`, and
@@ -1247,3 +1247,12 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   `permissionLayer` override was dead because the turn profile provides
   `Permission` per turn; `sendUserMessage` re-assigned three fields it had
   already set; `persistAssistantParts*` took an `agentName` it never read.
+
+## One operation for a tool outcome (2026-09-13)
+
+- `persistToolParts` followed by `reconcileToolProjections` with the same
+  four arguments was written five times across the turn engine and the
+  tool executor; the two were never useful apart. `recordToolOutcome` is
+  the one operation and the reconciler is no longer exported.
+- Core's `toResponseFinishReason` had one caller, its own test; the ACP
+  extension already carries the identical mapping for its own use.

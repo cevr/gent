@@ -194,7 +194,7 @@ export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageRecei
  * tool event (a recovered cell, a replay failure, a host that died mid-call)
  * gets its terminal event here, before any new model work reads the transcript.
  */
-export const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections")(
+const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections")(
   function* (params: {
     sessionId: SessionId
     branchId: BranchId
@@ -353,6 +353,34 @@ export const persistAssistantPartsWithBindings = Effect.fn(
   }
   return Option.some(committed.result)
 })
+
+/**
+ * Records what a tool call produced: the result parts on the tool message,
+ * then the terminal event for every call the transcript has not closed.
+ * The two are never useful apart, so a caller cannot persist and forget.
+ */
+export const recordToolOutcome = (params: {
+  sessionId: SessionId
+  branchId: BranchId
+  toolResultMessageId: MessageId
+  assistantMessageId: MessageId
+  parts: ReadonlyArray<Prompt.ToolResultPart>
+}) =>
+  persistToolParts({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.toolResultMessageId,
+    parts: params.parts,
+  }).pipe(
+    Effect.andThen(
+      reconcileToolProjections({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        assistantMessageId: params.assistantMessageId,
+        parts: params.parts,
+      }),
+    ),
+  )
 
 export const persistToolParts = (params: {
   sessionId: SessionId
