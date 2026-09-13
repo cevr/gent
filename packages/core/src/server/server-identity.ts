@@ -19,19 +19,4 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerIdenti
 ) {
   static Live = (config: ServerIdentityApi): Layer.Layer<ServerIdentity> =>
     Layer.succeed(ServerIdentity, ServerIdentity.of(config))
-
-  /** Deterministic identity for tests; values are stable so snapshots don't drift. */
-  static Test = (overrides: Partial<ServerIdentityApi> = {}): Layer.Layer<ServerIdentity> =>
-    Layer.succeed(
-      ServerIdentity,
-      ServerIdentity.of({
-        serverId: "test-server",
-        pid: 0,
-        hostname: "test-host",
-        dbPath: ":memory:",
-        buildFingerprint: "test-fingerprint",
-        startedAt: 0,
-        ...overrides,
-      }),
-    )
 }

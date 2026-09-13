@@ -1232,3 +1232,18 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   parameter widens the seam); `ProcessLocalToolReplay` width (every method
   has a caller); continuation prompts on the turn profile (line-neutral,
   rejected before).
+
+## Scaffolding for consumers that never arrived (2026-09-13)
+
+- `SystemPromptInput.driverSource`, `driverToolSurface`, and `sections`
+  were written by the loop and read by no hook; `ExternalDriverContribution.
+  toolSurface` was set by no driver. The codemode prompt slot they were
+  built for does not exist. All four are gone, with `resolveDriverToolSurface`
+  and `ResolvedTurn.driverSource`.
+- `BranchStorage.countMessages`, `SessionStorage.getLastSessionByCwd`, and
+  `InteractionStorage.deletePending` had no production caller; the `-c`
+  flag filters client-side and pending rows clear through `resolve`.
+- `ServerIdentity.Test` had no reader (tests use `testIdentity()`); the
+  `permissionLayer` override was dead because the turn profile provides
+  `Permission` per turn; `sendUserMessage` re-assigned three fields it had
+  already set; `persistAssistantParts*` took an `agentName` it never read.

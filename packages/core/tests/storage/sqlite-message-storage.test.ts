@@ -187,49 +187,6 @@ describe("Messages", () => {
       expect(messagesResult.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
-  it.live("counts messages in a branch", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const messages = yield* MessageStorage
-      yield* sessions.createSession(
-        new Session({
-          id: SessionId.make("count-session"),
-          createdAt: FIXED_NOW,
-          updatedAt: FIXED_NOW,
-        }),
-      )
-      yield* branches.createBranch(
-        new Branch({
-          id: BranchId.make("count-branch"),
-          sessionId: SessionId.make("count-session"),
-          createdAt: FIXED_NOW,
-        }),
-      )
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: MessageId.make("count-msg-1"),
-          sessionId: SessionId.make("count-session"),
-          branchId: BranchId.make("count-branch"),
-          role: "user",
-          parts: [Prompt.textPart({ text: "one" })],
-          createdAt: FIXED_NOW,
-        }),
-      )
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: MessageId.make("count-msg-2"),
-          sessionId: SessionId.make("count-session"),
-          branchId: BranchId.make("count-branch"),
-          role: "assistant",
-          parts: [Prompt.textPart({ text: "two" })],
-          createdAt: FIXED_NOW,
-        }),
-      )
-      const count = yield* branches.countMessages(BranchId.make("count-branch"))
-      expect(count).toBe(2)
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
   it.live("lists messages for a branch", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

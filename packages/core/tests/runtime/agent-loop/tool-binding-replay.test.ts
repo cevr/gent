@@ -1,7 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Context, Effect, Exit, Layer, Option, Predicate, Schema, Scope } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { AgentName } from "../../../src/domain/agent"
 import { LoadedArtifactIdentity, type LoadedExtension } from "../../../src/domain/extension"
 import {
   BranchId,
@@ -402,7 +401,6 @@ describe("tool binding replay", () => {
         parts: [toolCallPart],
         toolBindings: new Map([["@test/replay-tool", entry]]),
         storageTransaction,
-        agentName: AgentName.make("cowork"),
       })
 
       expect(

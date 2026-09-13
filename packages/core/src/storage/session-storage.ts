@@ -32,8 +32,6 @@ export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
-  // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
-  readonly getLastSessionByCwd: (cwd: string) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: Effect.Effect<ReadonlyArray<Session>, StorageError>
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
   /**
@@ -117,19 +115,6 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             return yield* sessionFromRow(row)
           },
           Effect.mapError(mapError("Failed to get session")),
-        ),
-
-        getLastSessionByCwd: Effect.fn("SessionStorage.getLastSessionByCwd")(
-          function* (cwd) {
-            const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE cwd = ${cwd} AND workspace_id = ${workspaceId} ORDER BY updated_at DESC LIMIT 1`
-            const row = rows[0]
-            // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
-            if (Predicate.isUndefined(row)) return undefined
-            return yield* sessionFromRow(row)
-          },
-          Effect.mapError(mapError("Failed to get last session by cwd")),
         ),
 
         listSessions: Effect.suspend(

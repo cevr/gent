@@ -15,7 +15,6 @@ import {
 import { Auth } from "../domain/auth.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import { SessionId } from "../domain/ids.js"
-import { Permission } from "../domain/permission.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -41,7 +40,6 @@ export const testOverrides = () => ({
   approvalLayer: ApprovalService.Test(),
   configServiceLayer: ConfigService.Test(),
   modelRegistryLayer: ModelRegistry.Test(),
-  permissionLayer: Permission.Live(),
 })
 
 export const testAgentsExtension = (

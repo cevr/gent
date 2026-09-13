@@ -320,7 +320,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           messageId: assistantMessageIdForTurn(params.messageId, step),
           parts,
           createdAt,
-          agentName: params.resolved.currentTurnAgent,
         })
 
       const persistAssistantPartsWithBindingsAt = (
@@ -336,7 +335,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           toolBindings: params.resolved.toolBindings,
           storageTransaction,
           createdAt,
-          agentName: params.resolved.currentTurnAgent,
         }).pipe(
           Effect.tap((persisted) =>
             Effect.gen(function* () {

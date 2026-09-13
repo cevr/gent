@@ -44,7 +44,6 @@ const branchStorageLayer = (
       createBranch: die("createBranch"),
       getBranch: die("getBranch"),
       listBranches: () => Effect.succeed(branches),
-      countMessages: die("countMessages"),
       countMessagesByBranches: () => Effect.succeed(counts),
     }),
   )
@@ -89,7 +88,6 @@ describe("getBranchTree helper", () => {
           createBranch: die("createBranch"),
           getBranch: die("getBranch"),
           listBranches: () => Effect.fail(failure),
-          countMessages: die("countMessages"),
           countMessagesByBranches: () => Effect.succeed(new Map<BranchId, number>()),
         }),
       )
@@ -113,7 +111,6 @@ describe("getBranchTree helper", () => {
           createBranch: die("createBranch"),
           getBranch: die("getBranch"),
           listBranches: () => Effect.succeed([makeBranch(ROOT_ID, 0)]),
-          countMessages: die("countMessages"),
           countMessagesByBranches: () => Effect.fail(failure),
         }),
       )

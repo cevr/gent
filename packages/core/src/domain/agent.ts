@@ -95,13 +95,8 @@ export const resolveDefaultAgentModel = (
 
 // ── Runtime driver routing ──
 
-/**
- * Where the resolved driver came from. Pipeline hooks (e.g. ACP system
- * prompt rewrite) read this to decide whether to apply external-driver
- * formatting.
- */
-export const DriverSource = Schema.Literals(["agent", "config", "default"])
-export type DriverSource = typeof DriverSource.Type
+/** Where the resolved driver came from; a config-routed driver is checked against the registry. */
+type DriverSource = "agent" | "config" | "default"
 
 interface ResolvedAgentDriver {
   /** The driver to dispatch through. `undefined` ⇒ default model path

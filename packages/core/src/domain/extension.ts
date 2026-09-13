@@ -2,7 +2,7 @@ import type { Duration, Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import type { AgentDefinition, AgentName, DriverSource } from "./agent"
+import type { AgentDefinition, AgentName } from "./agent"
 import type { ToolCapability } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
 import type { ExtensionContributions } from "./contribution.js"
@@ -110,39 +110,12 @@ export interface SystemPromptInput {
   readonly agent: AgentDefinition
   readonly interactive?: boolean
   /**
-   * Origin of the resolved driver for this turn. Set by the agent loop
-   * after `resolveAgentDriver` runs. Prompt slots read this to detect
-   * external dispatch (e.g. ACP via codemode) and rewrite the prompt's
-   * tool section accordingly. `undefined` for code paths that bypass
-   * `resolveTurnContext`.
-   */
-  readonly driverSource?: DriverSource
-  /**
    * Tools resolved for this turn. ACP-aware hooks need this to render
    * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
    */
   readonly tools?: ReadonlyArray<ToolCapability>
   /** Admitted host tools, including tools hidden from the model by modelSet. */
   readonly hostTools?: ReadonlyArray<ToolCapability>
-  /**
-   * Tool surface declared by the resolved driver (`"native"` or
-   * `"codemode"`). Set by the agent loop from
-   * `ExternalDriverContribution.toolSurface`; `undefined` for
-   * model-routed turns. The codemode prompt slot keys off this metadata
-   * rather than driver-id heuristics.
-   */
-  readonly driverToolSurface?: "native" | "codemode"
-  /**
-   * The structured prompt sections used to build `basePrompt`, in
-   * pre-compile form. Prompt slots that need to swap or strip
-   * sections (e.g. codemode replacing `tool-list` / `tool-guidelines`)
-   * rewrite this and recompile rather than performing string surgery.
-   */
-  readonly sections?: ReadonlyArray<{
-    readonly id: string
-    readonly content: string
-    readonly priority: number
-  }>
 }
 
 export interface TurnAfterInput {

@@ -436,7 +436,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       createdAt: yield* DateTime.nowAsDate,
     })
 
-    let payload = {
+    const payload = {
       workspaceId: yield* CurrentWorkspaceId,
       message,
       // Actor operation payloads require optional fields explicitly.
@@ -446,15 +446,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       interactive: input.interactive,
       // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
       runSpec: input.runSpec,
-    }
-    if (Predicate.isNotUndefined(input.agentOverride)) {
-      payload = { ...payload, agentOverride: input.agentOverride }
-    }
-    if (Predicate.isNotUndefined(input.interactive)) {
-      payload = { ...payload, interactive: input.interactive }
-    }
-    if (Predicate.isNotUndefined(input.runSpec)) {
-      payload = { ...payload, runSpec: input.runSpec }
     }
     const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
     if (input.completion === "admission") {

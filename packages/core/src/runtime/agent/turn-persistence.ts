@@ -1,6 +1,5 @@
 import { DateTime, Effect, Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import type { AgentName as AgentNameType } from "../../domain/agent.js"
 import {
   MessageReceived,
   ToolCallFailed,
@@ -268,7 +267,6 @@ export const persistAssistantParts = (params: {
   messageId: MessageId
   parts: ReadonlyArray<AssistantResponsePart>
   createdAt?: Date
-  agentName: AgentNameType
 }) =>
   persistMessageParts({
     sessionId: params.sessionId,
@@ -290,7 +288,6 @@ export const persistAssistantPartsWithBindings = Effect.fn(
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   storageTransaction: StorageTransaction
   createdAt?: Date
-  agentName: AgentNameType
 }) {
   if (params.parts.length === 0) {
     return Option.none<{ readonly message: Message; readonly inserted: boolean }>()

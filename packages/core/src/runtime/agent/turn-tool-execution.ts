@@ -218,7 +218,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       parts: toolCalls,
       toolBindings,
       storageTransaction,
-      agentName: params.currentTurnAgent,
     })
     if (Option.isSome(persisted) && persisted.value.inserted && Option.isSome(current)) {
       yield* processLocalReplay.setBinding(localBindingKey, { entry: current.value })

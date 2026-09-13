@@ -17,7 +17,6 @@ import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
-import { DriverRegistry } from "../extensions/driver-registry.js"
 import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
@@ -33,31 +32,6 @@ export interface ResolvedTurnContext extends ResolvedTurn {
   /** Admitted host tools remain available to extension-owned execution surfaces. */
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
 }
-
-/**
- * Resolve the tool surface a driver expects, used by the `systemPrompt`
- * slot to decide whether to append/replace tool-section content.
- * External drivers expose this on `ExternalDriverContribution.toolSurface`
- * (defaulting to `"native"` when omitted); model drivers are always native.
- * Returns `undefined` when no driver is set.
- */
-const resolveDriverToolSurfaceOption = Effect.fn("TurnHelpers.resolveDriverToolSurface")(function* (
-  agent: AgentDefinition,
-) {
-  const driver = yield* Effect.succeed(Option.fromUndefinedOr(agent.driver))
-  if (Option.isNone(driver)) return Option.none<"native" | "codemode">()
-  if (driver.value._tag === "model") return Option.some<"native" | "codemode">("native")
-  const driverRegistry = yield* DriverRegistry
-  const ext = yield* driverRegistry.getExternal(driver.value.id)
-  const surface: "native" | "codemode" = Option.match(Option.fromUndefinedOr(ext), {
-    onNone: () => "native",
-    onSome: (value) => Option.getOrElse(Option.fromUndefinedOr(value.toolSurface), () => "native"),
-  })
-  return Option.some(surface)
-})
-
-const resolveDriverToolSurface = (agent: AgentDefinition) =>
-  resolveDriverToolSurfaceOption(agent).pipe(Effect.map(Option.getOrUndefined))
 
 const hasAgentOverrides = (overrides: Option.Option<AgentRunOverrides>) =>
   Option.match(overrides, {
@@ -277,16 +251,12 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     extensionSections,
   )
   const turnPrompt = compileSystemPrompt(sections)
-  const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent)
   const systemPrompt = yield* extensionRegistry.extensionHooks.resolveSystemPrompt({
     basePrompt: turnPrompt,
     agent: dispatchAgent,
     interactive: params.interactive,
-    driverSource: driverResolution.source,
     tools,
     hostTools,
-    driverToolSurface,
-    sections,
   })
   const session = yield* sessionStorage
     .getSession(params.sessionId)
@@ -304,6 +274,5 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     reasoning: Option.getOrUndefined(resolveReasoning(dispatchAgent, session?.reasoningLevel)),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,
-    driverSource: driverResolution.source,
   }
 })

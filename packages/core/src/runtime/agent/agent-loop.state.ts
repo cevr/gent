@@ -7,7 +7,6 @@ import {
   DEFAULT_AGENT_NAME,
   type AgentDefinition as AgentDefinitionType,
   type DriverRef,
-  type DriverSource,
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
@@ -314,10 +313,6 @@ export type ResolvedTurn = {
   tools?: ReadonlyArray<ToolCapability>
   agent?: AgentDefinitionType
   driver?: DriverRef
-  /** Origin of {@link driver} — set by `resolveAgentDriver` in the loop's
-   *  `resolveTurnContext`. ACP-aware prompt slots read this
-   *  to detect external dispatch and rewrite the prompt accordingly. */
-  driverSource?: DriverSource
 }
 
 // ── Phase-tagged loop state (flat, actor-owned) ──

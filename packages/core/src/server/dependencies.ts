@@ -9,7 +9,6 @@ import { EventStore, EventStoreError } from "../domain/event.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { FileLockService } from "../domain/file-lock.js"
-import type { Permission } from "../domain/permission.js"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
@@ -51,7 +50,6 @@ interface DependencyOverrides {
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher | GentPlatform>
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
-  readonly permissionLayer?: Layer.Layer<Permission>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
   readonly agentRunnerLayer?: Layer.Layer<AgentRunnerService>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
@@ -197,14 +195,6 @@ const makeToolRunnerLayer = <A, E, R>(
   override: Option.Option<NonNullable<DependencyOverrides["toolRunnerLayer"]>>,
   liveDeps: Layer.Layer<A, E, R>,
 ) => Option.getOrElse(override, () => Layer.provide(ToolRunner.Live, liveDeps))
-
-const optionalPermissionLayer = (
-  override: Option.Option<NonNullable<DependencyOverrides["permissionLayer"]>>,
-) =>
-  Option.match(override, {
-    onNone: () => [],
-    onSome: (value) => [value],
-  })
 
 const makeApprovalServiceLayer = <A, E, R>(
   override: Option.Option<NonNullable<DependencyOverrides["approvalLayer"]>>,
@@ -390,7 +380,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       fileLockServiceLive,
       AgentLoopSessionGovernance.Live,
       modelResolverLive,
-      ...optionalPermissionLayer(Option.fromUndefinedOr(config.overrides?.permissionLayer)),
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
       FetchHttpClient.layer,
     ),

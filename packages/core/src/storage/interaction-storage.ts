@@ -86,10 +86,6 @@ export interface InteractionStorageService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
   }) => Effect.Effect<ReadonlyArray<InteractionRequestRecord>, StorageError>
-  readonly deletePending: (
-    sessionId: SessionId,
-    branchId: BranchId,
-  ) => Effect.Effect<void, StorageError>
 }
 
 export class InteractionStorage extends Context.Service<
@@ -182,18 +178,6 @@ export class InteractionStorage extends Context.Service<
             return yield* Effect.forEach(rows, (row) => decodeRow(row))
           },
           Effect.mapError(mapError("Failed to list pending interaction requests")),
-        ),
-
-        deletePending: Effect.fn("InteractionStorage.deletePending")(
-          function* (sessionId, branchId) {
-            const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`DELETE FROM interaction_requests
-              WHERE session_id = ${sessionId}
-                AND branch_id = ${branchId}
-                AND status = 'pending'
-                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
-          },
-          Effect.mapError(mapError("Failed to delete pending interaction requests")),
         ),
       })
     }),

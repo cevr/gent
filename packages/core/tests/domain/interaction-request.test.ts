@@ -257,44 +257,6 @@ describe("Interaction Request", () => {
       ])
     }).pipe(Effect.provide(storageLive)),
   )
-  it.live("deletePendingInteractionRequests clears by session+branch", () =>
-    Effect.gen(function* () {
-      const is = yield* InteractionStorage
-      yield* ensureStorageParents({
-        sessionId: SessionId.make("s3"),
-        branchId: BranchId.make("b3"),
-      })
-      yield* ensureStorageParents({
-        sessionId: SessionId.make("s3"),
-        branchId: BranchId.make("b4"),
-      })
-      // Insert requests for two different branches
-      yield* is.persist({
-        requestId: InteractionRequestId.make("req-del-1"),
-        type: "approval",
-        sessionId: SessionId.make("s3"),
-        branchId: BranchId.make("b3"),
-        paramsJson: "{}",
-        status: "pending",
-        createdAt: yield* Clock.currentTimeMillis,
-      })
-      yield* is.persist({
-        requestId: InteractionRequestId.make("req-del-2"),
-        type: "approval",
-        sessionId: SessionId.make("s3"),
-        branchId: BranchId.make("b4"),
-        paramsJson: "{}",
-        status: "pending",
-        createdAt: yield* Clock.currentTimeMillis,
-      })
-      // Delete only b3
-      yield* is.deletePending(SessionId.make("s3"), BranchId.make("b3"))
-      // Only b4 should remain
-      const remaining = yield* is.listPending()
-      expect(remaining.filter((r) => r.sessionId === SessionId.make("s3")).length).toBe(1)
-      expect(remaining[0]!.branchId).toBe(BranchId.make("b4"))
-    }).pipe(Effect.provide(storageLive)),
-  )
   it.live("storeResolution + subsequent present returns stored value without throwing", () =>
     Effect.gen(function* () {
       const interaction = yield* makeInteractionService({

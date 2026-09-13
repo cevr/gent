@@ -29,7 +29,6 @@ export interface BranchStorageService {
   readonly listBranches: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Branch>, StorageError>
-  readonly countMessages: (branchId: BranchId) => Effect.Effect<number, StorageError>
   readonly countMessagesByBranches: (
     branchIds: readonly BranchId[],
   ) => Effect.Effect<ReadonlyMap<BranchId, number>, StorageError>
@@ -118,20 +117,6 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             return yield* Effect.forEach(rows, branchFromRow)
           },
           Effect.mapError(mapError("Failed to list branches")),
-        ),
-
-        countMessages: Effect.fn("BranchStorage.countMessages")(
-          function* (branchId) {
-            const workspaceId = yield* CurrentWorkspaceId
-            const rows = yield* sql<{
-              count: number
-            }>`SELECT COUNT(*) as count
-              FROM messages m
-              JOIN sessions s ON s.id = m.session_id
-              WHERE m.branch_id = ${branchId} AND s.workspace_id = ${workspaceId}`
-            return rows[0]?.count ?? 0
-          },
-          Effect.mapError(mapError("Failed to count messages")),
         ),
 
         countMessagesByBranches: Effect.fn("BranchStorage.countMessagesByBranches")(

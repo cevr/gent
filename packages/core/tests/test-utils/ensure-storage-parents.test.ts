@@ -10,8 +10,6 @@ const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
     createSession: (session) =>
       Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
     getSession: (id) => Ref.get(sessions).pipe(Effect.map((map) => map.get(id))),
-    // oxlint-disable-next-line effect/noNullish -- SessionStorage uses undefined for an absent latest session.
-    getLastSessionByCwd: () => Effect.void.pipe(Effect.as(undefined)),
     listSessions: Ref.get(sessions).pipe(Effect.map((map) => [...map.values()])),
     updateSession: (session) =>
       Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
