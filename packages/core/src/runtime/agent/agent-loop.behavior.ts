@@ -304,16 +304,16 @@ export const makeAgentLoopBehavior = (
       }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),
     ).pipe(
       Effect.map(({ environment }) => {
-        const profile = {
+        const profile: AgentLoopTurnProfile = {
           turnExtensionRegistry: environment.extensionRegistry,
           turnDriverRegistry: environment.driverRegistry,
           turnPermission: environment.permission,
           turnBaseSections: environment.baseSections,
           turnHostCtx: environment.hostCtx,
           turnCapabilityContext: environment.capabilityContext,
+          turnGenerationId: environment.generationId,
         }
-        if (Predicate.isUndefined(environment.publication)) return profile
-        return { ...profile, turnPublication: environment.publication }
+        return profile
       }),
     )
 

@@ -18,7 +18,6 @@ import {
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "../../../src/domain/tool-binding"
-import { ResourceId, ResourceRevision } from "../../../src/domain/resource-graph"
 import { MessageReceived, ToolCallSucceeded } from "../../../src/domain/event"
 import { EventPublisher } from "../../../src/domain/event-publisher"
 import {
@@ -34,11 +33,6 @@ import { makeStorageTransaction, SqliteStorage } from "../../../src/storage/sqli
 import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import {
-  attachToolBindingIdentity,
-  bindingMismatchReason,
-  sameToolBindingIdentity,
-} from "../../../src/runtime/agent/tool-binding-replay"
-import {
   findPersistedToolResults,
   persistAssistantPartsWithBindings,
   ToolResultReplayError,
@@ -50,7 +44,6 @@ import {
   ProcessLocalToolReplay,
   processLocalReplayBindingKey,
 } from "../../../src/runtime/agent/process-local-tool-replay"
-import { ResourceGenerationId } from "../../../src/domain/resource-generation"
 import { EventStorage } from "../../../src/storage/event-storage"
 import { encodeToolOutput } from "../../../src/domain/tool-output"
 import {
@@ -73,7 +66,6 @@ const replayCases = [
     durable: false,
     saved: false,
     local: true,
-    retired: false,
     changed: false,
     dynamic: false,
     reason: "",
@@ -83,27 +75,15 @@ const replayCases = [
     durable: false,
     saved: false,
     local: false,
-    retired: false,
     changed: false,
     dynamic: false,
     reason: "MissingBinding",
-  },
-  {
-    name: "retired process generation",
-    durable: false,
-    saved: false,
-    local: true,
-    retired: true,
-    changed: false,
-    dynamic: false,
-    reason: "SourceMismatch",
   },
   {
     name: "matching durable identity",
     durable: true,
     saved: true,
     local: false,
-    retired: false,
     changed: false,
     dynamic: false,
     reason: "",
@@ -113,7 +93,6 @@ const replayCases = [
     durable: true,
     saved: false,
     local: true,
-    retired: false,
     changed: false,
     dynamic: false,
     reason: "MissingBinding",
@@ -123,27 +102,15 @@ const replayCases = [
     durable: true,
     saved: true,
     local: true,
-    retired: false,
     changed: true,
     dynamic: false,
     reason: "SourceMismatch",
-  },
-  {
-    name: "changed resource vector",
-    durable: true,
-    saved: true,
-    local: true,
-    retired: false,
-    changed: false,
-    dynamic: false,
-    reason: "ResourceMismatch",
   },
   {
     name: "dynamic durable marker",
     durable: true,
     saved: true,
     local: true,
-    retired: false,
     changed: false,
     dynamic: true,
     reason: "DynamicNonReplayable",
@@ -179,12 +146,7 @@ const makeBinding = () =>
       sourceRevision: ToolSourceRevision.make("source/legacy"),
     }),
     schemaRevision: ToolSchemaRevision.make("schema/legacy"),
-    resources: [
-      {
-        id: ResourceId.make("@test/replay-resource"),
-        revision: ResourceRevision.make("resource/1"),
-      },
-    ],
+    resources: [],
   })
 
 describe("tool binding replay", () => {
@@ -301,49 +263,22 @@ describe("tool binding replay", () => {
           )
           const cache = yield* SessionProfileCache
           const profile = yield* cache.resolve("/tmp")
-          const publication = profile.publication
-          if (Predicate.isUndefined(publication))
-            return yield* Effect.die("Expected live publication")
           const current = yield* captureCurrentToolBinding({
             sessionId,
             toolName: toolCall.name,
-            publication,
           })
           if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
           const replay = yield* ProcessLocalToolReplay
           const key = processLocalReplayBindingKey(address)
           if (scenario.local) {
-            let generationId = Option.some(publication.generationId)
-            if (scenario.retired) generationId = Option.some(ResourceGenerationId.make("retired"))
-            yield* replay.setBinding(key, { entry: current.value, generationId })
-            if (scenario.retired) {
-              yield* replay.setBinding("another-call-in-retired-generation", {
-                entry: current.value,
-                generationId,
-              })
-            }
+            yield* replay.setBinding(key, { entry: current.value })
           }
           if (scenario.saved) {
             const storage = yield* ToolCallBindingStorage
             let binding = current.value.binding
             if (Predicate.isUndefined(binding))
               return yield* Effect.die("Expected durable identity")
-            expect(binding.resources).toEqual([
-              {
-                id: ResourceId.make("test/replay-policy-resource"),
-                revision: ResourceRevision.make("1"),
-              },
-            ])
-            if (scenario.reason === "ResourceMismatch")
-              binding = makeToolBindingIdentity({
-                ...binding,
-                resources: [
-                  {
-                    id: ResourceId.make("test/replay-policy-resource"),
-                    revision: ResourceRevision.make("old"),
-                  },
-                ],
-              })
+            expect(binding.resources).toEqual([])
             if (scenario.changed)
               binding = makeToolBindingIdentity({
                 ...binding,
@@ -363,7 +298,7 @@ describe("tool binding replay", () => {
           const result = yield* resolveReplayToolBinding({
             ...address,
             toolCall,
-            publication,
+            generationId: profile.generationId,
           }).pipe(Effect.exit)
           if (Exit.isSuccess(result)) {
             expect(scenario.reason).toBe("")
@@ -375,11 +310,6 @@ describe("tool binding replay", () => {
             reason: scenario.reason,
           })
           expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
-          if (scenario.retired) {
-            expect(
-              Option.isNone(yield* replay.getBinding("another-call-in-retired-generation")),
-            ).toBe(true)
-          }
         }).pipe(
           // oxlint-disable-next-line effect/noInlineProvide -- Each scenario owns a production test root with its authored extension.
           Effect.provide(layer),
@@ -388,7 +318,7 @@ describe("tool binding replay", () => {
     )
   }
 
-  it.scopedLive("resumes a process-local binding only inside its live generation", () =>
+  it.scopedLive("resumes a process-local binding only inside its live process", () =>
     Effect.gen(function* () {
       const capability = makeTool()
       const extension = defineExtension({
@@ -415,28 +345,26 @@ describe("tool binding replay", () => {
         }
         const cache = yield* SessionProfileCache
         const profile = yield* cache.resolve("/tmp")
-        const publication = profile.publication
-        if (Predicate.isUndefined(publication))
-          return yield* Effect.die("Expected live publication")
+        const generationId = profile.generationId
         const current = yield* captureCurrentToolBinding({
           sessionId,
           toolName: "@test/replay-tool",
-          publication,
         })
         if (Option.isNone(current)) return yield* Effect.die("Expected captured capability")
         // A source-loaded extension has no build artifact, so no durable identity.
         expect(current.value.binding).toBeUndefined()
-        const identity = yield* innerOperationBindingIdentity(current.value, publication)
+        expect(Option.isNone(yield* innerOperationBindingIdentity(current.value))).toBe(true)
+        const identity = yield* innerOperationBindingIdentity(current.value, generationId)
         if (Option.isNone(identity)) return yield* Effect.die("Expected process-local identity")
         expect(identity.value.source).toEqual({
           _tag: "ProcessLocal",
-          sourceRevision: ToolSourceRevision.make(`process:${publication.generationId}`),
+          sourceRevision: ToolSourceRevision.make(`process:${generationId}`),
         })
 
         const live = yield* resolveStoredToolBinding({
           ...address,
           binding: identity.value,
-          publication,
+          generationId,
         })
         expect(live.capability).toBe(capability)
 
@@ -445,18 +373,18 @@ describe("tool binding replay", () => {
           binding: makeToolBindingIdentity({
             ...identity.value,
             source: ToolBindingSource.cases.ProcessLocal.make({
-              sourceRevision: ToolSourceRevision.make("process:retired-generation"),
+              sourceRevision: ToolSourceRevision.make("process:retired-process"),
             }),
           }),
-          publication,
+          generationId,
         }).pipe(Effect.flip)
         expect(retired).toMatchObject({ _tag: "ToolBindingReplayError", reason: "SourceMismatch" })
 
-        const withoutPublication = yield* resolveStoredToolBinding({
+        const withoutProcess = yield* resolveStoredToolBinding({
           ...address,
           binding: identity.value,
         }).pipe(Effect.flip)
-        expect(withoutPublication).toMatchObject({
+        expect(withoutProcess).toMatchObject({
           _tag: "ToolBindingReplayError",
           reason: "SourceMismatch",
         })
@@ -465,36 +393,6 @@ describe("tool binding replay", () => {
         Effect.provide(layer),
       )
     }).pipe(Effect.timeout("5 seconds")),
-  )
-
-  it.live("rejects a changed loaded publication revision with the same artifact and schema", () =>
-    Effect.sync(() => {
-      const capability = makeTool()
-      const extension = makeExtension(capability)
-      const entry = {
-        extensionId: extension.manifest.id,
-        capability,
-        origin: "static",
-      } satisfies ResolvedToolCapability
-      const first = attachToolBindingIdentity(entry, {
-        extensions: [extension],
-        resources: [],
-        publicationRevision: "config-revision-1",
-        hash: (input) => `hash-${input.length}`,
-      })
-      const second = attachToolBindingIdentity(entry, {
-        extensions: [extension],
-        resources: [],
-        publicationRevision: "config-revision-2",
-        hash: (input) => `hash-${input.length}`,
-      })
-
-      expect(first.binding).toBeDefined()
-      expect(second.binding).toBeDefined()
-      if (Predicate.isUndefined(first.binding) || Predicate.isUndefined(second.binding)) return
-      expect(sameToolBindingIdentity(first.binding, second.binding)).toBe(false)
-      expect(bindingMismatchReason(first.binding, second.binding)).toBe("SourceMismatch")
-    }),
   )
 
   it.live("does not backfill a binding on an existing assistant message", () =>
@@ -874,29 +772,6 @@ describe("tool binding replay", () => {
           expect(results.size).toBe(0)
         }),
       ),
-    ),
-  )
-  it.live("retires process-local bindings by resource generation", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const replay = yield* ProcessLocalToolReplay
-        const capability = makeTool()
-        const extension = makeExtension(capability)
-        const entry = {
-          extensionId: extension.manifest.id,
-          capability,
-          origin: "static",
-        } satisfies ResolvedToolCapability
-        const key = "generation-session:generation-branch:assistant:call"
-        yield* replay.setBinding(key, {
-          entry,
-          generationId: Option.some(ResourceGenerationId.make("generation-a")),
-        })
-
-        yield* replay.clearBindingsForGeneration(ResourceGenerationId.make("generation-a"))
-
-        expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
-      }).pipe(Effect.provide(ProcessLocalToolReplay.Live)),
     ),
   )
 })

@@ -15,7 +15,7 @@ import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
 } from "@gent/core/extensions/branch-tools"
-import { Effect, Layer, Option, Predicate } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { CellExecutionStorage } from "./cell-execution-storage.js"
 import type { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import { recoverCellExecution } from "./cell-recovery.js"
@@ -53,14 +53,7 @@ export const cellToolCallRecovery = Layer.effect(
         // Never admitted: nothing ran, so re-issue rather than settle.
         if (Option.isNone(saved)) return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
         const profile = yield* CurrentAgentLoopTurnProfile
-        if (Predicate.isUndefined(profile.turnPublication))
-          return yield* new ToolCallRecoveryError({
-            message: "Recovery requires a live turn publication",
-          })
-        return yield* recover({
-          cell,
-          profile: { ...profile, turnPublication: profile.turnPublication },
-        }).pipe(
+        return yield* recover({ cell, profile }).pipe(
           Effect.map((result) => ToolCallRecoveryOutcome.cases.Settled.make({ result })),
           Effect.catchTag("CellToolCallSuspended", (suspended) =>
             Effect.succeed(

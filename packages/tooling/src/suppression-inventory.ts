@@ -323,24 +323,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
   },
   {
-    file: "packages/core/src/runtime/extensions/resource-host/resource-graph-host.ts",
-    line: 511,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — The resource membrane owns heterogeneous layer channels.",
-  },
-  {
-    file: "packages/core/src/runtime/extensions/resource-host/resource-graph-host.ts",
-    line: 519,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit host membrane.",
-  },
-  {
-    file: "packages/core/src/runtime/extensions/resource-host/resource-graph-host.ts",
-    line: 526,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit host membrane.",
-  },
-  {
     file: "packages/extensions/src/openai/oauth.ts",
     line: 287,
     kind: "effect-diagnostics",

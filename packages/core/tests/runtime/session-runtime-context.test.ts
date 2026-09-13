@@ -3,6 +3,7 @@ import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Cause, Context, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
 import { BranchId, SessionId } from "../../src/domain/ids"
+import { ProcessGenerationId } from "../../src/domain/process-generation"
 import { dateFromMillis, Session } from "../../src/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -318,12 +319,10 @@ describe("resolveSessionEnvironment", () => {
           driverRegistryService: profileDriverRegistry,
           baseSections: [],
           instructions: "",
+          generationId: ProcessGenerationId.make("test"),
         }
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
-          refresh: () => Effect.die("unused in this test"),
-          current: () => Effect.succeedSome(fakeProfile),
-          requireCurrent: () => Effect.succeed(fakeProfile),
         }
         const hostProvider = yield* makeAmbientExtensionHostContextProvider({
           extensionRegistry,

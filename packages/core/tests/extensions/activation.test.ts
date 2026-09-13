@@ -1,6 +1,6 @@
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Exit, FileSystem, Layer, Option, Path, Predicate, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type {
   ExtensionLoadError,
@@ -14,13 +14,7 @@ import {
   validateLoadedExtensions,
 } from "../../src/runtime/extensions/activation"
 import type { ExtensionContributions } from "../../src/domain/contribution"
-import {
-  defineExtension,
-  defineResource,
-  ExtensionHost,
-  ResourceId,
-  tool,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
 import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -54,47 +48,6 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
 })
 
 describe("extension activation isolation", () => {
-  it.scopedLive("failed replacement leaves no current Profile or usable old publication", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      let revision = "1"
-      const changing = makeBuiltin(
-        "changing",
-        Effect.sync(() => ({
-          resources: [
-            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
-            defineResource({
-              id: "test/changing",
-              revision,
-              scope: "process",
-              layer: Layer.empty,
-              start: Effect.suspend(() => {
-                if (revision === "2") return Effect.die("replacement failed")
-                return Effect.void
-              }),
-            }) as never,
-          ],
-        })),
-      )
-      const context = yield* Layer.build(
-        SessionProfileCache.Live({
-          home,
-          platform: "test",
-          extensions: [changing],
-        }),
-      )
-      const cache = Context.get(context, SessionProfileCache)
-      const first = yield* cache.resolve(home)
-      if (!first.publication) return yield* Effect.die("Expected live publication")
-      revision = "2"
-      expect(Exit.isFailure(yield* cache.refresh(home).pipe(Effect.exit))).toBe(true)
-      expect(Option.isNone(yield* cache.current(home))).toBe(true)
-      expect(Exit.isFailure(yield* first.publication.run(Effect.void).pipe(Effect.exit))).toBe(true)
-      expect(Exit.isFailure(yield* cache.resolve(home).pipe(Effect.exit))).toBe(true)
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
-  )
-
   it.live("builtin setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
       const good = makeBuiltin(
@@ -500,74 +453,66 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 
-  it.scopedLive(
-    "failed first activation leaves no live Profile and closes acquired resources",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const home = yield* fs.makeTempDirectoryScoped()
-        let released = 0
-        let failStart = true
-        const healthy = defineExtension({
-          id: "healthy",
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register(
-              "resource",
-              // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
-              defineResource({
-                id: "test/healthy",
-                scope: "process",
-                layer: Layer.effectDiscard(
-                  Effect.addFinalizer(() =>
-                    Effect.sync(() => {
-                      released++
-                    }),
-                  ),
+  it.scopedLive("a failed resource start suspends only its extension and keeps siblings live", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      let released = 0
+      const healthy = defineExtension({
+        id: "healthy",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+            defineResource({
+              id: "test/healthy",
+              scope: "process",
+              layer: Layer.effectDiscard(
+                Effect.addFinalizer(() =>
+                  Effect.sync(() => {
+                    released++
+                  }),
                 ),
-              }) as never,
-            )
-          }),
-        })
-        const broken = defineExtension({
-          id: "broken",
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register(
-              "resource",
-              // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
-              defineResource({
-                id: "test/broken",
-                requires: [ResourceId.make("test/healthy")],
-                scope: "process",
-                layer: Layer.empty,
-                start: Effect.suspend(() => {
-                  if (failStart) return Effect.die("resource start boom")
-                  return Effect.void
-                }),
-              }) as never,
-            )
-          }),
-        })
-        const context = yield* Layer.build(
-          SessionProfileCache.Live({
-            home,
-            platform: "test",
-            extensions: [healthy, broken],
-          }),
-        )
-        const cache = Context.get(context, SessionProfileCache)
-        const failed = yield* cache.resolve(home).pipe(Effect.exit)
-        expect(Exit.isFailure(failed)).toBe(true)
-        expect(Option.isNone(yield* cache.current(home))).toBe(true)
-        expect(released).toBe(1)
-        failStart = false
-        const recovered = yield* cache.resolve(home)
-        expect(recovered.publication).toBeDefined()
-        expect(recovered.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
-          ExtensionId.make("broken"),
-          ExtensionId.make("healthy"),
-        ])
-      }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+              ),
+            }) as never,
+          )
+        }),
+      })
+      const broken = defineExtension({
+        id: "broken",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+            defineResource({
+              id: "test/broken",
+              scope: "process",
+              layer: Layer.empty,
+              start: Effect.die("resource start boom"),
+            }) as never,
+          )
+        }),
+      })
+      const context = yield* Layer.build(
+        SessionProfileCache.Live({
+          home,
+          platform: "test",
+          extensions: [healthy, broken],
+        }),
+      )
+      const cache = Context.get(context, SessionProfileCache)
+      const profile = yield* cache.resolve(home)
+      expect(profile.resolved.extensions.map((ext) => ext.manifest.id)).toEqual([
+        ExtensionId.make("healthy"),
+      ])
+      expect(profile.resolved.failedExtensions).toMatchObject([
+        { manifest: { id: ExtensionId.make("broken") }, phase: "startup" },
+      ])
+      expect(profile.resolved.failedExtensions[0]?.error).toContain("resource start boom")
+      // The healthy resource stays acquired until the server scope closes.
+      expect(released).toBe(0)
+    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 })

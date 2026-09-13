@@ -1,16 +1,20 @@
 import {
   CurrentDispatchingCall,
   CurrentInteractionOwner,
+  type EventPublisher,
+  type GentPlatform,
   type InteractionRequestId,
+  type MessageStorage,
   ModelContextLedger,
   type OwnedToolCallAddress,
   type ResolvedToolCapability,
+  type ToolRunner,
   innerOperationBindingIdentity,
   resolveStoredToolBinding,
   runAgentLoopTurnProfile,
-  type LiveAgentLoopTurnProfile,
+  type AgentLoopTurnProfile,
 } from "@gent/core/extensions/branch-tools"
-import { Effect, Option } from "effect"
+import { type Context, Effect, Option } from "effect"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import { CellOperationHost } from "./cell-kernel.js"
 import { type CellCatalog, CellEvaluationError } from "./cell-protocol.js"
@@ -21,7 +25,7 @@ import { executeBoundCellTool, cellToolResultValue } from "./cell-tool-call.js"
 
 interface CellToolHostParams {
   readonly cell: OwnedToolCallAddress
-  readonly profile: LiveAgentLoopTurnProfile
+  readonly profile: AgentLoopTurnProfile
 }
 
 interface CellContextHostParams {
@@ -61,7 +65,7 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
           assistantMessageId: params.cell.assistantMessageId,
           toolCallId: stored.toolCallId,
           binding: stored.binding,
-          publication: params.profile.turnPublication,
+          generationId: params.profile.turnGenerationId,
         })
         const admitted = yield* storage.resume(key, params.requestId)
         const result = yield* executeBoundCellTool({
@@ -86,13 +90,36 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
     ),
 )
 
-/** One outer cell's host. The existing publication owns every admitted call. */
+/**
+ * Runtime services a host call reads beyond the turn profile. The host is made
+ * inside the turn, so they are captured there and provided to each call.
+ */
+type CellToolHostServices =
+  | CellToolOperationStorage
+  | EventPublisher
+  | GentPlatform
+  | MessageStorage
+  | ToolRunner
+
+/** One outer cell's host. The turn profile owns every admitted call. */
 export const makeCellToolHost = (
   params: CellToolHostParams &
     CellContextHostParams & {
       readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
       readonly catalog?: CellCatalog
     },
+): Effect.Effect<typeof CellOperationHost.Service, never, CellToolHostServices> =>
+  Effect.map(Effect.context<CellToolHostServices>(), (services) =>
+    makeCellToolHostWith(params, services),
+  )
+
+const makeCellToolHostWith = (
+  params: CellToolHostParams &
+    CellContextHostParams & {
+      readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
+      readonly catalog?: CellCatalog
+    },
+  services: Context.Context<CellToolHostServices>,
 ): typeof CellOperationHost.Service =>
   CellOperationHost.of({
     catalog: params.catalog,
@@ -119,7 +146,7 @@ export const makeCellToolHost = (
             })
           const identity = yield* innerOperationBindingIdentity(
             captured.value,
-            params.profile.turnPublication,
+            params.profile.turnGenerationId,
           )
           if (Option.isNone(identity))
             return yield* new CellEvaluationError({
@@ -168,15 +195,8 @@ export const makeCellToolHost = (
                 output: "",
               }),
             ),
-          AgentLoopError: (cause) =>
-            Effect.fail(
-              new CellEvaluationError({
-                phase: "execute",
-                message: cause.message,
-                output: "",
-              }),
-            ),
         }),
+        Effect.provideContext(services),
       ),
     ),
   })

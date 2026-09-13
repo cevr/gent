@@ -15,6 +15,10 @@ import type * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "./ids.js"
 import type { BranchId, MessageId, SessionId } from "./ids.js"
 import type { CurrentAgentLoopTurnProfile } from "../runtime/agent/agent-loop.turn-profile.js"
+import type { ToolRunner } from "../runtime/agent/tool-runner.js"
+import type { GentPlatform } from "../runtime/gent-platform.js"
+import type { MessageStorage } from "../storage/message-storage.js"
+import type { EventPublisher } from "./event-publisher.js"
 
 /**
  * What recovering one pending call produced.
@@ -33,6 +37,14 @@ export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
 })
 export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
 
+/** Recovery runs inside the turn and settles receipts with the turn's runtime services. */
+type ToolCallRecoveryServices =
+  | CurrentAgentLoopTurnProfile
+  | EventPublisher
+  | GentPlatform
+  | MessageStorage
+  | ToolRunner
+
 interface ToolCallRecoveryApi {
   /** Recover one pending call, or report that it is not recoverable here. */
   readonly recover: (params: {
@@ -40,7 +52,7 @@ interface ToolCallRecoveryApi {
     readonly branchId: BranchId
     readonly assistantMessageId: MessageId
     readonly toolCall: Prompt.ToolCallPart
-  }) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, CurrentAgentLoopTurnProfile>
+  }) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, ToolCallRecoveryServices>
 }
 
 export class ToolCallRecoveryError extends Schema.TaggedError<ToolCallRecoveryError>()(

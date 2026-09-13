@@ -11,11 +11,11 @@ export const ToolSchemaRevision = Schema.NonEmptyString.pipe(Schema.brand("ToolS
 export type ToolSchemaRevision = typeof ToolSchemaRevision.Type
 
 /** A resource revision captured by one tool binding. */
-export const ToolBindingResource = Schema.Struct({
+const ToolBindingResource = Schema.Struct({
   id: ResourceId,
   revision: ResourceRevision,
 })
-export type ToolBindingResource = typeof ToolBindingResource.Type
+type ToolBindingResource = typeof ToolBindingResource.Type
 
 const canonicalResourceVector = Schema.Array(ToolBindingResource).pipe(
   Schema.check(

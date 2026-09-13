@@ -47,8 +47,7 @@ const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
   const context = yield* Layer.build(SessionProfileCache.Live(inputs))
   const cache = Context.get(context, SessionProfileCache)
   const profile = yield* cache.resolve(inputs.cwd)
-  if (!profile.publication) return yield* Effect.die("Live profile has no publication")
-  return { ...profile.publication.value, publication: profile.publication }
+  return { ...profile, profile }
 })
 
 // Static prompt sections live on capability leaf `prompt`. The tool here is a
@@ -378,11 +377,13 @@ describe("live Profile", () => {
               }),
             }
 
+            // The turn provides the profile's layer context, which carries the
+            // built process resources, exactly as the agent loop does.
             const result = yield* runtime.registryService.extensionHooks
               .resolveTurnProjection(hookCtx.projection)
               .pipe(
                 Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
-                runtime.publication.run,
+                Effect.provideContext(runtime.layerContext),
               )
             expect(result.promptSections).toEqual([
               { id: "pure-probe", priority: 1, content: "pure" },

@@ -12,8 +12,6 @@ import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
-import type { ResourceDescriptor } from "../../domain/resource-graph.js"
-import type { ResourceGenerationId } from "../../domain/resource-generation.js"
 import type { TurnProjection } from "../../domain/extension.js"
 import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
@@ -24,10 +22,8 @@ import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
 import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
-import type { ResourceGraphPublication } from "../extensions/resource-host/resource-graph-host.js"
-import type { RuntimeProfileCatalog } from "../profile.js"
 import { staticToolEntries, type ResolvedToolCapability } from "./tool-runner.js"
-import { attachToolBindingIdentity, bindingResourcesFromPlan } from "./tool-binding-replay.js"
+import { attachToolBindingIdentity } from "./tool-binding-replay.js"
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
@@ -36,8 +32,6 @@ export interface ResolvedTurnContext extends ResolvedTurn {
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Admitted host tools remain available to extension-owned execution surfaces. */
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
-  /** Exact resource generation captured for process-local source-mode replay. */
-  turnGenerationId?: ResourceGenerationId
 }
 
 /**
@@ -142,7 +136,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
-  turnPublication?: ResourceGraphPublication<RuntimeProfileCatalog>
   hash: (input: string) => string
 }) {
   const extensionRegistry = yield* ExtensionRegistry
@@ -247,17 +240,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     },
     extensionProjections,
   )
-  let bindingResources: ReadonlyArray<ResourceDescriptor> = []
-  if (Predicate.isNotUndefined(params.turnPublication)) {
-    bindingResources = bindingResourcesFromPlan(
-      params.turnPublication.plan.descriptors,
-      params.turnPublication.plan.startOrder,
-    )
-  }
   const bindingContext = {
     extensions: resolvedExtensions.extensions,
-    resources: bindingResources,
-    publicationRevision: params.turnPublication?.publicationRevision,
     hash: params.hash,
   }
   const entriesByToolId = new Map(
@@ -309,7 +293,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools,
     toolBindings,
     hostToolBindings,
-    turnGenerationId: params.turnPublication?.generationId,
     systemPrompt,
     modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),
     reasoning: Option.getOrUndefined(resolveReasoning(dispatchAgent, session?.reasoningLevel)),

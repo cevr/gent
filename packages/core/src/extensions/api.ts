@@ -135,7 +135,6 @@ export {
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
-export { ResourceId } from "../domain/resource-graph.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { OutputBuffer, headTailChars, saveFullOutput } from "../domain/output-buffer.js"
 // ── Public API ──

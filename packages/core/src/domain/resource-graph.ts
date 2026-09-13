@@ -49,12 +49,12 @@ export const ResourcePlan = Schema.Struct({
 export type ResourcePlan = typeof ResourcePlan.Type
 
 /** IDs that remain active, stop, or start when moving between two plans. */
-export const ResourceGraphDiff = Schema.Struct({
+const ResourceGraphDiff = Schema.Struct({
   retained: Schema.Array(ResourceId),
   stop: Schema.Array(ResourceId),
   start: Schema.Array(ResourceId),
 })
-export type ResourceGraphDiff = typeof ResourceGraphDiff.Type
+type ResourceGraphDiff = typeof ResourceGraphDiff.Type
 
 const compareResourceIds = (left: ResourceId, right: ResourceId): number => {
   if (left < right) return -1

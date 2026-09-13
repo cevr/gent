@@ -95,10 +95,7 @@ import { SessionOperationStorage } from "../../storage/session-operation-storage
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import {
-  runAgentLoopTurnProfileOrLegacy,
-  type AgentLoopTurnProfile,
-} from "./agent-loop.turn-profile.js"
+import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import type { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import {
   buildQueuedTurnItem,
@@ -192,7 +189,7 @@ export const buildAgentLoopActorHandlers = (config: {
       requestEffect.pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
-        runAgentLoopTurnProfileOrLegacy(environment),
+        runAgentLoopTurnProfile(environment),
         Effect.mapError(extensionRequestError),
       )
 

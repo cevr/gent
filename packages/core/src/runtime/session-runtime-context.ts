@@ -9,12 +9,11 @@ import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { StorageError } from "../domain/storage-error.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
-import type { ResourceGraphPublication } from "./extensions/resource-host/resource-graph-host.js"
+import type { ProcessGenerationId } from "../domain/process-generation.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import { ExtensionHostContextProvider } from "./make-extension-host-context.js"
 import type { SessionProfile, SessionProfileCacheService } from "./session-profile.js"
-import type { RuntimeProfileCatalog } from "./profile.js"
 
 export interface SessionEnvironmentDefaults {
   readonly driverRegistry: DriverRegistryService
@@ -25,8 +24,8 @@ export interface SessionEnvironmentDefaults {
 interface SessionEnvironment {
   readonly cwd: string
   readonly extensionRegistry: ExtensionRegistryService
-  /** Resource authority for the exact profile generation resolved for this run. */
-  readonly publication?: ResourceGraphPublication<RuntimeProfileCatalog>
+  /** Identity of the process that built the resolved profile, when one exists. */
+  readonly generationId?: ProcessGenerationId
   readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -49,7 +48,7 @@ interface ExistingSessionBranch {
 
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
-  readonly publication?: ResourceGraphPublication<RuntimeProfileCatalog>
+  readonly generationId?: ProcessGenerationId
   readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
@@ -87,7 +86,7 @@ const resolveActiveRuntimeBindings = (params: {
     const profile = params.profile.value
     return {
       extensionRegistry: profile.registryService,
-      publication: profile.publication,
+      generationId: profile.generationId,
       capabilityContext: profile.layerContext,
       driverRegistry: profile.driverRegistryService,
       permission: profile.permissionService,
@@ -132,7 +131,7 @@ const buildSessionEnvironment = (params: {
     const environment = {
       cwd: hostCtx.cwd,
       extensionRegistry: params.bindings.extensionRegistry,
-      publication: params.bindings.publication,
+      generationId: params.bindings.generationId,
       driverRegistry: params.bindings.driverRegistry,
       permission: params.bindings.permission,
       baseSections: params.bindings.baseSections,

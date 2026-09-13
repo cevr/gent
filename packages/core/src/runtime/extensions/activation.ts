@@ -26,7 +26,7 @@ export interface ExtensionActivationResult {
   readonly failed: ReadonlyArray<FailedExtension>
 }
 
-const toFailedExtension = (
+export const toFailedExtension = (
   ext: {
     manifest: LoadedExtension["manifest"]
     scope: LoadedExtension["scope"]
@@ -162,7 +162,7 @@ export const setupDiscoveredExtensions = (params: {
     return { active, failed }
   })
 
-export const extensionKey = (ext: Pick<LoadedExtension, "scope" | "manifest" | "sourcePath">) =>
+const extensionKey = (ext: Pick<LoadedExtension, "scope" | "manifest" | "sourcePath">) =>
   `${ext.scope}:${ext.manifest.id}:${ext.sourcePath}`
 
 const formatConflicts = (

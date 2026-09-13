@@ -265,7 +265,8 @@ const compileRpcRegistry = (
   }),
 })
 
-const sortExtensionsByScope = (
+/** Resolution order: scope precedence, then id. Later extensions win service conflicts. */
+export const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<LoadedExtension> =>
   [...extensions].sort((a, b) => {

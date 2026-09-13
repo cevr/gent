@@ -147,23 +147,16 @@ composition root. Neither has a separate activation implementation.
 
 The production server uses one live profile owner:
 
-- `runtime/session-profile.ts` owns entries by workspace and canonical cwd.
-  `runtime/live-profile.ts` stages each catalog from the graph host's acquired
-  service context. It does not acquire a second resource layer.
-- `server/dependencies.ts` recovers durable graph owners before selecting the
-  launch profile from that cache. An unavailable saved launch owner fails startup.
-  It does not receive a default profile with replacement authority.
-- `runtime/extensions/resource-host/resource-graph-command.ts` records desired
-  state and dispatches commands through Effect Encore. Recovery reacquires live
-  scopes, including graphs previously marked applied. A saved applied receipt
-  does not prove that this process owns the resource.
-- `runtime/extensions/resource-host/resource-graph-host.ts` owns catalog
-  publication, resource generations, and admission leases. Effect Machine in
-  `resource-lifecycle.ts` owns each local resource's lifecycle. Effect scopes own
-  its acquired services and cleanup. Neither library replaces the branch actor.
+- `runtime/session-profile.ts` owns entries by workspace and canonical cwd. Each
+  entry is built once: declarations load, every extension's process resources
+  build into a child of the server scope, and `buildProfileCatalog` stages the
+  catalog from that context. An extension whose process resource fails to build
+  is reported as failed at the `startup` phase; the rest of the profile stays
+  live. There is no reconciler, publication, or admission lease.
+- `server/dependencies.ts` selects the launch profile from that cache.
 
-Live turn profiles enter the selected publication lease before execution.
-Direct actor tests can use an explicit legacy profile without a graph host.
+Turn profiles carry the process identity that built them. A process-local tool
+binding names that process and is valid only inside it.
 Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
@@ -453,7 +446,7 @@ Key properties:
   `resolveStoredToolBinding` validates an already-owned durable identity without
   reading an assistant-message binding row. Native replay uses this same check.
   Inner-operation storage can use it without synthetic transcript tool calls.
-  Its caller must verify receipt ownership and hold the publication lease.
+  Its caller must verify receipt ownership.
 - **Internal direct command.** `InvokeTool` is not a waiting turn. If its tool
   requests approval, the command closes the request, saves a paired failed result,
   and returns an explicit failure. Redelivery preserves that failure without
@@ -571,7 +564,7 @@ Inner operation bindings and durable approvals use the stores described below.
 and the turn's selected tool bindings.
 The shared turn dispatcher supplies it for each bound tool invocation, including
 explicit tool invocation. `runtime/code-cell/cell-dispatch.ts` uses that address
-and the current live turn publication to enter branch-owned cell execution.
+and the current turn profile to enter branch-owned cell execution.
 It does not search messages or accept a call address from model input. It rejects
 an inner host operation that attempts to dispatch another outer cell. Missing
 branch ownership or recorded turn context returns an `AgentLoopError`, not a
@@ -602,7 +595,7 @@ replay old source or erase operation receipts.
 Fresh cell host calls select only from the supplied turn bindings. They do not
 search the full extension registry by name. Thus an agent-denied tool cannot be
 reached through a cell, and a newly registered replacement cannot replace the
-captured capability. The host still enters the current publication and checks
+captured capability. The host still enters the current turn profile and checks
 permissions before execution. The RPC lifetime test verifies a registered but
 agent-denied tool receives no calls. Catalog discovery must use this selected
 set. Default cutover must retain a host binding set when the advertised model
@@ -639,7 +632,7 @@ operation recovery and never evaluate their source again.
 `runtime/code-cell/cell-tool-call.ts` adapts one already-bound host call to
 `ToolRunner.runBound`. It requires an explicit `Permission` service and does not
 resolve a missing binding by name. The caller still owns the durable operation
-receipt and publication lease. Execution returns the original tool result.
+receipt. Execution returns the original tool result.
 A separate result conversion runs after persistence and maps failures to cell errors.
 `CellToolCallSuspended` instead carries the pending interaction and inner call
 identity out of evaluation. The kernel stops and discards the worker; it does

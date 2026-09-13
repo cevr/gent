@@ -27,17 +27,28 @@ import {
 import { multiToolCallStep, textStep, toolCallStep } from "@gent/core-internal/debug/provider.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
+import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
-it.live("rejects cell dispatch without a branch owner", () =>
+it.scopedLive("rejects cell dispatch without a branch owner", () =>
   Effect.gen(function* () {
     const error = yield* dispatchCell().pipe(Effect.flip)
     expect(error).toMatchObject({
       _tag: "AgentLoopError",
       message: "Cell execution requires a branch-owned runtime",
     })
-  }),
+  }).pipe(
+    Effect.provide(
+      createE2ELayer({
+        agents: [],
+        extensionInputs: [],
+        branchTools: CellBranchTools,
+        extensions: [],
+        providerLayer: LanguageModelLayers.debug(),
+      }),
+    ),
+  ),
 )
 
 describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {

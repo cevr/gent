@@ -1,7 +1,6 @@
 import { Context, Effect, Layer, Option, Predicate } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import type { ResourceGenerationId } from "../../domain/resource-generation.js"
 import type { ResolvedToolCapability } from "./tool-runner.js"
 
 export const processLocalReplayBindingKey = (params: {
@@ -18,18 +17,8 @@ export const processLocalReplayResultKey = (params: {
   readonly toolResultMessageId: string
 }): string => `${params.sessionId}:${params.branchId}:${params.toolResultMessageId}`
 
-export const sameProcessLocalGeneration = (
-  left: Option.Option<ResourceGenerationId>,
-  right: Option.Option<ResourceGenerationId>,
-): boolean => {
-  if (Option.isNone(left)) return Option.isNone(right)
-  if (Option.isNone(right)) return false
-  return left.value === right.value
-}
-
 interface ProcessLocalReplayBinding {
   readonly entry: ResolvedToolCapability
-  readonly generationId: Option.Option<ResourceGenerationId>
 }
 
 interface ProcessLocalToolReplayService {
@@ -37,7 +26,6 @@ interface ProcessLocalToolReplayService {
   readonly setBinding: (key: string, binding: ProcessLocalReplayBinding) => Effect.Effect<void>
   readonly removeBinding: (key: string) => Effect.Effect<void>
   readonly clearBindingsWithPrefix: (prefix: string) => Effect.Effect<void>
-  readonly clearBindingsForGeneration: (generationId: ResourceGenerationId) => Effect.Effect<void>
   readonly getResults: (key: string) => Effect.Effect<ReadonlyMap<string, Prompt.ToolResultPart>>
   readonly setResults: (
     key: string,
@@ -78,17 +66,6 @@ export class ProcessLocalToolReplay extends Context.Service<
           Effect.sync(() => {
             for (const key of bindings.keys()) {
               if (key.startsWith(prefix)) bindings.delete(key)
-            }
-          }),
-        clearBindingsForGeneration: (generationId) =>
-          Effect.sync(() => {
-            for (const [key, binding] of bindings) {
-              if (
-                Option.isSome(binding.generationId) &&
-                binding.generationId.value === generationId
-              ) {
-                bindings.delete(key)
-              }
             }
           }),
         getResults: (key) =>

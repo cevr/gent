@@ -2,7 +2,6 @@
 
 import { Context, DateTime, Effect, FileSystem, Layer, Path, Predicate } from "effect"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
-import type { ResourceGraphPublication } from "./extensions/resource-host/resource-graph-host.js"
 import { type PromptSection } from "../domain/prompt.js"
 import {
   type PermissionRule,
@@ -64,7 +63,7 @@ export interface RuntimeProfileInputs {
  * Use `compileBaseSections(profile)` to get the merged static section array.
  * (Dynamic sections are assembled per-turn by extension hooks, not here.)
  */
-export interface RuntimeProfile {
+interface RuntimeProfile {
   readonly cwd: string
   readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
@@ -74,13 +73,13 @@ export interface RuntimeProfile {
 
 /**
  * Heterogeneous services contributed by authored process resources. The host
- * membrane owns this erased context; callers use the publication boundary to
- * enter it instead of naming a closed-world service union here.
+ * membrane owns this erased context instead of naming a closed-world service
+ * union here.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Resource services are heterogeneous at this explicit host membrane.
 export type RuntimeProfileServiceContext = Context.Context<any>
 
-/** Services and immutable profile data staged from one graph publication. */
+/** Services and immutable profile data staged from one built profile. */
 export interface RuntimeProfileCatalog {
   readonly profile: RuntimeProfile
   readonly layerContext: RuntimeProfileServiceContext
@@ -90,8 +89,6 @@ export interface RuntimeProfileCatalog {
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 
-export type RuntimeProfilePublication = ResourceGraphPublication<RuntimeProfileCatalog>
-
 /**
  * Extension declarations and prompt inputs loaded before process resources are
  * acquired.
@@ -100,7 +97,7 @@ export type RuntimeProfilePublication = ResourceGraphPublication<RuntimeProfileC
  * This boundary only guarantees that it does not build Resource layers,
  * invoke Resource start/stop hooks.
  */
-export interface RuntimeProfileDeclarations {
+interface RuntimeProfileDeclarations {
   readonly cwd: string
   readonly config: UserConfig
   readonly extensionDeclarations: ExtensionActivationResult
@@ -143,9 +140,9 @@ const makeProfilePermissionService = (params: {
  * Load extension declarations and static prompt inputs for a runtime profile.
  *
  * This function performs discovery, trusted extension setup, validation, and
- * prompt input loading. It does not build Resource layers, invoke Resource
- * lifecycle hooks. The returned declarations are
- * consumed by the live Profile owner before resource acquisition.
+ * prompt input loading. It does not build Resource layers or invoke Resource
+ * lifecycle hooks. The returned declarations are consumed by the profile cache
+ * before resource acquisition.
  */
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
@@ -279,8 +276,9 @@ const compileBaseSections = (
  * services) from a resolved profile.
  *
  * Ephemeral children forward the parent's declarations and rebuild private
- * services with lifecycle disabled. Live profiles use the graph host and
- * buildProfileCatalog instead. Direct test fixtures can own a scoped layer.
+ * services with lifecycle disabled. Live profiles build resources per
+ * extension and call buildProfileCatalog instead. Direct test fixtures can own
+ * a scoped layer.
  */
 export const buildExtensionLayers = (
   resolved: ResolvedExtensions,
@@ -314,7 +312,7 @@ export const buildExtensionLayers = (
 }
 
 /**
- * Build a profile catalog from a context already acquired by ResourceGraphHost.
+ * Build a profile catalog from a context whose resources are already built.
  * This function only assembles services. It never invokes a resource layer.
  */
 export const buildProfileCatalog = (params: {
@@ -324,8 +322,8 @@ export const buildProfileCatalog = (params: {
   readonly configOverride?: UserConfig
 }) =>
   Effect.gen(function* () {
-    // The live graph host has already built every resource. Supplying its
-    // immutable context here is the only resource-side operation in staging.
+    // Every resource is already built. Supplying that immutable context here is
+    // the only resource-side operation in staging.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- The host membrane erases heterogeneous resource services at this boundary.
     const resourceLayer: Layer.Layer<any, never, never> = Layer.succeedContext(
       params.resourceContext,

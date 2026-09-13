@@ -68,11 +68,7 @@ import {
   processLocalReplayResultKey,
   ProcessLocalToolReplay,
 } from "./process-local-tool-replay.js"
-import {
-  provideAgentLoopTurnProfile,
-  runAgentLoopTurnProfileOrLegacy,
-  type AgentLoopTurnProfile,
-} from "./agent-loop.turn-profile.js"
+import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { resolveReplayToolBinding } from "./tool-binding-resolution.js"
 import type { TurnInterruption } from "./turn-interruption.js"
 
@@ -174,7 +170,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             branchId: scope.branchId,
             assistantMessageId: params.assistantMessageId,
             toolCall,
-            publication: params.turnProfile.turnPublication,
+            generationId: params.turnProfile.turnGenerationId,
           }).pipe(
             Effect.provideService(ToolCallBindingStorage, toolBindingStorage),
             Effect.provideService(ProcessLocalToolReplay, processLocalReplay),
@@ -365,10 +361,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                         assistantMessageId: assistantMessageIdForTurn(params.messageId, step),
                         toolCallId: part.id,
                       }),
-                      {
-                        entry,
-                        generationId: Option.fromUndefinedOr(params.resolved.turnGenerationId),
-                      },
+                      { entry },
                     )
                   }
                 }
@@ -715,7 +708,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           sessionId: scope.sessionId,
           baseSections: params.turnProfile.turnBaseSections,
           interactive: params.state.interactive,
-          turnPublication: params.turnProfile.turnPublication,
           hash: (input) => platform.hash("sha256", input),
         })
         if (Predicate.isUndefined(resolved)) {
@@ -792,7 +784,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                 toolCall,
               })
               .pipe(
-                provideAgentLoopTurnProfile(params.turnProfile),
+                runAgentLoopTurnProfile(params.turnProfile),
                 Effect.mapError(
                   (cause) => new AgentLoopError({ message: "Tool call recovery failed", cause }),
                 ),
@@ -946,7 +938,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         baseSections: params.turnProfile.turnBaseSections,
         interactive: params.state.interactive,
-        turnPublication: params.turnProfile.turnPublication,
         hash: (input) => platform.hash("sha256", input),
       })
       if (Predicate.isUndefined(resolved)) {
@@ -1115,7 +1106,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
           Effect.provideService(ConfigService, configServiceForRun),
-          runAgentLoopTurnProfileOrLegacy(turnProfile),
+          runAgentLoopTurnProfile(turnProfile),
         )
 
       let preserveReplayBindings = false

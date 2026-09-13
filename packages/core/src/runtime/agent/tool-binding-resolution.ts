@@ -11,16 +11,14 @@ import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.
 import type { ToolBindingIdentity } from "../../domain/tool-binding.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { GentPlatform } from "../gent-platform.js"
-import type { RuntimeProfilePublication } from "../profile.js"
+import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import {
   ProcessLocalToolReplay,
   processLocalReplayBindingKey,
-  sameProcessLocalGeneration,
 } from "./process-local-tool-replay.js"
 import {
   attachToolBindingIdentity,
   bindingMismatchReason,
-  bindingResourcesFromPlan,
   makeBindingReplayError,
   processLocalToolBindingIdentity,
   sameToolBindingIdentity,
@@ -28,63 +26,49 @@ import {
 } from "./tool-binding-replay.js"
 import { ToolRunner, type ResolvedToolCapability } from "./tool-runner.js"
 
-/** Capture the loaded capability and its exact publication identity. */
+/** Capture the loaded capability and its durable identity. */
 export const captureCurrentToolBinding = Effect.fn("ToolBinding.captureCurrent")(
-  function* (params: {
-    readonly sessionId: SessionId
-    readonly toolName: string
-    readonly publication?: RuntimeProfilePublication
-  }) {
+  function* (params: { readonly sessionId: SessionId; readonly toolName: string }) {
     const runner = yield* ToolRunner
     const registry = yield* ExtensionRegistry
     const platform = yield* GentPlatform
     const captured = yield* runner.capture(params)
-    const publication = Option.fromUndefinedOr(params.publication)
-    const resources = Option.match(publication, {
-      onNone: () => [],
-      onSome: (value) => bindingResourcesFromPlan(value.plan.descriptors, value.plan.startOrder),
-    })
     return Option.map(captured, (entry) =>
       attachToolBindingIdentity(entry, {
         extensions: registry.getResolved().extensions,
-        resources,
-        publicationRevision: params.publication?.publicationRevision,
         hash: (input: string) => platform.hash("sha256", input),
       }),
     )
   },
 )
 
-const publicationResources = (publication: RuntimeProfilePublication) =>
-  bindingResourcesFromPlan(publication.plan.descriptors, publication.plan.startOrder)
-
 /**
  * The identity a dispatching tool records for one inner host operation. A
  * build-owned binding is durable. A source run has none, so the operation names
- * the live process generation instead; resume is then valid only inside that
- * generation.
+ * the live process instead; resume is then valid only inside that process. A
+ * turn without a process identity cannot bind a source-run tool at all.
  */
 export const innerOperationBindingIdentity = Effect.fn("ToolBinding.innerOperationIdentity")(
-  function* (entry: ResolvedToolCapability, publication: RuntimeProfilePublication) {
+  function* (entry: ResolvedToolCapability, generationId?: ProcessGenerationId) {
     if (Predicate.isNotUndefined(entry.binding)) return Option.some(entry.binding)
+    if (Predicate.isUndefined(generationId)) return Option.none<ToolBindingIdentity>()
     const platform = yield* GentPlatform
     return processLocalToolBindingIdentity(entry, {
-      generationId: publication.generationId,
-      resources: publicationResources(publication),
+      generationId,
       hash: (input: string) => platform.hash("sha256", input),
     })
   },
 )
 
 /** Validate an owned durable binding without assuming a model-message storage layout.
- * The caller verifies receipt ownership and holds the selected publication lease.
+ * The caller verifies receipt ownership.
  */
 export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(function* (params: {
   readonly sessionId: SessionId
   readonly assistantMessageId: MessageId
   readonly toolCallId: ToolCallId
   readonly binding: ToolBindingIdentity
-  readonly publication?: RuntimeProfilePublication
+  readonly generationId?: ProcessGenerationId
 }) {
   const toolName = String(params.binding.toolId)
   const fail = (reason: ToolBindingReplayReason, message: string) =>
@@ -101,11 +85,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
       `Tool ${toolName} was provided by a dynamic registration and cannot be replayed`,
     )
   }
-  const current = yield* captureCurrentToolBinding({
-    sessionId: params.sessionId,
-    toolName,
-    publication: params.publication,
-  })
+  const current = yield* captureCurrentToolBinding({ sessionId: params.sessionId, toolName })
   if (Option.isNone(current)) {
     return yield* fail(
       "ToolUnavailable",
@@ -113,17 +93,16 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
     )
   }
   if (params.binding.source._tag === "ProcessLocal") {
-    const publication = Option.fromUndefinedOr(params.publication)
-    if (Option.isNone(publication)) {
+    const generationId = Option.fromUndefinedOr(params.generationId)
+    if (Option.isNone(generationId)) {
       return yield* fail(
         "SourceMismatch",
-        `Tool ${toolName} was bound to a process generation that is no longer live`,
+        `Tool ${toolName} was bound to a process that is no longer live`,
       )
     }
     const platform = yield* GentPlatform
     const live = processLocalToolBindingIdentity(current.value, {
-      generationId: publication.value.generationId,
-      resources: publicationResources(publication.value),
+      generationId: generationId.value,
       hash: (input: string) => platform.hash("sha256", input),
     })
     if (Option.isNone(live)) {
@@ -153,8 +132,8 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
 
 /**
  * Resolve replay authority for native, external, and direct tool adapters.
- * Durable rows take precedence. A missing row can use only a same-process,
- * same-generation capability that never had a durable identity.
+ * Durable rows take precedence. A missing row can use only a same-process
+ * capability that never had a durable identity.
  * Callers own result persistence and interaction policy.
  */
 export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(function* (params: {
@@ -162,7 +141,7 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
   readonly branchId: BranchId
   readonly assistantMessageId: MessageId
   readonly toolCall: Prompt.ToolCallPart
-  readonly publication?: RuntimeProfilePublication
+  readonly generationId?: ProcessGenerationId
 }) {
   const storage = yield* ToolCallBindingStorage
   const localReplay = yield* ProcessLocalToolReplay
@@ -190,21 +169,7 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
     if (Option.isNone(local) || Predicate.isNotUndefined(local.value.entry.binding)) {
       return yield* fail("MissingBinding", `No durable binding was recorded for tool ${toolName}`)
     }
-    const currentGeneration = Option.fromUndefinedOr(params.publication?.generationId)
-    if (!sameProcessLocalGeneration(local.value.generationId, currentGeneration)) {
-      if (Option.isSome(local.value.generationId)) {
-        yield* localReplay.clearBindingsForGeneration(local.value.generationId.value)
-      }
-      return yield* fail(
-        "SourceMismatch",
-        `Tool ${toolName} belongs to a retired resource generation`,
-      )
-    }
-    const current = yield* captureCurrentToolBinding({
-      sessionId: params.sessionId,
-      toolName,
-      publication: params.publication,
-    })
+    const current = yield* captureCurrentToolBinding({ sessionId: params.sessionId, toolName })
     if (Option.isNone(current)) {
       return yield* fail(
         "ToolUnavailable",
@@ -230,6 +195,6 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
   return yield* resolveStoredToolBinding({
     ...address,
     binding: stored.value,
-    publication: params.publication,
+    generationId: params.generationId,
   }).pipe(Effect.onError(() => localReplay.removeBinding(key)))
 })

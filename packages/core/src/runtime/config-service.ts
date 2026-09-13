@@ -149,7 +149,7 @@ export interface ConfigServiceService {
   readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
 
-export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
+class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
   path: Schema.String,
   message: Schema.String,
 }) {}

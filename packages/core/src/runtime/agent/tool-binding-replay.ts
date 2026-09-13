@@ -2,17 +2,15 @@ import { canonicalJsonString } from "effect-encore"
 import { Option, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type { LoadedExtension } from "../../domain/extension.js"
-import type { ResourceGenerationId } from "../../domain/resource-generation.js"
+import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import {
   makeToolBindingIdentity,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
   type ToolBindingIdentity,
-  type ToolBindingResource,
 } from "../../domain/tool-binding.js"
 import type { MessageId, ToolCallId, ToolId } from "../../domain/ids.js"
-import { type ResourceDescriptor, type ResourceId } from "../../domain/resource-graph.js"
 import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import type { ResolvedToolCapability } from "./tool-runner.js"
 
@@ -46,8 +44,6 @@ export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplay
 
 interface ToolBindingIdentityContext {
   readonly extensions: ReadonlyArray<LoadedExtension>
-  readonly resources: ReadonlyArray<ResourceDescriptor>
-  readonly publicationRevision?: string
   readonly hash: (input: string) => string
 }
 
@@ -63,18 +59,7 @@ const schemaRevisionFor = (
   return ToolSchemaRevision.make(`schema:${hash(canonicalJsonString(advertisedSchema))}`)
 }
 
-const resourceVectorFor = (
-  resources: ReadonlyArray<ResourceDescriptor>,
-): ReadonlyArray<ToolBindingResource> =>
-  resources.map((resource) => ({
-    id: resource.id,
-    revision: resource.revision,
-  }))
-
-const sourceRevisionFor = (
-  extension: LoadedExtension,
-  publicationRevision: ToolBindingIdentityContext["publicationRevision"],
-): Option.Option<ToolSourceRevision> => {
+const sourceRevisionFor = (extension: LoadedExtension): Option.Option<ToolSourceRevision> => {
   if (Predicate.isUndefined(extension.artifactIdentity)) return Option.none()
   const sourceParts = [
     "artifact",
@@ -83,9 +68,6 @@ const sourceRevisionFor = (
     extension.sourcePath,
     extension.manifest.id,
   ]
-  if (Predicate.isNotUndefined(publicationRevision)) {
-    sourceParts.push("publication", publicationRevision)
-  }
   return Option.some(ToolSourceRevision.make(sourceParts.join(":")))
 }
 
@@ -99,7 +81,7 @@ export const attachToolBindingIdentity = (
   )
   let sourceRevision = Option.none<ToolSourceRevision>()
   if (Predicate.isNotUndefined(extension)) {
-    const revision = sourceRevisionFor(extension, context.publicationRevision)
+    const revision = sourceRevisionFor(extension)
     if (Option.isSome(revision)) sourceRevision = revision
   }
   if (Option.isNone(sourceRevision)) return entry
@@ -110,7 +92,7 @@ export const attachToolBindingIdentity = (
     extensionId: entry.extensionId,
     source,
     schemaRevision: schemaRevisionFor(entry.capability, context.hash),
-    resources: resourceVectorFor(context.resources),
+    resources: [],
   })
   return { ...entry, binding }
 }
@@ -119,8 +101,7 @@ export const attachToolBindingIdentity = (
 export const processLocalToolBindingIdentity = (
   entry: ResolvedToolCapability,
   context: {
-    readonly generationId: ResourceGenerationId
-    readonly resources: ReadonlyArray<ResourceDescriptor>
+    readonly generationId: ProcessGenerationId
     readonly hash: (input: string) => string
   },
 ): Option.Option<ToolBindingIdentity> => {
@@ -133,7 +114,7 @@ export const processLocalToolBindingIdentity = (
         sourceRevision: ToolSourceRevision.make(`process:${context.generationId}`),
       }),
       schemaRevision: schemaRevisionFor(entry.capability, context.hash),
-      resources: resourceVectorFor(context.resources),
+      resources: [],
     }),
   )
 }
@@ -180,14 +161,6 @@ export const bindingMismatchReason = (
     }
   }
   return "SourceMismatch"
-}
-
-export const bindingResourcesFromPlan = (
-  descriptors: ReadonlyArray<ResourceDescriptor>,
-  activeIds: ReadonlyArray<ResourceId>,
-): ReadonlyArray<ResourceDescriptor> => {
-  const active = new Set(activeIds)
-  return descriptors.filter((descriptor) => active.has(descriptor.id))
 }
 
 export const makeBindingReplayError = (params: {

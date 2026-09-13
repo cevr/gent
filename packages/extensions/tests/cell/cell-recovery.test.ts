@@ -235,7 +235,6 @@ it.scopedLive(
             const selected = yield* captureCurrentToolBinding({
               sessionId,
               toolName: "delegate",
-              publication: profile.publication,
             })
             const identity = Option.flatMap(selected, (entry) =>
               Option.fromUndefinedOr(entry.binding),
@@ -266,7 +265,6 @@ it.scopedLive(
             const captured = yield* captureCurrentToolBinding({
               sessionId,
               toolName: "cell",
-              publication: profile.publication,
             })
             const identity = Option.flatMap(captured, (entry) =>
               Option.fromUndefinedOr(entry.binding),
@@ -275,23 +273,20 @@ it.scopedLive(
             yield* (yield* ToolCallBindingStorage).save({ ...cell, binding: identity.value })
           }
           if (state === "waiting") {
-            if (Predicate.isUndefined(profile.publication))
-              return yield* Effect.die("Missing publication")
             const host = yield* makeAmbientExtensionHostContextProvider({
               extensionRegistry: profile.registryService,
             })
             const selected = yield* captureCurrentToolBinding({
               sessionId,
               toolName: "approve",
-              publication: profile.publication,
             })
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
-            const suspended = yield* makeCellToolHost({
+            const suspendedHost = yield* makeCellToolHost({
               cell,
               ledger: yield* ModelContextLedger.make,
               toolBindings: new Map([["approve", selected.value]]),
               profile: {
-                turnPublication: profile.publication,
+                turnGenerationId: profile.generationId,
                 turnExtensionRegistry: profile.registryService,
                 turnDriverRegistry: profile.driverRegistryService,
                 turnPermission: profile.permissionService,
@@ -299,6 +294,7 @@ it.scopedLive(
                 turnHostCtx: host.forRun(cell),
               },
             })
+            const suspended = yield* suspendedHost
               .call(
                 CellResponse.cases.HostCall.make({
                   cellId: "1",
@@ -313,7 +309,6 @@ it.scopedLive(
           const binding = yield* captureCurrentToolBinding({
             sessionId,
             toolName: "sibling",
-            publication: profile.publication,
           })
           const identity = Option.flatMap(binding, (entry) => Option.fromUndefinedOr(entry.binding))
           if (Option.isNone(identity)) return yield* Effect.die("Missing sibling binding")

@@ -9,7 +9,8 @@ Composability](https://arxiv.org/abs/2608.25512). The paper defines two properti
 - Spatial composition activates a component when its requirements exist.
 
 Effect scopes already provide the temporal base. Context and Layer already provide
-the service base. Gent needs a live resource graph between these two parts.
+the service base. Gent composes these directly: one scope per profile, one
+Layer build per extension.
 
 ## Current decision
 
@@ -103,27 +104,11 @@ requires.
 
 ## Implemented resource boundary
 
-The pure planner owns identity, dependency order, and missing-provider policy.
-The live graph host owns resource scopes, generations, publication, and admission.
-It stops dependent resources before their providers. Replacement is exclusive:
-the host closes admission and drains or cancels users before replacement starts.
-This produces an unavailable interval. It does not promise an atomic swap of
-external ports, locks, or account leases.
-
-The profile cache is the single production owner. Startup and per-cwd requests use
-that cache. Encore records desired commands and applied results in SQLite. Startup
-recovery reacquires resources before exposing the saved launch owner. A failed
-saved owner does not fall back to default authority.
-
-The public `resourceGraph.preview` operation prepares a snapshot from the target's
-loaded declarations. It does not publish a catalog or acquire declared resources.
-Trusted setup can perform its own effects. Preview is not a sandbox. A healthy
-control server on the same database can submit a corrected snapshot for a failed
-owner. Submission records intent; callers must wait for applied state.
-
-See [the repair example](extensions.md#repairing-an-unavailable-resource-owner).
-Current root checks are recorded in `plans/live-composition.md`. These resource
-checks do not imply that tool replay or the complete product gate has passed.
+Each session profile builds its extensions' process resources in declaration
+order, one `Layer.build` per extension inside a child of the server scope. A
+build that fails releases only what that extension acquired and marks the
+extension failed; the profile stays live for the rest. Replacement is a process
+restart. There is no reconciler, publication, or admission lease.
 
 ## Ownership
 

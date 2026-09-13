@@ -136,7 +136,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
     assistantMessageId: params.assistantMessageId,
     toolCallId: params.toolCallId,
   })
-  const currentGeneration = Option.fromUndefinedOr(params.turnProfile.turnPublication?.generationId)
 
   return yield* Effect.gen(function* () {
     const existingResult = yield* messageStorage.getMessage(params.toolResultMessageId)
@@ -173,7 +172,7 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
         branchId: params.branchId,
         assistantMessageId: params.assistantMessageId,
         toolCall,
-        publication: params.turnProfile.turnPublication,
+        generationId: params.turnProfile.turnGenerationId,
       }).pipe(
         Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
           Effect.gen(function* () {
@@ -207,7 +206,6 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       current = yield* captureCurrentToolBinding({
         sessionId: params.sessionId,
         toolName: toolCall.name,
-        publication: params.turnProfile.turnPublication,
       })
       if (Option.isSome(current)) toolBindings.set(toolCall.name, current.value)
     }
@@ -223,10 +221,7 @@ export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params:
       agentName: params.currentTurnAgent,
     })
     if (Option.isSome(persisted) && persisted.value.inserted && Option.isSome(current)) {
-      yield* processLocalReplay.setBinding(localBindingKey, {
-        entry: current.value,
-        generationId: currentGeneration,
-      })
+      yield* processLocalReplay.setBinding(localBindingKey, { entry: current.value })
     }
 
     const toolResults = yield* executeToolCalls({

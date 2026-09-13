@@ -1,6 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
 import {
-  Cause,
   Context,
   Deferred,
   Effect,
@@ -10,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  Ref,
   Schema,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
@@ -20,17 +20,13 @@ import {
   defineResource,
   type GentExtension,
 } from "@gent/core/extensions/api"
-import {
-  SessionProfileCache,
-  SessionProfileUnavailableError,
-} from "../../src/runtime/session-profile"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ProcessRunnerLive } from "../../src/utils/run-process"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { ResourceLeaseStaleGenerationError } from "../../src/runtime/extensions/resource-host/resource-leases"
-import { waitFor } from "../../src/test-utils/fixtures"
+import { ExtensionId } from "../../src/domain/ids"
 
 const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
@@ -40,6 +36,20 @@ class SessionProfileResourceMarker extends Context.Service<
   SessionProfileResourceMarker,
   { readonly value: string }
 >()("@gent/core/tests/runtime/session-profile.test/SessionProfileResourceMarker") {}
+
+class SessionProfileStartProbe extends Context.Service<
+  SessionProfileStartProbe,
+  { readonly value: string }
+>()("@gent/core/tests/runtime/session-profile.test/SessionProfileStartProbe") {}
+
+/** A process resource whose only behavior is its `start` effect. */
+const startResource = (id: string, start: Effect.Effect<void>) =>
+  defineResource({
+    id,
+    scope: "process",
+    layer: Layer.succeed(SessionProfileStartProbe, SessionProfileStartProbe.of({ value: id })),
+    start,
+  })
 
 const makeCacheLayer = (params: {
   readonly cwd: string
@@ -70,8 +80,28 @@ const makeCacheLayer = (params: {
   )
 }
 
+const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = Effect.void) =>
+  defineExtension({
+    id,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: `${id}/marker`,
+          scope: "process",
+          layer: Layer.succeed(
+            SessionProfileResourceMarker,
+            SessionProfileResourceMarker.of({ value }),
+          ),
+          stop,
+        }),
+      )
+    }),
+  })
+
 describe("session profile resolution", () => {
-  it.scopedLive("isolates the live publication by workspace and supports refresh", () =>
+  it.scopedLive("isolates profiles by workspace and reuses one per key", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -79,31 +109,11 @@ describe("session profile resolution", () => {
       const home = yield* fs.makeTempDirectoryScoped()
       const workspaceA = WorkspaceId.make("a".repeat(64))
       const workspaceB = WorkspaceId.make("b".repeat(64))
-      const configPath = path.join(home, ".gent", "config.json")
-      yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
-      yield* fs.writeFileString(configPath, encodeJson({ permissions: [] }))
-      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
-        cwd: launch,
-        home,
-        platform: "darwin",
+      const setups = yield* Ref.make(0)
+      const counted = defineExtension({
+        id: "@gent/test-session-profile/counted",
+        setup: Ref.update(setups, (count) => count + 1),
       })
-      const configServiceLive = ConfigService.Live.pipe(
-        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
-      )
-      const sessionProfileCacheLive = SessionProfileCache.Live({
-        home,
-        platform: "darwin",
-        extensions: [],
-      }).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            BunServices.layer,
-            processRunnerLive,
-            configServiceLive,
-            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
-          ),
-        ),
-      )
 
       yield* Effect.gen(function* () {
         const cache = yield* SessionProfileCache
@@ -111,46 +121,20 @@ describe("session profile resolution", () => {
           .resolve(path.join(launch, "."))
           .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
         const profileB = yield* cache
-          .resolve(path.join(launch, "."))
+          .resolve(launch)
           .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
+        const again = yield* cache
+          .resolve(launch)
+          .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
 
         expect(profileA).not.toBe(profileB)
-        expect(profileA.publication?.generationId).not.toBe(profileB.publication?.generationId)
-
-        yield* fs.writeFileString(
-          configPath,
-          encodeJson({ permissions: [{ tool: "bash", action: "deny" }] }),
-        )
-        const refreshed = yield* cache
-          .refresh(launch)
-          .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
-        const permission = yield* refreshed.permissionService.check("bash", { command: "ls -la" })
-        expect(permission).toBe("denied")
-
-        yield* fs.writeFileString(configPath, "{ malformed")
-        const invalidRefresh = yield* cache
-          .refresh(launch)
-          .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA), Effect.exit)
-        expect(Exit.isFailure(invalidRefresh)).toBe(true)
-        const currentA = yield* cache
-          .current(launch)
-          .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
-        expect(Option.isSome(currentA)).toBe(true)
-        const retainedPermission = yield* Option.getOrThrow(currentA).permissionService.check(
-          "bash",
-          { command: "ls -la" },
-        )
-        expect(retainedPermission).toBe("denied")
-
-        const currentB = yield* cache
-          .current(launch)
-          .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
-        expect(Option.isSome(currentB)).toBe(true)
-        expect(Option.getOrThrow(currentB).publication?.generationId).toBe(
-          profileB.publication?.generationId,
-        )
+        expect(again).toBe(profileA)
+        expect(profileA.generationId).toBe(profileB.generationId)
+        expect(yield* Ref.get(setups)).toBe(2)
+      }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(sessionProfileCacheLive))
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })),
+      )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
@@ -178,29 +162,6 @@ describe("session profile resolution", () => {
       yield* writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
       yield* writeProjectConfig(secondary, [])
 
-      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
-        cwd: launch,
-        home,
-        platform: "darwin",
-      })
-      const configServiceLive = ConfigService.Live.pipe(
-        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
-      )
-      const sessionProfileCacheLive = SessionProfileCache.Live({
-        home,
-        platform: "darwin",
-        extensions: [],
-      }).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            BunServices.layer,
-            processRunnerLive,
-            configServiceLive,
-            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
-          ),
-        ),
-      )
-
       yield* Effect.gen(function* () {
         const cache = yield* SessionProfileCache
         const launchProfile = yield* cache.resolve(launch)
@@ -217,249 +178,107 @@ describe("session profile resolution", () => {
         expect(secondaryPermission).toBe("allowed")
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(sessionProfileCacheLive),
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("c".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  it.scopedLive(
-    "restages catalogs without rebuilding retained resources and replaces revisions",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const launch = yield* fs.makeTempDirectoryScoped()
-        const home = yield* fs.makeTempDirectoryScoped()
-        const workspace = WorkspaceId.make("d".repeat(64))
-        const configPath = path.join(home, ".gent", "config.json")
-        yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
-        yield* fs.writeFileString(configPath, encodeJson({ permissions: [] }))
-
-        let resourceRevision = "1"
-        let starts = 0
-        let stops = 0
-        const resourceExtension = defineExtension({
-          id: "@gent/test-session-profile/resource-replacement",
-          // Setup re-runs on every refresh, so the declaration value is rebuilt each time.
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register(
-              "resource",
-              defineResource({
-                id: "test/session-profile/resource-replacement",
-                revision: resourceRevision,
-                scope: "process",
-                // This layer is rebuilt as a declaration value on every refresh.
-                // The host must use the resource revision, not Layer identity.
-                layer: Layer.succeed(
-                  SessionProfileResourceMarker,
-                  SessionProfileResourceMarker.of({ value: resourceRevision }),
-                ),
-                start: Effect.sync(() => {
-                  starts += 1
-                }),
-                stop: Effect.sync(() => {
-                  stops += 1
-                }),
-              }),
-            )
-          }),
-        })
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const cache = yield* SessionProfileCache
-            const first = yield* cache
-              .resolve(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-            expect(starts).toBe(1)
-
-            const unchanged = yield* cache
-              .refresh(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-            expect(unchanged.publication?.generationId).toBe(first.publication?.generationId)
-            expect(starts).toBe(1)
-            expect(stops).toBe(0)
-
-            yield* fs.writeFileString(
-              configPath,
-              encodeJson({ permissions: [{ tool: "bash", action: "deny" }] }),
-            )
-            const catalogOnly = yield* cache
-              .refresh(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-            expect(catalogOnly.publication?.generationId).not.toBe(first.publication?.generationId)
-            expect(starts).toBe(1)
-            expect(stops).toBe(0)
-
-            resourceRevision = "2"
-            const replaced = yield* cache
-              .refresh(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-            expect(replaced.publication?.generationId).not.toBe(
-              catalogOnly.publication?.generationId,
-            )
-            expect(starts).toBe(2)
-            expect(stops).toBe(1)
-
-            const stalePublication = Option.fromUndefinedOr(first.publication)
-            expect(Option.isSome(stalePublication)).toBe(true)
-            if (Option.isSome(stalePublication)) {
-              const staleUse = yield* stalePublication.value
-                .run(Effect.succeed("stale"))
-                .pipe(Effect.exit)
-              expect(Exit.isFailure(staleUse)).toBe(true)
-              if (Exit.isFailure(staleUse)) {
-                expect(
-                  Schema.is(ResourceLeaseStaleGenerationError)(Cause.squash(staleUse.cause)),
-                ).toBe(true)
-              }
-            }
-
-            const current = yield* cache
-              .requireCurrent(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-            expect(current.publication?.generationId).toBe(replaced.publication?.generationId)
-          }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This focused test owns one isolated live cache layer.
-            Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [resourceExtension] })),
-          ),
-        )
-        expect(stops).toBe(2)
-      }).pipe(Effect.provide(BunPlatformLive)),
-  )
-
-  it.scopedLive("does not block an unrelated workspace while one publication drains", () =>
+  it.scopedLive("suspends only the extension whose process resource fails to start", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
       const launch = yield* fs.makeTempDirectoryScoped()
       const home = yield* fs.makeTempDirectoryScoped()
-      const workspaceA = WorkspaceId.make("e".repeat(64))
-      const workspaceB = WorkspaceId.make("f".repeat(64))
-      const configPath = path.join(home, ".gent", "config.json")
-      yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
-      yield* fs.writeFileString(configPath, encodeJson({ permissions: [] }))
-
-      const resourceExtension = defineExtension({
-        id: "@gent/test-session-profile/drain-isolation",
+      const healthy = markerExtension("@gent/test-session-profile/healthy", "live")
+      const broken = defineExtension({
+        id: "@gent/test-session-profile/broken",
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
           yield* host.register(
             "resource",
-            defineResource({
-              id: "test/session-profile/drain-isolation",
-              scope: "process",
-              layer: Layer.succeed(
-                SessionProfileResourceMarker,
-                SessionProfileResourceMarker.of({ value: "drain-isolation" }),
-              ),
-            }),
+            startResource("test/session-profile/broken", Effect.die("boom")),
           )
         }),
       })
 
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const cache = yield* SessionProfileCache
-          const first = yield* cache
-            .resolve(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
-          const firstPublication = Option.getOrThrow(Option.fromUndefinedOr(first.publication))
-          const activeEntered = yield* Deferred.make<void>()
-          const releaseActive = yield* Deferred.make<void>()
-          const active = yield* firstPublication
-            .run(
-              Effect.gen(function* () {
-                yield* Deferred.succeed(activeEntered, void 0)
-                yield* Deferred.await(releaseActive)
-              }),
-            )
-            .pipe(Effect.forkChild)
-          yield* Deferred.await(activeEntered)
-
-          yield* fs.writeFileString(
-            configPath,
-            encodeJson({ permissions: [{ tool: "bash", action: "deny" }] }),
-          )
-          const refreshing = yield* cache
-            .refresh(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA), Effect.forkChild)
-
-          const admissionAttempt = yield* waitFor(
-            firstPublication.run(Effect.succeed("late")).pipe(Effect.exit),
-            Exit.isFailure,
-            1_000,
-            "publication admission closes",
-          )
-          expect(Exit.isFailure(admissionAttempt)).toBe(true)
-
-          const unrelated = yield* cache
-            .resolve(launch)
-            .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB), Effect.forkChild)
-          const unrelatedExit = yield* Fiber.await(unrelated).pipe(
-            Effect.timeoutOption("250 millis"),
-          )
-          expect(Option.isSome(unrelatedExit)).toBe(true)
-          if (Option.isSome(unrelatedExit)) expect(Exit.isSuccess(unrelatedExit.value)).toBe(true)
-
-          yield* Deferred.succeed(releaseActive, void 0)
-          expect(Exit.isSuccess(yield* Fiber.await(active))).toBe(true)
-          expect(Exit.isSuccess(yield* Fiber.await(refreshing))).toBe(true)
-        }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This focused test owns one isolated live cache layer.
-          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [resourceExtension] })),
-        ),
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const profile = yield* cache.resolve(launch)
+        expect(profile.resolved.extensions.map((extension) => extension.manifest.id)).toEqual([
+          ExtensionId.make("@gent/test-session-profile/healthy"),
+        ])
+        expect(profile.resolved.failedExtensions).toMatchObject([
+          {
+            manifest: { id: ExtensionId.make("@gent/test-session-profile/broken") },
+            phase: "startup",
+          },
+        ])
+        expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [healthy, broken] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  it.scopedLive("does not retain an interrupted initial publication", () =>
+  it.scopedLive("releases a partially built profile when its build is interrupted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const launch = yield* fs.makeTempDirectoryScoped()
       const home = yield* fs.makeTempDirectoryScoped()
       const workspace = WorkspaceId.make("1".repeat(64))
+      const stopped = yield* Deferred.make<void>()
       const startEntered = yield* Deferred.make<void>()
       const releaseStart = yield* Deferred.make<void>()
-      const resourceExtension = defineExtension({
-        id: "@gent/test-session-profile/interrupted-start",
+      const starts = yield* Ref.make(0)
+      // Resources start in id order, so the healthy extension is built before
+      // the blocking one enters its start effect.
+      const healthy = markerExtension(
+        "@gent/test-session-profile/built-first",
+        "live",
+        Deferred.succeed(stopped, void 0).pipe(Effect.asVoid),
+      )
+      const blocking = defineExtension({
+        id: "@gent/test-session-profile/waiting-start",
         setup: Effect.gen(function* () {
-          yield* Deferred.succeed(startEntered, void 0)
-          yield* Deferred.await(releaseStart)
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            startResource(
+              "test/session-profile/waiting-start",
+              Effect.gen(function* () {
+                yield* Ref.update(starts, (count) => count + 1)
+                yield* Deferred.succeed(startEntered, void 0)
+                yield* Deferred.await(releaseStart)
+              }),
+            ),
+          )
         }),
       })
 
       yield* Effect.ensuring(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const cache = yield* SessionProfileCache
-            const resolving = yield* cache
-              .resolve(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace), Effect.forkChild)
-            yield* Deferred.await(startEntered)
-            yield* Fiber.interrupt(resolving)
-            expect(Exit.isFailure(yield* Fiber.await(resolving))).toBe(true)
-            const current = yield* cache
-              .current(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
-            expect(Option.isNone(current)).toBe(true)
-            const unavailable = yield* cache
-              .requireCurrent(launch)
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspace), Effect.exit)
-            expect(Exit.isFailure(unavailable)).toBe(true)
-            if (Exit.isFailure(unavailable)) {
-              const error = Cause.findErrorOption(unavailable.cause)
-              expect(Option.isSome(error)).toBe(true)
-              if (Option.isSome(error)) {
-                expect(error.value).toBeInstanceOf(SessionProfileUnavailableError)
-              }
-            }
-          }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This focused interruption test owns one isolated live cache layer.
-            Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [resourceExtension] })),
-          ),
+        Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolving = yield* cache
+            .resolve(launch)
+            .pipe(Effect.provideService(CurrentWorkspaceId, workspace), Effect.forkChild)
+          yield* Deferred.await(startEntered)
+          yield* Fiber.interrupt(resolving)
+          expect(Exit.isFailure(yield* Fiber.await(resolving))).toBe(true)
+          // The healthy extension's resource was already built and must be released.
+          expect(Option.isSome(yield* Deferred.poll(stopped))).toBe(true)
+
+          yield* Deferred.succeed(releaseStart, void 0)
+          const profile = yield* cache
+            .resolve(launch)
+            .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+          expect(yield* Ref.get(starts)).toBe(2)
+          expect(profile.resolved.failedExtensions).toEqual([])
+          expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This focused interruption test owns one isolated live cache layer.
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [healthy, blocking] })),
         ),
         Deferred.succeed(releaseStart, void 0).pipe(Effect.asVoid),
       )

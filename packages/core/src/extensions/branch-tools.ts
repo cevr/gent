@@ -46,6 +46,8 @@ export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membr
 export type { FeatureMigrations } from "../storage/schema.js"
 export { InteractionStorage } from "../storage/interaction-storage.js"
 export { MessageStorage } from "../storage/message-storage.js"
+export { EventPublisher } from "../domain/event-publisher.js"
+export { GentPlatform } from "../runtime/gent-platform.js"
 export {
   makeOwnedToolCallReader,
   type OwnedToolCallAddress,
@@ -77,7 +79,7 @@ export { summarizeToolOutput } from "../domain/tool-output.js"
 // Running a turn's worth of work, and stopping when the turn is interrupted.
 export {
   CurrentAgentLoopTurnProfile,
-  type LiveAgentLoopTurnProfile,
+  type AgentLoopTurnProfile,
   runAgentLoopTurnProfile,
 } from "../runtime/agent/agent-loop.turn-profile.js"
 export {

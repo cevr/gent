@@ -5,7 +5,7 @@ import {
   ModelContextLedger,
   runAgentLoopTurnProfile,
 } from "@gent/core/extensions/branch-tools"
-import { Effect, Option, Predicate } from "effect"
+import { Effect, Option } from "effect"
 import { buildCellCatalog } from "./cell-catalog.js"
 import { CellExecution } from "./cell-execution.js"
 import { CellOperationHost } from "./cell-kernel.js"
@@ -31,21 +31,17 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
     return yield* new AgentLoopError({ message: "Cell execution requires a recorded turn call" })
   }
   const cell = call.value
-  const current = profile.value
-  const turnPublication = current.turnPublication
-  if (Predicate.isUndefined(turnPublication)) {
-    return yield* new AgentLoopError({ message: "Cell execution requires a live turn publication" })
-  }
   const params = {
     cell,
     toolBindings: call.value.toolBindings,
     catalog: yield* buildCellCatalog(call.value.toolBindings),
-    profile: { ...current, turnPublication },
+    profile: profile.value,
     ledger: ledger.value,
   }
   yield* requireCellHostBranch(params)
+  const host = yield* makeCellToolHost(params)
   const result = yield* execution.value
     .run(cell)
-    .pipe(Effect.provideService(CellOperationHost, makeCellToolHost(params)))
+    .pipe(Effect.provideService(CellOperationHost, host))
   return yield* runAgentLoopTurnProfile(params.profile)(withCellOperationReceipts(cell, result))
 })

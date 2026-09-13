@@ -15,7 +15,7 @@ const JsonText = Schema.fromJsonString(Schema.Json)
 // value is projected through the text codec before it crosses to the worker.
 const UnknownText = Schema.fromJsonString(Schema.Unknown)
 
-/** The caller owns the bound capability, operation receipt, and publication lease. */
+/** The caller owns the bound capability and operation receipt. */
 export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(function* (params: {
   readonly request: Pick<
     Extract<CellResponse, { _tag: "HostCall" }>,

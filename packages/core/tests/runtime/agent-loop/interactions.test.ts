@@ -64,7 +64,7 @@ import {
   processLocalReplayBindingKey,
 } from "../../../src/runtime/agent/process-local-tool-replay"
 import { ToolBindingReplayError } from "../../../src/runtime/agent/tool-binding-replay"
-import { runAgentLoopTurnProfileOrLegacy } from "../../../src/runtime/agent/agent-loop.turn-profile"
+import { runAgentLoopTurnProfile } from "../../../src/runtime/agent/agent-loop.turn-profile"
 import { ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
@@ -972,7 +972,7 @@ describe("interaction", () => {
               }),
             }
             const invoke = (profile = turnProfile) =>
-              runAgentLoopTurnProfileOrLegacy(profile)(
+              runAgentLoopTurnProfile(profile)(
                 invokeTool({
                   ...params,
                   turnProfile: profile,

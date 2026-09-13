@@ -78,7 +78,7 @@ export class SignalError extends Schema.TaggedError<SignalError>()("SignalError"
 
 type GentPlatformHashAlgorithm = "sha256" | "md5"
 
-export interface GentPlatformApi {
+interface GentPlatformApi {
   readonly randomId: Effect.Effect<string>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>

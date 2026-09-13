@@ -85,13 +85,11 @@ const prepareCell = Effect.gen(function* () {
 
 const currentHostParams = Effect.gen(function* () {
   const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
-  if (Predicate.isUndefined(profile.publication))
-    return yield* Effect.die("Missing live publication")
   const hostProvider = yield* makeAmbientExtensionHostContextProvider({
     extensionRegistry: profile.registryService,
   })
   const turnProfile = {
-    turnPublication: profile.publication,
+    turnGenerationId: profile.generationId,
     turnExtensionRegistry: profile.registryService,
     turnDriverRegistry: profile.driverRegistryService,
     turnPermission: profile.permissionService,
@@ -105,7 +103,6 @@ const currentHostParams = Effect.gen(function* () {
         const binding = yield* captureCurrentToolBinding({
           sessionId: cell.sessionId,
           toolName: name,
-          publication: turnProfile.turnPublication,
         })
         if (Option.isSome(binding)) bindings.set(name, binding.value)
       }
@@ -179,7 +176,7 @@ it.scopedLive(
       yield* Effect.gen(function* () {
         yield* prepareCell
         const hostParams = yield* currentHostParams
-        const host = makeCellToolHost(hostParams)
+        const host = yield* makeCellToolHost(hostParams)
         expect(
           (yield* recoverCellExecution({
             ...hostParams,
@@ -320,7 +317,7 @@ it.scopedLive(
           const context = yield* Layer.build(layer("original"))
           return yield* Effect.gen(function* () {
             yield* prepareCell
-            const host = makeCellToolHost(yield* currentHostParams)
+            const host = yield* makeCellToolHost(yield* currentHostParams)
             const pending = yield* host.call(request("1", "approve")).pipe(Effect.flip)
             if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
             yield* (yield* ApprovalService).storeResolution(pending.pending.requestId, {
@@ -344,7 +341,7 @@ it.scopedLive(
             expect(result.id).toBe(first.toolCallId)
             expect(yield* Ref.get(calls)).toBe(2)
             expect((yield* (yield* CellExecutionStorage).claim(cell))._tag).toBe("Incomplete")
-            const pending = yield* makeCellToolHost(hostParams)
+            const pending = yield* (yield* makeCellToolHost(hostParams))
               .call(request("2", "approve"))
               .pipe(Effect.flip)
             if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
