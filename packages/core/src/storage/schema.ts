@@ -392,47 +392,17 @@ const toolCallBindingsMigration = Effect.gen(function* () {
   )
 })
 
-const resourceGraphStateMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
+// The durable resource graph (tables resource_graph_state and
+// resource_graph_commands) was removed. Migration 010 stays as a recorded
+// no-op so existing databases keep a contiguous history; 012 drops the tables
+// where an earlier build created them. Ids 012-014 belong to the cell feature
+// migrations, so the drop takes 015.
+const resourceGraphStateMigration = Effect.void
 
-  yield* sql.unsafe(`
-    CREATE TABLE resource_graph_state (
-      workspace_id TEXT NOT NULL,
-      cwd TEXT NOT NULL,
-      desired_revision TEXT NOT NULL,
-      desired_sequence INTEGER NOT NULL CHECK (desired_sequence > 0),
-      desired_json TEXT NOT NULL,
-      applied_revision TEXT,
-      applied_sequence INTEGER,
-      state TEXT NOT NULL CHECK (state IN ('pending', 'applying', 'applied', 'failed')),
-      failure_json TEXT,
-      command_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (workspace_id, cwd),
-      CHECK (applied_sequence IS NULL OR applied_sequence > 0),
-      CHECK ((applied_revision IS NULL) = (applied_sequence IS NULL))
-    )
-  `)
-  yield* sql.unsafe(`
-    CREATE TABLE resource_graph_commands (
-      workspace_id TEXT NOT NULL,
-      cwd TEXT NOT NULL,
-      command_id TEXT NOT NULL,
-      desired_sequence INTEGER NOT NULL CHECK (desired_sequence > 0),
-      command_json TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      PRIMARY KEY (workspace_id, cwd, command_id),
-      FOREIGN KEY (workspace_id, cwd)
-        REFERENCES resource_graph_state(workspace_id, cwd)
-        ON DELETE CASCADE
-    )
-  `)
-  yield* sql.unsafe(
-    `CREATE INDEX idx_resource_graph_state_workspace ON resource_graph_state(workspace_id, cwd)`,
-  )
-  yield* sql.unsafe(
-    `CREATE INDEX idx_resource_graph_commands_workspace ON resource_graph_commands(workspace_id, cwd, created_at)`,
-  )
+const dropResourceGraphStateMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`DROP TABLE IF EXISTS resource_graph_commands`)
+  yield* sql.unsafe(`DROP TABLE IF EXISTS resource_graph_state`)
 })
 
 const messageInsertionOrderMigration = Effect.gen(function* () {
@@ -504,6 +474,7 @@ const makeStorageMigratorLive = (
       "009_tool_call_bindings": toolCallBindingsMigration,
       "010_resource_graph_state": resourceGraphStateMigration,
       "011_message_insertion_order": messageInsertionOrderMigration,
+      "015_drop_resource_graph_state": dropResourceGraphStateMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

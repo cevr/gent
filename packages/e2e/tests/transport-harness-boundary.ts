@@ -11,10 +11,6 @@ import {
 } from "@gent/core-internal/test-utils/language-model.js"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import type { StorageError } from "@gent/core-internal/storage/sqlite-storage.js"
-import type {
-  ResourceGraphOwnerUnavailableError,
-  ResourceGraphRecoveryError,
-} from "@gent/core-internal/runtime/extensions/resource-host/resource-graph-command.js"
 import { AllBuiltinAgents } from "../../extensions/tests/helpers/builtin-agents.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 export { waitFor } from "@gent/core-internal/test-utils/fixtures"
@@ -36,8 +32,6 @@ type HarnessLayerError =
   | BootstrapError
   | Config.ConfigError
   | PlatformError.PlatformError
-  | ResourceGraphOwnerUnavailableError
-  | ResourceGraphRecoveryError
   | StorageError
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>

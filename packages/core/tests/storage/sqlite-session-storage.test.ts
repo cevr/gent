@@ -216,6 +216,7 @@ describe("Sessions", () => {
           "tool_call_bindings",
           "resource_graph_state",
           "message_insertion_order",
+          "drop_resource_graph_state",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -241,6 +242,7 @@ describe("Sessions", () => {
           "tool_call_bindings",
           "resource_graph_state",
           "message_insertion_order",
+          "drop_resource_graph_state",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))

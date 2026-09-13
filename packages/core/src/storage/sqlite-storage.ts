@@ -15,7 +15,6 @@ import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
 import { ToolCallBindingStorage } from "./tool-call-binding-storage.js"
-import { ResourceGraphStorage } from "./resource-graph-storage.js"
 import { StorageError } from "../domain/storage-error.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 export { StorageError }
@@ -63,7 +62,6 @@ type FocusedStorage =
   | RelationshipStorage
   | SessionOperationStorage
   | ToolCallBindingStorage
-  | ResourceGraphStorage
   | ClusterMessageStorage.MessageStorage
 
 /**
@@ -94,7 +92,6 @@ const provideFocusedRepositories = <A, E, R>(
     Layer.provide(RelationshipStorage.Live, base),
     Layer.provide(SessionOperationStorage.Live, base),
     Layer.provide(ToolCallBindingStorage.Live, base),
-    Layer.provide(ResourceGraphStorage.Live, base),
     Layer.provide(encoreSqlMessageStorage(), Layer.merge(base, BunCrypto.layer)),
     interactionStorage,
     Layer.provide(SearchStorage.Live, base),

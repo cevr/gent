@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Effect, FileSystem, Option, Path, Predicate, Result, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import type { Context } from "effect"
 import { canonicalJsonString } from "effect-encore"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -17,26 +17,13 @@ import type { DriverRef } from "../domain/agent.js"
 import { getToolMetadata } from "../domain/capability/tool.js"
 import type { PermissionRule } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
-import {
-  ResourceDescriptor,
-  ResourceRevision,
-  planResourceGraph,
-  type ResourcePlan,
-} from "../domain/resource-graph.js"
+import { ResourceRevision, type ResourcePlan } from "../domain/resource-graph.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
-import {
-  ResourceGraphExtensionSource,
-  ResourceGraphRevision,
-  ResourceGraphSnapshot,
-  ResourceGraphSource,
-  type ResourceGraphSnapshot as ResourceGraphSnapshotType,
-} from "../domain/resource-graph-state.js"
 import { collectResourceEntries } from "./extensions/resource-host/resource-layer.js"
 import {
   makeResourceGraphHost,
   type ResourceGraphHost,
-  ResourceGraphFailure,
-  ResourceGraphHostError,
+  type ResourceGraphHostError,
   type ResourceGraphRetireMode,
   type ResourceGraphPublication,
 } from "./extensions/resource-host/resource-graph-host.js"
@@ -52,14 +39,9 @@ import {
   type ConfigLoadError,
   ConfigService,
   type ConfigServiceService,
-  UserConfig,
+  type UserConfig,
 } from "./config-service.js"
 import { resolveExtensions } from "./extensions/registry.js"
-import {
-  ResourceGraphApplyError,
-  type ResourceGraphDesiredApplication,
-  type ResourceGraphPrepared,
-} from "./extensions/resource-host/resource-graph-entity.js"
 import { extensionKey } from "./extensions/activation.js"
 import { ProcessRunner } from "../utils/run-process.js"
 
@@ -69,25 +51,14 @@ export interface LiveRuntimeProfile {
   readonly desired: RuntimeProfileDesiredState
 }
 
-/** Runtime values retained by one owner for exact desired-snapshot replay. */
+/** Runtime values retained by one owner for the next refresh. */
 interface RuntimeProfileDesiredState {
-  readonly snapshot: ResourceGraphSnapshotType
+  readonly revision: ResourceRevision
   readonly config: UserConfig
   readonly declarations: RuntimeProfileDeclarations
   readonly resources: ReadonlyArray<AnyResourceContribution>
   readonly inputs: RuntimeProfileInputs
 }
-
-interface RuntimeProfilePreparedDesired extends ResourceGraphPrepared {
-  readonly owner: RuntimeProfileOwner
-  readonly desired: RuntimeProfileDesiredState
-  readonly config: UserConfig
-  readonly publicationRevision: ResourceRevision
-}
-
-export const isRuntimeProfilePreparedDesired = (
-  prepared: ResourceGraphPrepared,
-): prepared is RuntimeProfilePreparedDesired => "owner" in prepared
 
 export interface RuntimeProfileOwner {
   readonly refresh: (
@@ -95,17 +66,6 @@ export interface RuntimeProfileOwner {
     retireMode?: ResourceGraphRetireMode,
   ) => Effect.Effect<LiveRuntimeProfile, ConfigLoadError | ResourceGraphHostError>
   readonly current: Effect.Effect<Option.Option<LiveRuntimeProfile>>
-  readonly prepareDesired: (
-    request: ResourceGraphDesiredApplication,
-    inputs: RuntimeProfileInputs,
-  ) => Effect.Effect<RuntimeProfilePreparedDesired, ResourceGraphApplyError>
-  readonly validateDesired: (
-    prepared: RuntimeProfilePreparedDesired,
-  ) => Effect.Effect<void, ResourceGraphApplyError>
-  readonly applyDesired: (
-    prepared: RuntimeProfilePreparedDesired,
-    admit: () => Effect.Effect<void, ResourceGraphApplyError>,
-  ) => Effect.Effect<void, ResourceGraphApplyError>
 }
 
 // oxlint-disable-next-line effect/noUnknownParameters -- The explicit revision projection is parsed as JSON before hashing.
@@ -372,106 +332,6 @@ const effectiveInputs = (
   }
 }
 
-const configSnapshot = (config: UserConfig): Schema.Json => {
-  const result: Record<string, Schema.Json> = {}
-  if (!Predicate.isUndefined(config.permissions)) {
-    result["permissions"] = config.permissions.map((rule) => ({
-      tool: rule.tool,
-      action: rule.action,
-      pattern: optionalString(Option.fromUndefinedOr(rule.pattern)),
-    }))
-  }
-  if (!Predicate.isUndefined(config.disabledExtensions)) {
-    result["disabledExtensions"] = [...config.disabledExtensions]
-  }
-  if (!Predicate.isUndefined(config.driverOverrides)) {
-    const overrides: Record<string, Schema.Json> = {}
-    for (const [agent, driver] of Object.entries(config.driverOverrides)) {
-      if (driver._tag === "model") {
-        overrides[agent] = {
-          _tag: driver._tag,
-          id: optionalString(Option.fromUndefinedOr(driver.id)),
-        }
-      } else {
-        overrides[agent] = { _tag: driver._tag, id: driver.id }
-      }
-    }
-    result["driverOverrides"] = overrides
-  }
-  return result
-}
-
-/**
- * The loader must supply an explicit artifact identity. Missing identity is
- * represented as restart-required and cannot be accepted for durable replay.
- * This avoids assigning a new digest to a cached module closure.
- */
-const sourceIdentity = (extension: RuntimeProfile["resolved"]["extensions"][number]): string => {
-  const artifact = Option.fromUndefinedOr(extension.artifactIdentity)
-  if (Option.isSome(artifact)) {
-    return [
-      "artifact",
-      artifact.value,
-      extension.scope,
-      extension.sourcePath,
-      extension.manifest.id,
-    ].join(":")
-  }
-  return ["restart-required", extension.scope, extension.sourcePath, extension.manifest.id].join(
-    ":",
-  )
-}
-
-const makeRuntimeProfileSnapshot = (params: {
-  readonly sourceRevision: ResourceRevision
-  readonly config: UserConfig
-  readonly declarations: RuntimeProfileDeclarations
-  readonly resources: ReadonlyArray<AnyResourceContribution>
-}): ResourceGraphSnapshot => {
-  const extensions = params.declarations.extensionDeclarations.active.map((extension) => {
-    const version = extension.manifest.version
-    const sourceBase = {
-      extensionId: extension.manifest.id,
-      scope: extension.scope,
-      source: sourceIdentity(extension),
-    }
-    let source = ResourceGraphExtensionSource.make(sourceBase)
-    if (!Predicate.isUndefined(version)) {
-      source = ResourceGraphExtensionSource.make({ ...sourceBase, version })
-    }
-    return source
-  })
-  const descriptors = params.resources.map((resource) =>
-    ResourceDescriptor.make({
-      id: resource.id,
-      revision: resource.revision,
-      requires: [...resource.requires],
-      required: resource.required,
-    }),
-  )
-  return ResourceGraphSnapshot.make({
-    source: ResourceGraphSource.make({
-      revision: ResourceGraphRevision.make(String(params.sourceRevision)),
-      config: configSnapshot(params.config),
-      extensions,
-    }),
-    descriptors,
-  })
-}
-
-const sameSnapshotPart = <A>(left: A, right: A): boolean =>
-  stableJsonValue(left) === stableJsonValue(right)
-
-const applyError = (phase: "prepare" | "validate" | "apply", message: string) =>
-  new ResourceGraphApplyError({ phase, message })
-
-const decodeSnapshotConfig = (
-  snapshot: ResourceGraphSnapshot,
-): Effect.Effect<UserConfig, ResourceGraphApplyError> =>
-  Effect.fromOption(Schema.decodeUnknownOption(UserConfig)(snapshot.source.config), () =>
-    applyError("prepare", "Desired resource graph contains an invalid configuration snapshot"),
-  )
-
 /**
  * Create one owner for one cache key. Each refresh validates config and loads
  * declarations before calling the host, so a bad desired config cannot retire
@@ -510,14 +370,8 @@ export const makeRuntimeProfileOwner = (params: {
         config,
         profile,
       )
-      const snapshot = makeRuntimeProfileSnapshot({
-        sourceRevision: revision,
-        config,
-        declarations,
-        resources,
-      })
       return {
-        snapshot,
+        revision,
         config,
         declarations,
         resources,
@@ -548,7 +402,7 @@ export const makeRuntimeProfileOwner = (params: {
       const config = yield* params.configService.getFresh(inputs.cwd)
       const desired = yield* loadDesired(inputs, config)
       const publication = yield* params.host.apply({
-        publicationRevision: ResourceRevision.make(String(desired.snapshot.source.revision)),
+        publicationRevision: desired.revision,
         payload: desired.declarations,
         retireMode,
         resources: desired.resources,
@@ -575,144 +429,7 @@ export const makeRuntimeProfileOwner = (params: {
     }),
   )
 
-  let owner: RuntimeProfileOwner
-
-  const prepareDesired: RuntimeProfileOwner["prepareDesired"] = (request, inputs) =>
-    Effect.gen(function* () {
-      if (
-        request.snapshot.source.extensions.some((extension) =>
-          extension.source.startsWith("restart-required:"),
-        )
-      ) {
-        return yield* new ResourceGraphApplyError({
-          phase: "prepare",
-          message:
-            "Desired resource graph requires a stable loaded artifact identity before replay",
-        })
-      }
-      const config = yield* decodeSnapshotConfig(request.snapshot)
-      const desired = yield* loadDesired(inputs, config).pipe(
-        Effect.mapError((error) =>
-          applyError("prepare", `Could not load desired declarations: ${String(error)}`),
-        ),
-      )
-      if (
-        !sameSnapshotPart(request.snapshot.source.extensions, desired.snapshot.source.extensions)
-      ) {
-        return yield* new ResourceGraphApplyError({
-          phase: "prepare",
-          message: "Desired resource graph does not match the loaded extension artifact identity",
-        })
-      }
-      if (request.snapshot.source.revision !== desired.snapshot.source.revision) {
-        return yield* new ResourceGraphApplyError({
-          phase: "prepare",
-          message:
-            "Desired resource graph source revision does not match the loaded configuration and declarations",
-        })
-      }
-      if (!sameSnapshotPart(request.snapshot.descriptors, desired.snapshot.descriptors)) {
-        return yield* new ResourceGraphApplyError({
-          phase: "prepare",
-          message: "Desired resource graph does not match the loaded resource declarations",
-        })
-      }
-      return {
-        request,
-        owner,
-        desired: {
-          ...desired,
-          snapshot: request.snapshot,
-          config,
-        },
-        config,
-        publicationRevision: ResourceRevision.make(String(desired.snapshot.source.revision)),
-      }
-    })
-
-  const validateDesired: RuntimeProfileOwner["validateDesired"] = (prepared) =>
-    Effect.gen(function* () {
-      const planned = planResourceGraph(prepared.request.snapshot.descriptors)
-      if (Result.isFailure(planned)) {
-        return yield* new ResourceGraphApplyError({
-          phase: "validate",
-          message: `Invalid desired resource graph: ${String(planned.failure)}`,
-        })
-      }
-      if (
-        !sameSnapshotPart(
-          prepared.request.snapshot.source.extensions,
-          prepared.desired.snapshot.source.extensions,
-        ) ||
-        !sameSnapshotPart(
-          prepared.request.snapshot.descriptors,
-          prepared.desired.snapshot.descriptors,
-        )
-      ) {
-        return yield* new ResourceGraphApplyError({
-          phase: "validate",
-          message: "Loaded declarations changed before desired graph validation",
-        })
-      }
-      return yield* Effect.void
-    })
-
-  const toHostAdmission = (
-    admit: () => Effect.Effect<void, ResourceGraphApplyError>,
-  ): Effect.Effect<void, ResourceGraphHostError> =>
-    admit().pipe(
-      Effect.mapError(
-        (error) =>
-          new ResourceGraphHostError({
-            failures: [
-              ResourceGraphFailure.make({
-                // oxlint-disable-next-line effect/noNullish -- Admission failures have no resource owner.
-                id: null,
-                phase: "validate",
-                message: error.message,
-              }),
-            ],
-            retained: [],
-            unavailable: [],
-          }),
-      ),
-    )
-
-  const applyDesired: RuntimeProfileOwner["applyDesired"] = (prepared, admit) =>
-    params.host
-      .apply({
-        publicationRevision: prepared.publicationRevision,
-        payload: prepared.desired.declarations,
-        retireMode: "drain",
-        resources: prepared.desired.resources,
-        admit: toHostAdmission(admit),
-        stage: stageCatalog(prepared.config),
-      })
-      .pipe(
-        Effect.tap((publication) =>
-          Effect.sync(() => {
-            latestDesired = Option.some({
-              ...prepared.desired,
-              snapshot: prepared.request.snapshot,
-              config: prepared.config,
-            })
-            return publication
-          }),
-        ),
-        Effect.asVoid,
-        Effect.mapError((error) =>
-          applyError("apply", error.failures.map((failure) => failure.message).join("\n")),
-        ),
-      )
-
-  owner = {
-    refresh,
-    current,
-    prepareDesired,
-    validateDesired,
-    applyDesired,
-  }
-  return owner
+  return { refresh, current }
 }
 
 /** Construct a graph host for one profile cache key. */

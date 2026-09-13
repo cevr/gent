@@ -9,8 +9,6 @@ import { Auth, AuthGuard } from "../domain/auth.js"
 import { EventStore, EventStoreError } from "../domain/event.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event-publisher.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { CanonicalCwd } from "../domain/resource-graph-state.js"
-import type { ResourceGraphStatusState } from "../domain/resource-graph-state.js"
 import { FileLockService } from "../domain/file-lock.js"
 import type { Permission } from "../domain/permission.js"
 import { PromptPresenterLive } from "../runtime/prompt-presenter-live.js"
@@ -37,7 +35,6 @@ import {
 } from "../runtime/agent/branch-tool-feature.js"
 import { BranchToolLayer } from "../runtime/agent/branch-tool-layer.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
-import { ResourceGraphStorage } from "../storage/resource-graph-storage.js"
 import {
   decodeInteractionDecision,
   decodeInteractionParams,
@@ -46,16 +43,6 @@ import {
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { SessionCommands } from "./session-commands.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
-import {
-  ResourceGraphCommandService,
-  ResourceGraphDispatch,
-  ResourceGraphOwnerUnavailableError,
-} from "../runtime/extensions/resource-host/resource-graph-command.js"
-import {
-  ResourceGraphActorLive,
-  ResourceGraphApplyError,
-  ResourceGraphDesiredApplier,
-} from "../runtime/extensions/resource-host/resource-graph-entity.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { FileIndexLive, type FileIndex } from "../runtime/file-index/index.js"
@@ -286,37 +273,7 @@ const makeSessionProfileCacheLayer = <A, E, R>(
   resolverDeps: Layer.Layer<A, E, R>,
 ) => {
   const override = config.overrides?.sessionProfileCacheLayer
-  if (!Predicate.isUndefined(override)) {
-    // Test profile overrides do not own a live graph host. Keep the required
-    // service explicit so a durable graph command fails with a typed reason.
-    const unsupportedApplier = Layer.succeed(
-      ResourceGraphDesiredApplier,
-      ResourceGraphDesiredApplier.of({
-        prepare: () =>
-          Effect.fail(
-            new ResourceGraphApplyError({
-              phase: "prepare",
-              message: "SessionProfileCache override does not support durable graph application",
-            }),
-          ),
-        validate: () =>
-          Effect.fail(
-            new ResourceGraphApplyError({
-              phase: "validate",
-              message: "SessionProfileCache override does not support durable graph application",
-            }),
-          ),
-        applyDesired: () =>
-          Effect.fail(
-            new ResourceGraphApplyError({
-              phase: "apply",
-              message: "SessionProfileCache override does not support durable graph application",
-            }),
-          ),
-      }),
-    )
-    return Layer.provideMerge(unsupportedApplier, override)
-  }
+  if (!Predicate.isUndefined(override)) return override
   return Layer.provide(
     SessionProfileCache.Live({
       home: config.home,
@@ -397,104 +354,14 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.mergeAll(configServiceLive, runtimeEnvironmentLive, platformServicesLive),
   )
 
-  // One durable graph actor stack owns the Encore client, mailbox, and the
-  // cache-backed live applier. Startup recovery dispatches every persisted
-  // owner, including rows already marked applied, so each process reacquires
-  // its live scopes through SessionProfileCache.
-  const resourceGraphClusterLive = Layer.provideMerge(clusterRunnerLive, storageLive)
-  const resourceGraphActorLive = Layer.provide(
-    ResourceGraphActorLive,
-    Layer.merge(resourceGraphClusterLive, sessionProfileCacheLive),
-  )
-  const resourceGraphDispatchLive = Layer.provideMerge(
-    ResourceGraphDispatch.Live,
-    resourceGraphActorLive,
-  )
-  const resourceGraphCommandLive = Layer.provide(
-    ResourceGraphCommandService.Live,
-    Layer.merge(resourceGraphDispatchLive, storageLive),
-  )
   const extensionRegistryLive = Layer.provideMerge(
     Layer.unwrap(
       Effect.gen(function* () {
-        const commandService = yield* ResourceGraphCommandService
         const cache = yield* SessionProfileCache
-        const resourceGraphStorage = yield* ResourceGraphStorage
         const path = yield* Path.Path
         const platform = yield* GentPlatform
-        const launchCwd = CanonicalCwd.make(path.resolve(config.cwd))
+        const launchCwd = path.resolve(config.cwd)
         const launchWorkspaceId = WorkspaceId.make(platform.hash("sha256", launchCwd))
-        const recovery = yield* commandService.recoverAllAndAwaitReport
-        const durable = yield* resourceGraphStorage
-          .get({ workspaceId: launchWorkspaceId, cwd: launchCwd })
-          .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
-        const durableOption = Option.fromUndefinedOr(durable)
-        const launchRecovery = Option.fromUndefinedOr(
-          recovery.outcomes.find(
-            (outcome) =>
-              outcome.request.workspaceId === launchWorkspaceId &&
-              outcome.request.cwd === launchCwd,
-          ),
-        )
-        if (
-          Option.isSome(durableOption) &&
-          (Option.isNone(launchRecovery) ||
-            Option.isSome(launchRecovery.value.error) ||
-            !launchRecovery.value.applying ||
-            !launchRecovery.value.settled ||
-            Option.isNone(launchRecovery.value.status) ||
-            launchRecovery.value.status.value.state !== "applied")
-        ) {
-          const toUnavailableState = (
-            state: ResourceGraphStatusState,
-          ): "pending" | "applying" | "failed" => {
-            if (state === "applied") return "applying"
-            return state
-          }
-          const recoveryStatus = Option.flatMap(launchRecovery, (outcome) => outcome.status)
-          const statusForError = Option.orElse(recoveryStatus, () => durableOption)
-          const unavailableState: "pending" | "applying" | "failed" = Option.match(statusForError, {
-            onNone: () => "applying",
-            onSome: (status) => toUnavailableState(status.state),
-          })
-          const recoveryError = Option.flatMap(launchRecovery, (outcome) => outcome.error)
-          const recoveryFailureMessage = Option.flatMap(recoveryStatus, (status) =>
-            Option.fromUndefinedOr(status.failure?.message),
-          )
-          const durableFailureMessage = Option.flatMap(durableOption, (status) =>
-            Option.fromUndefinedOr(status.failure?.message),
-          )
-          return yield* new ResourceGraphOwnerUnavailableError({
-            workspaceId: launchWorkspaceId,
-            cwd: launchCwd,
-            state: unavailableState,
-            message: Option.getOrElse(recoveryError, () =>
-              Option.getOrElse(recoveryFailureMessage, () =>
-                Option.getOrElse(
-                  durableFailureMessage,
-                  () =>
-                    "The saved resource graph did not complete recovery; repair it before launching this cwd",
-                ),
-              ),
-            ),
-          })
-        }
-        yield* Option.match(Option.fromUndefinedOr(durable), {
-          onNone: () => Effect.void,
-          onSome: (status) => {
-            if (status.state === "applied") return Effect.void
-            return Effect.fail(
-              new ResourceGraphOwnerUnavailableError({
-                workspaceId: launchWorkspaceId,
-                cwd: launchCwd,
-                state: status.state,
-                message:
-                  status.failure?.message ??
-                  "The saved resource graph is unavailable; repair it before launching this cwd",
-              }),
-            )
-          },
-        })
         const profile = yield* cache
           .resolve(config.cwd)
           .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))
@@ -511,10 +378,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         )
       }),
     ),
-    Layer.merge(
-      resourceGraphCommandLive,
-      Layer.merge(storageLive, Layer.merge(sessionProfileCacheLive, platformServicesLive)),
-    ),
+    Layer.merge(storageLive, Layer.merge(sessionProfileCacheLive, platformServicesLive)),
   )
   const modelRegistryLive = makeModelRegistryLayer(
     config,

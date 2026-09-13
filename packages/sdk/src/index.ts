@@ -1,7 +1,6 @@
 // Shared transport contract
 export {
   Branch,
-  CanonicalCwd,
   ConnectionState,
   DriverInfo,
   DriverListResult,

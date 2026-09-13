@@ -39,16 +39,8 @@ import {
   makeRuntimeProfileOwner,
   makeRuntimeProfileOwnerHost,
   type LiveRuntimeProfile,
-  isRuntimeProfilePreparedDesired,
   type RuntimeProfileOwner,
 } from "./live-profile.js"
-import {
-  ResourceGraphApplyError,
-  ResourceGraphDesiredApplier,
-  type ResourceGraphDesiredApplication,
-  type ResourceGraphDesiredApplierService,
-  type ResourceGraphPrepared,
-} from "./extensions/resource-host/resource-graph-entity.js"
 import type {
   ResourceGraphHost,
   ResourceGraphHostError,
@@ -61,7 +53,6 @@ import type {
   RuntimeProfileInputs,
   RuntimeProfileServiceContext,
 } from "./profile.js"
-import type { ResourceGraphSnapshot } from "../domain/resource-graph-state.js"
 
 // ── SessionProfile ──
 
@@ -80,14 +71,11 @@ export interface SessionProfile {
   readonly instructions: string
   /** Authority for entering this profile's resource context. */
   readonly publication?: ResourceGraphPublication<RuntimeProfileCatalog>
-  /** JSON-safe desired graph used by durable repair and restart recovery. */
-  readonly resourceGraphSnapshot?: ResourceGraphSnapshot
 }
 
 /** A profile returned by SessionProfileCache.Live always owns a publication. */
 export interface LiveSessionProfile extends SessionProfile {
   readonly publication: ResourceGraphPublication<RuntimeProfileCatalog>
-  readonly resourceGraphSnapshot: ResourceGraphSnapshot
 }
 
 // ── SessionProfileCache ──
@@ -140,7 +128,7 @@ export class SessionProfileCache extends Context.Service<
   static Live = (
     config: SessionProfileCacheConfig,
   ): Layer.Layer<
-    SessionProfileCache | ResourceGraphDesiredApplier,
+    SessionProfileCache,
     never,
     | FileSystem.FileSystem
     | Path.Path
@@ -150,7 +138,8 @@ export class SessionProfileCache extends Context.Service<
     | GentPlatform
     | ProcessRunner
   > =>
-    Layer.effectContext(
+    Layer.effect(
+      SessionProfileCache,
       Effect.gen(function* () {
         const configService = yield* ConfigService
         const fs = yield* FileSystem.FileSystem
@@ -267,14 +256,6 @@ export class SessionProfileCache extends Context.Service<
           <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
             lockFor(key).pipe(Effect.flatMap((lock) => effect.pipe(lock.withPermits(1))))
 
-        const initOwner = (key: string) =>
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              const initialized = yield* makeOwner()
-              return yield* rememberEntry(key, { owner: initialized.owner })
-            }),
-          ).pipe(Effect.provideService(Scope.Scope, serverScope))
-
         const currentProfile = (entry: ProfileCacheEntry, workspaceId: WorkspaceId, cwd: string) =>
           entry.owner.current.pipe(
             Effect.flatMap(
@@ -370,58 +351,13 @@ export class SessionProfileCache extends Context.Service<
             return yield* currentProfile(entry, workspaceId, canonicalCwd)
           })
 
-        const ownerFor = (
-          request: ResourceGraphDesiredApplication,
-        ): Effect.Effect<RuntimeProfileOwner, ResourceGraphApplyError> =>
-          Effect.gen(function* () {
-            const key = cacheKey(request.receipt.workspaceId, request.receipt.cwd)
-            const cache = yield* TxRef.get(cacheRef)
-            const entry = HashMap.get(cache, key)
-            if (entry._tag === "Some") return entry.value.owner
-            const remembered = yield* initOwner(key)
-            return remembered.owner
-          }).pipe(provideKeyLock(cacheKey(request.receipt.workspaceId, request.receipt.cwd)))
-
-        const desiredApplier: ResourceGraphDesiredApplierService = {
-          prepare: (request) =>
-            ownerFor(request).pipe(
-              Effect.flatMap((owner) =>
-                owner.prepareDesired(request, inputsFor(String(request.receipt.cwd))),
-              ),
-            ),
-          validate: (prepared: ResourceGraphPrepared) => {
-            if (!isRuntimeProfilePreparedDesired(prepared)) {
-              return Effect.fail(
-                new ResourceGraphApplyError({
-                  phase: "validate",
-                  message: "Prepared resource graph belongs to a different profile owner",
-                }),
-              )
-            }
-            return prepared.owner.validateDesired(prepared)
-          },
-          applyDesired: (prepared: ResourceGraphPrepared, admit) => {
-            if (!isRuntimeProfilePreparedDesired(prepared)) {
-              return Effect.fail(
-                new ResourceGraphApplyError({
-                  phase: "apply",
-                  message: "Prepared resource graph belongs to a different profile owner",
-                }),
-              )
-            }
-            return prepared.owner.applyDesired(prepared, admit)
-          },
-        }
         const cacheService = SessionProfileCache.of({
           resolve,
           refresh,
           current,
           requireCurrent,
         })
-        return Context.empty().pipe(
-          Context.add(SessionProfileCache, cacheService),
-          Context.add(ResourceGraphDesiredApplier, desiredApplier),
-        )
+        return cacheService
       }),
     )
 
@@ -491,13 +427,11 @@ interface SessionProfileRuntime {
   readonly driverRegistryService: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly publication?: ResourceGraphPublication<RuntimeProfileCatalog>
-  readonly resourceGraphSnapshot?: ResourceGraphSnapshot
 }
 
 function sessionProfileFromRuntime(
   runtime: SessionProfileRuntime & {
     readonly publication: ResourceGraphPublication<RuntimeProfileCatalog>
-    readonly resourceGraphSnapshot: ResourceGraphSnapshot
   },
 ): LiveSessionProfile
 function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfile
@@ -512,7 +446,6 @@ function sessionProfileFromRuntime(runtime: SessionProfileRuntime): SessionProfi
     baseSections: runtime.baseSections,
     instructions: runtime.profile.instructions,
     publication: runtime.publication,
-    resourceGraphSnapshot: runtime.resourceGraphSnapshot,
   }
 }
 
@@ -520,5 +453,4 @@ const sessionProfileFromLiveRuntime = (runtime: LiveRuntimeProfile): LiveSession
   sessionProfileFromRuntime({
     ...runtime.publication.value,
     publication: runtime.publication,
-    resourceGraphSnapshot: runtime.desired.snapshot,
   })
