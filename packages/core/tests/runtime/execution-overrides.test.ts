@@ -28,7 +28,6 @@ describe("run spec CLI serialization", () => {
         reasoningEffort: "high",
         systemPromptAddendum: "Be concise.",
       },
-      tags: ["subprocess-test"],
       parentToolCallId: ToolCallId.make("tc-abc-123"),
     } satisfies Schema.Schema.Type<typeof RunSpecSchema>
 

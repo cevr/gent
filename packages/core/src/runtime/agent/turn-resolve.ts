@@ -145,7 +145,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     agent: dispatchAgent,
     allTools,
     interactive: params.interactive,
-    tags: params.runSpec?.tags,
     agentName: currentAgent,
     parentToolCallId: params.runSpec?.parentToolCallId,
   }
@@ -181,7 +180,6 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
       branchId: params.branchId,
       agentName: currentAgent,
       interactive: params.interactive,
-      tags: params.runSpec?.tags,
       parentToolCallId: params.runSpec?.parentToolCallId,
     },
     extensionProjections,

@@ -439,7 +439,6 @@ describe("helper run spec propagation", () => {
           parentBranchId: BranchId.make("parent-runspec-branch"),
           cwd: process.cwd(),
           runSpec: {
-            tags: ["auto-loop"],
             overrides: {
               modelId: ModelId.make("custom/model"),
               allowedTools: ["bash"],

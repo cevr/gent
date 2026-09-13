@@ -23,16 +23,16 @@ import {
   buildResourceServiceLayer,
 } from "./extensions/resource-host/resource-layer.js"
 import {
-  setupBuiltinExtensions,
-  setupDiscoveredExtensions,
+  setupExtensions,
   validateLoadedExtensions,
   type ExtensionActivationResult,
 } from "./extensions/activation.js"
-import { discoverExtensions } from "./extensions/loader.js"
+import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
 import { environmentSection } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 import type { ProcessRunner } from "./run-process.js"
+import type { ProcessGenerationId } from "../domain/process-generation.js"
 
 /**
  * Inputs that fully describe a runtime profile.
@@ -53,39 +53,27 @@ export interface RuntimeProfileInputs {
 }
 
 /**
- * Output of the resolver — everything a downstream composer needs to wire layers.
- *
- * `coreSections` are the static, environment-derived sections (cwd, platform,
- * git state). `extensionSectionInputs` are static
- * extension-contributed sections in scope-precedence order (project > user >
- * builtin).
- *
- * Use `compileBaseSections(profile)` to get the merged static section array.
- * (Dynamic sections are assembled per-turn by extension hooks, not here.)
- */
-interface RuntimeProfile {
-  readonly cwd: string
-  readonly resolved: ResolvedExtensions
-  readonly coreSections: ReadonlyArray<PromptSection>
-  readonly extensionSectionInputs: ReadonlyArray<PromptSection>
-}
-
-/**
  * Heterogeneous services contributed by authored process resources. The host
  * membrane owns this erased context instead of naming a closed-world service
  * union here.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Resource services are heterogeneous at this explicit host membrane.
-export type RuntimeProfileServiceContext = Context.Context<any>
+type RuntimeProfileServiceContext = Context.Context<any>
 
-/** Services and immutable profile data staged from one built profile. */
-export interface RuntimeProfileCatalog {
-  readonly profile: RuntimeProfile
+/** Services and immutable prompt inputs built for one session. */
+export interface SessionProfile {
+  readonly cwd: string
+  readonly resolved: ResolvedExtensions
   readonly layerContext: RuntimeProfileServiceContext
   readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
+  /**
+   * Identity of the process that built this profile. A process-local tool
+   * binding is replayable only inside it.
+   */
+  readonly generationId: ProcessGenerationId
 }
 
 /**
@@ -193,28 +181,26 @@ export const loadRuntimeProfileDeclarations = (
       )
     }
 
-    // 3. Setup external + builtin extensions
-    const externalSetup = yield* setupDiscoveredExtensions({
-      extensions: discovery.loaded,
-      cwd: canonicalCwd,
-      home: inputs.home,
-      disabled: disabledSet,
-    })
-    const builtinSetup = yield* setupBuiltinExtensions({
-      extensions: inputs.extensions,
+    // 3. Setup builtin + external extensions
+    const setup = yield* setupExtensions({
+      extensions: [
+        ...inputs.extensions.map((extension): DiscoveredExtension => ({
+          extension,
+          scope: "builtin",
+          sourcePath: "builtin",
+        })),
+        ...discovery.loaded,
+      ],
       cwd: canonicalCwd,
       home: inputs.home,
       disabled: disabledSet,
     })
 
     // 4. Validate declarations without acquiring process resources.
-    const extensionDeclarations = yield* validateLoadedExtensions([
-      ...builtinSetup.active,
-      ...externalSetup.active,
-    ])
+    const extensionDeclarations = yield* validateLoadedExtensions(setup.active)
     const declarations: ExtensionActivationResult = {
       active: extensionDeclarations.active,
-      failed: [...builtinSetup.failed, ...externalSetup.failed, ...extensionDeclarations.failed],
+      failed: [...setup.failed, ...extensionDeclarations.failed],
     }
     const resolved = resolveExtensions(declarations.active, declarations.failed)
 
@@ -247,24 +233,6 @@ export const loadRuntimeProfileDeclarations = (
       coreSections,
       extensionSectionInputs,
     }
-  })
-
-/**
- * Resolve the profile's prompt sections into a merged `PromptSection[]`.
- *
- * Must be called inside an Effect runtime where extension-contributed services
- * (e.g. `Skills`) are in scope, since dynamic sections may yield those services
- * in their `resolve` Effect.
- *
- * Extension sections shadow core sections by id.
- */
-const compileBaseSections = (
-  profile: RuntimeProfile,
-): Effect.Effect<ReadonlyArray<PromptSection>, never, never> =>
-  Effect.sync(() => {
-    const sectionMap = new Map(profile.coreSections.map((s) => [s.id, s]))
-    for (const s of profile.extensionSectionInputs) sectionMap.set(s.id, s)
-    return [...sectionMap.values()]
   })
 
 /**
@@ -308,14 +276,17 @@ export const buildExtensionLayers = (
 }
 
 /**
- * Build a profile catalog from a context whose resources are already built.
+ * Build a session profile from a context whose resources are already built.
  * This function only assembles services. It never invokes a resource layer.
  */
-export const buildProfileCatalog = (params: {
-  readonly profile: RuntimeProfile
+export const buildSessionProfile = (params: {
+  readonly cwd: string
+  readonly resolved: ResolvedExtensions
+  readonly coreSections: ReadonlyArray<PromptSection>
   readonly configService: ConfigServiceService
   readonly resourceContext: Context.Context<unknown>
   readonly configOverride?: UserConfig
+  readonly generationId: ProcessGenerationId
 }) =>
   Effect.gen(function* () {
     // Every resource is already built. Supplying that immutable context here is
@@ -325,31 +296,30 @@ export const buildProfileCatalog = (params: {
       params.resourceContext,
     )
     const baseLayers = Layer.mergeAll(
-      ExtensionRegistry.fromResolved(params.profile.resolved),
+      ExtensionRegistry.fromResolved(params.resolved),
       DriverRegistry.fromResolved({
-        modelDrivers: params.profile.resolved.modelDrivers,
-        externalDrivers: params.profile.resolved.externalDrivers,
+        modelDrivers: params.resolved.modelDrivers,
+        externalDrivers: params.resolved.externalDrivers,
       }),
     )
     const layerContext = yield* Layer.build(Layer.provideMerge(resourceLayer, baseLayers))
-    const registryService = Context.get(layerContext, ExtensionRegistry)
-    const driverRegistryService = Context.get(layerContext, DriverRegistry)
     const permissionService = makeProfilePermissionService({
-      cwd: params.profile.cwd,
+      cwd: params.cwd,
       configService: params.configService,
-      extensionRules: params.profile.resolved.permissionRules,
+      extensionRules: params.resolved.permissionRules,
       configOverride: params.configOverride,
     })
-    const baseSections = yield* Effect.provideContext(
-      compileBaseSections(params.profile),
-      layerContext,
-    )
+    // Extension sections shadow core sections by id.
+    const sectionMap = new Map(params.coreSections.map((s) => [s.id, s]))
+    for (const s of params.resolved.promptSections.values()) sectionMap.set(s.id, s)
     return {
-      profile: params.profile,
+      cwd: params.cwd,
+      resolved: params.resolved,
       layerContext,
       permissionService,
-      registryService,
-      driverRegistryService,
-      baseSections,
-    } satisfies RuntimeProfileCatalog
+      registryService: Context.get(layerContext, ExtensionRegistry),
+      driverRegistryService: Context.get(layerContext, DriverRegistry),
+      baseSections: [...sectionMap.values()],
+      generationId: params.generationId,
+    } satisfies SessionProfile
   })

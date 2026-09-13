@@ -90,7 +90,6 @@ describe("message.send", () => {
               reasoningEffort: "high",
               systemPromptAddendum: "Extra public contract instructions",
             },
-            tags: ["acceptance"],
           },
         })
 

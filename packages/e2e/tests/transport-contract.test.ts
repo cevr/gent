@@ -136,7 +136,6 @@ describe("GentClient transport contract", () => {
                 content: "overrides test",
                 runSpec: {
                   parentToolCallId: ToolCallId.make("tc-e2e-test"),
-                  tags: ["e2e-transport-test"],
                 },
               })
               .pipe(Effect.mapError(toTestFailure))

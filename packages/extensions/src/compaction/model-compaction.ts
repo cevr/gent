@@ -736,7 +736,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
     const initial = projectModelContext(normalized.messages, params.budget)
     if (Result.isFailure(initial)) return yield* projectionFailure(params.modelId, initial.failure)
     const forced = Option.fromUndefinedOr(params.force)
-    if (!initial.success.truncated && Option.isNone(forced)) {
+    if (initial.success.omittedMessageIds.length === 0 && Option.isNone(forced)) {
       return ModelCompactionResult.make({
         messages: [...normalized.messages],
         projection: initial.success,

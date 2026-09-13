@@ -144,7 +144,6 @@ export const ModelContextProjection = Schema.Struct({
   estimatedTokens: Schema.Natural,
   availableInputTokens: Schema.Natural,
   omittedMessageIds: Schema.Array(MessageId),
-  truncated: Schema.Boolean,
 })
 export type ModelContextProjection = typeof ModelContextProjection.Type
 
@@ -570,7 +569,6 @@ const projectUnits = (
       estimatedTokens: selected.success.estimatedTokens,
       availableInputTokens,
       omittedMessageIds: [...omittedMessageIds],
-      truncated: omittedMessageIds.length > 0,
     }),
   )
 }

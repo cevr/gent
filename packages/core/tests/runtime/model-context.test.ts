@@ -104,7 +104,6 @@ describe("projectModelContext", () => {
     expect(projection.estimatedTokens).toBe(2)
     expect(ids(projection)).toEqual(["user", "answer"])
     expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
-    expect(projection.truncated).toBe(true)
   })
 
   test("is deterministic for the same ordered input and does not mutate it", () => {
@@ -224,7 +223,6 @@ describe("projectModelContext", () => {
 
     expect(ids(projection)).toEqual(["visible"])
     expect(projection.omittedMessageIds).toEqual([])
-    expect(projection.truncated).toBe(false)
   })
 
   test("rejects a visible result whose call is hidden", () => {

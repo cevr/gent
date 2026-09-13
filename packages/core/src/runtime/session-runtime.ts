@@ -52,7 +52,7 @@ import type { ToolRunner } from "./agent/tool-runner.js"
 import type { ToolCallBindingStorage } from "../storage/tool-call-binding-storage.js"
 import type { InteractionStorage } from "../storage/interaction-storage.js"
 import type { ConfigService } from "./config-service.js"
-import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
+import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 const SESSION_TERMINATION_CONCURRENCY = 16
 import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
@@ -412,6 +412,27 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       yield* actorControl.redeliver(entityIdOf(workspaceId, target.sessionId, target.branchId))
     }).pipe(Effect.ignore)
 
+  /** One actor command: check the target, address the loop, run, wrap any failure. */
+  const actorCommand = <A, E, R>(
+    name: string,
+    target: SessionRuntimeTarget,
+    run: (
+      ref: Effect.Success<ReturnType<typeof agentLoopActorRefFor>>,
+      ids: { readonly workspaceId: WorkspaceId; readonly commandId: ActorCommandId },
+    ) => Effect.Effect<A, E, R>,
+  ) =>
+    requireSessionBranch(target).pipe(
+      Effect.flatMap(() =>
+        Effect.gen(function* () {
+          const ref = yield* agentLoopActorRefFor(target.sessionId, target.branchId)
+          const workspaceId = yield* CurrentWorkspaceId
+          const commandId = ActorCommandId.make(yield* platform.randomId)
+          return yield* run(ref, { workspaceId, commandId })
+        }),
+      ),
+      Effect.catchCause((cause) => Effect.fail(wrapError(`${name} failed`, cause))),
+    )
+
   const sendUserMessage = Effect.fn("SessionRuntime.sendUserMessage")(function* (
     input: SendUserMessagePayload,
   ) {
@@ -543,100 +564,50 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       ),
 
     requestExtension: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.RequestExtension.make({
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                extensionId: input.extensionId,
-                capabilityId: input.capabilityId,
-                input: Option.match(Option.fromUndefinedOr(input.input), {
-                  onNone: () => ({ _tag: "Missing" }),
-                  onSome: (value) => ({ _tag: "Present", value }),
-                }),
-                workspaceId: yield* CurrentWorkspaceId,
-                commandId: ActorCommandId.make(yield* platform.randomId),
-              }),
-            )
+      actorCommand("requestExtension", input, (ref, ids) =>
+        ref.execute(
+          AgentLoopActor.RequestExtension.make({
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            extensionId: input.extensionId,
+            capabilityId: input.capabilityId,
+            input: Option.match(Option.fromUndefinedOr(input.input), {
+              onNone: () => ({ _tag: "Missing" }),
+              onSome: (value) => ({ _tag: "Present", value }),
+            }),
+            ...ids,
           }),
         ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("requestExtension failed", cause))),
       ),
 
+    // DrainQueue opens the loop itself (`ensureStarted` in its handler),
+    // so no priming read is needed first.
     drainQueuedMessages: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const commandId = ActorCommandId.make(input.requestId)
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            const workspaceId = yield* CurrentWorkspaceId
-            // DrainQueue opens the loop itself (`ensureStarted` in its handler),
-            // so no priming read is needed first.
-            return yield* ref.execute(
-              AgentLoopActor.DrainQueue.make({
-                ...input,
-                workspaceId,
-                commandId,
-              }),
-            )
+      actorCommand("drainQueuedMessages", input, (ref, ids) =>
+        ref.execute(
+          AgentLoopActor.DrainQueue.make({
+            ...input,
+            workspaceId: ids.workspaceId,
+            commandId: ActorCommandId.make(input.requestId),
           }),
         ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("drainQueuedMessages failed", cause))),
       ),
 
     getQueuedMessages: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.andThen(redeliverPendingActorMessages(input)),
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.GetQueue.make({
-                ...input,
-                workspaceId: yield* CurrentWorkspaceId,
-                commandId: ActorCommandId.make(yield* platform.randomId),
-              }),
-            )
-          }),
+      actorCommand("getQueuedMessages", input, (ref, ids) =>
+        redeliverPendingActorMessages(input).pipe(
+          Effect.andThen(ref.execute(AgentLoopActor.GetQueue.make({ ...input, ...ids }))),
         ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
       ),
 
     getMetrics: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.GetMetrics.make({
-                ...input,
-                workspaceId: yield* CurrentWorkspaceId,
-                commandId: ActorCommandId.make(yield* platform.randomId),
-              }),
-            )
-          }),
-        ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause))),
+      actorCommand("getMetrics", input, (ref, ids) =>
+        ref.execute(AgentLoopActor.GetMetrics.make({ ...input, ...ids })),
       ),
 
     getState: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-            return yield* ref.execute(
-              AgentLoopActor.GetState.make({
-                ...input,
-                workspaceId: yield* CurrentWorkspaceId,
-                commandId: ActorCommandId.make(yield* platform.randomId),
-              }),
-            )
-          }),
-        ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause))),
+      actorCommand("getState", input, (ref, ids) =>
+        ref.execute(AgentLoopActor.GetState.make({ ...input, ...ids })),
       ),
 
     watchState: (input) =>

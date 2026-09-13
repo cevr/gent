@@ -3,8 +3,6 @@ import type {
   FailedExtension,
   FailedExtensionPhase,
   LoadedExtension,
-  GentExtension,
-  ExtensionSetupServices,
   ExtensionLoaderServices,
 } from "../../domain/extension.js"
 import {
@@ -18,7 +16,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
   modelCapabilities(contribs).length
-import type { DiscoveredBuiltinExtension, DiscoveredExtension } from "./loader.js"
+import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
 
 export interface ExtensionActivationResult {
@@ -47,64 +45,7 @@ const formatFailure = (error: Parameters<typeof hasMessage>[0]): string => {
   return String(error)
 }
 
-export const setupBuiltinExtensions = (params: {
-  readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
-  readonly cwd: string
-  readonly home: string
-  readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult, never, ExtensionLoaderServices> =>
-  Effect.gen(function* () {
-    const active: LoadedExtension[] = []
-    const failed: FailedExtension[] = []
-
-    for (const input of params.extensions) {
-      const extension = input
-      if (params.disabled.has(extension.manifest.id)) {
-        yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
-          Effect.annotateLogs({ extensionId: extension.manifest.id, scope: "builtin" }),
-        )
-        continue
-      }
-
-      const discovered = {
-        extension,
-        scope: "builtin",
-        sourcePath: "builtin",
-      } satisfies DiscoveredBuiltinExtension
-
-      const exit = yield* setupExtension(discovered, params.cwd, params.home).pipe(Effect.exit)
-      if (exit._tag === "Success") {
-        active.push(exit.value)
-        yield* Effect.logDebug("extension.setup.ok").pipe(
-          Effect.annotateLogs({
-            extensionId: extension.manifest.id,
-            scope: "builtin",
-            tools: modelToolCount(exit.value.contributions),
-          }),
-        )
-      } else {
-        const error = formatFailure(Cause.squash(exit.cause))
-        failed.push(
-          toFailedExtension(
-            { manifest: extension.manifest, scope: "builtin", sourcePath: "builtin" },
-            "setup",
-            error,
-          ),
-        )
-        yield* Effect.logWarning("extension.setup.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: extension.manifest.id,
-            scope: "builtin",
-            error,
-          }),
-        )
-      }
-    }
-
-    return { active, failed }
-  })
-
-export const setupDiscoveredExtensions = (params: {
+export const setupExtensions = (params: {
   readonly extensions: ReadonlyArray<DiscoveredExtension>
   readonly cwd: string
   readonly home: string

@@ -8,11 +8,8 @@ import type {
   LoadedExtension,
 } from "../../src/domain/extension.js"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import {
-  setupBuiltinExtensions,
-  setupDiscoveredExtensions,
-  validateLoadedExtensions,
-} from "../../src/runtime/extensions/activation"
+import type { DiscoveredExtension } from "../../src/runtime/extensions/loader"
+import { setupExtensions, validateLoadedExtensions } from "../../src/runtime/extensions/activation"
 import type { ExtensionContributions } from "../../src/domain/contribution"
 import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
 import { registerContributions } from "../../src/domain/extension-host.js"
@@ -31,6 +28,12 @@ const fsLayer = Layer.provideMerge(
   Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
   childProcessSpawnerLive,
 )
+
+const builtin = (extension: ReturnType<typeof makeBuiltin>): DiscoveredExtension => ({
+  extension,
+  scope: "builtin",
+  sourcePath: "builtin",
+})
 
 const makeBuiltin = (
   id: string,
@@ -66,8 +69,8 @@ describe("extension activation isolation", () => {
       )
       const bad = makeBuiltin("bad-ext", Effect.die(new Error("setup boom")))
 
-      const result = yield* setupBuiltinExtensions({
-        extensions: [good, bad],
+      const result = yield* setupExtensions({
+        extensions: [good, bad].map(builtin),
         cwd: "/tmp",
         home: "/tmp",
         disabled: new Set(),
@@ -84,8 +87,8 @@ describe("extension activation isolation", () => {
   it.live("does not infer builtin identity without a compiled build token", () =>
     Effect.gen(function* () {
       const extension = makeBuiltin("compiled-artifact", Effect.succeed({}))
-      const result = yield* setupBuiltinExtensions({
-        extensions: [extension],
+      const result = yield* setupExtensions({
+        extensions: [builtin(extension)],
         cwd: "/tmp",
         home: "/tmp",
         disabled: new Set(),
@@ -96,7 +99,7 @@ describe("extension activation isolation", () => {
 
   it.live("discovered setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
-      const result = yield* setupDiscoveredExtensions({
+      const result = yield* setupExtensions({
         extensions: [
           {
             extension: makeBuiltin("good-ext", Effect.succeed({})),

@@ -12,7 +12,7 @@
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Predicate } from "effect"
-import { setupBuiltinExtensions } from "@gent/core-internal/runtime/extensions/activation.js"
+import { setupExtensions } from "@gent/core-internal/runtime/extensions/activation.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { ProcessRunnerLive } from "@gent/core-internal/runtime/run-process.js"
 import {
@@ -41,8 +41,8 @@ const stubSessionManager = (disposeAll: Effect.Effect<void>): AcpSessionManager 
 })
 
 const activate = (extension: typeof AcpAgentsExtension) =>
-  setupBuiltinExtensions({
-    extensions: [extension],
+  setupExtensions({
+    extensions: [{ extension, scope: "builtin", sourcePath: "builtin" }],
     cwd: "/tmp",
     home: "/tmp",
     disabled: new Set(),

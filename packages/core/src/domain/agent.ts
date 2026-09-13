@@ -139,7 +139,6 @@ export const resolveAgentDriver = (
 //   - `history`       — whether the child starts from the caller's branch history
 //   - `visibility`    — whether the child leaves a trace on the parent
 //   - `overrides`     — per-turn model/tool/prompt overrides
-//   - `tags`          — RunContext annotations
 //   - `parentToolCallId` — links a child run to the tool call that spawned it
 //
 // Every child is a durable session driven by the same loop as its parent.
@@ -169,7 +168,6 @@ export const RunSpecSchema = Schema.Struct({
   history: Schema.optional(AgentRunHistory),
   visibility: Schema.optional(AgentRunVisibility),
   overrides: Schema.optional(AgentRunOverridesSchema),
-  tags: Schema.optional(Schema.Array(Schema.String)),
   parentToolCallId: Schema.optional(ToolCallId),
 })
 export type RunSpec = typeof RunSpecSchema.Type
@@ -181,7 +179,6 @@ export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => {
   if (Predicate.isNotUndefined(input.history)) spec.history = input.history
   if (Predicate.isNotUndefined(input.visibility)) spec.visibility = input.visibility
   if (Predicate.isNotUndefined(input.overrides)) spec.overrides = input.overrides
-  if (Predicate.isNotUndefined(input.tags)) spec.tags = input.tags
   if (Predicate.isNotUndefined(input.parentToolCallId))
     spec.parentToolCallId = input.parentToolCallId
   return spec

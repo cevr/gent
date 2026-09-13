@@ -16,14 +16,11 @@ describe("run spec construction", () => {
       // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       overrides: undefined,
       // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-      tags: undefined,
-      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       parentToolCallId: undefined,
     })
     expect(Object.keys(spec)).toEqual([])
     expect("visibility" in spec).toBe(false)
     expect("overrides" in spec).toBe(false)
-    expect("tags" in spec).toBe(false)
     expect("parentToolCallId" in spec).toBe(false)
   })
 
@@ -39,7 +36,6 @@ describe("run spec construction", () => {
         reasoningEffort: "high",
         systemPromptAddendum: "extra",
       },
-      tags: ["auto-loop"],
       parentToolCallId: tcid,
     })
     expect(spec.history).toBe("inherit")
@@ -49,13 +45,11 @@ describe("run spec construction", () => {
     expect(spec.overrides?.deniedTools).toEqual(["read"])
     expect(spec.overrides?.reasoningEffort).toBe("high")
     expect(spec.overrides?.systemPromptAddendum).toBe("extra")
-    expect(spec.tags).toEqual(["auto-loop"])
     expect(spec.parentToolCallId).toBe(tcid)
   })
 
-  test("partial input — only tags", () => {
-    const spec = makeRunSpec({ tags: ["a", "b"] })
-    expect(Object.keys(spec)).toEqual(["tags"])
-    expect(spec.tags).toEqual(["a", "b"])
+  test("partial input — only visibility", () => {
+    const spec = makeRunSpec({ visibility: "private" })
+    expect(Object.keys(spec)).toEqual(["visibility"])
   })
 })

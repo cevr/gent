@@ -173,13 +173,7 @@ const resolveToGentExtension = (value: unknown): Option.Option<LoadedUserExtensi
 
 export interface DiscoveredExtension {
   readonly extension: LoadedUserExtension
-  readonly scope: Exclude<ExtensionScope, "builtin">
-  readonly sourcePath: string
-}
-
-export interface DiscoveredBuiltinExtension {
-  readonly extension: LoadedUserExtension
-  readonly scope: "builtin"
+  readonly scope: ExtensionScope
   readonly sourcePath: string
 }
 
@@ -249,7 +243,7 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
 
 /** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
 export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(function* (
-  discovered: DiscoveredExtension | DiscoveredBuiltinExtension,
+  discovered: DiscoveredExtension,
   cwd: string,
   home: string,
 ) {

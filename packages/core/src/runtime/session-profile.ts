@@ -29,17 +29,14 @@ import type {
   ExtensionSetupServices,
   LoadedExtension,
 } from "../domain/extension.js"
-import { AllowAllPermission, type PermissionService } from "../domain/permission.js"
+import { AllowAllPermission } from "../domain/permission.js"
 import { ProcessGenerationId } from "../domain/process-generation.js"
-import type { PromptSection } from "../domain/prompt.js"
 import {
-  type ExtensionRegistryService,
-  type ResolvedExtensions,
   resolveExtensions,
   sortExtensionsByScope,
   ExtensionRegistry,
 } from "./extensions/registry.js"
-import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
+import { DriverRegistry } from "./extensions/driver-registry.js"
 import { toFailedExtension } from "./extensions/activation.js"
 import {
   buildResourceLayer,
@@ -49,29 +46,13 @@ import { ConfigService, type UserConfig } from "./config-service.js"
 import { ProcessRunner } from "./run-process.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
-  buildProfileCatalog,
+  buildSessionProfile,
   loadRuntimeProfileDeclarations,
-  type RuntimeProfileCatalog,
   type RuntimeProfileInputs,
-  type RuntimeProfileServiceContext,
+  type SessionProfile,
 } from "./profile.js"
 
-// ── SessionProfile ──
-
-export interface SessionProfile {
-  readonly cwd: string
-  readonly resolved: ResolvedExtensions
-  readonly layerContext: RuntimeProfileServiceContext
-  readonly permissionService: PermissionService
-  readonly registryService: ExtensionRegistryService
-  readonly driverRegistryService: DriverRegistryService
-  readonly baseSections: ReadonlyArray<PromptSection>
-  /**
-   * Identity of the process that built this profile. A process-local tool
-   * binding is replayable only inside it.
-   */
-  readonly generationId: ProcessGenerationId
-}
+export type { SessionProfile } from "./profile.js"
 
 // ── SessionProfileCache ──
 
@@ -240,18 +221,15 @@ export class SessionProfileCache extends Context.Service<
                 ...declarations.extensionDeclarations.failed,
                 ...started.failed,
               ])
-              const catalog = yield* buildProfileCatalog({
-                profile: {
-                  cwd: declarations.cwd,
-                  resolved,
-                  coreSections: declarations.coreSections,
-                  extensionSectionInputs: [...resolved.promptSections.values()],
-                },
+              return yield* buildSessionProfile({
+                cwd: declarations.cwd,
+                resolved,
+                coreSections: declarations.coreSections,
                 configService,
                 resourceContext: started.context,
                 configOverride: userConfig,
+                generationId,
               })
-              return sessionProfileFromCatalog(catalog, generationId)
             }).pipe(
               Effect.provideService(Scope.Scope, profileScope),
               // A failed or interrupted build releases everything it acquired.
@@ -328,17 +306,3 @@ export class SessionProfileCache extends Context.Service<
     )
   }
 }
-
-const sessionProfileFromCatalog = (
-  catalog: RuntimeProfileCatalog,
-  generationId: ProcessGenerationId,
-): SessionProfile => ({
-  cwd: catalog.profile.cwd,
-  resolved: catalog.profile.resolved,
-  layerContext: catalog.layerContext,
-  permissionService: catalog.permissionService,
-  registryService: catalog.registryService,
-  driverRegistryService: catalog.driverRegistryService,
-  baseSections: catalog.baseSections,
-  generationId,
-})
