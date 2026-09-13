@@ -298,7 +298,6 @@ const sessionRuntimeStub = (
           }),
         getState: () => SubscriptionRef.get(runtimeState),
         watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
-        listActiveLoops: Effect.succeed([]),
         terminateSession: () => Effect.void,
       } satisfies SessionRuntimeService
     }),

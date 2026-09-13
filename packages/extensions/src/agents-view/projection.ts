@@ -32,7 +32,7 @@ export interface AgentRowKey {
   readonly branchId: BranchId
 }
 
-/** A materialized loop, from `SessionRuntime.listActiveLoops` plus its state. */
+/** A materialized loop, from `ExtensionContext.Session.listActiveLoops`, with its registered state. */
 export interface LiveAgentRow {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -40,8 +40,8 @@ export interface LiveAgentRow {
   /**
    * Runtime state tag, e.g. `"Idle"` / `"Running"` / `"WaitingForInteraction"`.
    *
-   * `None` when the loop is known to be materialized but its state has not been
-   * read — enumerating N loops must not fan out into N state reads.
+   * `None` when the loop is materialized but its state read failed; such a
+   * loop counts as idle rather than running.
    */
   readonly status: Option.Option<string>
   readonly model: Option.Option<string>

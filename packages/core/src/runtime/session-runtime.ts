@@ -203,17 +203,6 @@ type SessionRuntimeLayerRequirements =
   | Path.Path
   | Scope.Scope
 
-/**
- * One currently-materialized agent loop. The actor registry is live-only: an
- * idle, evicted, or never-started branch is absent, and the list is empty
- * after a restart. Callers that need every agent — not just the running ones —
- * must merge this against durable session storage.
- */
-interface ActiveLoop {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-}
-
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
     input: SendUserMessagePayload,
@@ -245,11 +234,6 @@ export interface SessionRuntimeService {
   readonly watchState: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<Stream.Stream<SessionRuntimeState, SessionRuntimeError>, SessionRuntimeError>
-  /**
-   * Loops materialized in this workspace right now. Live-only by nature —
-   * see {@link ActiveLoop}.
-   */
-  readonly listActiveLoops: Effect.Effect<ReadonlyArray<ActiveLoop>, SessionRuntimeError>
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void, SessionRuntimeError>
 }
 
@@ -580,16 +564,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
           Stream.mapError((error) => wrapStreamSessionRuntimeError("watchState", error)),
         )
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
-
-    listActiveLoops: Effect.gen(function* () {
-      const workspaceId = yield* CurrentWorkspaceId
-      const entityIds = yield* actorState.listEntityIds
-      return yield* listWorkspaceLoops({
-        workspaceId,
-        entityIds,
-        concurrency: SESSION_TERMINATION_CONCURRENCY,
-      })
-    }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("listActiveLoops failed", cause)))),
 
     terminateSession: (sessionId) =>
       Effect.gen(function* () {

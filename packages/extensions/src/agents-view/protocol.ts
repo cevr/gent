@@ -70,17 +70,13 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
   const activeLoops = yield* ctx.Session.listActiveLoops.pipe(Effect.orDie)
   const sessions = yield* ctx.Session.listSessions.pipe(Effect.orDie)
 
-  // The live half. Status and metrics need a per-loop read, which this
-  // capability deliberately does not do: enumerating N loops must not fan out
-  // into N state reads on every keystroke. Rows carry identity and liveness;
-  // the client subscribes per row for detail.
+  // The live half. Status comes with the enumeration; metrics need a heavier
+  // per-loop read, which the client makes for one selected row at a time.
   const live: ReadonlyArray<LiveAgentRow> = activeLoops.map((loop) => ({
     sessionId: loop.sessionId,
     branchId: loop.branchId,
     agent: "main",
-    // Not read: see LiveAgentRow.status. A resident loop is reported idle
-    // rather than running, because this capability does not know which it is.
-    status: Option.none(),
+    status: loop.status,
     model: Option.none(),
     turns: Option.none(),
     costUsd: Option.none(),

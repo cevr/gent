@@ -22,6 +22,7 @@ const ReplySchema = Schema.Struct({
       sessionId: Schema.String,
       branchId: Schema.String,
       section: Schema.String,
+      status: Schema.optional(Schema.String),
       name: Schema.optional(Schema.String),
       cwd: Schema.optional(Schema.String),
       live: Schema.Boolean,
@@ -69,6 +70,11 @@ describe("AgentsViewExtension via RPC", () => {
           expect(row!.cwd).toBe("/tmp/agents-view-rpc")
           // No parent link, so the session sits at the root of the tree.
           expect(row!.depth).toBe(0)
+          // The request ran on this session's loop, so the loop is resident and
+          // the listing read its state rather than guessing.
+          expect(row!.live).toBe(true)
+          expect(row!.status).toBe("Idle")
+          expect(row!.section).toBe("idle")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

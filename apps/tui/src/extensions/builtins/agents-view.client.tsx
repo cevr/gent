@@ -146,29 +146,6 @@ export const makeAgentsController = (
   return { rows, current, error, loading, refresh, detail, select, open, setOpen }
 }
 
-/**
- * The section a row is in, corrected by live state where we have it.
- *
- * The listing reports every resident loop as `idle`, because enumerating N
- * loops must not fan out into N state reads. The detail read for the selected
- * row does know, so that one row shows what it is actually doing rather than
- * the conservative guess the listing had to make.
- */
-const sectionFor = (
-  row: AgentRowEntry,
-  detail: Option.Option<ExtensionAgentDetail>,
-): AgentRowEntry["section"] =>
-  Option.match(
-    Option.flatMap(detail, (value) => value.status),
-    {
-      onNone: () => row.section,
-      onSome: (status) => {
-        if (status === "Idle") return "idle"
-        return "running"
-      },
-    },
-  )
-
 /** Section headings, with the count each carries. Empty sections are skipped. */
 const SECTION_TITLE = {
   running: "Running",
@@ -549,13 +526,6 @@ export function AgentsPane(
   const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
 
   const tick = useSpinnerClock()
-  // Detail is fetched for the selected row only, so only that row can be
-  // corrected; the rest keep the section the listing gave them.
-  const liveSection = (row: AgentRowEntry, selected: boolean): AgentRowEntry["section"] => {
-    if (!selected) return row.section
-    return sectionFor(row, props.controller.detail())
-  }
-
   // The running pulse animates; idle and inactive share a dot and differ by colour.
   const glyphFor = (section: AgentRowEntry["section"]): string => {
     if (section === "running") return workingIconFrame(tick())
@@ -604,7 +574,7 @@ export function AgentsPane(
     const age = ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
-    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(liveSection(row, selected))} ${labelFor(row)}`
+    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${labelFor(row)}`
     if (activity.length > 0) left = `${left}  ·  ${activity}`
     const width = Math.max(0, rowWidth() - age.length - 2)
     return `${truncate(left, width).padEnd(width)}  ${age}`
@@ -658,7 +628,7 @@ export function AgentsPane(
                   if (selected()) return theme.primary
                   return "transparent"
                 }
-                const section = () => liveSection(item.row, selected())
+                const section = () => item.row.section
                 return (
                   <box
                     id={`agents-row-${item.index}`}

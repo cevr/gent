@@ -114,7 +114,12 @@ export interface ExtensionSessionService {
    * running ones.
    */
   readonly listActiveLoops: Effect.Effect<
-    ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+    ReadonlyArray<{
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      /** Runtime state tag such as `Idle` or `Running`; `None` when the read failed. */
+      readonly status: Option.Option<string>
+    }>,
     ExtensionServiceError
   >
 }
