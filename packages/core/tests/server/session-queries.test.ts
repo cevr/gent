@@ -12,7 +12,7 @@ import { SessionStorage } from "../../src/storage/session-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { SessionQueries } from "../../src/server/session-queries"
+import { getSessionSnapshot } from "../../src/server/session-queries"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { sessionRuntimeLayer } from "./session-mutations/helpers"
 
@@ -41,17 +41,14 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
     return values
   })
 
-const sessionQueriesActorFailureLayer = (() => {
-  const base = Layer.mergeAll(
-    SqliteStorage.TestWithSql(() => Layer.empty, {}),
-    GentPlatform.Test(),
-    sessionRuntimeLayer({
-      getState: () =>
-        Effect.fail(new SessionRuntimeError({ message: "injected runtime state failure" })),
-    }),
-  )
-  return Layer.mergeAll(base, Layer.provide(SessionQueries.Live, base))
-})()
+const sessionQueriesActorFailureLayer = Layer.mergeAll(
+  SqliteStorage.TestWithSql(() => Layer.empty, {}),
+  GentPlatform.Test(),
+  sessionRuntimeLayer({
+    getState: () =>
+      Effect.fail(new SessionRuntimeError({ message: "injected runtime state failure" })),
+  }),
+)
 
 describe("session queries", () => {
   it.live(
@@ -137,8 +134,7 @@ describe("session queries", () => {
       )
       yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
 
-      const queries = yield* SessionQueries
-      const exit = yield* queries.getSessionSnapshot({ sessionId, branchId }).pipe(Effect.exit)
+      const exit = yield* getSessionSnapshot({ sessionId, branchId }).pipe(Effect.exit)
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {

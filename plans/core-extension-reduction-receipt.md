@@ -1325,3 +1325,14 @@ parts type and every caller names the role. `ctx.State.changed` lost the
 the context it already holds. `ctx.Session.listMessages` had no production
 caller and is gone from the facet, host binding, and stubs; the surface-lock
 test and `docs/extensions.md` follow.
+
+## Sixth pass, group D: two Tags with one reader (2026-09-13)
+
+`SessionQueries` and `InteractionCommands` were one-method services whose
+only reader was `rpc-handlers.ts`. `server-root.ts` also wired
+`InteractionCommands.Live` on top of `SessionQueries.Live`, an edge the
+file never used. Both are now exported `Effect.fn`s, `getSessionSnapshot`
+and `respondInteraction`, that yield the storage and runtime services they
+need; the handler calls them directly, `AppServicesLive` and its build step
+are gone, and the interaction input is the wire schema's type instead of a
+second interface.

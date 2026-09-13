@@ -3,24 +3,11 @@ import { Clock, Context, Effect, Layer } from "effect"
 import type { Scope } from "effect"
 import type { FileSystem } from "effect/FileSystem"
 import { createDependencies, type DependenciesConfig } from "./dependencies.js"
-import { InteractionCommands } from "./interaction-commands.js"
-import { SessionQueries } from "./session-queries.js"
 import { ConnectionTracker, type ConnectionTrackerService } from "./connection-tracker.js"
 import { ServerIdentity, type ServerIdentityApi } from "./server-identity.js"
 import { buildServerRoutes } from "./server-routes.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
-
-// `SessionMutations` and `SessionRuntime` are not provided here: production
-// wiring builds them once in `dependencies.ts` and forwards them via the
-// parent context. Callers must include `SessionMutationsLive` and
-// `SessionRuntime.Live` in the parent layer they provide to `AppServicesLive`.
-const QueryServicesLive = SessionQueries.Live
-
-const AppServicesLive = Layer.merge(
-  QueryServicesLive,
-  InteractionCommands.Live.pipe(Layer.provideMerge(QueryServicesLive)),
-)
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
 type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
@@ -29,7 +16,6 @@ type DependenciesLayer = ReturnType<typeof createDependencies>
 type DependencyError = Layer.Error<DependenciesLayer>
 type ServerRootServices =
   | Layer.Success<DependenciesLayer>
-  | Layer.Success<typeof AppServicesLive>
   | Layer.Success<typeof ConnectionTracker.Live>
   | ServerIdentity
 
@@ -74,13 +60,9 @@ export const buildServerRoot = (
     const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
     const connectionTracker = Context.get(connectionTrackerCtx, ConnectionTracker)
     const depsServices = yield* Layer.buildWithScope(depsLive, scope)
-    const appServices = yield* Layer.buildWithScope(
-      AppServicesLive.pipe(Layer.provide(Layer.succeedContext(depsServices))),
-      scope,
-    )
     const serverIdentityCtx = yield* Layer.buildWithScope(ServerIdentity.Live(identity), scope)
     const allServices = Context.merge(
-      Context.merge(Context.merge(depsServices, appServices), connectionTrackerCtx),
+      Context.merge(depsServices, connectionTrackerCtx),
       serverIdentityCtx,
     )
     const coreServicesLive = Layer.succeedContext(allServices)

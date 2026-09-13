@@ -25,10 +25,10 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
-import { InteractionCommands } from "./interaction-commands.js"
+import { respondInteraction } from "./interaction-commands.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionMutations } from "../domain/session-mutations.js"
-import { SessionQueries } from "./session-queries.js"
+import { getSessionSnapshot } from "./session-queries.js"
 import { getBranchTree } from "./session-utils.js"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
@@ -129,10 +129,8 @@ const extensionRequestError = (params: {
 
 const RpcHandlers = GentRpcs.toLayer(
   Effect.gen(function* () {
-    const queries = yield* SessionQueries
     const mutations = yield* SessionMutations
     const eventStore = yield* EventStore
-    const interactions = yield* InteractionCommands
     const configService = yield* ConfigService
     const sessionRuntime = yield* SessionRuntime
     const modelRegistry = yield* ModelRegistry
@@ -252,7 +250,7 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       "session.getSnapshot": ({ sessionId, branchId }: GetSessionSnapshotInput) =>
-        queries.getSessionSnapshot({ sessionId, branchId }).pipe(
+        getSessionSnapshot({ sessionId, branchId }).pipe(
           Effect.tap(() => WideEvent.set({ sessionId, branchId })),
           withWideEvent(WideEventBoundary.rpc("session.getSnapshot")),
         ),
@@ -389,7 +387,7 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       "interaction.respondInteraction": (input: RespondInteractionInput) =>
-        interactions.respond(input).pipe(
+        respondInteraction(input).pipe(
           Effect.tap(() =>
             WideEvent.set({
               sessionId: input.sessionId,
