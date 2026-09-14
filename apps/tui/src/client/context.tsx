@@ -228,7 +228,7 @@ export interface ClientAgentValue {
   contextMetrics: () => Option.Option<ModelContextMetrics>
   // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
   modelInfo: () => Model | undefined
-  /** Every model the registry knows, in registry order; empty until it loads. */
+  /** The models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
 
   // Agent state setters (for local errors only)
@@ -409,7 +409,10 @@ export function ClientProvider(props: ClientProviderProps) {
             for (const model of models) modelsById[model.id] = model
             const agentsByName: Record<string, AgentDefinition> = {}
             for (const agent of drivers.agents) agentsByName[agent.name] = agent
-            setModelStore({ modelsById, agentsByName })
+            const driverIds = drivers.drivers
+              .filter((driver) => driver._tag === "model")
+              .map((driver) => driver.id)
+            setModelStore({ modelsById, agentsByName, driverIds })
           }),
         ),
         Effect.catchEager((err) =>
@@ -455,9 +458,12 @@ export function ClientProvider(props: ClientProviderProps) {
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
     agentsByName: Record<string, AgentDefinition>
+    /** Ids of the registered model drivers; a model needs one to run. */
+    driverIds: readonly string[]
   }>({
     modelsById: {},
     agentsByName: {},
+    driverIds: [],
   })
 
   createEffect(() => {
@@ -987,7 +993,10 @@ export function ClientProvider(props: ClientProviderProps) {
           agentStore.lastModelId,
         ),
       ),
-    models: () => Object.values(modelStore.modelsById),
+    models: () =>
+      Object.values(modelStore.modelsById).filter((model) =>
+        modelStore.driverIds.includes(model.provider),
+      ),
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {

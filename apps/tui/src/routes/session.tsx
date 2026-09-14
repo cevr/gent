@@ -135,7 +135,12 @@ export function Session(props: SessionProps) {
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
-    if (a.phase === "idle") {
+    // A local error (a slash command that could not apply, a failed RPC)
+    // replaces the phase word until the next turn clears it.
+    const localError = Option.fromNullishOr(client.error())
+    if (Option.isSome(localError)) {
+      items.push({ text: localError.value, color: theme.error })
+    } else if (a.phase === "idle") {
       items.push({ text: controller.phaseLabel(), color: theme.textMuted })
     }
 
@@ -248,6 +253,13 @@ export function Session(props: SessionProps) {
               <CommandPalette />
             </Composer>
           </ComposerFrame>
+          <ModelPicker
+            open={controller.uiState().overlay._tag === "model"}
+            models={client.models()}
+            current={Option.fromNullishOr(client.modelInfo()?.id)}
+            onSelect={controller.onModelSelect}
+            onClose={controller.closeOverlay}
+          />
           <ExtensionWidgets slot="below-input" />
         </box>
 
@@ -255,14 +267,6 @@ export function Session(props: SessionProps) {
           open={controller.uiState().overlay._tag === "fork"}
           messages={controller.forkMessages()}
           onSelect={controller.onForkSelect}
-          onClose={controller.closeOverlay}
-        />
-
-        <ModelPicker
-          open={controller.uiState().overlay._tag === "model"}
-          models={client.models()}
-          current={Option.fromNullishOr(client.modelInfo()?.id)}
-          onSelect={controller.onModelSelect}
           onClose={controller.closeOverlay}
         />
 

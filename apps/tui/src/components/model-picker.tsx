@@ -91,20 +91,29 @@ export function ModelPicker(props: ModelPickerProps) {
     { when: () => props.open },
   )
 
-  const panelWidth = () => Math.min(72, dimensions().width - 6)
-  const panelHeight = () => Math.min(18, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
-  const rowWidth = () => panelWidth() - 4
+  // Docked under the composer like the agents pane: a pane, not a modal. The
+  // pane spans the width and keeps a fixed row budget so a short terminal
+  // does not collapse the list.
+  const panelWidth = () => Math.max(0, dimensions().width - 2)
+  // Border 2, body padding 2, row padding 1.
+  const rowWidth = () => Math.max(0, panelWidth() - 5)
+  const BODY_ROWS = 10
+  const CHROME_ROWS = 5
+  const paneHeight = () => Math.max(5, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
 
   return (
     <Show when={props.open}>
-      <ChromePanel.Root
+      <box
+        height={paneHeight()}
+        alignSelf="stretch"
+        marginLeft={1}
+        marginRight={1}
+        backgroundColor={theme.backgroundMenu}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
+        flexDirection="column"
         title={`Model · ${visible().length}`}
-        width={panelWidth()}
-        height={panelHeight()}
-        left={left()}
-        top={top()}
       >
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
@@ -156,7 +165,7 @@ export function ModelPicker(props: ModelPickerProps) {
         </ChromePanel.Body>
 
         <ChromePanel.Footer>type to filter · ↑↓ move · ↵ select · esc close</ChromePanel.Footer>
-      </ChromePanel.Root>
+      </box>
     </Show>
   )
 }
