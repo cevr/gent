@@ -99,6 +99,31 @@ describe("estimateTokens", () => {
     expect(estimateTokens(messages)).toBe(250) // 1000/4
   })
 
+  test("a spilled tool result counts at its model-facing size, not its stored size", () => {
+    const messages = [
+      Message.cases.regular.make({
+        id: MessageId.make("m1"),
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
+        role: "tool",
+        parts: [
+          Prompt.toolResultPart({
+            id: ToolCallId.make("tc1"),
+            name: "cell",
+            isFailure: false,
+            providerExecuted: false,
+            result: { display: "x".repeat(40_000) },
+          }),
+        ],
+        createdAt: dateFromMillis(1_767_225_600_000),
+      }),
+    ]
+    // The stored result is ~10,000 tokens; the model sees 8,000 chars plus a locator.
+    const tokens = estimateTokens(messages)
+    expect(tokens).toBeLessThan(2_200)
+    expect(tokens).toBeGreaterThan(2_000)
+  })
+
   test("multiple messages sum correctly", () => {
     const messages = [
       Message.cases.regular.make({

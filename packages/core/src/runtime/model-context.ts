@@ -3,6 +3,7 @@ import type { ToolCapability } from "../domain/capability/tool.js"
 import { encodeToolOutput } from "../domain/tool-output.js"
 import { Message, MessageRole } from "../domain/message.js"
 import { MessageId, ToolCallId } from "../domain/ids.js"
+import { boundToolResultForModel } from "../providers/ai-transcript.js"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"
 
 /** Input tokens the context projection keeps free for the reply. The request itself carries no output cap: each provider uses the model's own limit. */
@@ -24,7 +25,8 @@ export const estimateTokens = (messages: ReadonlyArray<Message>): number => {
           chars += encodeToolOutput(part.params).length
           break
         case "tool-result":
-          chars += encodeToolOutput(part.result).length
+          // The model sees the bounded result, so the budget counts that, not the stored one.
+          chars += encodeToolOutput(boundToolResultForModel(part).result).length
           break
         case "file":
           chars += 1000 // ~250 tokens estimate for image references
