@@ -9,6 +9,7 @@ import {
   ModelContextProjected,
   ProviderRetrying,
   type EventEnvelope,
+  type EventStoreError,
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
@@ -35,16 +36,18 @@ import {
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
+  type ModelContextProjection,
   ModelContextProjectionError,
   projectModelContext,
 } from "../model-context.js"
 import {
-  type ModelCompactionError,
-  ModelCompactionResult,
+  type CompactionRequest,
+  type CompactionSummary,
   ModelContextCompactor,
 } from "../model-context-compactor.js"
 import { type ContextDirective, ModelContextLedger } from "../model-context-ledger.js"
 import {
+  currentHandoffId,
   latestUserMessageId,
   messagesInCurrentWindow,
   windowMarkerMessage,
@@ -63,7 +66,6 @@ import {
   type ActiveStreamHandle,
   type CollectedTurnResponse,
 } from "./turn-response.js"
-import { GentPlatform } from "../gent-platform.js"
 import { causeMessage } from "../../domain/guards.js"
 import type { ResolvedTurnContext } from "./turn-resolve.js"
 import type { ResolveModelRequest } from "../../providers/model-resolver.js"
@@ -108,46 +110,140 @@ export type ExternalToolPersistence = {
   readonly toolResultMessageId: MessageId
 }
 
-interface CompactionRequest {
-  readonly instructions?: string
+/** What the model asked the summary to focus on, when the pending directive is a compaction. */
+const compactionInstructions = (
+  directive: Option.Option<ContextDirective>,
+): Option.Option<string> =>
+  directive.pipe(
+    Option.filter((value) => value._tag === "Compact"),
+    Option.flatMap((value) => Option.fromUndefinedOr(value.instructions)),
+  )
+
+/** The handoff marker's record of what it replaced, taken from the history's ends. */
+const summarizedRange = (history: ReadonlyArray<Message>, summary: CompactionSummary) =>
+  Option.all([Option.fromUndefinedOr(history[0]), Option.fromUndefinedOr(history.at(-1))]).pipe(
+    Option.map(([first, last]) => ({
+      firstMessageId: first.id,
+      lastMessageId: last.id,
+      count: history.length,
+      modelId: summary.modelId,
+      usage: summary.usage,
+    })),
+  )
+
+type WindowProjection = {
+  readonly durableMessages: ReadonlyArray<Message>
+  readonly compacted: boolean
 }
 
-/** A new window persists its marker; a compaction request only shapes this projection. */
-const applyContextDirective = Effect.fn("TurnHelpers.applyContextDirective")(function* <
-  E,
-  R,
->(params: {
-  readonly directive: Option.Option<ContextDirective>
-  readonly messages: ReadonlyArray<Message>
+/**
+ * The window the model sees this step. A fresh window puts the issuer's notice
+ * at the head; a handoff moves the history before the newest user message
+ * behind one marker that summarizes it and names the ids it replaced. The
+ * loop hands off when the window overflows, or when the model asked.
+ */
+const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(function* (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly persist: (message: Message) => Effect.Effect<Message, E, R>
+  readonly modelId: ModelId
+  readonly messages: ReadonlyArray<Message>
+  readonly budget: ModelContextBudget
+  readonly directive: Option.Option<ContextDirective>
+  readonly project: (
+    messages: ReadonlyArray<Message>,
+  ) => Effect.Effect<ModelContextProjection, ModelContextProjectionError>
+  readonly persist: (message: Message) => Effect.Effect<Message, StorageError | EventStoreError>
+  readonly summaryModel: CompactionRequest["summaryModel"]
 }) {
-  if (Option.isNone(params.directive)) {
-    return { durableMessages: params.messages, force: Option.none<CompactionRequest>() }
-  }
-  if (params.directive.value._tag === "Compact") {
-    return {
-      durableMessages: params.messages,
-      force: Option.some<CompactionRequest>({
-        instructions: params.directive.value.instructions,
+  const eventPublisher = yield* EventPublisher
+  const now = yield* DateTime.nowAsDate
+  let durableMessages = params.messages
+  const newWindow = params.directive.pipe(Option.filter((value) => value._tag === "NewWindow"))
+  const newWindowAnchor = Option.all([newWindow, latestUserMessageId(durableMessages)])
+  if (Option.isSome(newWindowAnchor)) {
+    const [directive, anchor] = newWindowAnchor.value
+    const marker = yield* params.persist(
+      windowMarkerMessage({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        keepFromMessageId: anchor,
+        notice: directive.notice,
+        createdAt: now,
       }),
-    }
+    )
+    durableMessages = [...durableMessages, marker]
   }
-  const anchor = latestUserMessageId(params.messages)
-  if (Option.isNone(anchor)) {
-    return { durableMessages: params.messages, force: Option.none<CompactionRequest>() }
+
+  const window = messagesInCurrentWindow(durableMessages)
+  const anchor = latestUserMessageId(window).pipe(
+    Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
+  )
+  const history = window.slice(
+    0,
+    Math.max(
+      0,
+      window.findIndex((m) => Option.contains(anchor, m)),
+    ),
+  )
+  const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
+  const overflowing = (yield* params.project(window)).omittedMessageIds.length > 0
+  // Summarising is an extension's job. With no compactor installed the
+  // transcript is truncated and the omission is reported as usual.
+  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
+  if (!(requested || overflowing) || history.length === 0 || Option.isNone(compactor)) {
+    return { durableMessages, compacted: false } satisfies WindowProjection
   }
+  const summary = yield* compactor.value
+    .compact({
+      modelId: params.modelId,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      history,
+      budget: params.budget,
+      instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
+      summaryModel: params.summaryModel,
+    })
+    .pipe(
+      Effect.asSome,
+      Effect.catchTag("ModelCompactionError", (error) =>
+        // A summary that cannot be produced must not cost the turn: the window
+        // is truncated instead, with a visible notice.
+        Effect.gen(function* () {
+          const plain = yield* params.project(window)
+          yield* eventPublisher.publish(
+            ErrorOccurred.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              error: `Context compaction failed (${error.reason}); continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+            }),
+          )
+          return Option.none()
+        }),
+      ),
+    )
+  const handoff = Option.all([summary, anchor]).pipe(
+    Option.flatMap(([value, anchorMessage]) =>
+      summarizedRange(history, value).pipe(
+        Option.map((summarized) => ({ notice: value.notice, summarized, anchorMessage })),
+      ),
+    ),
+  )
+  if (Option.isNone(handoff))
+    return { durableMessages, compacted: false } satisfies WindowProjection
   const marker = yield* params.persist(
     windowMarkerMessage({
       sessionId: params.sessionId,
       branchId: params.branchId,
-      keepFromMessageId: anchor.value,
-      notice: params.directive.value.notice,
-      createdAt: yield* DateTime.nowAsDate,
+      keepFromMessageId: handoff.value.anchorMessage.id,
+      notice: handoff.value.notice,
+      summarized: handoff.value.summarized,
+      createdAt: now,
     }),
   )
-  return { durableMessages: [...params.messages, marker], force: Option.none<CompactionRequest>() }
+  return {
+    durableMessages: [...durableMessages, marker],
+    compacted: true,
+  } satisfies WindowProjection
 })
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
@@ -404,90 +500,42 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   // projection of a new turn drops whatever an earlier turn left behind.
   if (params.step <= 1) yield* ledger.discardDirective
   const directive = yield* ledger.pendingDirective
-  const { durableMessages, force } = yield* applyContextDirective({
-    directive,
-    messages: resolved.messages,
+  const project = (messages: ReadonlyArray<Message>) =>
+    Effect.gen(function* () {
+      const projection = projectModelContext(messages, budget)
+      if (Result.isFailure(projection)) {
+        return yield* new ModelContextProjectionError({
+          modelId: contextModelId,
+          failure: projection.failure,
+        })
+      }
+      return projection.success
+    })
+  const { durableMessages, compacted } = yield* projectContextWindow({
     sessionId: params.sessionId,
     branchId: params.branchId,
+    modelId: contextModelId,
+    messages: resolved.messages,
+    budget,
+    directive,
+    project,
     persist: persistDurableMessage,
+    summaryModel: (maxTokens) =>
+      resolveAdmittedModel({
+        ...modelRequest,
+        hints: { ...modelRequest.hints, maxTokens },
+      }),
   })
-  const windowed = messagesInCurrentWindow(durableMessages)
-  // The plain window: what the model sees when nothing summarises, and what a
-  // failed summary degrades to.
-  const plainProjection = Effect.gen(function* () {
-    const projection = projectModelContext(windowed, budget)
-    if (Result.isFailure(projection)) {
-      return yield* new ModelContextProjectionError({
-        modelId: contextModelId,
-        failure: projection.failure,
-      })
-    }
-    return ModelCompactionResult.make({
-      messages: [...windowed],
-      projection: projection.success,
-      compacted: false,
-    })
-  })
-  // Summarising is an extension's job. With no compactor installed the
-  // transcript is truncated and the omission is reported as usual.
-  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
-  const compact = (forced: Option.Option<CompactionRequest>) =>
-    Effect.gen(function* () {
-      if (Option.isNone(compactor)) return yield* plainProjection
-      const platform = yield* GentPlatform
-      return yield* compactor.value.compact({
-        modelId: contextModelId,
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messages: windowed,
-        budget,
-        hash: (input) => platform.hash("sha256", input),
-        persistSummary: persistDurableMessage,
-        force: Option.getOrUndefined(forced),
-        summaryModel: (maxTokens) =>
-          resolveAdmittedModel({
-            ...modelRequest,
-            hints: { ...modelRequest.hints, maxTokens },
-          }),
-      })
-    })
-  // A summary that cannot be produced must not cost the turn: a requested one
-  // falls back to the automatic path, and that falls back to the plain
-  // truncated projection with a visible notice.
-  const degraded = (error: ModelCompactionError) =>
-    Effect.gen(function* () {
-      // Integrity failures (the source moved, a conflicting summary) still stop
-      // the turn; only a summary the model could not produce degrades.
-      if (!error.recoverable) return yield* error
-      const plain = yield* plainProjection
-      yield* eventPublisher.publish(
-        ErrorOccurred.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: `Context compaction failed (${error.reason}); continuing with ${plain.projection.omittedMessageIds.length} older messages omitted`,
-        }),
-      )
-      return plain
-    })
-  const compacted = yield* compact(force).pipe(
-    Effect.catchTag("ModelCompactionError", (error) => {
-      if (Option.isNone(force)) return degraded(error)
-      return Effect.logWarning("Requested compaction failed; continuing without it")
-        .pipe(Effect.annotateLogs({ error: String(error) }))
-        .pipe(
-          Effect.andThen(
-            compact(Option.none()).pipe(Effect.catchTag("ModelCompactionError", degraded)),
-          ),
-        )
-    }),
-  )
-  const compactedRevision = compacted.revision
+
+  const finalWindow = messagesInCurrentWindow(durableMessages)
+  const projection = yield* project(finalWindow)
+  const handoffMessageId = Option.getOrUndefined(currentHandoffId(finalWindow))
   yield* ledger.recordProjection({
-    estimatedTokens: compacted.projection.estimatedTokens,
-    availableInputTokens: compacted.projection.availableInputTokens,
+    estimatedTokens: projection.estimatedTokens,
+    availableInputTokens: projection.availableInputTokens,
     contextLimitTokens: contextLimit,
-    omittedMessages: compacted.projection.omittedMessageIds.length,
-    compactedRevision,
+    omittedMessages: projection.omittedMessageIds.length,
+    handoffMessageId,
   })
   // Acknowledged only after the projection it shaped succeeded, so a failed
   // projection retries it and a successful one applies it exactly once.
@@ -496,15 +544,15 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     ModelContextProjected.make({
       sessionId: params.sessionId,
       branchId: params.branchId,
-      estimatedTokens: compacted.projection.estimatedTokens,
-      availableInputTokens: compacted.projection.availableInputTokens,
+      estimatedTokens: projection.estimatedTokens,
+      availableInputTokens: projection.availableInputTokens,
       contextLimitTokens: contextLimit,
-      omittedMessages: compacted.projection.omittedMessageIds.length,
-      compactedRevision,
-      compacted: compacted.compacted,
+      omittedMessages: projection.omittedMessageIds.length,
+      handoffMessageId,
+      compacted,
     }),
   )
-  const prompt = toPrompt(compacted.projection.messages, { systemPrompt: resolved.systemPrompt })
+  const prompt = toPrompt(projection.messages, { systemPrompt: resolved.systemPrompt })
   const toolkit = convertTools([...resolved.tools])
   const rawStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(

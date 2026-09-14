@@ -21,7 +21,7 @@ import {
   formatActivityHeader,
   formatCellRowLabel,
   formatDuration,
-  formatCompactionLabel,
+  plural,
   formatPreviewFooter,
   formatRowCounts,
   workingIconFrame,
@@ -54,11 +54,12 @@ const BashOutput = Schema.Struct({
   stderr: Schema.optional(Schema.String),
 })
 
-const CompactionDetails = Schema.Struct({
-  sourceMessageIds: Schema.Array(Schema.String),
+/** The part of a window marker's details the transcript shows: how much history a handoff replaced. */
+const HandoffDetails = Schema.Struct({
+  summarized: Schema.optional(Schema.Struct({ count: Schema.Natural })),
 })
-
-const COMPACTION_MESSAGE_TYPE = "model-compaction"
+type HandoffDetails = typeof HandoffDetails.Type
+const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 const PREVIEW_LINES = 20
 
 const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
@@ -179,12 +180,26 @@ const isMessageItem = Predicate.or(
 )
 
 /** Harness-authored user messages collapse to one line unless full detail is on. */
-const collapsedUserLabel = (customType: string): Option.Option<string> => {
+const collapsedUserLabel = (
+  customType: string,
+  handoff: Option.Option<HandoffDetails>,
+): Option.Option<string> => {
   if (customType === "goal-context") return Option.some("↻ goal continuation")
-  if (customType === "context-window") return Option.some("⇣ new context window")
+  if (customType === "context-window") return Option.some(windowLabel(handoff))
   if (customType === "model-change") return Option.some("⇄ model changed")
   return Option.none()
 }
+
+/** A handoff names what it summarized; a bare window says only that history left the view. */
+const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
+  handoff.pipe(
+    Option.flatMap((value) => Option.fromUndefinedOr(value.summarized)),
+    Option.match({
+      onNone: () => "⇣ new context window",
+      onSome: (summarized) =>
+        `⇣ context handoff · ${plural(summarized.count, "message")} summarized`,
+    }),
+  )
 
 function UserMessage(props: {
   content: string
@@ -192,12 +207,15 @@ function UserMessage(props: {
   interjection: boolean
   pendingMode?: "queued" | "steer"
   customType?: string
+  details?: unknown
   fullDetail: boolean
 }) {
   const { theme } = useTheme()
   const collapsedLabel = () =>
     Option.fromUndefinedOr(props.customType).pipe(
-      Option.flatMap(collapsedUserLabel),
+      Option.flatMap((customType) =>
+        collapsedUserLabel(customType, decodeHandoffDetails(props.details)),
+      ),
       Option.filter(() => !props.fullDetail),
     )
   const textColor = () => {
@@ -656,28 +674,6 @@ function SingleToolCall(props: {
   )
 }
 
-/** A compaction record folds to one line until the full level or the transcript view opens. */
-function CompactionCard(props: { content: string; details: unknown; open: boolean }) {
-  const { theme } = useTheme()
-  const sourceCount = () =>
-    Schema.decodeUnknownOption(CompactionDetails)(props.details).pipe(
-      Option.map((value) => value.sourceMessageIds.length),
-      Option.getOrElse(() => 0),
-    )
-  return (
-    <box marginTop={1} paddingLeft={2} flexDirection="column">
-      <text style={{ fg: theme.textMuted }}>
-        {formatCompactionLabel(sourceCount(), props.content.length)}
-      </text>
-      <Show when={props.open}>
-        <text>
-          <span style={{ fg: theme.textMuted, dim: true }}>{props.content}</span>
-        </text>
-      </Show>
-    </box>
-  )
-}
-
 interface MessageListProps {
   items: SessionItem[]
   disclosure: DisclosureLevel
@@ -697,15 +693,6 @@ export function MessageList(props: MessageListProps) {
           (() => {
             if (!isMessageItem(item)) {
               return <SessionEventIndicator event={item} />
-            }
-            if (item.metadata?.customType === COMPACTION_MESSAGE_TYPE) {
-              return (
-                <CompactionCard
-                  content={item.content}
-                  details={item.metadata.details}
-                  open={props.fullDetail === true || props.disclosure === "full"}
-                />
-              )
             }
             return (
               <Show
@@ -732,6 +719,7 @@ export function MessageList(props: MessageListProps) {
                   interjection={item._tag === "interjection-message"}
                   pendingMode={item.pendingMode}
                   customType={item.metadata?.customType}
+                  details={item.metadata?.details}
                   fullDetail={props.fullDetail === true}
                 />
               </Show>

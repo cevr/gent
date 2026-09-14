@@ -168,6 +168,8 @@ describe("Bun cell evaluation", () => {
         "const page = await context.read('m1', { offset: 2, limit: 5 }); `${page.echoed.id}:${page.echoed.offset}:${page.echoed.limit}`",
       )
       expect(read.display).toBe("m1:2:5")
+      const history = yield* kernel.evaluate("(await context.history({ limit: 3 })).echoed.limit")
+      expect(history.display).toBe("3")
       const compact = yield* kernel.evaluate(
         "await context.compact('keep paths'); (await context.newWindow()).name",
       )
@@ -175,6 +177,7 @@ describe("Bun cell evaluation", () => {
       expect(yield* Ref.get(names)).toEqual([
         "context.status",
         "context.read",
+        "context.history",
         "context.compact",
         "context.newWindow",
       ])

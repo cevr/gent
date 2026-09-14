@@ -69,7 +69,6 @@ const failingCompactor = Layer.succeed(
         new ModelCompactionError({
           modelId: request.modelId,
           reason: "SummaryGenerationFailed",
-          recoverable: true,
         }),
       ),
   }),
@@ -112,7 +111,7 @@ describe("context compaction degrade path", () => {
       expect(notices[0]?.error).toContain("older messages omitted")
       expect(result.events.some((event) => event._tag === "TurnCompleted")).toBe(true)
       expect(
-        result.durable.some((message) => message.metadata?.customType === "model-compaction"),
+        result.durable.some((message) => message.metadata?.customType === "context-window"),
       ).toBe(false)
       const last = result.durable.at(-1)
       expect(last?.role).toBe("assistant")

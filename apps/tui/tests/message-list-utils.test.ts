@@ -8,7 +8,6 @@ import {
   describeCellCode,
   formatActivityHeader,
   formatCellRowLabel,
-  formatCompactionLabel,
   formatPreviewFooter,
   formatRowCounts,
   formatAge,
@@ -381,10 +380,5 @@ describe("progressive disclosure helpers", () => {
     expect(preview.hidden).toBe(5)
     expect(formatPreviewFooter(preview.hidden)).toBe("… +5 lines (ctrl+o)")
     expect(previewOutput("   \n", 20)).toEqual({ lines: [], hidden: 0 })
-  })
-
-  test("a compaction label reports replaced messages and the summary token estimate", () => {
-    expect(formatCompactionLabel(12, 400)).toBe("⇣ Compacted 12 messages into ~100 tokens")
-    expect(formatCompactionLabel(1, 1)).toBe("⇣ Compacted 1 message into ~1 tokens")
   })
 })

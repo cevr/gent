@@ -144,7 +144,9 @@ export const AgentEvent = Schema.TaggedUnion({
     availableInputTokens: Schema.Natural,
     contextLimitTokens: Schema.Natural,
     omittedMessages: Schema.Natural,
-    compactedRevision: Schema.optional(Schema.NonEmptyString),
+    /** The handoff marker leading this window, when it carries a summary. */
+    handoffMessageId: Schema.optional(MessageId),
+    /** This projection wrote a handoff. */
     compacted: Schema.Boolean,
   },
   ToolCallStarted: {

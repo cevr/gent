@@ -266,7 +266,7 @@ type MessageWithMetadata = {
 }
 
 const isStandaloneMessage = (message: MessageWithMetadata): boolean =>
-  message.metadata?.customType === "model-compaction" || message.metadata?.hidden === true
+  message.metadata?.hidden === true
 
 const appendSessionEvent = (setStore: SetStoreFunction<SessionFeedStore>, event: SessionEvent) => {
   setStore(

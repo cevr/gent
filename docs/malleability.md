@@ -136,8 +136,9 @@ The current behavior is:
   and hidden panels do not each add a resize listener.
 - Retry events keep a historical resolved state. Stream start, completion,
   interruption, error, and idle transitions settle the visible retry label.
-- Live and buffered message events accept the labeled model-compaction record. A
-  native streamed assistant message remains separate from that summary record.
+- The context handoff marker is a durable user-role message that folds to one
+  line (`⇣ context handoff · N messages summarized`) until full detail opens
+  it. A native streamed assistant message remains separate from that marker.
 
 The behavior is covered by focused render and feed tests. The deterministic debug
 provider covers stream, retry, tool, and long-history fixtures. The current debug

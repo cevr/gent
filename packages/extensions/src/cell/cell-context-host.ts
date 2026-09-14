@@ -23,14 +23,23 @@ const ReadInput = Schema.Struct({
   limit: Schema.optional(Schema.Natural),
 })
 
+const DEFAULT_HISTORY_LIMIT = 50
+const MAXIMUM_HISTORY_LIMIT = 200
+const HISTORY_PREVIEW_CHARS = 120
+
+const HistoryInput = Schema.Struct({
+  offset: Schema.optional(Schema.Natural),
+  limit: Schema.optional(Schema.Natural),
+})
+
 const CompactInput = Schema.Struct({
   instructions: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
 })
 
 const WINDOW_NOTICE =
-  "Earlier context was dropped from the model view by context.newWindow(). It stays durable: use context.read(messageId) or context.read(toolCallId) to recover any of it."
+  "Earlier context was dropped from the model view by context.newWindow(). It stays durable: context.history({ offset, limit }) lists it and context.read(messageId) or context.read(toolCallId) recovers any of it."
 
-const ContextOperation = Schema.Literals(["status", "read", "compact", "newWindow"])
+const ContextOperation = Schema.Literals(["status", "history", "read", "compact", "newWindow"])
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
@@ -65,6 +74,22 @@ const locateText = Effect.fn("CellContextHost.locate")(function* (branchId: Bran
   return Option.none<{ readonly kind: string; readonly text: string }>()
 })
 
+/** One line of the branch's durable transcript: enough to decide what to `read`. */
+const historyEntry = (message: Message): Schema.Json => {
+  const text = messageText(message)
+  const base = {
+    id: message.id,
+    role: message.role,
+    chars: text.length,
+    preview: text.slice(0, HISTORY_PREVIEW_CHARS).replace(/\s+/g, " "),
+    createdAt: message.createdAt.toISOString(),
+  }
+  return Option.match(Option.fromUndefinedOr(message.metadata?.customType), {
+    onNone: (): Schema.Json => base,
+    onSome: (kind): Schema.Json => ({ ...base, kind }),
+  })
+}
+
 export interface ReadPage {
   readonly text: string
   readonly totalChars: number
@@ -87,7 +112,7 @@ export const pageText = (text: string, offset: number, limit: number): ReadPage 
   }
 }
 
-/** Serve one `context.*` host call. Reads are durable lookups; the rest schedule work for the next projection. */
+/** Serve one `context.*` host call. History and reads are durable lookups; the rest schedule work for the next projection. */
 export const handleContextCall = Effect.fn("CellContextHost.call")(function* (params: {
   readonly branchId: BranchId
   readonly name: string
@@ -111,9 +136,33 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
             (value.estimatedTokens / Math.max(1, value.contextLimitTokens)) * 100,
           ),
           omittedMessages: value.omittedMessages,
-          compactedRevision: value.compactedRevision ?? "",
+          handoffMessageId: value.handoffMessageId ?? "",
         }),
       })
+    }
+    case "history": {
+      const input = yield* Schema.decodeUnknownEffect(HistoryInput)(params.input).pipe(
+        Effect.mapError((cause) => failure(`context.history input is invalid: ${cause.message}`)),
+      )
+      const messages = yield* MessageStorage
+      const all = yield* messages
+        .listMessages(params.branchId)
+        .pipe(Effect.mapError((cause) => failure(`context.history failed: ${cause.message}`)))
+      const offset = Math.min(input.offset ?? 0, all.length)
+      const limit = Math.max(
+        1,
+        Math.min(input.limit ?? DEFAULT_HISTORY_LIMIT, MAXIMUM_HISTORY_LIMIT),
+      )
+      const page = all.slice(offset, offset + limit)
+      const reply: Schema.Json = {
+        branchId: params.branchId,
+        total: all.length,
+        offset,
+        nextOffset: offset + page.length,
+        done: offset + page.length >= all.length,
+        entries: page.map(historyEntry),
+      }
+      return reply
     }
     case "read": {
       const input = yield* Schema.decodeUnknownEffect(ReadInput)(params.input).pipe(

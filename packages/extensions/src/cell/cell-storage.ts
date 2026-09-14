@@ -15,7 +15,7 @@ import {
   type ToolCallRecoveryService,
   eraseResourceLayer,
 } from "@gent/core/extensions/branch-tools"
-import { InnerOperationReceipts, RetainedBindings } from "../compaction/tool-contracts.js"
+import { RetainedBindings } from "../compaction/tool-contracts.js"
 import { Effect, Layer, Option } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { CellExecution } from "./cell-execution.js"
@@ -88,11 +88,7 @@ const cellMigrations: FeatureMigrations = {
  * would be written to a store nothing reads back.
  */
 /** What the cell's storage installs. Core merges it without naming it. */
-export type CellStorageTags =
-  | DispatchingToolStorage
-  | InnerOperationReceipts
-  | RetainedBindings
-  | ToolCallRecoveryService
+export type CellStorageTags = DispatchingToolStorage | RetainedBindings | ToolCallRecoveryService
 
 const cellStorageLayer = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
@@ -104,33 +100,13 @@ const cellStorageLayer = <E, R>(
     Layer.provide(CellToolOperationStorage.Live, Layer.merge(base, interactionStorage)),
   )
   // The projections ship with the tables. Installing the cell's storage
-  // without the answers core reads from it would leave compaction silently
-  // reporting no receipts and no retained names.
+  // without the answers core reads from it would leave a handoff silently
+  // reporting no retained names.
   return Layer.provideMerge(
-    Layer.mergeAll(cellInnerOperationReceipts, cellRetainedBindings, cellToolCallRecovery),
+    Layer.mergeAll(cellRetainedBindings, cellToolCallRecovery),
     Layer.merge(tables, interactionStorage),
   )
 }
-
-/**
- * The cell's answer to core's inner-operation question.
- *
- * Compaction asks what a tool call dispatched; the cell's receipts know. This
- * projects them to the shape core reads, dropping the storage key it does not
- * need.
- */
-export const cellInnerOperationReceipts = Layer.effect(
-  InnerOperationReceipts,
-  Effect.gen(function* () {
-    const storage = yield* CellToolOperationStorage
-    return InnerOperationReceipts.of({
-      listForToolCall: (params) =>
-        storage
-          .listForToolCall(params)
-          .pipe(Effect.map((rows) => rows.map(({ operation }) => operation))),
-    })
-  }),
-)
 
 /**
  * The cell's answer to core's retained-names question: its namespace bindings.

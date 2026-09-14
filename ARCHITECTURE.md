@@ -85,6 +85,16 @@ updates this list in the same commit.
 16. **RPC is the application transport.** No parallel REST surface. Receipt:
     `apps/server/src/`.
 
+17. **Context leaves the window as a handoff, never as a loss.** When the
+    window overflows or the model asks, the history before the newest user
+    message is summarised into one durable user-role marker that names the
+    session, the branch, and the id range it replaced; every replaced message
+    stays readable from the cell through `context.history` and `context.read`.
+    A summary that cannot be produced degrades to truncation with a visible
+    notice. Receipts: `packages/core/src/runtime/model-context-window.ts`,
+    `packages/core/src/runtime/agent/turn-source.ts`,
+    `packages/extensions/src/compaction/model-compaction.ts`.
+
 ### Known gaps
 
 Kept here so the next pass starts from them, not from a fresh survey. Each
@@ -98,9 +108,10 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpcs/session.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
-- **Compaction is not yet re-measured after the spill.** Tool-result spill
-  landed first; whether `packages/extensions/src/compaction/` shrinks is the
-  next measurement (ledger open question 3).
+- **Compaction is measured on long sessions only by hand.** The handoff
+  count (`ModelContextProjected.compacted`) after the spill comes from gamut
+  runs, not from a test; the receipt in
+  `plans/core-extension-reduction-receipt.md` records the last measurement.
 - **`agent-runner.ts` and `agent-loop.handlers.ts` are actor command
   handlers, not the stream fold.** They did not shrink with R7; a later pass
   may collapse them against the actor protocol.
@@ -383,9 +394,11 @@ Shape:
 - Context compaction is a seam, not a core feature. The loop checks the window,
   and with no `ModelContextCompactor` process resource installed it truncates
   and reports the omission. The `@gent/compaction` extension installs the
-  summariser; core keeps only the durable summary record shape that status and
-  the TUI read. A compactor that fails recoverably degrades to truncation with a
-  visible notice; an integrity failure still stops the turn.
+  summariser; core keeps only the window marker shape (`context-window`,
+  optional `summarized` range) that status and the TUI read. A compactor that
+  fails degrades to truncation with a visible notice. The marker's notice
+  names the session id, the branch id, and the replaced id range so the model
+  can page the replaced history from the cell.
 - Project instructions are an extension, not a profile field. `@gent/agents`
   reads `AGENTS.md` (or `CLAUDE.md`) from the gent home, the project and the
   project-local `.gent/` on every turn and contributes the `project-instructions`
@@ -404,9 +417,9 @@ Shape:
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in
-  the durable summary details. Summary reuse retains that receipt without another
-  model call. Failed attempts and crashes before summary persistence still need
-  durable attempt accounting; this metadata alone does not enforce a budget.
+  the handoff marker's `summarized` details. Failed attempts and crashes before
+  marker persistence still need durable attempt accounting; this metadata alone
+  does not enforce a budget.
 - interactions are cold machine states, not blocked fibers
 - machine inspection events are published as diagnostics
 

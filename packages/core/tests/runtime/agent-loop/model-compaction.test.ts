@@ -1,8 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Option, Predicate, Schema, Stream } from "effect"
+import { Effect, Layer, Option, Predicate, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { Message, dateFromMillis } from "../../../src/domain/message"
+import { windowDetails } from "../../../src/runtime/model-context-window"
 import {
   LanguageModelLayers,
   finishPart,
@@ -10,7 +11,6 @@ import {
 } from "../../../src/test-utils/language-model"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { ModelCompactionDetails } from "../../../../extensions/src/compaction/summary-record"
 import { ModelContextCompactorLive } from "../../../../extensions/tests/helpers/test-preset"
 import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "./helpers"
 
@@ -25,7 +25,7 @@ const promptText = (prompt: Prompt.Prompt): string =>
     .join("\n")
 
 describe("native model compaction integration", () => {
-  it.live("summarizes a bounded old range before the native provider turn", () => {
+  it.live("hands off the history before the turn and keeps every message durable", () => {
     const sessionId = SessionId.make("native-compaction-session")
     const branchId = BranchId.make("native-compaction-branch")
     const oldMessages = Array.from({ length: 12 }, (_, index) =>
@@ -63,19 +63,28 @@ describe("native model compaction integration", () => {
         expect(providerCalls).toBe(2)
         expect(Option.isSome(mainPrompt)).toBe(true)
         if (Option.isNone(mainPrompt)) return yield* Effect.die("main prompt missing")
-        expect(promptText(mainPrompt.value)).toContain("Historical context summary")
-        expect(promptText(mainPrompt.value)).toContain("native current turn")
+        const main = promptText(mainPrompt.value)
+        expect(main).toContain("Context handoff")
+        expect(main).toContain("native bounded summary")
+        expect(main).toContain(`Session ${sessionId}, branch ${branchId}`)
+        expect(main).toContain("native current turn")
+        // The handoff replaced the old messages in the model view.
+        expect(main).not.toContain("native-old-1 xxxx")
 
         const durable = yield* storage.listMessages(branchId)
-        expect(
-          durable.filter((message) => message.metadata?.customType === "model-compaction"),
-        ).toHaveLength(1)
-        const summary = durable.find(
-          (message) => message.metadata?.customType === "model-compaction",
+        const markers = durable.filter(
+          (message) => message.metadata?.customType === "context-window",
         )
-        expect(Predicate.isNotUndefined(summary)).toBe(true)
-        if (Predicate.isUndefined(summary)) return yield* Effect.die("summary missing")
-        expect(Schema.is(ModelCompactionDetails)(summary.metadata?.details)).toBe(true)
+        expect(markers).toHaveLength(1)
+        const marker = markers[0]
+        if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
+        const details = Option.getOrThrow(windowDetails(marker))
+        expect(details.summarized).toMatchObject({
+          firstMessageId: "native-old-1",
+          lastMessageId: "native-old-12",
+          count: 12,
+        })
+        expect(main).toContain("native-old-1 … native-old-12")
         expect(durable.some((message) => message.id === oldMessages[0]?.id)).toBe(true)
       }),
     ).pipe(

@@ -24,6 +24,18 @@ const decodeReply = Schema.decodeUnknownSync(
     projected: Schema.optional(Schema.Boolean),
     percent: Schema.optional(Schema.Finite),
     scheduled: Schema.optional(Schema.String),
+    total: Schema.optional(Schema.Finite),
+    entries: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          role: Schema.String,
+          chars: Schema.Finite,
+          preview: Schema.String,
+          kind: Schema.optional(Schema.String),
+        }),
+      ),
+    ),
   }),
 )
 
@@ -86,6 +98,27 @@ describe("cell context host", () => {
       )
       expect(after.projected).toBe(true)
       expect(after.percent).toBe(42)
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("history lists the branch in order with previews and pages by offset", () =>
+    Effect.gen(function* () {
+      yield* seedTranscript
+      const first = decodeReply(
+        yield* handleContextCall({ branchId, name: "context.history", input: { limit: 1 } }),
+      )
+      expect(first.total).toBe(2)
+      expect(first.nextOffset).toBe(1)
+      expect(first.done).toBe(false)
+      expect(first.entries?.map((entry) => entry.id)).toEqual(["m-long"])
+      expect(first.entries?.[0]?.role).toBe("assistant")
+      expect(first.entries?.[0]?.preview.startsWith("line 1 line 2")).toBe(true)
+      expect(first.entries?.[0]?.chars).toBeGreaterThan(200)
+      const rest = decodeReply(
+        yield* handleContextCall({ branchId, name: "context.history", input: { offset: 1 } }),
+      )
+      expect(rest.entries?.map((entry) => entry.id)).toEqual(["m-tool"])
+      expect(rest.done).toBe(true)
     }).pipe(Effect.provide(layer)),
   )
 

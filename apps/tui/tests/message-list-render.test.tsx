@@ -144,16 +144,19 @@ const bashMessage = (id: string, lines: number): Message => ({
 
 const compactionMessage = (): Message => ({
   _tag: "regular-message",
-  id: "model-compaction:b1:r2",
-  role: "assistant",
-  content: "Historical context summary: the user renamed the loader.",
+  id: "context-handoff:b1:m3",
+  role: "user",
+  content: "Context handoff: the user renamed the loader.",
   reasoning: "",
   images: [],
   createdAt: 0,
   toolCalls: absent,
   metadata: {
-    customType: "model-compaction",
-    details: { sourceMessageIds: ["m1", "m2", "m3"], sourceRevision: "r1" },
+    customType: "context-window",
+    details: {
+      keepFromMessageId: "m4",
+      summarized: { firstMessageId: "m1", lastMessageId: "m3", count: 3 },
+    },
   },
 })
 
@@ -702,7 +705,7 @@ describe("FX transcript treatment", () => {
     }),
   )
 
-  it.live("a compaction record folds to one line until the full level opens it", () =>
+  it.live("a context handoff folds to one line until full detail is on", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [compactionMessage()]
       const setup = yield* Effect.promise(() =>
@@ -721,13 +724,20 @@ describe("FX transcript treatment", () => {
                 syntaxStyle={syntaxStyle}
                 streaming={false}
               />
+              <MessageList
+                items={items}
+                disclosure="collapsed"
+                fullDetail={true}
+                syntaxStyle={syntaxStyle}
+                streaming={false}
+              />
             </>
           ),
           { width: 100, height: 20 },
         ),
       )
       const frame = renderFrame(setup)
-      expect(frame.match(/⇣ Compacted 3 messages into ~14 tokens/g)?.length).toBe(2)
+      expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
       expect(frame.match(/renamed the loader/g)?.length).toBe(1)
     }),
   )

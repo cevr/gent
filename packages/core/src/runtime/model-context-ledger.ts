@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
+import { MessageId } from "../domain/ids.js"
 
 /** What the model last saw as its context, recorded after each projection. */
 const ModelContextStatus = Schema.Struct({
@@ -6,8 +7,8 @@ const ModelContextStatus = Schema.Struct({
   availableInputTokens: Schema.Natural,
   contextLimitTokens: Schema.Natural,
   omittedMessages: Schema.Natural,
-  /** Revision of the newest summary in the projection; absent when nothing is compacted. */
-  compactedRevision: Schema.optional(Schema.String),
+  /** The handoff marker leading the window; absent when the window carries no summary. */
+  handoffMessageId: Schema.optional(MessageId),
 })
 type ModelContextStatus = typeof ModelContextStatus.Type
 

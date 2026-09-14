@@ -1,41 +1,66 @@
 import { Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId } from "../domain/ids.js"
 import { Message } from "../domain/message.js"
+import { ModelId } from "../domain/model.js"
 
-/** Custom type of the durable marker a NewWindow directive leaves in the transcript. */
+/** Custom type of the durable marker that starts a context window. */
 export const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
+
+/** The history a handoff marker summarizes; every message in it stays durable and readable by id. */
+const ContextHandoffSummary = Schema.Struct({
+  firstMessageId: MessageId,
+  lastMessageId: MessageId,
+  count: Schema.Natural,
+  modelId: Schema.optional(ModelId),
+  usage: Schema.optional(UsageSchema),
+})
+type ContextHandoffSummary = typeof ContextHandoffSummary.Type
 
 const ContextWindowDetails = Schema.TaggedStruct(CONTEXT_WINDOW_MESSAGE_TYPE, {
   /** The first durable message the model still sees; everything earlier leaves the projection. */
   keepFromMessageId: MessageId,
+  /** Present when the marker's notice carries a summary of what left the window. */
+  summarized: Schema.optional(ContextHandoffSummary),
 })
 type ContextWindowDetails = typeof ContextWindowDetails.Type
 
 const isWindowDetails = Schema.is(ContextWindowDetails)
 
-/** The marker is a user message so every provider accepts it at the head of the window. */
+/**
+ * The marker is a user message so every provider accepts it at the head of the
+ * window. A bare window carries the issuer's notice; a handoff carries the
+ * summary and the ids that let the model read what it replaced.
+ */
 export const windowMarkerMessage = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly keepFromMessageId: MessageId
   readonly notice: string
+  readonly summarized?: ContextHandoffSummary
   readonly createdAt: Date
-}) =>
-  Message.cases.regular.make({
-    id: MessageId.make(`context-window:${params.branchId}:${params.keepFromMessageId}`),
+}) => {
+  let kind = "context-window"
+  if (Predicate.isNotUndefined(params.summarized)) kind = "context-handoff"
+  return Message.cases.regular.make({
+    id: MessageId.make(`${kind}:${params.branchId}:${params.keepFromMessageId}`),
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "user",
     parts: [Prompt.textPart({ text: params.notice })],
     metadata: {
       customType: CONTEXT_WINDOW_MESSAGE_TYPE,
-      details: ContextWindowDetails.make({ keepFromMessageId: params.keepFromMessageId }),
+      details: ContextWindowDetails.make({
+        keepFromMessageId: params.keepFromMessageId,
+        summarized: params.summarized,
+      }),
     },
     createdAt: params.createdAt,
   })
+}
 
-const windowDetails = (message: Message): Option.Option<ContextWindowDetails> => {
+export const windowDetails = (message: Message): Option.Option<ContextWindowDetails> => {
   if (message.metadata?.customType !== CONTEXT_WINDOW_MESSAGE_TYPE) return Option.none()
   const details = message.metadata.details
   if (!isWindowDetails(details)) return Option.none()
@@ -71,4 +96,15 @@ export const messagesInCurrentWindow = (
     return [marker, ...messages.slice(anchor).filter((message) => message.id !== marker.id)]
   }
   return messages
+}
+
+/** The id of the handoff marker leading a window, when the window starts with a summary. */
+export const currentHandoffId = (window: ReadonlyArray<Message>): Option.Option<MessageId> => {
+  const first = Option.fromUndefinedOr(window[0])
+  return Option.flatMap(first, (marker) =>
+    Option.flatMap(windowDetails(marker), (details) => {
+      if (Predicate.isUndefined(details.summarized)) return Option.none()
+      return Option.some(marker.id)
+    }),
+  )
 }

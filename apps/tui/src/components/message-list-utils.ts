@@ -202,7 +202,7 @@ export function describeCellCode(code: string): ReadonlyArray<string> {
   return collapseRepeats(found.map((entry) => entry.label))
 }
 
-const plural = (count: number, singular: string, pluralForm = `${singular}s`) => {
+export const plural = (count: number, singular: string, pluralForm = `${singular}s`) => {
   if (count === 1) return `${count} ${singular}`
   return `${count} ${pluralForm}`
 }
@@ -321,9 +321,3 @@ export function previewOutput(text: string, maxLines = 20): OutputPreview {
 }
 
 export const formatPreviewFooter = (hidden: number) => `… +${plural(hidden, "line")} (ctrl+o)`
-
-/** One line for a compaction record: what it replaced and roughly what it costs now. */
-export function formatCompactionLabel(sourceMessages: number, summaryChars: number): string {
-  const tokens = Math.ceil(summaryChars / 4)
-  return `⇣ Compacted ${plural(sourceMessages, "message")} into ~${tokens} tokens`
-}

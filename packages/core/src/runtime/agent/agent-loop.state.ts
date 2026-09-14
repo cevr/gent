@@ -22,6 +22,7 @@ import {
 import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
+  MessageId,
 } from "../../domain/ids.js"
 
 export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
@@ -364,8 +365,8 @@ export const ModelContextMetrics = Schema.Struct({
   availableInputTokens: Schema.Natural,
   contextLimitTokens: Schema.Natural,
   omittedMessages: Schema.Natural,
-  /** Newest summary in the current projection; absent after a summary-free window. */
-  compactedRevision: Schema.optional(Schema.NonEmptyString),
+  /** The handoff marker leading the current window; absent after a summary-free window. */
+  handoffMessageId: Schema.optional(MessageId),
   /** Projections on this branch that compacted history so far. */
   compactions: Schema.Natural,
 })

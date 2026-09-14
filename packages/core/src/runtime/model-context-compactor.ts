@@ -1,12 +1,12 @@
 /**
  * The context compaction seam.
  *
- * The loop keeps the window check and the plain omission fallback. Whether
- * older history is summarised, with what prompt, and what the summary records
- * belongs to whichever extension installs a `ModelContextCompactor` as a
- * process resource. With none installed, an overflowing transcript is simply
- * truncated. The shape of the durable summary record belongs to the
- * extension; the loop reads only the result and the error's `recoverable` flag.
+ * The loop decides when a window hands off: on overflow, or when the model
+ * asks. It gives the history that leaves the window to whichever extension
+ * installs a `ModelContextCompactor` as a process resource and gets back the
+ * notice the handoff marker carries. With none installed, an overflowing
+ * transcript is simply truncated. The loop owns the marker, its ids, and the
+ * transaction; the extension owns the summary prompt and the notice text.
  *
  * @module
  */
@@ -14,57 +14,39 @@
 import { Context, type Effect, Schema, type Scope } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { ProviderAuthError } from "../domain/driver.js"
-import type { EventStoreError } from "../domain/event.js"
+import { UsageSchema } from "../domain/event.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import { Message } from "../domain/message.js"
+import type { Message } from "../domain/message.js"
 import { ModelId } from "../domain/model.js"
 import type { ProviderError } from "../domain/provider-error.js"
-import type { StorageError } from "../domain/storage-error.js"
-import type { MessageStorage } from "../storage/message-storage.js"
-import {
-  type ModelContextBudget,
-  ModelContextProjection,
-  type ModelContextProjectionError,
-} from "./model-context.js"
+import type { ModelContextBudget } from "./model-context.js"
 
-/** Why a summary was not produced; `recoverable` says whether the loop may go on without it. */
+/** Why a summary was not produced. Every failure degrades to a truncated window. */
 export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
   "ModelCompactionError",
   {
     modelId: ModelId,
     reason: Schema.NonEmptyString,
-    recoverable: Schema.Boolean,
   },
 ) {}
 
-export const ModelCompactionResult = Schema.Struct({
-  messages: Schema.Array(Message),
-  projection: ModelContextProjection,
-  compacted: Schema.Boolean,
-  /** Newest summary revision left in the window, for status reporting. */
-  revision: Schema.optional(Schema.String),
+/** What the handoff marker carries: the notice the model reads, and the receipt of producing it. */
+export const CompactionSummary = Schema.Struct({
+  notice: Schema.NonEmptyString,
+  modelId: ModelId,
+  usage: Schema.optional(UsageSchema),
 })
-export type ModelCompactionResult = typeof ModelCompactionResult.Type
-
-/** Stable digest of a message range; the loop supplies the platform hash. */
-export type RevisionHash = (input: string) => string
-
-/** Persists one summary record once and delivers its event; the loop owns the transaction. */
-export type SummaryPersister = (
-  message: Message,
-) => Effect.Effect<Message, StorageError | EventStoreError>
+export type CompactionSummary = typeof CompactionSummary.Type
 
 export interface CompactionRequest {
   readonly modelId: ModelId
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  /** The current window, oldest first, with earlier summaries in place. */
-  readonly messages: ReadonlyArray<Message>
+  /** The history leaving the window, oldest first, an earlier handoff marker included. */
+  readonly history: ReadonlyArray<Message>
   readonly budget: ModelContextBudget
-  readonly hash: RevisionHash
-  readonly persistSummary: SummaryPersister
-  /** Summarize even when the projection fits; the model asked for it. */
-  readonly force?: { readonly instructions?: string }
+  /** What the model asked the summary to focus on, when it asked. */
+  readonly instructions?: string
   /** The admitted model for a summary bounded to `maxOutputTokens`. */
   readonly summaryModel: (
     maxOutputTokens: number,
@@ -74,11 +56,7 @@ export interface CompactionRequest {
 interface ModelContextCompactorService {
   readonly compact: (
     request: CompactionRequest,
-  ) => Effect.Effect<
-    ModelCompactionResult,
-    ModelCompactionError | ModelContextProjectionError | StorageError | EventStoreError,
-    MessageStorage | Scope.Scope
-  >
+  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope>
 }
 
 /** Installed by an extension as a process resource; absent when nothing summarises. */

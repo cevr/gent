@@ -91,11 +91,9 @@ export { partToText } from "../domain/message-part-display.js"
 // Implementing the context compaction seam.
 export {
   type CompactionRequest,
+  CompactionSummary,
   ModelCompactionError,
-  ModelCompactionResult,
   ModelContextCompactor,
-  type RevisionHash,
-  type SummaryPersister,
 } from "../runtime/model-context-compactor.js"
 export {
   ModelContextBudget,

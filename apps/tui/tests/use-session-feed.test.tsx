@@ -99,17 +99,16 @@ const makeUserMessage = (sessionId: SessionId, branchId: BranchId): Message =>
 
 const makeCompactionMessage = (sessionId: SessionId, branchId: BranchId): Message =>
   Message.cases.regular.make({
-    id: MessageId.make("model-compaction:branch-feed-compaction:revision"),
+    id: MessageId.make("context-handoff:branch-feed-compaction:anchor"),
     sessionId,
     branchId,
-    role: "assistant",
-    parts: [Prompt.textPart({ text: "Historical context summary: stored summary" })],
+    role: "user",
+    parts: [Prompt.textPart({ text: "Context handoff: stored summary" })],
     metadata: {
-      customType: "model-compaction",
+      customType: "context-window",
       details: {
-        _tag: "model-compaction",
-        sourceMessageIds: [],
-        sourceRevision: "revision",
+        keepFromMessageId: "anchor",
+        summarized: { firstMessageId: "m1", lastMessageId: "m3", count: 3 },
       },
     },
     createdAt: dateFromMillis(0),
@@ -840,11 +839,11 @@ describe("useSessionFeed", () => {
       expect(feed.value.messages()).toHaveLength(2)
       const summary = feed.value
         .messages()
-        .find((message) => message.metadata?.customType === "model-compaction")
+        .find((message) => message.metadata?.customType === "context-window")
       const response = feed.value
         .messages()
         .find((message) => message.content.includes("native response"))
-      expect(summary?.content).toBe("Historical context summary: stored summary")
+      expect(summary?.content).toBe("Context handoff: stored summary")
       expect(response?.id).toBeDefined()
       expect(response?.id).not.toBe(summary?.id)
       expect(response?.content).toBe("native response")
@@ -932,7 +931,7 @@ describe("useSessionFeed", () => {
       const response = feed.value
         .messages()
         .find((message) => message.content.includes("native response"))
-      expect(summary?.content).toBe("Historical context summary: stored summary")
+      expect(summary?.content).toBe("Context handoff: stored summary")
       expect(response?.id).toBeDefined()
       expect(response?.id).not.toBe(summary?.id)
       expect(response?.content).toBe("native response")
@@ -964,12 +963,8 @@ describe("useSessionFeed", () => {
           interrupted: true,
         }),
       )
-      const compactionEnvelope = makeEnvelope(
-        3,
-        AgentEvent.cases.MessageReceived.make({
-          message: makeCompactionMessage(sessionId, branchId),
-        }),
-      )
+      // The handoff marker is a durable user message, so a reload reads it
+      // from the snapshot rather than from the buffered event stream.
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
@@ -977,12 +972,13 @@ describe("useSessionFeed", () => {
           session: active,
           client: createMockClient({
             session: {
-              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
+              getSnapshot: () =>
+                Effect.succeed({
+                  ...snapshotFor(sessionId, branchId, 3),
+                  messages: [projectMessage(makeCompactionMessage(sessionId, branchId), [])],
+                }),
               events: () =>
-                Stream.concat(
-                  Stream.make(retryEnvelope, interruptedEnvelope, compactionEnvelope),
-                  Stream.never,
-                ),
+                Stream.concat(Stream.make(retryEnvelope, interruptedEnvelope), Stream.never),
               watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
             },
           }),
@@ -1018,7 +1014,7 @@ describe("useSessionFeed", () => {
           feed.value.items().some((item) => item._tag === "interruption") &&
           feed.value
             .messages()
-            .some((message) => message.metadata?.customType === "model-compaction"),
+            .some((message) => message.metadata?.customType === "context-window"),
       )
       if (Option.isNone(feed)) return yield* Effect.die("feed did not initialize")
       const retry = feed.value.items().find((item) => item._tag === "retrying")

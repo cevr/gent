@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
+import { MessageId } from "@gent/core/protocol"
 import { RGBA } from "@opentui/core"
 import { buildTopRightLabels } from "../src/utils/session-labels"
 
@@ -50,11 +51,11 @@ describe("buildTopRightLabels", () => {
         contextLimitTokens: 200_000,
         omittedMessages: 3,
         compactions: 2,
-        compactedRevision: "1a2b3c4d",
+        handoffMessageId: MessageId.make("context-handoff:b:m"),
       },
     })
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted · compacted r1a2b3c4d")
+    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted · compacted")
     expect(labels[0]!.color).toBe(theme.textMuted)
   })
 
@@ -72,22 +73,7 @@ describe("buildTopRightLabels", () => {
     expect(labels[0]!.color).toBe(theme.error)
   })
 
-  test("shows a short revision without changing the full snapshot value", () => {
-    const revision = "59c5b2477afb478332e5b1fde56be33c10aa27dc9a50aa680c8a6fbe1e164328"
-    const context = {
-      estimatedTokens: 489,
-      availableInputTokens: 1036883,
-      contextLimitTokens: 1050000,
-      omittedMessages: 0,
-      compactions: 1,
-      compactedRevision: revision,
-    }
-    const labels = buildTopRightLabels(absent, 0, absent, theme, { context })
-    expect(labels[0]?.text).toBe("ctx 0% · compacted r59c5b247")
-    expect(context.compactedRevision).toBe(revision)
-  })
-
-  test("a summary-free projection does not label the old compaction count as a revision", () => {
+  test("a summary-free projection does not label the old compaction count", () => {
     const labels = buildTopRightLabels(absent, 0, absent, theme, {
       context: {
         estimatedTokens: 1000,

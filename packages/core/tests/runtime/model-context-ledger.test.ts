@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import { MessageId } from "../../src/domain/ids"
 import { Effect, Option } from "effect"
 import { ContextDirective, ModelContextLedger } from "../../src/runtime/model-context-ledger"
 
@@ -18,11 +19,11 @@ describe("model context ledger", () => {
         availableInputTokens: 80,
         contextLimitTokens: 100,
         omittedMessages: 2,
-        compactedRevision: "r2",
+        handoffMessageId: MessageId.make("context-handoff:b:m"),
       })
       const status = Option.getOrThrow(yield* ledger.status)
       expect(status.estimatedTokens).toBe(20)
-      expect(status.compactedRevision).toBe("r2")
+      expect(status.handoffMessageId).toBe(MessageId.make("context-handoff:b:m"))
     }),
   )
 

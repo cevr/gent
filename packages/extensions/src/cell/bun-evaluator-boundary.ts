@@ -162,6 +162,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     )
   const context = {
     status: () => contextCall("status", {}),
+    history: (options: { offset?: number; limit?: number } = {}) =>
+      contextCall("history", { ...options }),
     read: (id: string, options: { offset?: number; limit?: number } = {}) =>
       contextCall("read", { id: String(id), ...options }),
     compact: (instructions?: string) => {

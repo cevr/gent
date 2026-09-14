@@ -10,8 +10,10 @@ import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import type { Message } from "@gent/core-internal/domain/message.js"
 import { CellTool } from "../../src/cell/cell-tool.js"
 import { CompactionExtension } from "../../src/compaction/index.js"
-import { ModelCompactionDetails } from "../../src/compaction/summary-record.js"
-import { CONTEXT_WINDOW_MESSAGE_TYPE } from "@gent/core-internal/runtime/model-context-window.js"
+import {
+  CONTEXT_WINDOW_MESSAGE_TYPE,
+  windowDetails,
+} from "@gent/core-internal/runtime/model-context-window.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
@@ -30,7 +32,7 @@ const windowMarkers = (items: ReadonlyArray<Message>) =>
 
 describe.skipIf(process.platform !== "darwin")("model context directives from a cell", () => {
   it.scopedLive(
-    "a reused summary keeps its revision until a new context window clears it",
+    "a handoff leads the window until a bare context window replaces it",
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
@@ -81,23 +83,23 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
           client.message.list({ branchId }),
           hasReply("after compaction"),
         )
-        const details = Option.getOrThrow(
+        const handoff = Option.getOrThrow(
           Option.fromUndefinedOr(
-            compacted.find((message) => message.metadata?.customType === "model-compaction")
-              ?.metadata?.details,
+            windowMarkers(compacted).find((m) => Option.isSome(windowDetails(m))),
           ),
         )
-        const summary = yield* Schema.decodeUnknownEffect(ModelCompactionDetails)(details)
+        const details = Option.getOrThrow(windowDetails(handoff))
+        expect(details.summarized?.count).toBeGreaterThan(0)
         const afterCompaction = yield* client.session.getSnapshot({ sessionId, branchId })
         expect(afterCompaction.metrics.context).toMatchObject({
-          compactedRevision: summary.sourceRevision,
+          handoffMessageId: handoff.id,
           compactions: 1,
         })
         yield* client.message.send({ sessionId, branchId, content: "reuse the summary" })
         yield* waitFor(client.message.list({ branchId }), hasReply("summary reused"))
         const reused = yield* client.session.getSnapshot({ sessionId, branchId })
         expect(reused.metrics.context).toMatchObject({
-          compactedRevision: summary.sourceRevision,
+          handoffMessageId: handoff.id,
           compactions: 1,
         })
         yield* client.message.send({ sessionId, branchId, content: "open a new window" })
@@ -105,26 +107,25 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
           client.message.list({ branchId }),
           hasReply("after window"),
         )
+        // The handoff marker and the bare window marker are both durable.
         const markers = windowMarkers(afterFirst)
-        expect(markers).toHaveLength(1)
-        // The marker anchors on the user message that started this turn.
+        expect(markers).toHaveLength(2)
+        // The new marker anchors on the user message that started this turn.
         const anchor = afterFirst.find(
           (message) => message.role === "user" && hasReply("open a new window")([message]),
         )
-        expect(markers[0]?.metadata?.details).toMatchObject({ keepFromMessageId: anchor?.id })
+        expect(markers[1]?.metadata?.details).toMatchObject({ keepFromMessageId: anchor?.id })
 
         yield* client.message.send({ sessionId, branchId, content: "and again" })
         const afterSecond = yield* waitFor(
           client.message.list({ branchId }),
           hasReply("second turn"),
         )
-        expect(windowMarkers(afterSecond)).toHaveLength(1)
+        expect(windowMarkers(afterSecond)).toHaveLength(2)
         const windowed = yield* client.session.getSnapshot({ sessionId, branchId })
-        expect(windowed.metrics.context?.compactedRevision).toBeUndefined()
+        expect(windowed.metrics.context?.handoffMessageId).toBeUndefined()
         expect(windowed.metrics.context?.compactions).toBe(1)
-        expect(
-          afterSecond.some((message) => message.metadata?.customType === "model-compaction"),
-        ).toBe(true)
+        expect(afterSecond.some((message) => message.id === handoff.id)).toBe(true)
         yield* controls.assertDone
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
@@ -227,7 +228,7 @@ describe.skipIf(process.platform !== "darwin")("model context directives from a 
           )
           expect(windowMarkers(messages)).toHaveLength(0)
           expect(
-            messages.filter((message) => message.metadata?.customType === "model-compaction"),
+            messages.filter((message) => message.metadata?.customType === "context-window"),
           ).toHaveLength(0)
           expect(yield* controls.callCount).toBe(3)
           yield* controls.assertDone

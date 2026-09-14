@@ -1,4 +1,4 @@
-import { Option } from "effect"
+import { Option, Predicate } from "effect"
 import type { RGBA } from "@opentui/core"
 import type { BorderLabelItem } from "./border-segments"
 import { formatTokens } from "./format-tool"
@@ -17,7 +17,7 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   return theme.textMuted
 }
 
-/** `ctx 42% · 3 omitted · compacted r1a2b3c4d`: percent of the model's input budget, then what the projection dropped. */
+/** `ctx 42% · 3 omitted · compacted`: percent of the model's input budget, then what the projection dropped. */
 const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): BorderLabelItem => {
   const pct = Math.min(
     100,
@@ -25,8 +25,7 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
   )
   const parts = [`ctx ${pct}%`]
   if (context.omittedMessages > 0) parts.push(`${context.omittedMessages} omitted`)
-  const revision = Option.fromUndefinedOr(context.compactedRevision)
-  if (Option.isSome(revision)) parts.push(`compacted r${revision.value.slice(0, 8)}`)
+  if (Predicate.isNotUndefined(context.handoffMessageId)) parts.push("compacted")
   return { text: parts.join(" · "), color: pressureColor(pct, theme) }
 }
 
