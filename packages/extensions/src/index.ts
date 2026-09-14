@@ -12,7 +12,6 @@ import {
 import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import { CellExtension } from "./cell/cell-extension.js"
 import { CompactionExtension, ModelContextCompactorResource } from "./compaction/index.js"
-import { InstructionsExtension } from "./instructions/index.js"
 import { CellBranchTools } from "./cell/cell-storage.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate/delegate-tool.js"
@@ -32,9 +31,7 @@ import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
 import { GrepTool } from "./fs-tools/grep.js"
 import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
-import { WebFetchTool } from "./network-tools/webfetch.js"
 import { WebSearchTool } from "./network-tools/websearch.js"
-import { SearchSessionsTool } from "./session-tools/search-sessions.js"
 import { ReadSessionTool } from "./session-tools/read-session.js"
 import { AskUserTool } from "./interaction-tools/ask-user.js"
 import { PromptTool } from "./interaction-tools/prompt.js"
@@ -89,7 +86,7 @@ export const NetworkToolsExtension = defineExtension({
   id: "@gent/network-tools",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", WebFetchTool, WebSearchTool)
+    yield* host.register("tool", WebSearchTool)
   }),
 })
 
@@ -97,7 +94,7 @@ export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", SearchSessionsTool, ReadSessionTool, RenameSessionTool)
+    yield* host.register("tool", ReadSessionTool, RenameSessionTool)
     yield* host.on("systemPrompt", (input) => {
       if (input.interactive === false) {
         return Effect.succeed(input.basePrompt)
@@ -120,7 +117,6 @@ export const InteractionToolsExtension = defineExtension({
 export {
   CompactionExtension,
   ModelContextCompactorResource,
-  InstructionsExtension,
   ExecToolsExtension,
   DelegateExtension,
   AgentsExtension,
@@ -145,7 +141,6 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner 
   [
     CellExtension,
     CompactionExtension,
-    InstructionsExtension,
     HandoffExtension,
     GoalExtension,
     BtwExtension,

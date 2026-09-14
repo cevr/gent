@@ -48,7 +48,6 @@ const createParentTurnMessages = (
   iteration: number,
   delegateToolCallId: ToolCallId,
   reviewToolCallId: ToolCallId,
-  searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
   nowMillis: number,
 ) =>
@@ -74,12 +73,6 @@ const createParentTurnMessages = (
           id: reviewToolCallId,
           name: "review",
           params: { description: `Review debug cycle ${iteration}` },
-          providerExecuted: false,
-        }),
-        Prompt.toolCallPart({
-          id: searchSessionsToolCallId,
-          name: "search_sessions",
-          params: { query: "tool renderer" },
           providerExecuted: false,
         }),
         Prompt.toolCallPart({
@@ -139,17 +132,6 @@ const createParentTurnMessages = (
               severity: "medium",
               type: "bug",
               text: "Pending steer badges should disappear as soon as the interjection flushes.",
-            },
-          ],
-        }),
-        makeJsonResult(searchSessionsToolCallId, "search_sessions", {
-          totalMatches: 2,
-          sessions: [
-            {
-              sessionId: "019debug1",
-              name: "tui renderer cleanup",
-              lastActivity: "2026-03-22T18:30:00.000Z",
-              excerpts: ["tool rendering in the TUI is a bit broken"],
             },
           ],
         }),
@@ -318,7 +300,6 @@ const persistDebugTurn = (
   iteration: number,
   delegateToolCallId: ToolCallId,
   reviewToolCallId: ToolCallId,
-  searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
 ) =>
   Effect.gen(function* () {
@@ -330,7 +311,6 @@ const persistDebugTurn = (
       iteration,
       delegateToolCallId,
       reviewToolCallId,
-      searchSessionsToolCallId,
       readSessionToolCallId,
       nowMillis,
     )
@@ -354,7 +334,6 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     const eventStore = yield* EventStore
     const delegateToolCallId = asToolCallId(`dbg-live-delegate-${iteration}`)
     const reviewToolCallId = asToolCallId(`dbg-live-review-${iteration}`)
-    const searchSessionsToolCallId = asToolCallId(`dbg-live-search-sessions-${iteration}`)
     const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
     const agent = AgentName.make("main")
     const previousAgent = AgentName.make("main")
@@ -467,37 +446,6 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       ToolCallStarted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        toolCallId: searchSessionsToolCallId,
-        toolName: "search_sessions",
-        input: { query: "tool renderer" },
-      }),
-    )
-    yield* Effect.sleep("350 millis")
-    yield* eventStore.publish(
-      ToolCallSucceeded.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        toolCallId: searchSessionsToolCallId,
-        toolName: "search_sessions",
-        summary: "2 matches in 1 session",
-        output: encodeDebugJson({
-          totalMatches: 2,
-          sessions: [
-            {
-              sessionId: "019debug1",
-              name: "tui renderer cleanup",
-              lastActivity: "2026-03-22T18:30:00.000Z",
-            },
-          ],
-        }),
-      }),
-    )
-
-    yield* Effect.sleep("250 millis")
-    yield* eventStore.publish(
-      ToolCallStarted.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
         toolCallId: readSessionToolCallId,
         toolName: "read_session",
         input: {
@@ -550,7 +498,6 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       iteration,
       delegateToolCallId,
       reviewToolCallId,
-      searchSessionsToolCallId,
       readSessionToolCallId,
     )
   })

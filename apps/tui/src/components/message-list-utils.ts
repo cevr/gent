@@ -45,7 +45,6 @@ export const TOOL_SPINNERS = {
   // Bash - command prompt
   bash: [">  ", ">> ", ">>>"],
   // Network - signal waves
-  webfetch: ["~  ", "~~ ", "~~~"],
   fetch: ["~  ", "~~ ", "~~~"],
   // Default - classic spinner
   default: [" | ", " / ", " - ", " \\ "],

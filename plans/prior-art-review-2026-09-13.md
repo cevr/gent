@@ -7,21 +7,21 @@ Priorities: effect-native, actor-model, lean core, fully extensible.
 
 ## Where gent stands
 
-| Concept | gent | opencode v2 | pi | exo | deepseek | prime |
-|---|---|---|---|---|---|---|
-| Core LOC | 27.6k (`packages/core/src`) | 61.9k | ~2.3k loop + 3.5k session | ~0.7k loop + Rust substrate | 4.1k spine, 275 pkgs | 2.3k loop + 13.3k session |
-| Loop proper | `runtime/agent` 8.2k | `runner/llm.ts` 370 + `step.ts` 298 | 110 lines | 70 lines | `agent.ts` 619 | 963 |
-| Concurrency | encore actor per (ws, session, branch) | doorbell coordinator + write-ahead claim | lanes = actors with durable inbox | file lock per conversation | durable inbox projection | daemon + worker per tree |
-| Queued input | `agent_loop_queues` table | `session_inbox` steer/queue, delivery boundaries | two `PendingMessageQueue`s | none | `agent/inbox/spliced` events | steer/followUp |
-| Storage | SQLite, event log + projection, 14 migrations | SQLite/Drizzle, event + projection same tx, 47 migrations | JSONL tree | JSON files, UUIDv7 | JSONL, immutable generations | JSONL tree |
-| Tools in core | 0 | 0 (13 internal plugins) | 8 | 5 (`shell` only fs primitive) | 26 pkgs behind seams | 1 (`ipython`) |
-| Model tool | `cell` (full Bun, 3.7k) | `execute` (hand-written JS interpreter, 8.9k) | none | none | `run_code` (PTC transport) | `ipython` (Python kernel) |
-| Permissions | rules + approvals + `/permissions` | action/resource rules, allow/deny/ask, saved | none (project trust only) | none (sandbox rewind) | `ask`/`never`, `allowed-once`, fail-closed | none (extension examples) |
-| Compaction | core `model-context` 831 + ext 1,038 | `compaction.ts` 793 + instruction epochs | 865 | none; tool-result spill at 8k chars | separate plugin 2.9k + spill store | 851 pure |
-| Retries | core `retry.ts` 124 | `runner/retry.ts` 151 | per-provider | none | plugin, policy on adapter | one shared policy |
-| System prompt | 1 core section + per-tool guidelines | 15-line file + instructions | 168 lines, tool-conditional | developer `Message[]` per turn | logged as surface node 0 | trained prefix + schemas |
-| Subagents | `delegate` foreground in cell, child = user message | `subagent` tool, depth 1, bg completion = inbox input | none (on purpose) | none | named registry, depth-checked | `rlm.spawn` admission handle, `collect` fan-in |
-| Effect | v4 rc.112 + encore | v4 rc.112, custom LayerNode DAG, no cluster | no | no | Cordis DI | no |
+| Concept       | gent                                                | opencode v2                                               | pi                                | exo                                 | deepseek                                   | prime                                          |
+| ------------- | --------------------------------------------------- | --------------------------------------------------------- | --------------------------------- | ----------------------------------- | ------------------------------------------ | ---------------------------------------------- |
+| Core LOC      | 27.6k (`packages/core/src`)                         | 61.9k                                                     | ~2.3k loop + 3.5k session         | ~0.7k loop + Rust substrate         | 4.1k spine, 275 pkgs                       | 2.3k loop + 13.3k session                      |
+| Loop proper   | `runtime/agent` 8.2k                                | `runner/llm.ts` 370 + `step.ts` 298                       | 110 lines                         | 70 lines                            | `agent.ts` 619                             | 963                                            |
+| Concurrency   | encore actor per (ws, session, branch)              | doorbell coordinator + write-ahead claim                  | lanes = actors with durable inbox | file lock per conversation          | durable inbox projection                   | daemon + worker per tree                       |
+| Queued input  | `agent_loop_queues` table                           | `session_inbox` steer/queue, delivery boundaries          | two `PendingMessageQueue`s        | none                                | `agent/inbox/spliced` events               | steer/followUp                                 |
+| Storage       | SQLite, event log + projection, 14 migrations       | SQLite/Drizzle, event + projection same tx, 47 migrations | JSONL tree                        | JSON files, UUIDv7                  | JSONL, immutable generations               | JSONL tree                                     |
+| Tools in core | 0                                                   | 0 (13 internal plugins)                                   | 8                                 | 5 (`shell` only fs primitive)       | 26 pkgs behind seams                       | 1 (`ipython`)                                  |
+| Model tool    | `cell` (full Bun, 3.7k)                             | `execute` (hand-written JS interpreter, 8.9k)             | none                              | none                                | `run_code` (PTC transport)                 | `ipython` (Python kernel)                      |
+| Permissions   | rules + approvals + `/permissions`                  | action/resource rules, allow/deny/ask, saved              | none (project trust only)         | none (sandbox rewind)               | `ask`/`never`, `allowed-once`, fail-closed | none (extension examples)                      |
+| Compaction    | core `model-context` 831 + ext 1,038                | `compaction.ts` 793 + instruction epochs                  | 865                               | none; tool-result spill at 8k chars | separate plugin 2.9k + spill store         | 851 pure                                       |
+| Retries       | core `retry.ts` 124                                 | `runner/retry.ts` 151                                     | per-provider                      | none                                | plugin, policy on adapter                  | one shared policy                              |
+| System prompt | 1 core section + per-tool guidelines                | 15-line file + instructions                               | 168 lines, tool-conditional       | developer `Message[]` per turn      | logged as surface node 0                   | trained prefix + schemas                       |
+| Subagents     | `delegate` foreground in cell, child = user message | `subagent` tool, depth 1, bg completion = inbox input     | none (on purpose)                 | none                                | named registry, depth-checked              | `rlm.spawn` admission handle, `collect` fan-in |
+| Effect        | v4 rc.112 + encore                                  | v4 rc.112, custom LayerNode DAG, no cluster               | no                                | no                                  | Cordis DI                                  | no                                             |
 
 Two things every prior agrees on that gent already does: built-ins are
 extensions with no privileged path, and tool guidance lives on the tool, not

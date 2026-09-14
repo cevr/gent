@@ -85,7 +85,7 @@ export const WebSearchTool = tool({
   description:
     "Search the web using Exa AI. Returns content from the most relevant websites. Use the current year when searching for recent information.",
   promptSnippet: "Search the web for information",
-  promptGuidelines: ["Prefer webfetch when you already have a specific URL"],
+  promptGuidelines: ["When you already have a specific URL, fetch it in the cell instead"],
   params: WebSearchParams,
   output: WebSearchResult,
   execute: Effect.fn("WebSearchTool.execute")(function* (params) {

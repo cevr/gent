@@ -22,11 +22,8 @@
     "@ff-labs/fff-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/core-internal": "workspace:*",
-    "@types/turndown": "^5.0.6",
     "effect-encore": "catalog:",
-    "linkedom": "^0.18.13",
-    "picomatch": "catalog:",
-    "turndown": "^7.2.4"
+    "picomatch": "catalog:"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

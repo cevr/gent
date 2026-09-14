@@ -138,11 +138,6 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("glob", {})).toBe("")
   })
 
-  test("webfetch: url", () => {
-    expect(toolArgSummary("webfetch", { url: "https://example.com" })).toBe("https://example.com")
-    expect(toolArgSummary("webfetch", {})).toBe("")
-  })
-
   test("delegate: todo", () => {
     expect(toolArgSummary("delegate", { todo: "find the bug" })).toBe("find the bug")
     expect(toolArgSummary("delegate", {})).toBe("")
@@ -152,10 +147,6 @@ describe("toolArgSummary", () => {
     const longTodo = "a".repeat(60)
     const result = toolArgSummary("delegate", { todo: longTodo })
     expect(result).toBe(`${"a".repeat(40)}…`)
-  })
-
-  test("search_sessions: query", () => {
-    expect(toolArgSummary("search_sessions", { query: "auth migration" })).toBe("auth migration")
   })
 
   test("read_session: goal", () => {

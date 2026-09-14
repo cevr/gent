@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core-internal/domain/event"
-import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
+import { toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { AgentsExtension, SessionToolsExtension } from "../../src/index.js"
@@ -46,49 +46,6 @@ describe("Session tools via model turn", () => {
           expect(failed?.event._tag).toBe("ToolCallFailed")
           if (failed?.event._tag === "ToolCallFailed") {
             expect(failed.event.output).toContain("Failed to load session")
-          }
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "search_sessions uses the request-scoped session host facet",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            textStep("indexed reply"),
-            toolCallStep("search_sessions", { query: "needle-session-tools-rpc", limit: 5 }),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [AgentsExtension, SessionToolsExtension],
-          })
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "needle-session-tools-rpc",
-          })
-
-          const eventFiber = yield* toolEventsFor(
-            client.session.events({ sessionId, branchId }),
-            "search_sessions",
-          )
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "Search sessions for the marker",
-          })
-
-          const events = Array.from(yield* Fiber.join(eventFiber))
-          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
-          expect(succeeded?.event._tag).toBe("ToolCallSucceeded")
-          if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).toContain("needle-session-tools-rpc")
           }
         }).pipe(Effect.timeout("8 seconds")),
       ),

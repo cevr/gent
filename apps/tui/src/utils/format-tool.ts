@@ -148,9 +148,7 @@ const toolArgFormatters = {
   },
   grep: (args, options) => summarizeScopedPattern(args, options, "/", "/"),
   glob: (args, options) => summarizeScopedPattern(args, options),
-  webfetch: (args) => getStringArg(args, "url"),
   delegate: summarizeDelegate,
-  search_sessions: (args) => truncateText(getStringArg(args, "query"), 50),
   read_session: (args) => truncateText(getStringArg(args, "goal"), 50),
   handoff: (args) => truncateText(getStringArg(args, "reason"), 50),
 } satisfies Record<string, ToolArgFormatter>

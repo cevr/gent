@@ -209,7 +209,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     sessionId,
     branchId,
     role: "user",
-    parts: [makeText("Search related sessions and review the audit output.")],
+    parts: [makeText("Read the related session and review the audit output.")],
     createdAt: nowPlus(-28_000),
   })
 
@@ -220,11 +220,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     role: "assistant",
     parts: [
       makeText("Pulled adjacent context and kicked off review helpers."),
-      makeToolCall({
-        id: asToolCallId("dbg-webfetch"),
-        name: "webfetch",
-        params: { url: "https://example.com/docs/tool-renderers" },
-      }),
       makeToolCall({
         id: asToolCallId("dbg-delegate"),
         name: "delegate",
@@ -239,11 +234,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         id: asToolCallId("dbg-review"),
         name: "delegate",
         params: { todo: "Sanity-check the debug session bootstrap." },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-search-sessions"),
-        name: "search_sessions",
-        params: { query: "tool renderer" },
       }),
       makeToolCall({
         id: asToolCallId("dbg-read-session"),
@@ -263,11 +253,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     branchId,
     role: "tool",
     parts: [
-      makeJsonResult(asToolCallId("dbg-webfetch"), "webfetch", {
-        url: "https://example.com/docs/tool-renderers",
-        title: "Tool renderer notes",
-        excerpt: "Use ToolFrame once and let specialized renderers own body layout.",
-      }),
       makeJsonResult(asToolCallId("dbg-delegate"), "delegate", {
         output: "Explorer agreed the duplicate chrome was stale message-list markup.",
       }),
@@ -276,18 +261,6 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       }),
       makeJsonResult(asToolCallId("dbg-review"), "delegate", {
         output: "Move debug boot into core-side scenario code and keep the shell thin.",
-      }),
-      makeJsonResult(asToolCallId("dbg-search-sessions"), "search_sessions", {
-        query: "tool renderer",
-        totalMatches: 1,
-        sessions: [
-          {
-            sessionId: "019debug1-session",
-            name: "tui renderer cleanup",
-            lastActivity: nowPlus(-120_000).toISOString(),
-            excerpts: ["Use one tool frame and preserve the queue's input behavior."],
-          },
-        ],
       }),
       makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
         sessionId: "019debug1-session",

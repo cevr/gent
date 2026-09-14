@@ -94,7 +94,7 @@ export {
 } from "../domain/ids.js"
 export { Model, ModelId } from "../domain/model.js"
 export { AuthMethod } from "../domain/auth.js"
-export { dateFromMillis, type Message, type Branch } from "../domain/message.js"
+export { type Message, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
 export { messagePartsDisplayText } from "../domain/message-part-display.js"
 export { PermissionRule } from "../domain/permission.js"

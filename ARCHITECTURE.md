@@ -308,11 +308,16 @@ Shape:
   summariser; core keeps only the durable summary record shape that status and
   the TUI read. A compactor that fails recoverably degrades to truncation with a
   visible notice; an integrity failure still stops the turn.
-- Project instructions are an extension, not a profile field. `@gent/instructions`
+- Project instructions are an extension, not a profile field. `@gent/agents`
   reads `AGENTS.md` (or `CLAUDE.md`) from the gent home, the project and the
   project-local `.gent/` on every turn and contributes the `project-instructions`
-  prompt section at priority 70. Core builds no instruction text and the profile
-  carries none; an edit to `AGENTS.md` reaches the next turn.
+  prompt section at priority 70 beside the persona sections. Core builds no
+  instruction text and the profile carries none; an edit to `AGENTS.md` reaches
+  the next turn.
+- The cell subsumes host tools the Bun runtime already provides: `fetch` for
+  network reads and `bun:sqlite` on `~/.gent/data.db` for past sessions. No
+  `webfetch` or `search_sessions` tool ships; `read_session` stays as the
+  parent-to-child output seam.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in

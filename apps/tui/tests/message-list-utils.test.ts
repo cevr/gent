@@ -107,7 +107,6 @@ describe("getSpinnerFrames", () => {
   })
 
   test("returns network spinner for fetch tools", () => {
-    expect(getSpinnerFrames("webfetch")).toBe(TOOL_SPINNERS["webfetch"]!)
     expect(getSpinnerFrames("fetch")).toBe(TOOL_SPINNERS["fetch"]!)
   })
 

@@ -435,10 +435,10 @@ Preview is not a sandbox or a general side-effect-free operation.
 
 ## In-tree Examples
 
-| Extension                               | Demonstrates                                 |
-| --------------------------------------- | -------------------------------------------- |
-| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration  |
-| `examples/extensions/session-notes.ts`  | one-file tool + slash request + state + hook |
+| Extension                              | Demonstrates                                 |
+| -------------------------------------- | -------------------------------------------- |
+| `packages/extensions/src/agents.ts`    | `tool` + turn projection prompt sections     |
+| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook |
 
 ## Surface Invariants
 
