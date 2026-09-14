@@ -10,7 +10,6 @@ import { Context, DateTime, Effect, Option, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
-import { EntityAddress, EntityId, EntityType, ShardId } from "effect/unstable/cluster"
 import {
   extensionServiceError,
   type ExtensionHostContext,
@@ -54,17 +53,6 @@ interface ExtensionSessionControlService {
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
 const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
-
-/**
- * The registry keys a loop's state by entity type and id; the shard is not
- * part of the key (effect-encore 0.30 `addressKey`), so any shard id resolves.
- */
-const loopStateAddress = (entityId: string): EntityAddress.EntityAddress =>
-  EntityAddress.make({
-    shardId: ShardId.make("default", 0),
-    entityType: EntityType.make(AgentLoopActor.name),
-    entityId: EntityId.make(entityId),
-  })
 
 interface ExtensionHostContextInput {
   readonly extensionRegistry: ExtensionRegistryService
@@ -263,9 +251,10 @@ export const makeExtensionHostContextProvider = (
             return yield* Effect.forEach(
               loops,
               (loop) =>
-                stateOf<SessionRuntimeState>(
-                  loopStateAddress(entityIdOf(workspaceId, loop.sessionId, loop.branchId)),
-                ).pipe(
+                stateOf<SessionRuntimeState>({
+                  entityType: AgentLoopActor.name,
+                  entityId: entityIdOf(workspaceId, loop.sessionId, loop.branchId),
+                }).pipe(
                   Effect.map((state) => Option.some(state._tag)),
                   Effect.catchEager(() => Effect.succeed(Option.none<string>())),
                   Effect.provideService(ActorStateRegistry, stateRegistry),
