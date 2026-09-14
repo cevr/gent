@@ -1826,3 +1826,55 @@ Files: `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`,
 `packages/extensions/src/agents.ts`, `packages/extensions/src/exec-tools/bash.ts`,
 `packages/core/tests/runtime/agent-loop/step-outcome.test.ts`,
 `ARCHITECTURE.md`, `plans/prior-art-review-2026-09-13.md`.
+
+## Compaction handoff, step cost, handler collapse (2026-09-14, `be77fe38` → `0753abbe`)
+
+Four commits in the Rift `compaction-session-context`; 40 files, +1,228
+−2,491; core 27,472 LOC (`packages/core/src`, was 27,412: the window
+projection gained `projectContextWindow`), extensions 15,790 LOC (was
+16,495); `packages/extensions/src/compaction/` 306 lines (was 1,038).
+
+| Commit     | Change                                                                                                                                                                                                                                       |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fa36c0bc` | subagents tray takes fx's `<name> working · <task>` rows, hides when nothing runs                                                                                                                                                            |
+| `363bedda` | compaction hands off: one durable user-role `context-window` marker with `summarized { firstMessageId, lastMessageId, count }`; the notice names the session id, branch id, and id range; `context.history` joins the cell; failures degrade |
+| `3cfb483d` | the "Worked for" row tallies `StreamEnded.outcome` per turn: steps, tool calls, cost                                                                                                                                                         |
+| `0753abbe` | one admission path (`reserveAndStart`) in the actor handlers, pure `foldSessionMetrics`; handlers 902 → 844                                                                                                                                  |
+
+Gone with `363bedda`: `summary-record.ts` (source revisions, path record,
+source replacement), `cellInnerOperationReceipts`, `SummaryPersister`,
+`ModelCompactionResult`, `compactedRevision`, the `CompactionCard`, and the
+receipt-driven `model-compaction-dispatch` test. `handoffMessageId` (a
+`MessageId`) replaces the revision on the ledger status, the projection
+event, the snapshot metrics, and the TUI status label.
+
+Runner (`agent-runner.ts`) is 575 lines (was 562): the two child prompt
+submissions share `promptChild`; nothing else moved. ARCHITECTURE.md
+invariant 17 records the handoff; the known gap for the handlers now names
+the recovery reads that remain there.
+
+Files: `packages/core/src/runtime/model-context-window.ts`,
+`packages/core/src/runtime/model-context-compactor.ts`,
+`packages/core/src/runtime/agent/turn-source.ts`,
+`packages/extensions/src/compaction/model-compaction.ts`,
+`packages/extensions/src/cell/cell-context-host.ts`,
+`packages/extensions/src/cell/cell-tool.ts`,
+`apps/tui/src/components/message-list.tsx`,
+`apps/tui/src/components/session-event-label.ts`,
+`apps/tui/src/hooks/use-session-feed.ts`,
+`packages/core/src/runtime/agent/agent-loop.handlers.ts`,
+`packages/core/src/runtime/agent/agent-loop.state.ts`,
+`packages/extensions/tests/compaction/model-compaction.test.ts`,
+`packages/core/tests/runtime/agent-loop/session-metrics-fold.test.ts`.
+
+Gamut run 34 (opus-luna, at `0753abbe`, gate for the pass): Opus root at
+`low`, 8 Luna children (6 tasks + 2 checks), 8 spawn + 8 success receipts,
+17 tests green in 5m36s, $0.82, no continuation. Root outcomes: 6
+`ToolCalls`, 1 `Answered`. The "Worked for" row read
+`Worked for 5m 36s · 7 steps · 6 tool calls · $0.819`in the terminal, and
+the tray showed two`main working · Task N …` rows under the status line
+mid-turn. No handoff fired: the root peaked at 6,878 estimated tokens
+against a 1,000,000 limit, so the compaction-after-spill measurement stays
+"none needed on the gamut"; the live store holds one compaction ever
+(2026-09-13, before the spill), 2,790 projections peaking at 46,919 tokens,
+and no compaction since the spill landed.
