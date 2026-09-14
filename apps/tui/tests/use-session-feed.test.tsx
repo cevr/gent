@@ -242,8 +242,17 @@ describe("useSessionFeed", () => {
         }),
         11_200,
       )
-      const turnCompletedEnvelope = makeEnvelope(
+      const streamEndedEnvelope = makeEnvelope(
         7,
+        AgentEvent.cases.StreamEnded.make({
+          sessionId,
+          branchId,
+          outcome: "ToolCalls",
+          costUsd: 0.01,
+        }),
+      )
+      const turnCompletedEnvelope = makeEnvelope(
+        8,
         AgentEvent.cases.TurnCompleted.make({
           sessionId,
           branchId,
@@ -251,7 +260,7 @@ describe("useSessionFeed", () => {
         }),
       )
       const retryEnvelope = makeEnvelope(
-        8,
+        9,
         AgentEvent.cases.ProviderRetrying.make({
           sessionId,
           branchId,
@@ -262,7 +271,7 @@ describe("useSessionFeed", () => {
         }),
       )
       const errorEnvelope = makeEnvelope(
-        9,
+        10,
         AgentEvent.cases.ErrorOccurred.make({
           sessionId,
           branchId,
@@ -276,6 +285,7 @@ describe("useSessionFeed", () => {
         toolStartedEnvelope,
         makeEnvelope(5, toolStartedEnvelope.event),
         toolSucceededEnvelope,
+        streamEndedEnvelope,
         turnCompletedEnvelope,
         retryEnvelope,
         errorEnvelope,
@@ -362,8 +372,13 @@ describe("useSessionFeed", () => {
         expect(toolSegments).toHaveLength(1)
         expect(toolSegments?.[0]?.toolCall.status).toBe("completed")
         expect(toolSegments?.[0]?.toolCall.durationMs).toBe(1_200)
-        expect(events?.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
-        const retry = events?.find((event) => event._tag === "retrying")
+        expect(events.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
+        // The single StreamEnded before TurnCompleted is the turn's only step.
+        expect(events[0]).toMatchObject({
+          _tag: "turn-ended",
+          steps: { count: 1, toolCalls: 1, costUsd: 0.01 },
+        })
+        const retry = events.find((event) => event._tag === "retrying")
         expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
         dispose()
       })

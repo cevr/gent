@@ -28,7 +28,12 @@ import {
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
 import type { ToolCall } from "../components/tool-renderers"
-import type { SessionEvent } from "../components/session-event-label"
+import {
+  addStep,
+  emptyTurnSteps,
+  type SessionEvent,
+  type TurnSteps,
+} from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { randomId } from "../utils/random-id"
 import { formatConnectionIssue } from "../utils/format-error"
@@ -216,11 +221,13 @@ const createInterruptionEvent = (createdAt: number, seq: number): SessionEvent =
 
 const createTurnEndedEvent = (
   durationSeconds: number,
+  steps: TurnSteps,
   createdAt: number,
   seq: number,
 ): SessionEvent => ({
   _tag: "turn-ended",
   durationSeconds,
+  steps,
   createdAt,
   seq,
 })
@@ -444,6 +451,13 @@ export function useSessionFeed(
   const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
   let streamMessageId = Option.none<string>()
   let eventSeq = 0
+  // The steps of the turn in flight; TurnCompleted spends them on its label.
+  let turnSteps = emptyTurnSteps
+  const takeTurnSteps = () => {
+    const steps = turnSteps
+    turnSteps = emptyTurnSteps
+    return steps
+  }
   const lastSeenEventIdByKey = new Map<string, number>()
   let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
 
@@ -742,15 +756,21 @@ export function useSessionFeed(
       return
     }
 
+    if (event._tag === "StreamEnded") {
+      turnSteps = addStep(turnSteps, event)
+      return
+    }
+
     if (event._tag === "TurnCompleted") {
       resolveRetryingEvents(setStore)
       const durationSeconds = Math.round(event.durationMs / 1000)
+      const steps = takeTurnSteps()
       if (event.interrupted === true) {
         appendSessionEvent(setStore, createInterruptionEvent(envelope.createdAt, eventSeq++))
       } else if (durationSeconds > 0) {
         appendSessionEvent(
           setStore,
-          createTurnEndedEvent(durationSeconds, envelope.createdAt, eventSeq++),
+          createTurnEndedEvent(durationSeconds, steps, envelope.createdAt, eventSeq++),
         )
       }
       return
@@ -834,6 +854,7 @@ export function useSessionFeed(
 
         case "StreamEnded":
           streamMessageId = Option.none()
+          turnSteps = addStep(turnSteps, event)
           break
 
         case "TurnCompleted": {
@@ -841,12 +862,13 @@ export function useSessionFeed(
           resolveRetryingEvents(setStore)
           const durationSeconds = Math.round(event.durationMs / 1000)
           const createdAt = yield* Clock.currentTimeMillis
+          const steps = takeTurnSteps()
           if (event.interrupted === true) {
             appendSessionEvent(setStore, createInterruptionEvent(createdAt, eventSeq++))
           } else if (durationSeconds > 0) {
             appendSessionEvent(
               setStore,
-              createTurnEndedEvent(durationSeconds, createdAt, eventSeq++),
+              createTurnEndedEvent(durationSeconds, steps, createdAt, eventSeq++),
             )
           }
           break
