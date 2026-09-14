@@ -19,15 +19,91 @@ Everything else is adapter code around those nouns.
 
 ## Rules
 
-- Schema-first transport contract.
-- Thin transport adapters.
-- Command/query services, not god facades.
-- Runtime owns orchestration.
-- Platform edges stay explicit.
-- TUI routes own screen state; components render and dispatch.
-- Extension seams are explicit structural descriptors, not generic middleware buckets.
-- App-specific UI extension facets live at the app edge, not in core.
-- RPC is the application transport. No parallel REST surface.
+Numbered invariants. Each carries the file that enforces it, so a reviewer can
+check the claim instead of trusting it. A change that breaks an invariant
+updates this list in the same commit.
+
+1. **Effect-native end to end.** No `Promise<` in an extension surface; no
+   `async`/`await` in tests. Receipts: `packages/tooling/src/check-guardrails.ts`,
+   `packages/core/src/extensions/api.ts`.
+2. **One actor per (workspace, session, branch).** The agent loop is an
+   effect-encore entity; every session mutation crosses its mailbox.
+   Receipts: `packages/core/src/runtime/agent/agent-loop.actor.ts`,
+   `packages/core/src/runtime/agent/agent-loop.entity-id.ts`.
+3. **Everything is an extension of the loop.** Core registers zero tools;
+   drivers, tools, resources, reactions, and TUI facets arrive through the
+   extension API. Receipts: `packages/core/src/extensions/api.ts`,
+   `packages/extensions/src/index.ts`.
+4. **Schema-first transport contract.** Every RPC input and output is a
+   Schema; thin adapters carry it. Receipts:
+   `packages/core/src/server/transport-contract.ts`, `packages/core/src/server/rpcs.ts`.
+5. **Event and projection commit together.** A session mutation writes its
+   row and its events in one transaction, so a reader never sees one without
+   the other. Receipt: `transactWithEvent` in
+   `packages/core/src/server/session-mutations-live.ts`.
+6. **Tool calls replay from durable bindings.** A resumed turn re-delivers a
+   tool result from `tool_call_bindings`; it never re-runs the tool.
+   Receipts: `packages/core/src/storage/tool-call-binding-storage.ts`,
+   `packages/core/src/runtime/agent/tool-binding-replay.ts`.
+7. **Approvals are one-shot and fail closed.** A guarded call asks once
+   through the durable interaction request; nothing is saved; no answerer
+   means no. Core has no rule schema, rule storage, or `permission.*` RPC.
+   Receipts: `packages/core/src/runtime/approval-service.ts`,
+   `packages/core/src/domain/interaction-request.ts`.
+8. **Each model step is classified once.** The stream fold produces a
+   `StepOutcome`; persistence and the continue/stop/run-tools policy are
+   exhaustive matches on it, and the tag travels on `StreamEnded.outcome`.
+   Receipts: `classifyStep` in
+   `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`,
+   `packages/core/src/domain/event.ts`.
+9. **Retry policy belongs to the driver.** The loop re-runs a step; the
+   driver says which failures are transient and how long to wait. Receipts:
+   `RetryPolicy` in `packages/core/src/domain/driver.ts`,
+   `packages/core/src/runtime/retry.ts`.
+10. **Tool results are bounded before the model sees them.** At most 8,000
+    characters inline (head and tail); the rest is paged through
+    `context.read`. Receipt: `maximumModelToolResultChars` in
+    `packages/core/src/providers/ai-transcript.ts`.
+11. **A model change is a durable user-role notice.** Switching models writes
+    one `model-change` message the next turn reads; an effort change writes
+    nothing. Receipt: `modelChangeNotice` in
+    `packages/core/src/server/session-mutations-live.ts`.
+12. **Tool guidance lives on the tool and follows the active tool list.**
+    `promptGuidelines` are deduped per turn from the post-policy tools only.
+    Receipts: `buildTurnPromptSections` in
+    `packages/core/src/runtime/agent/agent-loop.utils.ts`,
+    `packages/core/src/runtime/agent/turn-resolve.ts`.
+13. **The cell runs in full Bun.** No sandbox, no interpreter; network reads,
+    HTML parsing, and past-session queries happen in the cell. Receipt:
+    `packages/extensions/src/cell/`.
+14. **A child's completion arrives as a user message, never a tool result.**
+    Receipt: `packages/core/src/runtime/agent/child-completion.ts`.
+15. **Platform edges stay explicit.** File, process, lock, and network access
+    go through `GentPlatform` facets; TUI routes own screen state, components
+    render and dispatch; app-specific UI facets live at the app edge.
+    Receipts: `packages/core/src/runtime/gent-platform.ts`, `apps/tui/src/routes/`.
+16. **RPC is the application transport.** No parallel REST surface. Receipt:
+    `apps/server/src/`.
+
+### Known gaps
+
+Kept here so the next pass starts from them, not from a fresh survey. Each
+names the decision that left it open.
+
+- **No typed fan-in for children.** `delegate` is foreground in one cell; an
+  orchestrator that wants to spawn without awaiting has no `collect`. Left
+  open until a gamut run shows the orchestrator wanting it (ledger A3,
+  `plans/prior-art-review-2026-09-13.md`).
+- **The agents view keeps a server half.** The live catalog
+  (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpcs/session.ts`) differ after a
+  restart; folding the view into the client would need a core RPC or one
+  snapshot read per session per tick. Rejected as R6 in the same ledger.
+- **Compaction is not yet re-measured after the spill.** Tool-result spill
+  landed first; whether `packages/extensions/src/compaction/` shrinks is the
+  next measurement (ledger open question 3).
+- **`agent-runner.ts` and `agent-loop.handlers.ts` are actor command
+  handlers, not the stream fold.** They did not shrink with R7; a later pass
+  may collapse them against the actor protocol.
 
 ## Package Map
 

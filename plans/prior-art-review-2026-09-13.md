@@ -1,5 +1,27 @@
 # Prior-art review — what to remove, what to add (2026-09-13)
 
+## Status (2026-09-14)
+
+| Item                           | Result                                                                                                                                                                                                                   | Commit     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
+| R1 permission rules            | removed; one-shot approval covers the bash guardrails                                                                                                                                                                    | `d7dbf8e7` |
+| R2 webfetch                    | removed; cell guideline says fetch and parse in the cell                                                                                                                                                                 | `1d7124d9` |
+| R3 instructions extension      | folded into `agents` turn projection                                                                                                                                                                                     | `1d7124d9` |
+| R4 retry policy                | on `ModelDriverContribution.retry`; loop keeps re-run only                                                                                                                                                               | `fc134b9e` |
+| R5 search-sessions             | removed; `read-session` and `rename-session` stay; cell guideline names `~/.gent/data.db`                                                                                                                                | `1d7124d9` |
+| R6 agents-view server half     | **rejected**: the two-catalog constraint holds (live `Session.listActiveLoops` vs stored `session.list`); a client-only view needs a core RPC or N snapshot reads per tick, which costs more than the 435 LOC it removes | —          |
+| R7 step/outcome loop           | `classifyStep` → `StepOutcome`; policy and persistence are exhaustive matches                                                                                                                                            | `41c971aa` |
+| A1 tool-result spill           | 8,000-char cap with a `read` locator                                                                                                                                                                                     | `e9808c2e` |
+| A2 model-change notice         | durable user-role `model-change` message on model switch only                                                                                                                                                            | `fb9ad41f` |
+| A3 typed fan-in                | deferred; recorded as a known gap in `ARCHITECTURE.md`                                                                                                                                                                   | —          |
+| A4 step boundary events        | `StreamEnded.outcome` carries the step tag                                                                                                                                                                               | `41c971aa` |
+| A5 tool-conditional guidelines | **verified, no change**: `turn-resolve.ts` already passes the post-policy tool list to `buildTurnPromptSections`                                                                                                         | `fb9ad41f` |
+
+Open questions answered: 1 one-shot approval covers the guardrails; 2 one
+Rift, gamut as the gate; 3 spill first, compaction measured later; 4 yes,
+`ARCHITECTURE.md` Rules are now numbered invariants with receipts and a
+known-gaps list.
+
 Baseline: gent main `ce0b8137`. Priors surveyed in the session scratchpad:
 opencode `v2` (`052be04466`, Effect 4 rc.112), pi (`71dca87`), exo
 (`f90ea0f`), deepseek-harness (`c291e79`), prime-agent (`1fc1adb`).
