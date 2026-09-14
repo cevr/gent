@@ -1,5 +1,4 @@
 import { Context, type Effect } from "effect"
-import type { ReasoningEffort } from "./agent.js"
 import type { EventStoreError } from "./event.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
@@ -9,7 +8,9 @@ import type {
   CreateBranchInput,
   CreateSessionInput,
   ForkBranchInput,
+  SessionSettings,
   SwitchBranchInput,
+  UpdateSessionSettingsInput,
 } from "../server/transport-contract.js"
 
 type SessionMutationError = StorageError | EventStoreError | InvalidStateError | NotFoundError
@@ -35,17 +36,10 @@ export interface SessionMutationsService {
     input: SwitchBranchInput,
   ) => Effect.Effect<void, SessionMutationError>
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionMutationError>
-  readonly updateReasoningLevel: (input: {
-    readonly sessionId: SessionId
-    // oxlint-disable-next-line effect/noNullish -- RPC-facing mutation input preserves an omitted reasoning level.
-    readonly reasoningLevel: ReasoningEffort | undefined
-  }) => Effect.Effect<
-    {
-      // oxlint-disable-next-line effect/noNullish -- RPC-facing mutation output preserves an omitted reasoning level.
-      reasoningLevel: ReasoningEffort | undefined
-    },
-    SessionMutationError
-  >
+  /** Replace the session's settings; the reply is what was stored. */
+  readonly updateSettings: (
+    input: UpdateSessionSettingsInput,
+  ) => Effect.Effect<SessionSettings, SessionMutationError>
 }
 
 export class SessionMutations extends Context.Service<SessionMutations, SessionMutationsService>()(

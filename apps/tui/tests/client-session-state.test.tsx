@@ -168,6 +168,7 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-b"),
           branchId: BranchId.make("branch-b"),
           name: "B",
+          modelId: absent,
           reasoningLevel: absent,
         },
       })
@@ -269,6 +270,7 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-refresh"),
           branchId: BranchId.make("branch-refresh"),
           name: "Fresh",
+          modelId: absent,
           reasoningLevel: "high",
         },
       })
@@ -328,6 +330,7 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-target"),
           branchId: BranchId.make("branch-target"),
           name: "Target",
+          modelId: absent,
           reasoningLevel: absent,
         },
       })
@@ -392,6 +395,7 @@ describe("ClientProvider session lifecycle", () => {
           sessionId: SessionId.make("session-branch-race"),
           branchId: BranchId.make("branch-new"),
           name: "New",
+          modelId: absent,
           reasoningLevel: absent,
         },
       })

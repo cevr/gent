@@ -209,7 +209,10 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     toolBindings,
     hostToolBindings,
     systemPrompt,
-    modelId: resolveAgentModel(dispatchAgent),
+    // The session's own settings win over the agent definition and config.
+    modelId: Option.getOrElse(Option.fromUndefinedOr(session?.modelId), () =>
+      resolveAgentModel(dispatchAgent),
+    ),
     reasoning: Option.getOrUndefined(resolveReasoning(dispatchAgent, session?.reasoningLevel)),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,

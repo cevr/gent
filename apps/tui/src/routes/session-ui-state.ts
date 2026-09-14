@@ -21,6 +21,7 @@ export type SessionOverlayState =
   | { readonly _tag: "mermaid" }
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
   | { readonly _tag: "permissions" }
+  | { readonly _tag: "model" }
   | { readonly _tag: "extension"; readonly overlayId: string }
   | PromptSearchOverlayState
 
@@ -57,6 +58,7 @@ export const SessionUiEvent = Schema.TaggedUnion({
   OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenPermissions: {},
+  OpenModelPicker: {},
   OpenExtensionOverlay: { overlayId: Schema.String },
   CloseOverlay: {},
   PromptSearch: {
@@ -129,6 +131,13 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: "auth", enforceAuth: event.enforceAuth },
+        },
+        effects: [],
+      }),
+      OpenModelPicker: (): SessionUiTransitionResult => ({
+        state: {
+          ...state,
+          overlay: { _tag: "model" },
         },
         effects: [],
       }),

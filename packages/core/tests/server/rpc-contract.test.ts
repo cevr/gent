@@ -26,10 +26,11 @@ describe("RPC contract schemas", () => {
     })
 
     expect(
-      decodeSuccess("session.updateReasoningLevel", {
+      decodeSuccess("session.updateSettings", {
+        modelId: "anthropic/claude-sonnet-5",
         reasoningLevel: "medium",
       }),
-    ).toEqual({ reasoningLevel: "medium" })
+    ).toEqual({ modelId: "anthropic/claude-sonnet-5", reasoningLevel: "medium" })
   })
 
   test("decode inlined branch success payloads", () => {

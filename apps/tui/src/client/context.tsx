@@ -25,7 +25,6 @@ import {
   type Model,
   type ModelContextMetrics,
   type ModelId,
-  type ReasoningEffort,
 } from "@gent/core/protocol"
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import { omitUndefined } from "@gent/core-internal/domain/guards.js"
@@ -79,8 +78,10 @@ import type {
 import {
   SessionState,
   SessionStateEvent,
+  sessionSettings,
   transitionSessionState,
   type Session,
+  type SessionSettings,
 } from "./session-state"
 
 const isReconnectingState = (state: ConnectionState): boolean =>
@@ -101,10 +102,14 @@ const resolveModelInfo = (
   models: Record<string, Model>,
   agentsByName: Record<string, AgentDefinition>,
   agent: Option.Option<AgentName>,
+  sessionModelId: Option.Option<ModelId>,
   lastModelId: Option.Option<ModelId>,
 ): Option.Option<Model> => {
-  if (Option.isSome(lastModelId)) {
-    const live = Option.fromNullishOr(models[lastModelId.value])
+  // The session's own setting names the next turn's model; `lastModelId`
+  // names the one that last streamed. Show what the user will get.
+  const pinned = Option.orElse(sessionModelId, () => lastModelId)
+  if (Option.isSome(pinned)) {
+    const live = Option.fromNullishOr(models[pinned.value])
     if (Option.isSome(live)) return live
   }
   if (Option.isNone(agent)) return Option.none()
@@ -113,7 +118,7 @@ const resolveModelInfo = (
   return Option.fromNullishOr(models[resolveAgentModel(agentDef.value)])
 }
 
-export type { Session, SessionState } from "./session-state"
+export type { Session, SessionSettings, SessionState } from "./session-state"
 
 export { AgentStatus, type AgentState } from "./agent-state"
 
@@ -184,9 +189,9 @@ export interface ClientSessionValue {
   // eslint-disable-next-line effect/noNullish -- session switching accepts an optional agent override.
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
-  updateSessionReasoningLevel: (
-    // eslint-disable-next-line effect/noNullish -- RPC session settings omit an unset reasoning level.
-    reasoningLevel: ReasoningEffort | undefined,
+  /** Replace the session's settings from its current ones; the server reply is folded back. */
+  updateSessionSettings: (
+    update: (current: SessionSettings) => SessionSettings,
   ) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
@@ -223,6 +228,8 @@ export interface ClientAgentValue {
   contextMetrics: () => Option.Option<ModelContextMetrics>
   // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
   modelInfo: () => Model | undefined
+  /** Every model the registry knows, in registry order; empty until it loads. */
+  models: () => readonly Model[]
 
   // Agent state setters (for local errors only)
   // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
@@ -557,12 +564,15 @@ export function ClientProvider(props: ClientProviderProps) {
           () => "Unnamed",
         ),
       ),
+      modelId: snapshot.modelId,
       reasoningLevel: snapshot.reasoningLevel,
     }
     const sessionChanged = Option.match(currentSession, {
       onNone: () => true,
       onSome: (current) =>
-        current.name !== nextSession.name || current.reasoningLevel !== nextSession.reasoningLevel,
+        current.name !== nextSession.name ||
+        current.modelId !== nextSession.modelId ||
+        current.reasoningLevel !== nextSession.reasoningLevel,
     })
     if (sessionChanged) {
       dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
@@ -635,15 +645,11 @@ export function ClientProvider(props: ClientProviderProps) {
 
       case "SessionSettingsUpdated": {
         const s = sessionOption()
-        const reasoningLevel = Option.fromNullishOr(event.reasoningLevel)
-        if (
-          Option.isSome(s) &&
-          event.sessionId === s.value.sessionId &&
-          Option.isSome(reasoningLevel)
-        ) {
+        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
           dispatchSession(
-            SessionStateEvent.cases.UpdateReasoningLevel.make({
-              reasoningLevel: reasoningLevel.value,
+            SessionStateEvent.cases.UpdateSettings.make({
+              modelId: event.modelId,
+              reasoningLevel: event.reasoningLevel,
             }),
           )
         }
@@ -737,6 +743,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   sessionId: result.sessionId,
                   branchId: result.branchId,
                   name: result.name,
+                  modelId: Option.getOrUndefined(Option.none()),
                   reasoningLevel: Option.getOrUndefined(Option.none()),
                 },
               }),
@@ -801,6 +808,7 @@ export function ClientProvider(props: ClientProviderProps) {
             sessionId,
             branchId,
             name,
+            modelId: Option.getOrUndefined(Option.none()),
             reasoningLevel: Option.getOrUndefined(Option.none()),
           },
         }),
@@ -834,22 +842,20 @@ export function ClientProvider(props: ClientProviderProps) {
       return yield* client.branch.list({ sessionId: currentSession.value.sessionId })
     }),
 
-    updateSessionReasoningLevel: (reasoningLevel) => {
+    updateSessionSettings: (update) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return Effect.void
       const s = currentSession.value
-      return client.session.updateReasoningLevel({ sessionId: s.sessionId, reasoningLevel }).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            dispatchSession(
-              SessionStateEvent.cases.UpdateReasoningLevel.make({
-                reasoningLevel: result.reasoningLevel,
-              }),
-            )
-          }),
-        ),
-        Effect.asVoid,
-      )
+      return client.session
+        .updateSettings({ sessionId: s.sessionId, ...update(sessionSettings(s)) })
+        .pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
+            }),
+          ),
+          Effect.asVoid,
+        )
     },
 
     createBranch: (name) => {
@@ -951,6 +957,8 @@ export function ClientProvider(props: ClientProviderProps) {
       // of truth — server-side agent overrides (`runSpec.agentName`) can swap
       // to a different driver mid-turn, so the local agent default would
       // disagree with what's actually running.
+      const pinned = Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.modelId))
+      if (Option.isSome(pinned)) return pinned.value
       if (Option.isSome(agentStore.lastModelId)) return agentStore.lastModelId.value
       const agentDef = Option.flatMap(agentStore.agent, (agent) =>
         Option.fromNullishOr(modelStore.agentsByName[agent]),
@@ -975,9 +983,11 @@ export function ClientProvider(props: ClientProviderProps) {
           modelStore.modelsById,
           modelStore.agentsByName,
           agentStore.agent,
+          Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.modelId)),
           agentStore.lastModelId,
         ),
       ),
+    models: () => Object.values(modelStore.modelsById),
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {

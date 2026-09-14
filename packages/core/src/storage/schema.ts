@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Predicate, Schema } from "effect"
 import { Migrator, SqlClient } from "effect/unstable/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { StorageError } from "../domain/storage-error.js"
@@ -214,8 +214,14 @@ const agentLoopQueueMigration = Effect.gen(function* () {
 })
 
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
-const sqliteMessageIncludes = (error: unknown, expected: string) =>
-  String(error).toLowerCase().includes(expected.toLowerCase())
+// The driver wraps the SQLiteError in an SqlError whose message is generic;
+// the "duplicate column name" text lives on the cause.
+// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
+const sqliteMessageIncludes = (error: unknown, expected: string): boolean => {
+  if (String(error).toLowerCase().includes(expected.toLowerCase())) return true
+  if (Predicate.hasProperty(error, "cause")) return sqliteMessageIncludes(error.cause, expected)
+  return false
+}
 
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
 const isAlreadyAppliedSqliteError = (error: unknown) =>
@@ -446,6 +452,13 @@ const dropWriteOnlyStorageMigration = Effect.gen(function* () {
   yield* sql.unsafe(`DROP INDEX IF EXISTS idx_tool_call_bindings_tool_call`)
 })
 
+const sessionModelMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql
+    .unsafe(`ALTER TABLE sessions ADD COLUMN model_id TEXT`)
+    .pipe(ignoreAlreadyAppliedSqliteError("017_session_model", "ADD COLUMN model_id"))
+})
+
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
@@ -496,6 +509,7 @@ const makeStorageMigratorLive = (
       "011_message_insertion_order": messageInsertionOrderMigration,
       "015_drop_resource_graph_state": dropResourceGraphStateMigration,
       "016_drop_write_only_storage": dropWriteOnlyStorageMigration,
+      "017_session_model": sessionModelMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

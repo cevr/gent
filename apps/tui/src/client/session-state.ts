@@ -1,18 +1,35 @@
 import { Schema } from "effect"
-import { BranchId, ReasoningEffort, SessionId } from "@gent/core/protocol"
+import { BranchId, ModelId, ReasoningEffort, SessionId } from "@gent/core/protocol"
 
 export interface Session {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly name: string
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
+  readonly modelId: ModelId | undefined
   // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
   readonly reasoningLevel: ReasoningEffort | undefined
 }
+
+/** The session's mutable settings, always carried whole. */
+export interface SessionSettings {
+  // eslint-disable-next-line effect/noNullish -- an unset model falls back to the agent's.
+  readonly modelId: ModelId | undefined
+  // eslint-disable-next-line effect/noNullish -- an unset level falls back to the agent's.
+  readonly reasoningLevel: ReasoningEffort | undefined
+}
+
+export const sessionSettings = (session: Session): SessionSettings => ({
+  modelId: session.modelId,
+  reasoningLevel: session.reasoningLevel,
+})
 
 const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.String,
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
+  modelId: Schema.UndefinedOr(ModelId),
   // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
@@ -30,8 +47,12 @@ export const SessionStateEvent = Schema.TaggedUnion({
   Clear: {},
   UpdateName: { name: Schema.String },
   UpdateBranch: { branchId: BranchId },
-  // eslint-disable-next-line effect/noNullish -- RPC updates preserve an omitted reasoning level.
-  UpdateReasoningLevel: { reasoningLevel: Schema.UndefinedOr(ReasoningEffort) },
+  UpdateSettings: {
+    // eslint-disable-next-line effect/noNullish -- RPC updates preserve an unset model.
+    modelId: Schema.UndefinedOr(ModelId),
+    // eslint-disable-next-line effect/noNullish -- RPC updates preserve an unset reasoning level.
+    reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+  },
 })
 export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
 
@@ -63,7 +84,11 @@ export function transitionSessionState(
       return mapActive(state, (session) => ({ ...session, name: event.name }))
     case "UpdateBranch":
       return mapActive(state, (session) => ({ ...session, branchId: event.branchId }))
-    case "UpdateReasoningLevel":
-      return mapActive(state, (session) => ({ ...session, reasoningLevel: event.reasoningLevel }))
+    case "UpdateSettings":
+      return mapActive(state, (session) => ({
+        ...session,
+        modelId: event.modelId,
+        reasoningLevel: event.reasoningLevel,
+      }))
   }
 }

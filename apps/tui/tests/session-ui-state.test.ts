@@ -33,3 +33,12 @@ describe("transcript disclosure", () => {
     expect(cleared.state.disclosure).toBe("preview")
   })
 })
+
+describe("model picker overlay", () => {
+  test("/model with no argument opens the picker and escape closes it", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), { _tag: "OpenModelPicker" })
+    expect(opened.state.overlay).toEqual({ _tag: "model" })
+    const closed = transitionSessionUi(opened.state, { _tag: "CloseOverlay" })
+    expect(closed.state.overlay).toEqual({ _tag: "none" })
+  })
+})

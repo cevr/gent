@@ -203,8 +203,10 @@ export const AgentEvent = Schema.TaggedUnion({
     sessionId: SessionId,
     name: Schema.String,
   },
+  /** The session's full settings after a change; absent fields are unset. */
   SessionSettingsUpdated: {
     sessionId: SessionId,
+    modelId: Schema.optional(ModelId),
     reasoningLevel: Schema.optional(ReasoningEffort),
   },
   BranchCreated: {

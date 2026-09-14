@@ -87,6 +87,7 @@ export const toSession = (session: DomainSession): ClientSession | undefined => 
     sessionId: session.id,
     branchId: branchId.value,
     name: Option.getOrElse(Option.fromNullishOr(session.name), () => "Unnamed"),
+    modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
   }
 }

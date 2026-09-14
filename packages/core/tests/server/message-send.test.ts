@@ -1,9 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { textStep } from "../../src/test-utils/sequence-steps"
 import { ToolCallId } from "../../src/domain/ids"
 import { ModelId } from "../../src/domain/model"
-import { AgentName } from "../../src/domain/agent"
+import { AgentName, type ReasoningEffort } from "../../src/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
@@ -13,6 +13,8 @@ import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { makeClient, parentToolCallProbeExtension } from "./session-mutations/helpers"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+const absentModel = Option.getOrUndefined(Option.none<ModelId>())
+const absentReasoning = Option.getOrUndefined(Option.none<ReasoningEffort>())
 
 describe("message.send", () => {
   it.live(
@@ -183,6 +185,92 @@ describe("message.send", () => {
           runSpec: { overrides: { modelId: ModelId.make("custom/model") } },
         })
         yield* replied("run spec reply")
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("6 seconds")),
+    ),
+  )
+
+  it.live("session settings win over config agent overrides until they are cleared", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("session model reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("custom/session-model")
+              expect(request.reasoning).toBe("max")
+            },
+          },
+          {
+            ...textStep("configured reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("openai/gpt-5.6-sol")
+              expect(request.reasoning).toBe("low")
+            },
+          },
+        ])
+        const configServiceLayer = ConfigService.Test(
+          new UserConfig({
+            agents: {
+              [AgentName.make("main")]: {
+                modelId: ModelId.make("openai/gpt-5.6-sol"),
+                reasoningEffort: "low",
+              },
+            },
+          }),
+        )
+        const { client } = yield* Gent.test(
+          createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
+        )
+        const created = yield* client.session.create({ cwd: process.cwd() })
+        const replied = (text: string) =>
+          waitFor(
+            client.session.getSnapshot({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === text),
+              ),
+            5_000,
+            `assistant reply: ${text}`,
+          )
+
+        const sessionModel = ModelId.make("custom/session-model")
+        const stored = yield* client.session.updateSettings({
+          sessionId: created.sessionId,
+          modelId: sessionModel,
+          reasoningLevel: "max",
+        })
+        expect(stored).toEqual({ modelId: sessionModel, reasoningLevel: "max" })
+        const withSettings = yield* client.session.getSnapshot({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        expect(withSettings.modelId).toBe(sessionModel)
+        expect(withSettings.reasoningLevel).toBe("max")
+
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "use the session model",
+        })
+        yield* replied("session model reply")
+
+        yield* client.session.updateSettings({
+          sessionId: created.sessionId,
+          modelId: absentModel,
+          reasoningLevel: absentReasoning,
+        })
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "back to the configured model",
+        })
+        yield* replied("configured reply")
         yield* controls.assertDone
       }).pipe(Effect.timeout("6 seconds")),
     ),

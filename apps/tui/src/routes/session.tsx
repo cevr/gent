@@ -16,6 +16,7 @@ import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { MessagePicker } from "../components/message-picker"
+import { ModelPicker } from "../components/model-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/context"
@@ -254,6 +255,14 @@ export function Session(props: SessionProps) {
           open={controller.uiState().overlay._tag === "fork"}
           messages={controller.forkMessages()}
           onSelect={controller.onForkSelect}
+          onClose={controller.closeOverlay}
+        />
+
+        <ModelPicker
+          open={controller.uiState().overlay._tag === "model"}
+          models={client.models()}
+          current={Option.fromNullishOr(client.modelInfo()?.id)}
+          onSelect={controller.onModelSelect}
           onClose={controller.closeOverlay}
         />
 

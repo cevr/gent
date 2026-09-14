@@ -144,6 +144,7 @@ describe("CommandPalette renderer", () => {
         sessionId: betaSessionId,
         branchId: betaBranchId,
         name: "Beta",
+        modelId: absent,
         reasoningLevel: absent,
       })
     }),

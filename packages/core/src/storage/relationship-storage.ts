@@ -73,7 +73,7 @@ export class RelationshipStorage extends Context.Service<
             SELECT ${sql.literal(SESSION_COLUMNS)}, 0
             FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
             UNION ALL
-            SELECT s.id, s.name, s.cwd, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
+            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
             FROM sessions s
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20 AND s.workspace_id = ${workspaceId}

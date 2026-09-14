@@ -65,7 +65,7 @@ import {
   type SteerCommand as TransportSteerCommand,
   type SubscribeEventsInput,
   type SwitchBranchInput,
-  type UpdateSessionReasoningLevelInput,
+  type UpdateSessionSettingsInput,
 } from "./transport-contract.js"
 
 /** The one read the client hydrates from: persisted conversation plus live runtime state. */
@@ -147,6 +147,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     name: session.name,
     messages: snapshotState.projectedMessages,
     lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
+    modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
     activeBranchId: session.activeBranchId,
     runtime,
@@ -387,8 +388,8 @@ const RpcHandlers = GentRpcs.toLayer(
       "session.getSnapshot": (input: GetSessionSnapshotInput) =>
         rpc("session.getSnapshot", getSessionSnapshot(input), () => input),
 
-      "session.updateReasoningLevel": (input: UpdateSessionReasoningLevelInput) =>
-        rpc("session.updateReasoningLevel", mutations.updateReasoningLevel(input), () => input),
+      "session.updateSettings": (input: UpdateSessionSettingsInput) =>
+        rpc("session.updateSettings", mutations.updateSettings(input), () => input),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
         const subscription = { sessionId, branchId, synchronize: true }

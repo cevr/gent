@@ -3,7 +3,7 @@
  *
  * Takes explicit (sessionId, branchId) and subscribes exactly once per identity.
  * No dependency on client.session() or machine state — immune to the
- * UpdateBypass/UpdateReasoningLevel re-run footgun.
+ * UpdateBypass/UpdateSettings re-run footgun.
  */
 
 import { batch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"

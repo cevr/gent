@@ -9,6 +9,7 @@ import type {
   BranchId,
   MessageId,
   Message as DurableMessage,
+  ModelId,
   SessionId,
 } from "@gent/core/protocol"
 import type { Message, SessionItem } from "../components/message-list"
@@ -98,6 +99,7 @@ export interface SessionController {
   resolveAuthGate: () => void
   closeOverlay: () => void
   onForkSelect: (messageId: MessageId) => void
+  onModelSelect: (modelId: ModelId) => void
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
 }
 
@@ -473,6 +475,7 @@ export function createSessionController(props: {
       router.navigateToSession(sessionId, branchId)
     },
     openForkPicker,
+    openModelPicker: () => dispatchSessionUi(SessionUiEvent.cases.OpenModelPicker.make({})),
     openPermissions: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
   })
@@ -520,6 +523,15 @@ export function createSessionController(props: {
       ),
       Effect.asVoid,
     )
+
+  const onModelSelect = (modelId: ModelId) => {
+    closeOverlay()
+    cast(
+      client
+        .updateSessionSettings((current) => ({ ...current, modelId }))
+        .pipe(Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error))))),
+    )
+  }
 
   const onForkSelect = (messageId: MessageId) => {
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
@@ -693,6 +705,7 @@ export function createSessionController(props: {
     resolveAuthGate,
     closeOverlay,
     onForkSelect,
+    onModelSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
 }

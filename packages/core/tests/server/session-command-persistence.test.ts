@@ -8,6 +8,7 @@ import { BranchStorage } from "../../src/storage/branch-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionMutations } from "../../src/domain/session-mutations"
+import type { ModelId } from "../../src/domain/model"
 import {
   FIXED_NOW,
   createActiveSessionFixture,
@@ -15,6 +16,8 @@ import {
   makeRpcHandlersClient,
   sessionMutationsLayer,
 } from "./session-mutations/helpers"
+
+const absentModel = Option.getOrUndefined(Option.none<ModelId>())
 
 describe("session command persistence", () => {
   it.live("message.send surfaces runtime failure and does not log message sent", () =>
@@ -240,7 +243,7 @@ describe("session command persistence", () => {
       })
 
       const exit = yield* Effect.exit(
-        mutations.updateReasoningLevel({ sessionId, reasoningLevel: "high" }),
+        mutations.updateSettings({ sessionId, modelId: absentModel, reasoningLevel: "high" }),
       )
 
       expect(exit._tag).toBe("Failure")

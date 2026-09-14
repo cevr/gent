@@ -71,6 +71,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               workspace_id: workspaceId,
               name: toSqlNull(session.name),
               cwd: toSqlNull(session.cwd),
+              model_id: toSqlNull(session.modelId),
               reasoning_level: toSqlNull(session.reasoningLevel),
               active_branch_id: toSqlNull(session.activeBranchId),
               parent_session_id: toSqlNull(session.parentSessionId),
@@ -108,7 +109,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         updateSession: Effect.fn("SessionStorage.updateSession")(
           function* (session) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE sessions SET name = ${toSqlNull(session.name)}, reasoning_level = ${toSqlNull(session.reasoningLevel)}, active_branch_id = ${toSqlNull(session.activeBranchId)}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
+            yield* sql`UPDATE sessions SET name = ${toSqlNull(session.name)}, model_id = ${toSqlNull(session.modelId)}, reasoning_level = ${toSqlNull(session.reasoningLevel)}, active_branch_id = ${toSqlNull(session.activeBranchId)}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
             return session
           },
           Effect.mapError(storageError("Failed to update session")),

@@ -8,6 +8,7 @@ import {
   decodeDateFromMillis,
 } from "../../domain/message.js"
 import { AgentEvent, EventId } from "../../domain/event.js"
+import { ModelId } from "../../domain/model.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
 import { isReasoningEffort } from "../../domain/agent.js"
 
@@ -45,6 +46,7 @@ export const SessionRow = Schema.Struct({
   id: SessionId,
   name: Schema.NullOr(Schema.String),
   cwd: Schema.NullOr(Schema.String),
+  model_id: Schema.NullOr(ModelId),
   reasoning_level: Schema.NullOr(Schema.String),
   active_branch_id: Schema.NullOr(BranchId),
   parent_session_id: Schema.NullOr(SessionId),
@@ -98,7 +100,7 @@ export const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
 
 export const SESSION_COLUMNS =
-  "id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at"
+  "id, name, cwd, model_id, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at"
 
 /** One message row per content chunk, scoped through the owning session. Interpolate with `sql.literal`. */
 export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.kind, m.role, m.created_at, m.turn_duration_ms, m.metadata,
@@ -116,6 +118,7 @@ const rowToSession = (row: SessionRow) =>
       id: row.id,
       name: Option.getOrUndefined(Option.fromNullishOr(row.name)),
       cwd: Option.getOrUndefined(Option.fromNullishOr(row.cwd)),
+      modelId: Option.getOrUndefined(Option.fromNullishOr(row.model_id)),
       reasoningLevel: Option.getOrUndefined(
         Option.fromNullishOr(row.reasoning_level).pipe(Option.filter(isReasoningEffort)),
       ),

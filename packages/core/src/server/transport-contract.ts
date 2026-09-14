@@ -15,6 +15,7 @@ import {
   ListAuthProvidersPayload,
 } from "../domain/auth.js"
 import { EventEnvelope } from "../domain/event.js"
+import { ModelId } from "../domain/model.js"
 import {
   BranchId,
   ExtensionId,
@@ -95,6 +96,7 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   name: Schema.optional(Schema.String),
   messages: Schema.Array(ProjectedMessage),
   lastEventId: Schema.NullOr(Schema.Finite),
+  modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
@@ -137,11 +139,18 @@ export const RespondInteractionInput = Schema.Struct({
 })
 export type RespondInteractionInput = typeof RespondInteractionInput.Type
 
-export const UpdateSessionReasoningLevelInput = Schema.Struct({
-  sessionId: SessionId,
+/** The session's mutable settings, sent whole: an undefined field clears it. */
+export const SessionSettings = Schema.Struct({
+  modelId: Schema.UndefinedOr(ModelId),
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
-export type UpdateSessionReasoningLevelInput = typeof UpdateSessionReasoningLevelInput.Type
+export type SessionSettings = typeof SessionSettings.Type
+
+export const UpdateSessionSettingsInput = Schema.Struct({
+  sessionId: SessionId,
+  ...SessionSettings.fields,
+})
+export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
 
 export const DeletePermissionRuleInput = Schema.Struct({
   tool: Schema.String,

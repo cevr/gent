@@ -509,25 +509,23 @@ const makeSessionMutationsService: Effect.Effect<
       yield* deleteSessionCascade(sessionId)
     }),
 
-    updateReasoningLevel: Effect.fn("SessionMutations.updateReasoningLevel")(function* (input) {
+    updateSettings: Effect.fn("SessionMutations.updateSettings")(function* (input) {
       const session = yield* sessionStorage.getSession(input.sessionId)
       if (Predicate.isUndefined(session)) {
         return yield* new NotFoundError({ message: "Session not found" })
       }
+      const settings = { modelId: input.modelId, reasoningLevel: input.reasoningLevel }
       yield* transactWithEvent(
         sessionStorage.updateSession(
           new Session({
             ...session,
-            reasoningLevel: input.reasoningLevel,
+            ...settings,
             updatedAt: yield* DateTime.nowAsDate,
           }),
         ),
-        SessionSettingsUpdated.make({
-          sessionId: input.sessionId,
-          reasoningLevel: input.reasoningLevel,
-        }),
+        SessionSettingsUpdated.make({ sessionId: input.sessionId, ...settings }),
       )
-      return { reasoningLevel: input.reasoningLevel }
+      return settings
     }),
   } satisfies SessionMutationsService
 })

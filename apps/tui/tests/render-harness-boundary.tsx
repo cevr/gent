@@ -72,7 +72,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
             lastInputTokens: 0,
           },
         }),
-      updateReasoningLevel: () => noRpcError({ reasoningLevel: absent }),
+      updateSettings: () => noRpcError({ modelId: absent, reasoningLevel: absent }),
       events: () => Stream.empty,
       watchRuntime: () => Stream.fromIterable<SessionRuntimeState>([]),
     },
@@ -195,6 +195,7 @@ const toInitialSession = (
       sessionId: value.id,
       branchId,
       name: Option.getOrElse(Option.fromNullishOr(value.name), () => "Unnamed"),
+      modelId: value.modelId,
       reasoningLevel: value.reasoningLevel,
     }))
   })

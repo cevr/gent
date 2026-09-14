@@ -2,6 +2,7 @@ import { Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
+import { ModelId } from "./model"
 
 export const dateFromMillis = (millis: number): Date => Schema.decodeSync(DateFromNumber)(millis)
 
@@ -150,6 +151,8 @@ export class Session extends Schema.Class<Session>("Session")({
   id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
+  /** Session-scoped model; wins over the agent definition and config for every turn. */
+  modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),

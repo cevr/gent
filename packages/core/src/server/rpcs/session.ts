@@ -2,7 +2,6 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { Branch, BranchTreeNode, Message, Session } from "../../domain/message.js"
-import { ReasoningEffort } from "../../domain/agent.js"
 import { SessionRuntimeStateSchema } from "../../runtime/agent/agent-loop.state.js"
 import { GentRpcError } from "../errors.js"
 import {
@@ -19,7 +18,8 @@ import {
   SteerCommand,
   SubscribeEventsInput,
   SwitchBranchInput,
-  UpdateSessionReasoningLevelInput,
+  SessionSettings,
+  UpdateSessionSettingsInput,
   EventEnvelope,
 } from "../transport-contract.js"
 
@@ -51,11 +51,9 @@ export class SessionRpcs extends RpcGroup.make(
     success: SessionSnapshot,
     error: GentRpcError,
   }),
-  Rpc.make("session.updateReasoningLevel", {
-    payload: UpdateSessionReasoningLevelInput.fields,
-    success: Schema.Struct({
-      reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
-    }),
+  Rpc.make("session.updateSettings", {
+    payload: UpdateSessionSettingsInput.fields,
+    success: SessionSettings,
     error: GentRpcError,
   }),
   Rpc.make("session.events", {

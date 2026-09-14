@@ -1,9 +1,11 @@
 import { createEffect, onCleanup, type Accessor } from "solid-js"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Match, Option, Schema } from "effect"
 import type { ClientContextValue } from "../client/index"
 import type { Command } from "../command/types"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
 import { formatError } from "../utils/format-error"
+import { resolveModelQuery, type ModelQueryResult } from "../client/model-query"
+import type { Model, ModelId } from "@gent/core/protocol"
 
 interface SessionCommandRegistryProps {
   readonly client: ClientContextValue
@@ -19,6 +21,7 @@ interface SessionCommandRegistryProps {
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
   readonly navigateToCreatedSession: Parameters<ClientContextValue["createSession"]>[0]
   readonly openForkPicker: () => void
+  readonly openModelPicker: () => void
   readonly openPermissions: () => void
   readonly openAuth: () => void
 }
@@ -35,6 +38,14 @@ const VALID_REASONING_LEVELS = [
 ] satisfies ReadonlyArray<ReasoningLevelInput>
 
 const parseReasoningLevel = Schema.decodeUnknownOption(ReasoningLevelInput)
+
+const AMBIGUOUS_PREVIEW = 4
+
+export const describeAmbiguous = (query: string, candidates: readonly Model[]): string => {
+  const shown: string[] = candidates.slice(0, AMBIGUOUS_PREVIEW).map((model) => model.id)
+  if (candidates.length > AMBIGUOUS_PREVIEW) shown.push("…")
+  return `"${query}" matches ${candidates.length} models: ${shown.join(", ")}`
+}
 
 const slashAutocompleteItems = (
   commands: readonly Command[],
@@ -137,14 +148,61 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         Option.liftPredicate(reasoningLevel.value, (value) => value !== "off"),
       )
       props.cast(
-        props.client.updateSessionReasoningLevel(sessionReasoningLevel).pipe(
-          Effect.catchEager((error) =>
-            Effect.sync(() => {
-              props.client.setError(formatError(error))
-            }),
+        props.client
+          .updateSessionSettings((current) => ({
+            ...current,
+            reasoningLevel: sessionReasoningLevel,
+          }))
+          .pipe(
+            Effect.catchEager((error) =>
+              Effect.sync(() => {
+                props.client.setError(formatError(error))
+              }),
+            ),
           ),
-        ),
       )
+    },
+  },
+  {
+    id: "session.model",
+    title: "Set Model",
+    description: "Pick the model for this session (/model <id or name>, /model default)",
+    category: "Session",
+    slash: "model",
+    slashPriority: 0,
+    onSelect: props.openModelPicker,
+    onSlash: (args) => {
+      const query = args.trim()
+      if (query.length === 0) {
+        props.openModelPicker()
+        return
+      }
+      const apply = (modelId: Option.Option<ModelId>) =>
+        props.cast(
+          props.client
+            .updateSessionSettings((current) => ({
+              ...current,
+              modelId: Option.getOrUndefined(modelId),
+            }))
+            .pipe(
+              Effect.catchEager((error) =>
+                Effect.sync(() => {
+                  props.client.setError(formatError(error))
+                }),
+              ),
+            ),
+        )
+      if (query === "default" || query === "off") {
+        apply(Option.none())
+        return
+      }
+      Match.type<ModelQueryResult>().pipe(
+        Match.tagsExhaustive({
+          Match: (result) => apply(Option.some(result.model.id)),
+          None: () => props.client.setError(`No model matches "${query}"`),
+          Ambiguous: (result) => props.client.setError(describeAmbiguous(query, result.candidates)),
+        }),
+      )(resolveModelQuery(props.client.models(), query))
     },
   },
   {

@@ -84,6 +84,7 @@ describe("HandoffRenderer", () => {
               sessionId: SessionId.make("parent-session"),
               branchId: BranchId.make("parent-branch"),
               name: "Parent",
+              modelId: Option.getOrUndefined(Option.none()),
               reasoningLevel: Option.getOrUndefined(Option.none()),
             },
           },

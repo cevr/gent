@@ -57,6 +57,7 @@ const snapshotFor = (
   branchId,
   messages: [],
   lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
+  modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
   runtime: {
     _tag: "Idle",
@@ -116,6 +117,7 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
   sessionId,
   branchId,
   name: "Test Session",
+  modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
 })
 
