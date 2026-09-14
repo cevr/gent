@@ -1892,3 +1892,34 @@ calls is the fan-in, `background: true` returns a handle whose completion
 lands as a user message, and gamut run 34 ran six delegates in one cell
 without a `collect`. Recorded in `ARCHITECTURE.md` known gaps and the
 ledger status table.
+
+## Adjustable context window; mid-turn handoff (2026-09-14, `424497ad` → `736235db`)
+
+`AgentDefinition.contextLength` and `AgentRunOverrides.contextLength` set the
+input window per agent from `.gent/config.json` `agents.<name>` or a
+`delegate` override; `resolveTurnSource` prefers it over the model catalog's
+limit. Gamut run 35 (opus-luna, `424497ad`, `contextLength: 20000`, ~8.5k
+input tokens after the 7.5k system+tool reserve and the 4k reply reserve)
+killed the root and five of eleven children with `ModelContextProjectionError`
+and an empty message: a turn with several large steps after its only user
+message had no history before the anchor, so the projection failed with
+`BudgetExceeded` instead of handing off.
+
+`b3b2a1c7`: `handoffAnchorWithinTurn` (`runtime/model-context.ts`) anchors
+the handoff at a step boundary inside the turn and keeps the newest steps
+that fit half the budget; `handoffPlan` in `turn-source.ts` picks it when the
+projection fails with `BudgetExceeded`. `ModelContextProjectionError` now
+names its failure tag. Test: "a turn whose own steps overflow hands off at a
+step boundary" (`tests/runtime/agent-loop/model-compaction.test.ts`, proven
+to fail without the override path).
+
+Gamut run 36 (opus-luna, `b3b2a1c7`, 20k window): 7 sessions, 13 handoffs,
+0 errors, 5 of 6 children completed, 16 testbed tests green. One Luna child
+looped: 53 steps, 12 handoffs, no edit. Its summaries were accurate (goal,
+files, the store-test conflict, "no edits made") but with ~4.4k tokens of
+usable tail it re-inspected the repo after each handoff. Two harness gaps
+surfaced: the bindings note listed ~90 retained cell names on every handoff,
+and `estimateTokens` counted a 16k-char cell result at its stored size while
+the model sees the 8k spill. `736235db` fixes the estimate
+(`boundToolResultForModel` in the budget). The bindings note stays open.
+The run was stopped by hand after 13 minutes.
