@@ -5,7 +5,7 @@ import type { Command } from "../command/types"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
 import { formatError } from "../utils/format-error"
 import { resolveModelQuery, type ModelQueryResult } from "../client/model-query"
-import type { Model, ModelId } from "@gent/core/protocol"
+import { ReasoningEffort, type Model, type ModelId } from "@gent/core/protocol"
 
 interface SessionCommandRegistryProps {
   readonly client: ClientContextValue
@@ -22,20 +22,14 @@ interface SessionCommandRegistryProps {
   readonly navigateToCreatedSession: Parameters<ClientContextValue["createSession"]>[0]
   readonly openForkPicker: () => void
   readonly openModelPicker: () => void
+  readonly openReasoningPicker: () => void
   readonly openPermissions: () => void
   readonly openAuth: () => void
 }
 
-const ReasoningLevelInput = Schema.Literals(["off", "low", "medium", "high", "xhigh", "max"])
-type ReasoningLevelInput = Schema.Schema.Type<typeof ReasoningLevelInput>
-const VALID_REASONING_LEVELS = [
-  "off",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] satisfies ReadonlyArray<ReasoningLevelInput>
+/** `/think <level>`: a core reasoning level, or `default`/`off` to clear the session override. */
+const ReasoningLevelInput = Schema.Union([ReasoningEffort, Schema.Literals(["default", "off"])])
+const VALID_REASONING_LEVELS = ["default", ...ReasoningEffort.literals]
 
 const parseReasoningLevel = Schema.decodeUnknownOption(ReasoningLevelInput)
 
@@ -131,21 +125,25 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
   {
     id: "session.think",
     title: "Set Reasoning Level",
+    description: "Pick the reasoning level for this session (/think <level>, /think default)",
     category: "Session",
     slash: "think",
     slashPriority: 0,
-    onSelect: () => {
-      props.client.setError(`Usage: /think <${VALID_REASONING_LEVELS.join("|")}>`)
-    },
+    onSelect: props.openReasoningPicker,
     onSlash: (args) => {
       const level = args.trim().toLowerCase()
+      if (level.length === 0) {
+        props.openReasoningPicker()
+        return
+      }
       const reasoningLevel = parseReasoningLevel(level)
       if (Option.isNone(reasoningLevel)) {
         props.client.setError(`Usage: /think <${VALID_REASONING_LEVELS.join("|")}>`)
         return
       }
+      // `default`/`off` decode to `None`, which clears the session override.
       const sessionReasoningLevel = Option.getOrUndefined(
-        Option.liftPredicate(reasoningLevel.value, (value) => value !== "off"),
+        Schema.decodeUnknownOption(ReasoningEffort)(reasoningLevel.value),
       )
       props.cast(
         props.client

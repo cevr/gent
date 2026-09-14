@@ -238,6 +238,13 @@ describe("message.send", () => {
             5_000,
             `assistant reply: ${text}`,
           )
+        // Before any setting or turn, the snapshot already resolves the config default.
+        const fresh = yield* client.session.getSnapshot({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        expect(fresh.resolvedModelId).toBe(ModelId.make("openai/gpt-5.6-sol"))
+        expect(fresh.resolvedReasoningLevel).toBe("low")
 
         const sessionModel = ModelId.make("custom/session-model")
         const stored = yield* client.session.updateSettings({
@@ -252,6 +259,8 @@ describe("message.send", () => {
         })
         expect(withSettings.modelId).toBe(sessionModel)
         expect(withSettings.reasoningLevel).toBe("max")
+        expect(withSettings.resolvedModelId).toBe(sessionModel)
+        expect(withSettings.resolvedReasoningLevel).toBe("max")
 
         yield* client.message.send({
           sessionId: created.sessionId,
@@ -265,6 +274,13 @@ describe("message.send", () => {
           modelId: absentModel,
           reasoningLevel: absentReasoning,
         })
+        // Cleared settings resolve back to the config default before the next turn.
+        const cleared = yield* client.session.getSnapshot({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        expect(cleared.resolvedModelId).toBe(ModelId.make("openai/gpt-5.6-sol"))
+        expect(cleared.resolvedReasoningLevel).toBe("low")
         yield* client.message.send({
           sessionId: created.sessionId,
           branchId: created.branchId,

@@ -18,6 +18,7 @@ import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
+import { applyAgentOverrides, resolveSessionSettings } from "../runtime/agent/turn-resolve.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
@@ -67,6 +68,17 @@ import {
   type SwitchBranchInput,
   type UpdateSessionSettingsInput,
 } from "./transport-contract.js"
+
+/** The registry serving a cwd: its profile's when a profile cache is wired, else the launch registry. */
+const resolveRegistryForCwd = Effect.fn("SessionQueries.resolveRegistryForCwd")(function* (
+  cwd: Option.Option<string>,
+) {
+  const extensionRegistry = yield* ExtensionRegistry
+  const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
+  if (Option.isNone(cwd) || Option.isNone(profileCacheOpt)) return extensionRegistry
+  const profile = yield* profileCacheOpt.value.resolve(cwd.value)
+  return profile.registryService
+})
 
 /** The one read the client hydrates from: persisted conversation plus live runtime state. */
 export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
@@ -119,6 +131,21 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     ),
   )
 
+  // The footer shows what the next turn would use; resolving it here keeps
+  // the precedence (session > config > agent) in one place with the turn.
+  const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd))
+  const configService = yield* ConfigService
+  const config = yield* configService.get(session.cwd)
+  const agent = Option.fromUndefinedOr(
+    [...registry.getResolved().agents.values()].find((entry) => entry.name === runtime.agent),
+  )
+  const settings = resolveSessionSettings(
+    Option.map(agent, (definition) =>
+      applyAgentOverrides(definition, Option.fromUndefinedOr(config.agents?.[definition.name])),
+    ),
+    session,
+  )
+
   // Cumulative metrics (turns, cost, last-model) are the authority for
   // client HUD displays. Keeping them on the snapshot means the TUI
   // hydrates cost/tokens from here instead of re-deriving by joining
@@ -149,6 +176,8 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
+    resolvedModelId: settings.modelId,
+    resolvedReasoningLevel: Option.getOrUndefined(settings.reasoningLevel),
     activeBranchId: session.activeBranchId,
     runtime,
     metrics,
@@ -296,7 +325,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
-    const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
@@ -344,24 +372,15 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.orElseSucceed(() => Option.none()),
       )
 
-    const resolveProfileRegistry = (
-      cwd: Option.Option<string>,
-    ): Effect.Effect<ExtensionRegistryService> =>
-      Effect.gen(function* () {
-        if (Option.isNone(cwd) || Option.isNone(profileCacheOpt)) return extensionRegistry
-        const profile = yield* profileCacheOpt.value.resolve(cwd.value)
-        return profile.registryService
-      })
-
     const resolveSessionRegistry = (
       sessionId: Option.Option<string>,
     ): Effect.Effect<ExtensionRegistryService> =>
       Effect.gen(function* () {
-        if (Option.isNone(sessionId)) return yield* resolveProfileRegistry(Option.none())
+        if (Option.isNone(sessionId)) return yield* resolveRegistryForCwd(Option.none())
         const session = yield* loadSession(sessionId.value)
         const cwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
-        return yield* resolveProfileRegistry(cwd)
-      })
+        return yield* resolveRegistryForCwd(cwd)
+      }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
 
     return {
       // ----------------------------------------------------------------------

@@ -34,11 +34,19 @@ describe("transcript disclosure", () => {
   })
 })
 
-describe("model picker overlay", () => {
-  test("/model with no argument opens the picker and escape closes it", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), { _tag: "OpenModelPicker" })
-    expect(opened.state.overlay).toEqual({ _tag: "model" })
-    const closed = transitionSessionUi(opened.state, { _tag: "CloseOverlay" })
+describe("settings picker overlay", () => {
+  test("/model and /think open their pane and escape closes it", () => {
+    const model = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "OpenSettingsPicker",
+      picker: "model",
+    })
+    expect(model.state.overlay).toEqual({ _tag: "model" })
+    const reasoning = transitionSessionUi(model.state, {
+      _tag: "OpenSettingsPicker",
+      picker: "reasoning",
+    })
+    expect(reasoning.state.overlay).toEqual({ _tag: "reasoning" })
+    const closed = transitionSessionUi(reasoning.state, { _tag: "CloseOverlay" })
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 })

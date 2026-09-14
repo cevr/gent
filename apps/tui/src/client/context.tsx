@@ -24,7 +24,7 @@ import {
   type MessageId,
   type Model,
   type ModelContextMetrics,
-  type ModelId,
+  type ReasoningEffort,
 } from "@gent/core/protocol"
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import { omitUndefined } from "@gent/core-internal/domain/guards.js"
@@ -97,26 +97,6 @@ export const SteerCommandInput = Schema.TaggedUnion({
   SwitchAgent: { agent: AgentNameSchema },
 })
 export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
-
-const resolveModelInfo = (
-  models: Record<string, Model>,
-  agentsByName: Record<string, AgentDefinition>,
-  agent: Option.Option<AgentName>,
-  sessionModelId: Option.Option<ModelId>,
-  lastModelId: Option.Option<ModelId>,
-): Option.Option<Model> => {
-  // The session's own setting names the next turn's model; `lastModelId`
-  // names the one that last streamed. Show what the user will get.
-  const pinned = Option.orElse(sessionModelId, () => lastModelId)
-  if (Option.isSome(pinned)) {
-    const live = Option.fromNullishOr(models[pinned.value])
-    if (Option.isSome(live)) return live
-  }
-  if (Option.isNone(agent)) return Option.none()
-  const agentDef = Option.fromNullishOr(agentsByName[agent.value])
-  if (Option.isNone(agentDef)) return Option.none()
-  return Option.fromNullishOr(models[resolveAgentModel(agentDef.value)])
-}
 
 export type { Session, SessionSettings, SessionState } from "./session-state"
 
@@ -217,7 +197,12 @@ export interface ClientAgentValue {
   agent: () => AgentName | undefined
   agentStatus: () => AgentStatus
   cost: () => number
+  /** The model the next turn would use: session setting, else the server-resolved default. */
   model: () => string
+  // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
+  reasoningLevel: () => ReasoningEffort | undefined
+  /** The reasoning level config/agent would apply without a session override. */
+  resolvedReasoningLevel: () => Option.Option<ReasoningEffort>
   // Derived accessors
   isStreaming: () => boolean
   isError: () => boolean
@@ -431,7 +416,8 @@ export function ClientProvider(props: ClientProviderProps) {
     agent: initialAgent,
     status: AgentStatus.cases["idle"].make({}),
     cost: 0,
-    lastModelId: Option.none(),
+    resolvedModelId: Option.none(),
+    resolvedReasoningLevel: Option.none(),
   })
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
   const [contextMetrics, setContextMetrics] = createSignal<Option.Option<ModelContextMetrics>>(
@@ -590,7 +576,8 @@ export function ClientProvider(props: ClientProviderProps) {
       agent: Option.fromNullishOr(rt.agent),
       status,
       cost: snapshot.metrics.costUsd,
-      lastModelId: Option.fromNullishOr(snapshot.metrics.lastModelId),
+      resolvedModelId: Option.some(snapshot.resolvedModelId),
+      resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
     setLatestInputTokens(snapshot.metrics.lastInputTokens)
     setContextMetrics(Option.fromUndefinedOr(snapshot.metrics.context))
@@ -606,7 +593,8 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             setAgentStore({
               cost: snapshot.metrics.costUsd,
-              lastModelId: Option.fromNullishOr(snapshot.metrics.lastModelId),
+              resolvedModelId: Option.some(snapshot.resolvedModelId),
+              resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
             })
             setLatestInputTokens(snapshot.metrics.lastInputTokens)
             setContextMetrics(Option.fromUndefinedOr(snapshot.metrics.context))
@@ -658,6 +646,8 @@ export function ClientProvider(props: ClientProviderProps) {
               reasoningLevel: event.reasoningLevel,
             }),
           )
+          // The server resolves what the cleared/changed settings fall back to.
+          refreshSessionMetrics()
         }
         break
       }
@@ -738,7 +728,8 @@ export function ClientProvider(props: ClientProviderProps) {
               agent: Option.some(defaultAgent),
               status: AgentStatus.cases["idle"].make({}),
               cost: 0,
-              lastModelId: Option.none(),
+              resolvedModelId: Option.none(),
+              resolvedReasoningLevel: Option.none(),
             })
             setLatestInputTokens(0)
             clearConnectionIssue()
@@ -801,7 +792,8 @@ export function ClientProvider(props: ClientProviderProps) {
         agent: nextAgent,
         status: AgentStatus.cases["idle"].make({}),
         cost: 0,
-        lastModelId: Option.none(),
+        resolvedModelId: Option.none(),
+        resolvedReasoningLevel: Option.none(),
       })
       setLatestInputTokens(0)
       clearConnectionIssue()
@@ -827,7 +819,8 @@ export function ClientProvider(props: ClientProviderProps) {
         agent: Option.some(defaultAgent),
         status: AgentStatus.cases["idle"].make({}),
         cost: 0,
-        lastModelId: Option.none(),
+        resolvedModelId: Option.none(),
+        resolvedReasoningLevel: Option.none(),
       })
       setLatestInputTokens(0)
       clearConnectionIssue()
@@ -858,6 +851,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.tap((result) =>
             Effect.sync(() => {
               dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
+              refreshSessionMetrics()
             }),
           ),
           Effect.asVoid,
@@ -959,13 +953,12 @@ export function ClientProvider(props: ClientProviderProps) {
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => {
-      // Server-authoritative `lastModelId` from `metrics` is the single source
-      // of truth — server-side agent overrides (`runSpec.agentName`) can swap
-      // to a different driver mid-turn, so the local agent default would
-      // disagree with what's actually running.
+      // The session setting applies before the snapshot refresh lands; the
+      // server-resolved id covers config and agent defaults. The agent
+      // definition only fills the gap before the first snapshot hydrates.
       const pinned = Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.modelId))
       if (Option.isSome(pinned)) return pinned.value
-      if (Option.isSome(agentStore.lastModelId)) return agentStore.lastModelId.value
+      if (Option.isSome(agentStore.resolvedModelId)) return agentStore.resolvedModelId.value
       const agentDef = Option.flatMap(agentStore.agent, (agent) =>
         Option.fromNullishOr(modelStore.agentsByName[agent]),
       )
@@ -974,6 +967,14 @@ export function ClientProvider(props: ClientProviderProps) {
       if (Option.isSome(resolved)) return resolveAgentModel(resolved.value)
       return DEFAULT_MODEL_ID
     },
+    reasoningLevel: () =>
+      Option.getOrUndefined(
+        Option.orElse(
+          Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.reasoningLevel)),
+          () => agentStore.resolvedReasoningLevel,
+        ),
+      ),
+    resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
     isError: () => agentStore.status._tag === "error",
@@ -983,16 +984,7 @@ export function ClientProvider(props: ClientProviderProps) {
     },
     latestInputTokens,
     contextMetrics,
-    modelInfo: () =>
-      Option.getOrUndefined(
-        resolveModelInfo(
-          modelStore.modelsById,
-          modelStore.agentsByName,
-          agentStore.agent,
-          Option.flatMap(sessionOption(), (s) => Option.fromUndefinedOr(s.modelId)),
-          agentStore.lastModelId,
-        ),
-      ),
+    modelInfo: () => modelStore.modelsById[agentValue.model()],
     models: () =>
       Object.values(modelStore.modelsById).filter((model) =>
         modelStore.driverIds.includes(model.provider),

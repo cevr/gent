@@ -4,9 +4,9 @@
 
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
-import { Option, Predicate } from "effect"
+import { Option, Predicate, Schema } from "effect"
 import type { RGBA } from "@opentui/core"
-import type { BranchId, SessionId } from "@gent/core/protocol"
+import { ModelId, ReasoningEffort, type BranchId, type SessionId } from "@gent/core/protocol"
 import { MessageList } from "../components/message-list"
 import { NativeTranscript } from "../components/native-transcript"
 import { Composer } from "../components/composer"
@@ -16,7 +16,12 @@ import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
 import { MessagePicker } from "../components/message-picker"
-import { ModelPicker } from "../components/model-picker"
+import {
+  DEFAULT_ROW_ID,
+  modelRows,
+  reasoningRows,
+  SettingsPicker,
+} from "../components/settings-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/context"
@@ -50,6 +55,9 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
     </For>
   )
 }
+
+/** A reasoning row id; `default` decodes to `None` and clears the override. */
+const parseReasoningRow = Schema.decodeUnknownOption(ReasoningEffort)
 
 export function Session(props: SessionProps) {
   const { theme } = useTheme()
@@ -120,7 +128,7 @@ export function Session(props: SessionProps) {
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
       buildTopRightLabels(
-        client.session()?.reasoningLevel,
+        client.reasoningLevel(),
         client.latestInputTokens(),
         client.modelInfo()?.contextLength,
         theme,
@@ -253,11 +261,25 @@ export function Session(props: SessionProps) {
               <CommandPalette />
             </Composer>
           </ComposerFrame>
-          <ModelPicker
+          <SettingsPicker
             open={controller.uiState().overlay._tag === "model"}
-            models={client.models()}
-            current={Option.fromNullishOr(client.modelInfo()?.id)}
-            onSelect={controller.onModelSelect}
+            title="Model"
+            rows={modelRows(client.models())}
+            current={Option.some(client.model())}
+            onSelect={(id) => controller.onModelSelect(ModelId.make(id))}
+            onClose={controller.closeOverlay}
+          />
+          <SettingsPicker
+            open={controller.uiState().overlay._tag === "reasoning"}
+            title="Reasoning"
+            rows={reasoningRows(client.resolvedReasoningLevel())}
+            current={Option.some(
+              Option.getOrElse(
+                Option.fromUndefinedOr(client.session()?.reasoningLevel),
+                () => DEFAULT_ROW_ID,
+              ),
+            )}
+            onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
             onClose={controller.closeOverlay}
           />
           <ExtensionWidgets slot="below-input" />

@@ -10,6 +10,7 @@ import type {
   MessageId,
   Message as DurableMessage,
   ModelId,
+  ReasoningEffort,
   SessionId,
 } from "@gent/core/protocol"
 import type { Message, SessionItem } from "../components/message-list"
@@ -100,6 +101,8 @@ export interface SessionController {
   closeOverlay: () => void
   onForkSelect: (messageId: MessageId) => void
   onModelSelect: (modelId: ModelId) => void
+  /** `None` clears the session override so config/agent defaults apply. */
+  onReasoningSelect: (level: Option.Option<ReasoningEffort>) => void
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
 }
 
@@ -475,7 +478,10 @@ export function createSessionController(props: {
       router.navigateToSession(sessionId, branchId)
     },
     openForkPicker,
-    openModelPicker: () => dispatchSessionUi(SessionUiEvent.cases.OpenModelPicker.make({})),
+    openModelPicker: () =>
+      dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" })),
+    openReasoningPicker: () =>
+      dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "reasoning" })),
     openPermissions: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
   })
@@ -529,6 +535,18 @@ export function createSessionController(props: {
     cast(
       client
         .updateSessionSettings((current) => ({ ...current, modelId }))
+        .pipe(Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error))))),
+    )
+  }
+
+  const onReasoningSelect = (level: Option.Option<ReasoningEffort>) => {
+    closeOverlay()
+    cast(
+      client
+        .updateSessionSettings((current) => ({
+          ...current,
+          reasoningLevel: Option.getOrUndefined(level),
+        }))
         .pipe(Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error))))),
     )
   }
@@ -706,6 +724,7 @@ export function createSessionController(props: {
     closeOverlay,
     onForkSelect,
     onModelSelect,
+    onReasoningSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
 }

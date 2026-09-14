@@ -16,6 +16,7 @@ import {
   ToolCallId,
   dateFromMillis,
   Message,
+  ModelId,
 } from "@gent/core/protocol"
 import { EventId } from "@gent/core-internal/domain/event"
 import { ExtensionId, InteractionRequestId } from "@gent/core-internal/domain/ids"
@@ -59,6 +60,7 @@ const snapshotFor = (
   lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
+  resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
   runtime: {
     _tag: "Idle",
     agent: AgentName.make("cowork"),

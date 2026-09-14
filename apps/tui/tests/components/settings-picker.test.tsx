@@ -1,14 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 /**
- * The model picker behind `/model`.
+ * The docked settings pane behind `/model` and `/think`.
  *
- * It lists the registry catalogue, marks the model the next turn would use,
- * narrows as the user types, and hands the selected id back.
+ * It lists rows, marks the one the next turn would use, narrows as the user
+ * types, and hands the selected id back.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { Model, ModelId, ProviderId } from "@gent/core/protocol"
-import { ModelPicker } from "../../src/components/model-picker"
+import {
+  DEFAULT_ROW_ID,
+  modelRows,
+  reasoningRows,
+  SettingsPicker,
+} from "../../src/components/settings-picker"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 
@@ -21,16 +26,17 @@ const catalogue = [
   model("openai/gpt-5.6-luna", "GPT-5.6 Luna"),
 ]
 
-describe("Model picker", () => {
+describe("Settings picker", () => {
   it.live("marks the current model, filters on typing, and selects with enter", () =>
     Effect.gen(function* () {
       const selected: Array<string> = []
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
-          <ModelPicker
+          <SettingsPicker
             open={true}
-            models={catalogue}
-            current={Option.some(ModelId.make("anthropic/claude-opus-5"))}
+            title="Model"
+            rows={modelRows(catalogue)}
+            current={Option.some("anthropic/claude-opus-5")}
             onSelect={(id) => {
               selected.push(id)
             }}
@@ -52,6 +58,39 @@ describe("Model picker", () => {
       expect(renderFrame(setup)).not.toContain("Claude Opus 5")
       setup.mockInput.pressEnter()
       expect(selected).toEqual(["openai/gpt-5.6-luna"])
+    }),
+  )
+
+  it.live("lists default plus every reasoning level and marks the session override", () =>
+    Effect.gen(function* () {
+      const selected: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SettingsPicker
+            open={true}
+            title="Reasoning"
+            rows={reasoningRows(Option.some("max"))}
+            current={Option.some("high")}
+            onSelect={(id) => {
+              selected.push(id)
+            }}
+            onClose={() => {}}
+          />
+        )),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Reasoning · 8"), "pane"),
+      )
+      expect(renderFrame(setup)).toContain("agent or config default (max)")
+      expect(renderFrame(setup)).toContain("● high")
+      // The current row is preselected; the top row is `default`.
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressEnter()
+      expect(selected).toEqual([DEFAULT_ROW_ID])
     }),
   )
 })

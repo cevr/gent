@@ -89,6 +89,7 @@ describe("ClientProvider session lifecycle", () => {
         messages: [],
         lastEventId: 42,
         reasoningLevel: absent,
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         runtime: { _tag: "Running", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
         metrics: {
           turns: 1,
@@ -175,7 +176,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.agent()).toBe(AgentName.make("deepwork"))
     }),
   )
-  it.live("model() prefers snapshot.metrics.lastModelId over agent default", () =>
+  it.live("model() reads the snapshot's server-resolved model", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
@@ -196,6 +197,7 @@ describe("ClientProvider session lifecycle", () => {
         messages: [],
         lastEventId: nullValue,
         reasoningLevel: absent,
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         runtime: {
           _tag: "Idle",
           agent: AgentName.make("cowork"),
@@ -206,7 +208,6 @@ describe("ClientProvider session lifecycle", () => {
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,
-          lastModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         },
       })
       yield* Effect.promise(() =>
@@ -242,6 +243,7 @@ describe("ClientProvider session lifecycle", () => {
         messages: [],
         lastEventId: nullValue,
         reasoningLevel: "high",
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         runtime: {
           _tag: "Idle",
           agent: AgentName.make("cowork"),
@@ -304,6 +306,7 @@ describe("ClientProvider session lifecycle", () => {
         messages: [],
         lastEventId: nullValue,
         reasoningLevel: "high",
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         runtime: {
           _tag: "Running",
           agent: AgentName.make("cowork"),
@@ -314,7 +317,6 @@ describe("ClientProvider session lifecycle", () => {
           durationMs: 0,
           costUsd: 123,
           lastInputTokens: 456,
-          lastModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         },
       })
       const state = yield* Effect.promise(() =>
@@ -368,6 +370,7 @@ describe("ClientProvider session lifecycle", () => {
         messages: [],
         lastEventId: nullValue,
         reasoningLevel: "medium",
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         runtime: {
           _tag: "Running",
           agent: AgentName.make("cowork"),
@@ -378,7 +381,6 @@ describe("ClientProvider session lifecycle", () => {
           durationMs: 0,
           costUsd: 12,
           lastInputTokens: 34,
-          lastModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         },
       })
       const state = yield* Effect.promise(() =>
@@ -404,7 +406,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.latestInputTokens()).toBe(0)
     }),
   )
-  it.live("switchSession clears stale lastModelId before re-hydration", () =>
+  it.live("switchSession clears the stale resolved model before re-hydration", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
@@ -425,6 +427,7 @@ describe("ClientProvider session lifecycle", () => {
         messages: [],
         lastEventId: nullValue,
         reasoningLevel: absent,
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         runtime: {
           _tag: "Idle",
           agent: AgentName.make("cowork"),
@@ -435,7 +438,6 @@ describe("ClientProvider session lifecycle", () => {
           durationMs: 0,
           costUsd: 0,
           lastInputTokens: 0,
-          lastModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
         },
       })
       yield* Effect.promise(() =>

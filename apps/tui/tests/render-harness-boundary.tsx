@@ -20,7 +20,7 @@ import { ComposerDraftsProvider } from "../src/components/composer-drafts"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
-import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
+import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
 import type { ClientLog } from "../src/utils/client-logger"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 
@@ -60,6 +60,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           messages: [],
           lastEventId: nullValue,
           reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
           runtime: {
             _tag: "Idle",
             agent: AgentName.make("cowork"),

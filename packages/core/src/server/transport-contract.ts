@@ -98,6 +98,11 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   lastEventId: Schema.NullOr(Schema.Finite),
   modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  /** What the next turn would use once session settings, config, and the
+   * agent definition are folded together. Clients render these; they never
+   * re-derive the precedence. */
+  resolvedModelId: ModelId,
+  resolvedReasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntimeStateSchema),

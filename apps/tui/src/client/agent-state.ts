@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type * as Option from "effect/Option"
-import type { AgentName, ModelId } from "@gent/core/protocol"
+import type { AgentName, ModelId, ReasoningEffort } from "@gent/core/protocol"
 
 export const AgentStatus = Schema.Union([
   Schema.TaggedStruct("idle", {}),
@@ -15,10 +15,10 @@ export interface AgentState {
   status: AgentStatus
   cost: number
   /**
-   * Server-authoritative model id from `SessionSnapshot.metrics.lastModelId`.
-   * Mirrors the cost field's flow: hydrated from snapshot, refreshed on
-   * `StreamEnded`. Falls back to the agent's default model only when no
-   * stream has ended yet for the active session.
+   * What the next turn would use, resolved by the server from session
+   * settings, config, and the agent definition (`SessionSnapshot.resolved*`).
+   * Hydrated from the snapshot and refreshed after every settings change.
    */
-  lastModelId: Option.Option<ModelId>
+  resolvedModelId: Option.Option<ModelId>
+  resolvedReasoningLevel: Option.Option<ReasoningEffort>
 }

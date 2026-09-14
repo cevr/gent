@@ -1,7 +1,7 @@
 import { createEffect, createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { Option } from "effect"
-import type { Model, ModelId } from "@gent/core/protocol"
+import { ReasoningEffort, type Model } from "@gent/core/protocol"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
@@ -9,34 +9,70 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { truncate } from "../utils/format-tool"
 import { FilterListEvent, FilterListState, transitionFilterList } from "./filter-list-state"
-import { filterModels } from "../client/model-query"
 
-export interface ModelPickerProps {
+/** One selectable row: the id goes back to the caller, name and detail render. */
+export interface PickerRow {
+  readonly id: string
+  readonly name: string
+  readonly detail: string
+}
+
+export const modelRows = (models: readonly Model[]): readonly PickerRow[] =>
+  models.map((model) => ({ id: model.id, name: model.name, detail: model.id }))
+
+/** The row id that clears the session override and falls back to config/agent. */
+export const DEFAULT_ROW_ID = "default"
+
+export const reasoningRows = (resolved: Option.Option<ReasoningEffort>): readonly PickerRow[] => [
+  {
+    id: DEFAULT_ROW_ID,
+    name: DEFAULT_ROW_ID,
+    detail: Option.match(resolved, {
+      onNone: () => "agent or config default",
+      onSome: (level) => `agent or config default (${level})`,
+    }),
+  },
+  ...ReasoningEffort.literals.map((level) => ({ id: level, name: level, detail: "" })),
+]
+
+export const filterRows = (rows: readonly PickerRow[], query: string): readonly PickerRow[] => {
+  const needle = query.trim().toLowerCase()
+  if (needle.length === 0) return rows
+  return rows.filter(
+    (row) => row.id.toLowerCase().includes(needle) || row.name.toLowerCase().includes(needle),
+  )
+}
+
+export interface SettingsPickerProps {
   open: boolean
-  models: readonly Model[]
-  /** The model the next turn would use; rendered with a marker and preselected. */
-  current: Option.Option<ModelId>
-  onSelect: (modelId: ModelId) => void
+  title: string
+  rows: readonly PickerRow[]
+  /** The row the next turn would use; rendered with a marker and preselected. */
+  current: Option.Option<string>
+  onSelect: (id: string) => void
   onClose: () => void
 }
 
-export function ModelPicker(props: ModelPickerProps) {
+/**
+ * A docked filter list under the composer, shared by `/model` and `/think`.
+ * A pane, not a modal: it spans the width and keeps a fixed row budget so a
+ * short terminal does not collapse the list.
+ */
+export function SettingsPicker(props: SettingsPickerProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(FilterListState.initial())
   let scrollRef = Option.none<ScrollBoxRenderable>()
 
-  const visible = () => filterModels(props.models, state().query)
+  const visible = () => filterRows(props.rows, state().query)
 
-  useScrollSync(() => `model-picker-${state().selectedIndex}`, {
+  useScrollSync(() => `settings-picker-${state().selectedIndex}`, {
     getRef: () => Option.getOrUndefined(scrollRef),
   })
 
   createEffect(() => {
     if (!props.open) return
-    const index = props.models.findIndex((model) =>
-      Option.exists(props.current, (id) => id === model.id),
-    )
+    const index = props.rows.findIndex((row) => Option.exists(props.current, (id) => id === row.id))
     setState(FilterListState.initial(Math.max(0, index)))
   })
 
@@ -91,9 +127,6 @@ export function ModelPicker(props: ModelPickerProps) {
     { when: () => props.open },
   )
 
-  // Docked under the composer like the agents pane: a pane, not a modal. The
-  // pane spans the width and keeps a fixed row budget so a short terminal
-  // does not collapse the list.
   const panelWidth = () => Math.max(0, dimensions().width - 2)
   // Border 2, body padding 2, row padding 1.
   const rowWidth = () => Math.max(0, panelWidth() - 5)
@@ -113,7 +146,7 @@ export function ModelPicker(props: ModelPickerProps) {
         borderStyle="rounded"
         borderColor={theme.borderSubtle}
         flexDirection="column"
-        title={`Model · ${visible().length}`}
+        title={`${props.title} · ${visible().length}`}
       >
         <ChromePanel.Section>
           <text style={{ fg: theme.text }}>
@@ -126,12 +159,12 @@ export function ModelPicker(props: ModelPickerProps) {
         <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
           <Show
             when={visible().length > 0}
-            fallback={<text style={{ fg: theme.textMuted }}> no models match</text>}
+            fallback={<text style={{ fg: theme.textMuted }}> nothing matches</text>}
           >
             <For each={visible()}>
-              {(model, index) => {
+              {(row, index) => {
                 const isSelected = () => state().selectedIndex === index()
-                const isCurrent = () => Option.exists(props.current, (id) => id === model.id)
+                const isCurrent = () => Option.exists(props.current, (id) => id === row.id)
                 const backgroundColor = () => {
                   if (isSelected()) return theme.primary
                   return "transparent"
@@ -145,14 +178,15 @@ export function ModelPicker(props: ModelPickerProps) {
                   return "  "
                 }
                 const label = () => {
-                  const name = model.name
-                  const id = model.id
-                  const gap = Math.max(1, rowWidth() - 2 - name.length - id.length)
-                  return truncate(`${marker()}${name}${" ".repeat(gap)}${id}`, rowWidth())
+                  const gap = Math.max(1, rowWidth() - 2 - row.name.length - row.detail.length)
+                  return truncate(
+                    `${marker()}${row.name}${" ".repeat(gap)}${row.detail}`,
+                    rowWidth(),
+                  )
                 }
                 return (
                   <box
-                    id={`model-picker-${index()}`}
+                    id={`settings-picker-${index()}`}
                     backgroundColor={backgroundColor()}
                     paddingLeft={1}
                   >

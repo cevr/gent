@@ -49,6 +49,7 @@ function TestComposer(props: {
     closeOverlay: () => {},
     onForkSelect: () => {},
     onModelSelect: () => {},
+    onReasoningSelect: () => {},
     onPromptSearchEvent: () => {},
   } satisfies SessionController
   return (

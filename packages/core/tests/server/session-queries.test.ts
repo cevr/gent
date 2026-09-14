@@ -13,6 +13,8 @@ import { BranchStorage } from "../../src/storage/branch-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { getSessionSnapshot } from "../../src/server/rpc-handlers"
+import { ConfigService } from "../../src/runtime/config-service"
+import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { SessionRuntimeError } from "../../src/runtime/session-runtime"
 import { sessionRuntimeLayer } from "./session-mutations/helpers"
 
@@ -44,6 +46,8 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
 const sessionQueriesActorFailureLayer = Layer.mergeAll(
   SqliteStorage.TestWithSql(() => Layer.empty, {}),
   GentPlatform.Test(),
+  ConfigService.Test(),
+  ExtensionRegistry.Test(),
   sessionRuntimeLayer({
     getState: () =>
       Effect.fail(new SessionRuntimeError({ message: "injected runtime state failure" })),

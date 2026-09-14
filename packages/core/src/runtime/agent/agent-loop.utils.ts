@@ -1,13 +1,9 @@
-import {
-  isReasoningEffort,
-  type AgentDefinition,
-  type ReasoningEffort,
-} from "../../domain/agent.js"
+import type { AgentDefinition } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import type { Message } from "../../domain/message.js"
 import { messagePartsToolCallParts } from "../../domain/message-part-display.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
-import { Option, Predicate } from "effect"
+import { Predicate } from "effect"
 import type { PromptSection } from "../../domain/prompt.js"
 
 /**
@@ -73,16 +69,6 @@ export const buildTurnPromptSections = (
   }
 
   return sections
-}
-
-export const resolveReasoning = (
-  agent: AgentDefinition,
-  sessionOverride?: string,
-): Option.Option<ReasoningEffort> => {
-  if (!Predicate.isUndefined(sessionOverride) && isReasoningEffort(sessionOverride)) {
-    return Option.some(sessionOverride)
-  }
-  return Option.fromUndefinedOr(agent.reasoningEffort)
 }
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>

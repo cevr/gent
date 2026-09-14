@@ -3,12 +3,15 @@ import { omitUndefined } from "../../domain/guards.js"
 import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
   resolveAgentDriver,
   resolveAgentModel,
   type AgentName as AgentNameType,
   type AgentRunOverrides,
+  type ReasoningEffort,
   type RunSpec,
 } from "../../domain/agent.js"
+import type { ModelId } from "../../domain/model.js"
 import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -20,7 +23,7 @@ import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"
 import { compileToolPolicy, ExtensionRegistry } from "../extensions/registry.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
-import { buildTurnPromptSections, resolveReasoning } from "./agent-loop.utils.js"
+import { buildTurnPromptSections } from "./agent-loop.utils.js"
 import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import { staticToolEntries, type ResolvedToolCapability } from "./tool-runner.js"
 import { attachToolBindingIdentity } from "./tool-binding-replay.js"
@@ -47,7 +50,8 @@ const mergeSystemPromptAddendum = (
       }),
   })
 
-const applyAgentOverrides = (
+/** Config `agents[name]` and `RunSpec.overrides` reshape a definition the same way. */
+export const applyAgentOverrides = (
   agent: AgentDefinition,
   overrides: Option.Option<AgentRunOverrides>,
 ): AgentDefinition => {
@@ -72,6 +76,36 @@ const applyAgentOverrides = (
     }),
   })
 }
+
+interface SessionSettingsSource {
+  readonly modelId?: ModelId
+  readonly reasoningLevel?: ReasoningEffort
+}
+
+interface ResolvedSessionSettings {
+  readonly modelId: ModelId
+  readonly reasoningLevel: Option.Option<ReasoningEffort>
+}
+
+/**
+ * What the next turn on a session would use. The session's own settings win
+ * over the effective agent (definition plus config and run overrides); a
+ * session whose agent is unknown falls back to the default model.
+ */
+export const resolveSessionSettings = (
+  effectiveAgent: Option.Option<AgentDefinition>,
+  session: SessionSettingsSource,
+): ResolvedSessionSettings => ({
+  modelId: Option.getOrElse(Option.fromUndefinedOr(session.modelId), () =>
+    Option.match(effectiveAgent, {
+      onNone: () => DEFAULT_MODEL_ID,
+      onSome: resolveAgentModel,
+    }),
+  ),
+  reasoningLevel: Option.orElse(Option.fromUndefinedOr(session.reasoningLevel), () =>
+    Option.flatMap(effectiveAgent, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
+  ),
+})
 
 export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
   agentOverride?: AgentNameType
@@ -197,9 +231,15 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools,
     hostTools,
   })
-  const session = yield* sessionStorage
-    .getSession(params.sessionId)
-    .pipe(Effect.catchEager(() => Effect.void))
+  const session = yield* sessionStorage.getSession(params.sessionId).pipe(
+    Effect.map(Option.fromUndefinedOr),
+    Effect.orElseSucceed(() => Option.none()),
+  )
+  // The session's own settings win over the agent definition and config.
+  const settings = resolveSessionSettings(
+    Option.some(dispatchAgent),
+    Option.getOrElse(session, (): SessionSettingsSource => ({})),
+  )
 
   return {
     currentTurnAgent: currentAgent,
@@ -209,11 +249,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     toolBindings,
     hostToolBindings,
     systemPrompt,
-    // The session's own settings win over the agent definition and config.
-    modelId: Option.getOrElse(Option.fromUndefinedOr(session?.modelId), () =>
-      resolveAgentModel(dispatchAgent),
-    ),
-    reasoning: Option.getOrUndefined(resolveReasoning(dispatchAgent, session?.reasoningLevel)),
+    modelId: settings.modelId,
+    reasoning: Option.getOrUndefined(settings.reasoningLevel),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,
   }
