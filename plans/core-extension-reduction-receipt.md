@@ -1775,3 +1775,17 @@ Receipts: `packages/core/src/runtime/agent/turn-resolve.ts`,
 `apps/tui/src/client/context.tsx`, `apps/tui/src/routes/session.tsx`,
 `packages/core/tests/server/message-send.test.ts`,
 `apps/tui/tests/components/settings-picker.test.tsx`.
+
+## `metrics.lastModelId` dropped (2026-09-13, `4fd4700a`)
+
+The snapshot's `resolvedModelId` names what the next turn uses, so the
+agents-pane detail reads it and the metrics fold no longer tracks the last
+streamed model. Five files, 3 insertions, 15 deletions.
+
+Gamut run 32 (opus-luna, at `73bd6d94`): Opus root at `low`, 5 Luna
+children, 5 spawn + 5 success receipts, 18 tests green in 7m32s, $0.69, no
+continuation. Every child's `StreamEnded.model` was `openai/gpt-5.6-luna`
+with an empty `sessions.model_id`, so children still take the caller's
+`overrides` rather than a session setting; the root stayed on
+`anthropic/claude-opus-5`. Opus reported the 9 pre-existing Cents typecheck
+errors and did not touch them.
