@@ -1742,3 +1742,36 @@ the 14-candidate error, `/model default` cleared and the next turn ran on
 Opus from config. Known gap: right after clearing, the footer falls back
 to the last streamed model until the next turn, because the client cannot
 resolve the config default itself.
+
+## Resolved settings on the snapshot; `/think` shares the pane (2026-09-13, `73bd6d94`)
+
+`SessionSnapshot` carries `resolvedModelId` and `resolvedReasoningLevel`.
+`resolveSessionSettings` in `turn-resolve.ts` is the one place that folds
+session setting > config `agents[name]` > agent definition; the turn and
+the snapshot both call it, and `resolveReasoning` in `agent-loop.utils.ts`
+is gone. `getSessionSnapshot` resolves the session's registry by cwd
+through `resolveRegistryForCwd`, which the handler's
+`resolveSessionRegistry` now reuses. The TUI no longer guesses from the
+last streamed model: `AgentState.lastModelId` and `resolveModelInfo` are
+deleted; `model()` reads session setting, then the resolved id;
+`modelInfo()` is a lookup. Every settings write refreshes the snapshot.
+
+`SettingsPicker` replaces `ModelPicker`: one docked pane with row builders
+`modelRows` and `reasoningRows` (`default` plus the seven core levels, the
+resolved level shown on the default row). `/think` with no argument opens
+it; `/think <level>` accepts every core level plus `default`/`off`.
+
+herdr run (pane `wZ:p18`, opus-luna testbed, config Opus at `low`): a fresh
+session's footer read `Claude Opus 5 · low` before any turn; `/model luna`
+→ `GPT-5.6 Luna`; `/model default` → `Claude Opus 5` at once (the gap from
+the previous section is closed); `/think` opened `Reasoning · 8`, typing
+`xh` + Enter set `xhigh`; `/think default` returned to `low`; one turn ran
+on `anthropic/claude-opus-5` per `StreamEnded.model`.
+
+Receipts: `packages/core/src/runtime/agent/turn-resolve.ts`,
+`packages/core/src/server/rpc-handlers.ts`,
+`packages/core/src/server/transport-contract.ts`,
+`apps/tui/src/components/settings-picker.tsx`,
+`apps/tui/src/client/context.tsx`, `apps/tui/src/routes/session.tsx`,
+`packages/core/tests/server/message-send.test.ts`,
+`apps/tui/tests/components/settings-picker.test.tsx`.
