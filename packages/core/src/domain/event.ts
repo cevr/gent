@@ -69,6 +69,15 @@ export type Question = typeof QuestionSchema.Type
 export const EventId = Schema.Finite.pipe(branded("EventId"))
 export type EventId = typeof EventId.Type
 
+/** Tags of `StepOutcome` in `agent-loop.turn-execution.ts`, as they travel on `StreamEnded`. */
+const StepOutcomeTag = Schema.Literals([
+  "Interrupted",
+  "Failed",
+  "External",
+  "ToolCalls",
+  "Answered",
+])
+
 export const AgentEvent = Schema.TaggedUnion({
   SessionStarted: {
     sessionId: SessionId,
@@ -102,6 +111,8 @@ export const AgentEvent = Schema.TaggedUnion({
     // upstream pricing registry later refreshes.
     costUsd: Schema.optional(Schema.Finite),
     interrupted: Schema.optional(Schema.Boolean),
+    /** How the step ended; the step boundary the loop's policy matched on. */
+    outcome: Schema.optional(StepOutcomeTag),
   },
   TurnCompleted: {
     sessionId: SessionId,

@@ -172,6 +172,7 @@ const reportStreamFailure = <E>(
         branchId: params.branchId,
         messageId: params.messageId,
         step: params.step,
+        outcome: "Failed",
       }),
     )
     yield* publishEventOrDie(

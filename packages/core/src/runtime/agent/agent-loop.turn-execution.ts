@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Predicate, Ref, Schema } from "effect"
+import { DateTime, Effect, Match, Option, Predicate, Ref, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   AgentName,
@@ -93,33 +93,38 @@ const computeStreamEndedCost: (params: {
   return Option.some(calculateCost(params.usage.value, pricing))
 })
 
-interface CollectedResult<A> {
-  readonly _tag: "collected"
-  readonly collected: A
-}
+/**
+ * What one model step produced, classified once from the collected response.
+ * Policy (continue, stop, run tools) matches on this; nothing else inspects
+ * the response parts, and the tag travels on the step's `StreamEnded` event.
+ */
+export const StepOutcome = Schema.TaggedUnion({
+  Interrupted: {},
+  /** The stream failed; `partialOutput` says whether observable output was saved first. */
+  Failed: { partialOutput: Schema.Boolean },
+  /** The external driver ran the whole step, tools included. */
+  External: {},
+  /** The model asked for tools; the response parts carry them. */
+  ToolCalls: { count: Schema.Int },
+  /** No tool calls: an answer, nothing at all, or output cut off at the limit. */
+  Answered: { empty: Schema.Boolean, truncated: Schema.Boolean },
+})
+export type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
 
-interface InteractionPendingResult {
-  readonly _tag: "interaction-pending"
-  readonly pending: InteractionPendingError
+export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
+  const observable = collected.responseParts.some(isObservableModelOutputPart)
+  if (collected.interrupted) return StepOutcome.cases.Interrupted.make({})
+  if (collected.streamFailed) return StepOutcome.cases.Failed.make({ partialOutput: observable })
+  if (collected.driverKind === "external") return StepOutcome.cases.External.make({})
+  const count = toolCallsFromResponseParts(collected.responseParts).length
+  if (count > 0) return StepOutcome.cases.ToolCalls.make({ count })
+  return StepOutcome.cases.Answered.make({
+    empty: !observable,
+    truncated: collected.responseParts.some(
+      (part) => part.type === "finish" && part.reason === "length",
+    ),
+  })
 }
-
-type TurnStepResult =
-  | {
-      readonly _tag: "continue"
-      readonly currentTurnAgent: AgentNameType
-    }
-  | {
-      readonly _tag: "stop"
-      readonly currentTurnAgent: AgentNameType
-      readonly interrupted: boolean
-      readonly streamFailed: boolean
-      /** The model never produced an answer and no continuation is left. */
-      readonly unanswered: boolean
-    }
-  | {
-      readonly _tag: "interaction"
-      readonly outcome: TurnOutcome
-    }
 
 const MAX_TURN_STEPS = 200
 /** Continuation instructions one turn may persist after a failed, empty, or truncated step. */
@@ -142,6 +147,20 @@ export const TurnOutcome = Schema.TaggedUnion({
   },
 })
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
+
+/** What the turn loop does after one step. */
+const StepResult = Schema.TaggedUnion({
+  Continue: { currentTurnAgent: AgentName },
+  Stop: {
+    currentTurnAgent: AgentName,
+    interrupted: Schema.Boolean,
+    streamFailed: Schema.Boolean,
+    /** The model never produced an answer and no continuation is left. */
+    unanswered: Schema.Boolean,
+  },
+  Interaction: { outcome: TurnOutcome },
+})
+type StepResult = Schema.Schema.Type<typeof StepResult>
 
 type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
@@ -401,18 +420,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
 
       if (Predicate.isUndefined(source)) {
-        return {
+        let driverKind: "model" | "external" = "model"
+        const driver = params.resolved.driver
+        if (Predicate.isNotUndefined(driver) && driver._tag === "external") driverKind = "external"
+        const collected: CollectedTurnResponse = {
           responseParts: [],
           messageProjection: { assistant: [], tool: [] },
           interrupted: false,
           streamFailed: true,
-          driverKind: (() => {
-            let kind: "model" | "external" = "model"
-            const driver = params.resolved.driver
-            if (Predicate.isNotUndefined(driver) && driver._tag === "external") kind = "external"
-            return kind
-          })(),
+          driverKind,
         }
+        return { collected, outcome: classifyStep(collected) }
       }
 
       const eventPublisher = yield* EventPublisher
@@ -466,88 +484,100 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
       }
 
+      const outcome = classifyStep(collected)
       let responseStep = params.step
       if (source.driverKind === "external") responseStep = nextExternalStep
+      const assistantParts = collected.messageProjection.assistant
+      const toolParts = collected.messageProjection.tool
 
-      if (collected.interrupted) {
+      // A settled step: cost frozen into the boundary event, metrics folded,
+      // parts persisted with their bindings.
+      const settleStep = Effect.gen(function* () {
+        const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
+        const streamEndedCost = yield* computeStreamEndedCost({
+          modelId: params.resolved.modelId,
+          usage,
+        })
         yield* publishEventOrDie(
           StreamEnded.make({
             messageId: params.messageId,
             step: params.step,
             sessionId: scope.sessionId,
             branchId: scope.branchId,
-            interrupted: true,
+            usage: collected.messageProjection.usage,
+            model: params.resolved.modelId,
+            costUsd: Option.getOrUndefined(streamEndedCost),
+            outcome: outcome._tag,
           }),
         )
-        yield* persistAssistantPartsLocal(responseStep, collected.messageProjection.assistant)
-        return collected
-      }
-
-      if (collected.streamFailed) {
-        yield* persistAssistantPartsLocal(responseStep, collected.messageProjection.assistant)
-        yield* persistToolPartsLocal(responseStep, collected.messageProjection.tool)
-        return collected
-      }
-
-      const streamEndedCost = yield* computeStreamEndedCost({
-        modelId: params.resolved.modelId,
-        usage: Option.fromUndefinedOr(collected.messageProjection.usage),
-      })
-      yield* publishEventOrDie(
-        StreamEnded.make({
-          messageId: params.messageId,
-          step: params.step,
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          usage: collected.messageProjection.usage,
-          model: params.resolved.modelId,
-          costUsd: Option.getOrUndefined(streamEndedCost),
-        }),
-      )
-      const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
-      const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
-        inputTokens: 0,
-        outputTokens: 0,
-      }))
-      yield* Effect.logInfo("stream.end").pipe(
-        Effect.annotateLogs({
-          driverKind: source.driverKind,
-          inputTokens,
-          outputTokens,
-          toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
-        }),
-      )
-
-      const usableCount = (count: number) => Number.isSafeInteger(count) && count >= 0
-      yield* Ref.update(scope.turnMetricsRef, (m) => {
-        const totalInput = m.inputTokens + inputTokens
-        const totalOutput = m.outputTokens + outputTokens
-        return {
-          ...m,
-          agent: params.resolved.currentTurnAgent,
-          model: params.resolved.modelId,
-          inputTokens: totalInput,
-          outputTokens: totalOutput,
-          toolCallCount:
-            m.toolCallCount + toolCallsFromResponseParts(collected.responseParts).length,
-          steps: m.steps + 1,
-          usageKnown:
-            m.usageKnown &&
-            Option.isSome(usage) &&
-            usableCount(inputTokens) &&
-            usableCount(outputTokens) &&
-            usableCount(totalInput) &&
-            usableCount(totalOutput),
-        }
+        const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
+          inputTokens: 0,
+          outputTokens: 0,
+        }))
+        const toolCallCount = toolCallsFromResponseParts(collected.responseParts).length
+        yield* Effect.logInfo("stream.end").pipe(
+          Effect.annotateLogs({
+            driverKind: source.driverKind,
+            outcome: outcome._tag,
+            inputTokens,
+            outputTokens,
+            toolCallCount,
+          }),
+        )
+        const usableCount = (count: number) => Number.isSafeInteger(count) && count >= 0
+        yield* Ref.update(scope.turnMetricsRef, (m) => {
+          const totalInput = m.inputTokens + inputTokens
+          const totalOutput = m.outputTokens + outputTokens
+          return {
+            ...m,
+            agent: params.resolved.currentTurnAgent,
+            model: params.resolved.modelId,
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            toolCallCount: m.toolCallCount + toolCallCount,
+            steps: m.steps + 1,
+            usageKnown:
+              m.usageKnown &&
+              Option.isSome(usage) &&
+              usableCount(inputTokens) &&
+              usableCount(outputTokens) &&
+              usableCount(totalInput) &&
+              usableCount(totalOutput),
+          }
+        })
+        yield* persistAssistantPartsWithBindingsAt(responseStep, assistantParts)
+        yield* persistToolPartsLocal(responseStep, toolParts)
       })
 
-      yield* persistAssistantPartsWithBindingsAt(
-        responseStep,
-        collected.messageProjection.assistant,
-      )
-      yield* persistToolPartsLocal(responseStep, collected.messageProjection.tool)
+      yield* Match.type<StepOutcome>().pipe(
+        Match.tagsExhaustive({
+          Interrupted: () =>
+            Effect.gen(function* () {
+              yield* publishEventOrDie(
+                StreamEnded.make({
+                  messageId: params.messageId,
+                  step: params.step,
+                  sessionId: scope.sessionId,
+                  branchId: scope.branchId,
+                  interrupted: true,
+                  outcome: "Interrupted",
+                }),
+              )
+              yield* persistAssistantPartsLocal(responseStep, assistantParts)
+            }),
+          // The failure already ended the stream where it broke; keep what arrived.
+          Failed: () =>
+            Effect.gen(function* () {
+              yield* persistAssistantPartsLocal(responseStep, assistantParts)
+              yield* persistToolPartsLocal(responseStep, toolParts)
+            }),
+          External: () => settleStep,
+          ToolCalls: () => settleStep,
+          Answered: () => settleStep,
+        }),
+      )(outcome)
 
-      return collected
+      return { collected, outcome }
     })
 
     const executeToolsWithInteraction = (params: {
@@ -564,18 +594,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Effect.catchIf(Schema.is(ToolInteractionPending), (pending) => Effect.succeedSome(pending)),
       )
 
-    const interactionOutcome = (
-      pending: ToolInteractionPending,
-      currentTurnAgent: AgentNameType,
-    ): Extract<TurnStepResult, { readonly _tag: "interaction" }> =>
-      ({
-        _tag: "interaction",
+    const interactionOutcome = (pending: ToolInteractionPending, currentTurnAgent: AgentNameType) =>
+      StepResult.cases.Interaction.make({
         outcome: TurnOutcome.cases.InteractionRequested.make({
           pendingRequestId: pending.pending.requestId,
           pendingToolCallId: String(pending.toolCallId),
           currentTurnAgent,
         }),
-      }) satisfies Extract<TurnStepResult, { readonly _tag: "interaction" }>
+      })
 
     const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (params: {
       messageId: RunningState["message"]["id"]
@@ -919,15 +945,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         baseSections: params.turnProfile.turnBaseSections,
         interactive: params.state.interactive,
       })
-      if (Predicate.isUndefined(resolved)) {
-        return {
-          _tag: "stop",
-          currentTurnAgent: params.currentTurnAgent,
+      const stopWith = (
+        currentTurnAgent: AgentNameType,
+        flags: { interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean },
+      ) =>
+        StepResult.cases.Stop.make({
+          currentTurnAgent,
           interrupted: false,
           streamFailed: false,
           unanswered: false,
-        } satisfies TurnStepResult
-      }
+          ...flags,
+        })
+      if (Predicate.isUndefined(resolved)) return stopWith(params.currentTurnAgent, {})
 
       const currentTurnAgent = resolved.currentTurnAgent
       if (params.step === 1) {
@@ -938,16 +967,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }))
       }
       if (yield* scope.turnInterruption.interrupted) {
-        return {
-          _tag: "stop",
-          currentTurnAgent,
-          interrupted: true,
-          streamFailed: false,
-          unanswered: false,
-        } satisfies TurnStepResult
+        return stopWith(currentTurnAgent, { interrupted: true })
       }
 
-      const collectedOrPending = yield* Effect.scoped(
+      const attempt = yield* Effect.scoped(
         Effect.gen(function* () {
           const activeStream = yield* makeActiveStreamHandle
           yield* Ref.set(scope.activeStreamRef, Option.some(activeStream))
@@ -959,114 +982,79 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),
       ).pipe(
-        Effect.map(
-          (collected) =>
-            ({ _tag: "collected", collected }) satisfies CollectedResult<typeof collected>,
-        ),
+        Effect.map(Result.succeed),
         Effect.catchIf(Schema.is(InteractionPendingError), (pending) =>
-          Effect.succeed({
-            _tag: "interaction-pending",
-            pending,
-          } satisfies InteractionPendingResult),
+          Effect.succeed(Result.fail(pending)),
         ),
       )
-      if (collectedOrPending._tag === "interaction-pending") {
-        return {
-          _tag: "interaction",
+      if (Result.isFailure(attempt)) {
+        return StepResult.cases.Interaction.make({
           outcome: TurnOutcome.cases.InteractionRequested.make({
-            pendingRequestId: collectedOrPending.pending.requestId,
+            pendingRequestId: attempt.failure.requestId,
             pendingToolCallId: "external",
             currentTurnAgent,
           }),
-        } satisfies TurnStepResult
+        })
       }
-
-      const { collected } = collectedOrPending
-      if (collected.interrupted) {
-        return {
-          _tag: "stop",
-          currentTurnAgent,
-          interrupted: true,
-          streamFailed: false,
-          unanswered: false,
-        } satisfies TurnStepResult
-      }
-      if (collected.streamFailed) {
-        const continued =
-          collected.responseParts.some(isObservableModelOutputPart) &&
-          (yield* continueWithinTurn({
-            messageId: params.state.message.id,
-            step: params.step,
-            instruction: CONTINUATION_INSTRUCTION,
-          }))
-        if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
-        return {
-          _tag: "stop",
-          currentTurnAgent,
-          interrupted: false,
-          streamFailed: true,
-          unanswered: false,
-        } satisfies TurnStepResult
-      }
-      if (collected.driverKind === "external") {
-        return {
-          _tag: "stop",
-          currentTurnAgent,
-          interrupted: false,
-          streamFailed: false,
-          unanswered: false,
-        } satisfies TurnStepResult
-      }
-
-      const toolCalls = toolCallsFromResponseParts(collected.responseParts)
-      if (toolCalls.length === 0) {
-        // A step with no tool calls normally means the model answered. A step
-        // with no observable output either answered nothing at all: persisting
-        // an empty parts list stores no message, so finalizing here reports a
-        // successful turn that produced no reply. Re-prompt once instead.
-        // A step cut off at the output limit lost whatever it was writing,
-        // usually a tool call. Re-prompt for a smaller step instead of
-        // reporting the fragment as the reply.
-        const producedNothing = !collected.responseParts.some(isObservableModelOutputPart)
-        const truncated = collected.responseParts.some(
-          (part) => part.type === "finish" && part.reason === "length",
+      const { collected, outcome } = attempt.success
+      const stop = (flags: {
+        interrupted?: boolean
+        streamFailed?: boolean
+        unanswered?: boolean
+      }) => stopWith(currentTurnAgent, flags)
+      const proceed = StepResult.cases.Continue.make({ currentTurnAgent })
+      // Whatever the model did produce stays; a durable instruction follows it
+      // and the same turn runs one more step. Once the budget is spent, stop.
+      const continueOr = (instruction: string, otherwise: StepResult) =>
+        continueWithinTurn({
+          messageId: params.state.message.id,
+          step: params.step,
+          instruction,
+        }).pipe(
+          Effect.map((continued) => {
+            if (continued) return proceed
+            return otherwise
+          }),
         )
-        if (producedNothing || truncated) {
-          let instruction = EMPTY_RESPONSE_INSTRUCTION
-          if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
-          const continued = yield* continueWithinTurn({
-            messageId: params.state.message.id,
-            step: params.step,
-            instruction,
-          })
-          if (continued) return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
-        }
-        // Continuations are spent and the model still said nothing. Say so on
-        // the receipt rather than finalizing a turn that looks like a reply.
-        return {
-          _tag: "stop",
+      const runTools = Effect.gen(function* () {
+        const interactionSignal = yield* executeToolsWithInteraction({
+          hostToolBindings: resolved.hostToolBindings,
+          messageId: params.state.message.id,
+          step: params.step,
+          toolCalls: toolCallsFromResponseParts(collected.responseParts),
           currentTurnAgent,
-          interrupted: false,
-          streamFailed: false,
-          unanswered: producedNothing,
-        } satisfies TurnStepResult
-      }
-      const interactionSignal = yield* executeToolsWithInteraction({
-        hostToolBindings: resolved.hostToolBindings,
-        messageId: params.state.message.id,
-        step: params.step,
-        toolCalls,
-        currentTurnAgent,
-        toolBindings: resolved.toolBindings,
+          toolBindings: resolved.toolBindings,
+        })
+        if (Option.isSome(interactionSignal)) {
+          return interactionOutcome(interactionSignal.value, currentTurnAgent)
+        }
+        yield* clearProcessLocalReplayBindings(
+          assistantMessageIdForTurn(params.state.message.id, params.step),
+        )
+        yield* deliverSteeringAtStepBoundary()
+        return proceed
       })
-      if (Option.isSome(interactionSignal)) {
-        return interactionOutcome(interactionSignal.value, currentTurnAgent)
-      }
-      yield* clearProcessLocalReplayBindings(
-        assistantMessageIdForTurn(params.state.message.id, params.step),
-      )
-      yield* deliverSteeringAtStepBoundary()
-      return { _tag: "continue", currentTurnAgent } satisfies TurnStepResult
+
+      return yield* Match.type<StepOutcome>().pipe(
+        Match.tagsExhaustive({
+          Interrupted: () => Effect.succeed(stop({ interrupted: true })),
+          Failed: ({ partialOutput }) => {
+            if (!partialOutput) return Effect.succeed(stop({ streamFailed: true }))
+            return continueOr(CONTINUATION_INSTRUCTION, stop({ streamFailed: true }))
+          },
+          External: () => Effect.succeed(stop({})),
+          // A step with nothing observable answered nothing; one cut off at the
+          // output limit lost what it was writing. Re-prompt rather than report
+          // the fragment as the reply; once continuations are spent, say so.
+          Answered: ({ empty, truncated }) => {
+            if (!empty && !truncated) return Effect.succeed(stop({}))
+            let instruction = EMPTY_RESPONSE_INSTRUCTION
+            if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
+            return continueOr(instruction, stop({ unanswered: empty }))
+          },
+          ToolCalls: () => runTools,
+        }),
+      )(outcome)
     })
 
     const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
@@ -1136,14 +1124,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }
 
           const stepResult = yield* runTurnStep({ state, step, currentTurnAgent, turnProfile })
-          if (stepResult._tag === "stop") {
+          if (stepResult._tag === "Stop") {
             currentTurnAgent = stepResult.currentTurnAgent
             interrupted = stepResult.interrupted
             streamFailed = stepResult.streamFailed
             unanswered = stepResult.unanswered
             break
           }
-          if (stepResult._tag === "continue") {
+          if (stepResult._tag === "Continue") {
             currentTurnAgent = stepResult.currentTurnAgent
             continue
           }
