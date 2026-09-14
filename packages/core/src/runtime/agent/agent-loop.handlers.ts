@@ -54,7 +54,6 @@ import {
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
-import type { ModelId } from "../../domain/model.js"
 import { Message, type MessageMetadata } from "../../domain/message.js"
 
 const isActiveLoopState = Predicate.or(
@@ -817,7 +816,6 @@ export const buildAgentLoopActorHandlers = (config: {
             let durationMs = 0
             let costUsd = 0
             let lastInputTokens = 0
-            let lastModelId = Option.none<ModelId>()
             let compactions = 0
             let context = Option.none<ModelContextMetrics>()
             for (const { event } of envelopes) {
@@ -844,9 +842,6 @@ export const buildAgentLoopActorHandlers = (config: {
                   if (!Predicate.isUndefined(event.costUsd)) {
                     costUsd += event.costUsd
                   }
-                  if (!Predicate.isUndefined(event.model)) {
-                    lastModelId = Option.some(event.model)
-                  }
                   break
               }
             }
@@ -856,8 +851,6 @@ export const buildAgentLoopActorHandlers = (config: {
               costUsd,
               lastInputTokens,
             }
-            if (Option.isSome(lastModelId))
-              Object.assign(metrics, { lastModelId: lastModelId.value })
             if (Option.isSome(context)) Object.assign(metrics, { context: context.value })
             return metrics
           }).pipe(provideActorWorkspace),

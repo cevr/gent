@@ -121,7 +121,6 @@ describe("SessionRuntime metrics", () => {
       }
       const expected = result.streamEndeds.reduce((sum, ev) => sum + (ev.costUsd ?? 0), 0)
       expect(result.metrics.costUsd).toBeCloseTo(expected, 10)
-      expect(result.metrics.lastModelId).toBe(ModelId.make("test/priced"))
       expect(result.metrics.lastInputTokens).toBeGreaterThan(0)
     }),
   )
@@ -260,7 +259,6 @@ describe("SessionRuntime metrics", () => {
         expect(ev.costUsd).toBeUndefined()
       }
       expect(result.metrics.costUsd).toBe(0)
-      expect(result.metrics.lastModelId).toBe(ModelId.make("test/priced"))
     }),
   )
 })

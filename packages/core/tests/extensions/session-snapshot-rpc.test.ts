@@ -36,7 +36,7 @@ describe("Session snapshot across RPC boundaries", () => {
           expect(after.messages.map((message) => extractText(message.parts))).toContain("hello")
           expect(after.metrics.turns).toBeGreaterThan(0)
           expect(after.metrics.lastInputTokens).toBeGreaterThan(0)
-          expect(after.metrics.lastModelId).toBeDefined()
+          expect(after.resolvedModelId).toBeDefined()
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

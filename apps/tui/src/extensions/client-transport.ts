@@ -251,7 +251,7 @@ const agentDetailAt = (
   }).pipe(
     Effect.map((snapshot) => ({
       status: Option.some(snapshot.runtime._tag),
-      model: Option.fromUndefinedOr(snapshot.metrics.lastModelId),
+      model: Option.some(snapshot.resolvedModelId),
       turns: snapshot.metrics.turns,
       costUsd: snapshot.metrics.costUsd,
       durationMs: snapshot.metrics.durationMs,

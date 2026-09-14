@@ -12,7 +12,7 @@ import {
 } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
 import { messagePartsTextLines, messageSingleText } from "../../domain/message-part-display.js"
-import { ModelId, type ModelId as ModelIdType } from "../../domain/model.js"
+import type { ModelId as ModelIdType } from "../../domain/model.js"
 import {
   FollowUpQueueEntryInfo,
   QueueSnapshot,
@@ -383,9 +383,6 @@ export const SessionRuntimeMetrics = Schema.Struct({
    * to the context window are we right now" — sums don't answer that). */
   lastInputTokens: Schema.Finite,
   context: Schema.optional(ModelContextMetrics),
-  /** Model id reported by the most recent `StreamEnded` (drives the model
-   * name label in the TUI). `undefined` until the first stream ends. */
-  lastModelId: Schema.optional(ModelId),
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
