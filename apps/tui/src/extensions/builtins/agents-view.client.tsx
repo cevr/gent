@@ -713,7 +713,10 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
     return clientContributions(
       widgetContribution({
         id: "agents.tray",
-        slot: "above-input",
+        // Under the status line, not between the transcript and the composer:
+        // the tray is chrome about background work, and the reply stays next
+        // to the prompt it answers.
+        slot: "below-input",
         component: () => <SubagentTray controller={controller} />,
       }),
       clientCommandContribution({
