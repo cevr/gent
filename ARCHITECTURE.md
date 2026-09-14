@@ -90,6 +90,8 @@ updates this list in the same commit.
     message is summarised into one durable user-role marker that names the
     session, the branch, and the id range it replaced; every replaced message
     stays readable from the cell through `context.history` and `context.read`.
+    When the newest turn alone overflows, the handoff anchors inside the turn
+    at a step boundary and keeps the newest steps that fit half the budget.
     A summary that cannot be produced degrades to truncation with a visible
     notice. Receipts: `packages/core/src/runtime/model-context-window.ts`,
     `packages/core/src/runtime/agent/turn-source.ts`,

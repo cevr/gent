@@ -36,6 +36,7 @@ import {
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
+  handoffAnchorWithinTurn,
   type ModelContextProjection,
   ModelContextProjectionError,
   projectModelContext,
@@ -137,6 +138,32 @@ type WindowProjection = {
 }
 
 /**
+ * Where the window hands off and whether it must. The newest user message
+ * anchors it; when the newest turn alone exceeds the budget the anchor moves
+ * inside the turn, to a step boundary. Any other projection failure is the
+ * caller's to raise.
+ */
+const handoffPlan = (
+  window: ReadonlyArray<Message>,
+  budget: ModelContextBudget,
+  fit: Result.Result<ModelContextProjection, ModelContextProjectionError>,
+): Result.Result<
+  { readonly anchor: Option.Option<MessageId>; readonly overflowing: boolean },
+  ModelContextProjectionError
+> =>
+  Result.match(fit, {
+    onSuccess: (projection) =>
+      Result.succeed({
+        anchor: latestUserMessageId(window),
+        overflowing: projection.omittedMessageIds.length > 0,
+      }),
+    onFailure: (error) => {
+      if (error.failure._tag !== "BudgetExceeded") return Result.fail(error)
+      return Result.succeed({ anchor: handoffAnchorWithinTurn(window, budget), overflowing: true })
+    },
+  })
+
+/**
  * The window the model sees this step. A fresh window puts the issuer's notice
  * at the head; a handoff moves the history before the newest user message
  * behind one marker that summarizes it and names the ids it replaced. The
@@ -175,7 +202,9 @@ const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(funct
   }
 
   const window = messagesInCurrentWindow(durableMessages)
-  const anchor = latestUserMessageId(window).pipe(
+  const fit = yield* Effect.result(params.project(window))
+  const plan = yield* Effect.fromResult(handoffPlan(window, params.budget, fit))
+  const anchor = plan.anchor.pipe(
     Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
   )
   const history = window.slice(
@@ -186,7 +215,7 @@ const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(funct
     ),
   )
   const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
-  const overflowing = (yield* params.project(window)).omittedMessageIds.length > 0
+  const overflowing = plan.overflowing
   // Summarising is an extension's job. With no compactor installed the
   // transcript is truncated and the omission is reported as usual.
   const compactor = yield* Effect.serviceOption(ModelContextCompactor)

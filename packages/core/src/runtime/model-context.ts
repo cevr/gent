@@ -135,7 +135,11 @@ export class ModelContextProjectionError extends Schema.TaggedError<ModelContext
     modelId: Schema.String,
     failure: ModelContextError,
   },
-) {}
+) {
+  override get message(): string {
+    return `${this.failure._tag} projecting the context for ${this.modelId}`
+  }
+}
 
 /** A bounded, model-only snapshot of durable messages. */
 export const ModelContextProjection = Schema.Struct({
@@ -569,6 +573,39 @@ const projectUnits = (
       availableInputTokens,
       omittedMessageIds: [...omittedMessageIds],
     }),
+  )
+}
+
+/**
+ * Where a window hands off when the newest turn alone overflows: the newest
+ * step boundaries that fit half the input budget stay, and the handoff anchors
+ * at the first kept message. The first unit always leaves, so a turn that is
+ * one unit has nothing to hand off.
+ */
+export const handoffAnchorWithinTurn = (
+  messages: ReadonlyArray<Message>,
+  budget: ModelContextBudget,
+): Option.Option<MessageId> => {
+  const visible = visibleSnapshot(messages)
+  const records = collectToolRecords(visible)
+  if (Result.isFailure(records)) return Option.none()
+  const groups = groupToolCalls(visible, records.success)
+  if (Result.isFailure(groups)) return Option.none()
+  const units = buildUnits(visible, groups.success)
+  const target = Math.floor((budget.contextLimitTokens - reserveTotal(budget)) / 2)
+  let start = units.length - 1
+  let kept = 0
+  for (let index = units.length - 1; index > 0; index -= 1) {
+    const unit = Option.fromNullishOr(units[index])
+    if (Option.isNone(unit)) continue
+    if (kept + unit.value.estimatedTokens > target) break
+    start = index
+    kept += unit.value.estimatedTokens
+  }
+  if (start <= 0) return Option.none()
+  return Option.fromNullishOr(units[start]).pipe(
+    Option.flatMap((unit) => Option.fromNullishOr(unit.messages[0])),
+    Option.map((message) => message.id),
   )
 }
 
