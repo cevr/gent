@@ -112,9 +112,11 @@ names the decision that left it open.
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
   `plans/core-extension-reduction-receipt.md` records the last measurement.
-- **`agent-runner.ts` and `agent-loop.handlers.ts` are actor command
-  handlers, not the stream fold.** They did not shrink with R7; a later pass
-  may collapse them against the actor protocol.
+- **`agent-loop.handlers.ts` still carries the loop's recovery reads.**
+  Admission is one path (`reserveAndStart`) and the metrics fold is pure
+  (`foldSessionMetrics`), but the incomplete-turn and prior-history scans
+  over storage live in the handlers; a later pass may move them behind the
+  behavior.
 
 ## Package Map
 

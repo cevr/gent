@@ -318,6 +318,33 @@ export const InProcessRunner: Layer.Layer<
       return { sessionId, branchId, completion: Option.none<TurnCompleted>() }
     }, asAgentRunError)
 
+    /** The child's prompt is one user message on its branch, keyed by the run. */
+    const promptChild = (params: {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly messageId: MessageId
+      readonly prompt: string
+      readonly agentName: AgentName
+      readonly runSpec?: RunSpec
+      readonly completion?: "admission"
+    }) =>
+      sessionRuntime
+        .sendUserMessage({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          commandId: ActorCommandId.make(params.messageId),
+          content: params.prompt,
+          agentOverride: params.agentName,
+          interactive: false,
+          runSpec: params.runSpec,
+          completion: params.completion,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new AgentRunError({ message: "Child prompt was not admitted", cause }),
+          ),
+        )
+
     /** Admission completes when the child's actor holds the prompt; the turn runs on its own. */
     const submitChildMessage = Effect.fn("AgentRunner.submitChildMessage")(function* (
       requestId: RequestId,
@@ -327,26 +354,15 @@ export const InProcessRunner: Layer.Layer<
         return yield* new AgentRunError({ message: "Agent-start receipt no longer exists" })
       }
       const { sessionId, branchId, input } = saved.value
-      yield* sessionRuntime
-        .sendUserMessage({
-          sessionId,
-          branchId,
-          commandId: ActorCommandId.make(`agent-start:${requestId}`),
-          content: input.prompt,
-          agentOverride: input.agentName,
-          interactive: false,
-          runSpec: input.runSpec,
-          completion: "admission",
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentRunError({
-                message: "Child queue admission failed; retry the same start request",
-                cause,
-              }),
-          ),
-        )
+      yield* promptChild({
+        sessionId,
+        branchId,
+        messageId: startMessageId(requestId),
+        prompt: input.prompt,
+        agentName: input.agentName,
+        runSpec: input.runSpec,
+        completion: "admission",
+      })
     }, asAgentRunError)
 
     return AgentRunnerService.of({
@@ -479,21 +495,18 @@ export const InProcessRunner: Layer.Layer<
               ),
           })
           const messageId = MessageId.make(`agent-run:${sessionId}`)
-          yield* sessionRuntime
-            .sendUserMessage({
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make(messageId),
-              content: params.prompt,
-              agentOverride: agentName,
-              interactive: false,
-              runSpec: makeRunSpec({ ...runSpec, parentToolCallId: toolCallId }),
-            })
-            .pipe(
-              Effect.ensuring(
-                Option.match(observer, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
-              ),
-            )
+          yield* promptChild({
+            sessionId,
+            branchId,
+            messageId,
+            prompt: params.prompt,
+            agentName,
+            runSpec: makeRunSpec({ ...runSpec, parentToolCallId: toolCallId }),
+          }).pipe(
+            Effect.ensuring(
+              Option.match(observer, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
+            ),
+          )
 
           // The answer is the branch's last assistant message; the totals are
           // on the turn receipt. Neither needs an event scan.

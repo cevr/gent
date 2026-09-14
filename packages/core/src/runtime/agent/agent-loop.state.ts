@@ -10,6 +10,7 @@ import {
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
+import type { AgentEvent } from "../../domain/event.js"
 import { Message } from "../../domain/message.js"
 import { messagePartsTextLines, messageSingleText } from "../../domain/message-part-display.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
@@ -388,6 +389,46 @@ export const SessionRuntimeMetrics = Schema.Struct({
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 // ── State builders ──
+
+/** Session totals read off the branch's event log; one pass, no storage. */
+export const foldSessionMetrics = (
+  events: ReadonlyArray<{ readonly event: AgentEvent }>,
+): SessionRuntimeMetrics => {
+  let turns = 0
+  let durationMs = 0
+  let costUsd = 0
+  let lastInputTokens = 0
+  let compactions = 0
+  let context = Option.none<ModelContextMetrics>()
+  for (const { event } of events) {
+    switch (event._tag) {
+      case "TurnCompleted":
+        turns++
+        durationMs += event.durationMs
+        break
+      case "ModelContextProjected":
+        if (event.compacted) compactions++
+        context = Option.some({
+          estimatedTokens: event.estimatedTokens,
+          availableInputTokens: event.availableInputTokens,
+          contextLimitTokens: event.contextLimitTokens,
+          omittedMessages: event.omittedMessages,
+          handoffMessageId: event.handoffMessageId,
+          compactions,
+        })
+        break
+      case "StreamEnded":
+        if (Predicate.isNotUndefined(event.usage)) lastInputTokens = event.usage.inputTokens
+        if (Predicate.isNotUndefined(event.costUsd)) costUsd += event.costUsd
+        break
+    }
+  }
+  const metrics = { turns, durationMs, costUsd, lastInputTokens }
+  return Option.match(context, {
+    onNone: () => metrics,
+    onSome: (value) => ({ ...metrics, context: value }),
+  })
+}
 
 export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleState =>
   LoopState.cases.Idle.make({

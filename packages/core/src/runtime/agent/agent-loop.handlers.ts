@@ -46,6 +46,7 @@ import {
   Path,
   Predicate,
   Ref,
+  Result,
   Schema,
   Scope,
   Stream,
@@ -75,10 +76,10 @@ import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import {
   AgentLoopError,
   emptyLoopQueueState,
+  foldSessionMetrics,
   projectRuntimeState,
   queueRequestsWake,
   type QueuedTurnItem,
-  type ModelContextMetrics,
 } from "./agent-loop.state.js"
 import {
   AgentLoopFollowUp,
@@ -217,6 +218,18 @@ export const buildAgentLoopActorHandlers = (config: {
           ),
         )
 
+    /** Reserve the start for one item and run it when the reservation grants it. */
+    const reserveAndStart = (
+      handle: AgentLoopBehavior,
+      item: QueuedTurnItem,
+      options: { readonly queueOnly: boolean },
+    ) =>
+      Effect.gen(function* () {
+        const reserved = yield* handle.reserveStartOrQueueFollowUp(item, options)
+        if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
+        return reserved
+      })
+
     // Typed reentrant-only handle lookup. The only legitimate caller is the
     // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
     // fires from inside the behavior itself (during turn execution), so the
@@ -273,6 +286,14 @@ export const buildAgentLoopActorHandlers = (config: {
     })
 
     const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(Effect.map(Option.isSome))
+
+    /** A cold loop wakes for an explicit ask, an unfinished turn, or any prior history. */
+    const shouldWake = (input: { readonly wake?: boolean }) =>
+      Effect.gen(function* () {
+        if (input.wake === true) return true
+        if (yield* hasIncompleteUserTurn) return true
+        return yield* hasPriorMessageHistory
+      })
 
     const startNextQueuedTurnIfIdle = (
       handle: AgentLoopBehavior,
@@ -406,9 +427,7 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* markWrite
       const item = yield* buildFollowUpItem(input)
       yield* handle.reserveStartOrQueueFollowUp(item, { queueOnly: true })
-      const shouldWake =
-        input.wake === true || (yield* hasIncompleteUserTurn) || (yield* hasPriorMessageHistory)
-      if (shouldWake) {
+      if (yield* shouldWake(input)) {
         yield* Ref.set(wakeRequested, true)
         // A retained facade can enqueue after its original turn has ended.
         // The actor owns this wake; an active mutation releases its permit first.
@@ -422,21 +441,9 @@ export const buildAgentLoopActorHandlers = (config: {
     ) {
       const wasAlreadyWarm = yield* markWrite
       const item = yield* buildFollowUpItem(input)
-      const reservedStart = yield* handle.reserveStartOrQueueFollowUp(item, {
-        queueOnly: !wasAlreadyWarm,
-      })
-      if (Option.isSome(reservedStart)) {
-        yield* handle.startTurn(item).pipe(orCleanup(handle))
-      }
-      if (!wasAlreadyWarm) {
-        if (
-          input.wake === true ||
-          (yield* hasIncompleteUserTurn) ||
-          (yield* hasPriorMessageHistory)
-        ) {
-          yield* startNextQueuedTurnIfIdle(handle)
-        }
-        return
+      yield* reserveAndStart(handle, item, { queueOnly: !wasAlreadyWarm })
+      if (!wasAlreadyWarm && (yield* shouldWake(input))) {
+        yield* startNextQueuedTurnIfIdle(handle)
       }
     })
 
@@ -454,7 +461,7 @@ export const buildAgentLoopActorHandlers = (config: {
       )
 
     const openLoop = Effect.gen(function* () {
-      const initialQueueExit = yield* Effect.exit(
+      const loadedQueue = yield* Effect.result(
         queueStorage.getQueueState(sessionId, branchId).pipe(
           Effect.mapError(
             (cause) =>
@@ -465,18 +472,8 @@ export const buildAgentLoopActorHandlers = (config: {
           ),
         ),
       )
-      let initialQueue = emptyLoopQueueState()
-      let initialQueueFailure = Option.none<AgentLoopError>()
-      if (Exit.isSuccess(initialQueueExit)) {
-        initialQueue = initialQueueExit.value
-      } else {
-        initialQueueFailure = Option.some(
-          new AgentLoopError({
-            message: `Failed to load loop queue for ${sessionId}/${branchId}`,
-            cause: initialQueueExit.cause,
-          }),
-        )
-      }
+      const initialQueue = Result.getOrElse(loadedQueue, emptyLoopQueueState)
+      const initialQueueFailure = Result.getFailure(loadedQueue)
       if (Option.isSome(initialQueueFailure)) {
         yield* Effect.logWarning("failed to load loop queue").pipe(
           Effect.annotateLogs({
@@ -629,37 +626,27 @@ export const buildAgentLoopActorHandlers = (config: {
 
     /**
      * Admit one submitted turn: target check, warm mark, reservation, and the
-     * start when the reservation grants it. Returns the reservation so the
-     * caller can wait on what it was granted.
+     * start when the reservation grants it.
      */
-    const admitTurn = <Reserved>(
-      handle: AgentLoopBehavior,
-      operation: TurnSubmissionInput,
-      reserve: (item: QueuedTurnItem) => Effect.Effect<Option.Option<Reserved>, AgentLoopError>,
-    ) =>
+    const admitTurn = (handle: AgentLoopBehavior, operation: TurnSubmissionInput) =>
       Effect.gen(function* () {
         yield* ensureTarget(operation.message)
         yield* markWrite
-        if (yield* turnAlreadyCompleted(operation.message.id)) return Option.none<Reserved>()
+        if (yield* turnAlreadyCompleted(operation.message.id)) return
         const item: QueuedTurnItem = {
           message: operation.message,
           agentOverride: operation.agentOverride,
           runSpec: operation.runSpec,
           interactive: operation.interactive,
         }
-        const reserved = yield* reserve(item)
-        if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
-        return reserved
+        yield* reserveAndStart(handle, item, { queueOnly: false })
       })
-
-    const reserveStart = (handle: AgentLoopBehavior) => (item: QueuedTurnItem) =>
-      handle.reserveStartOrQueueFollowUp(item, { queueOnly: false })
 
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      yield* admitTurn(handle, operation, reserveStart(handle))
+      yield* admitTurn(handle, operation)
     })
 
     const submitTurnAndWait = Effect.fn("AgentLoopActor.submitTurnAndWait")(function* (
@@ -667,7 +654,7 @@ export const buildAgentLoopActorHandlers = (config: {
     ) {
       const handle = yield* ensureStarted
       const baseline = yield* turnFailureBaseline(handle)
-      yield* admitTurn(handle, operation, reserveStart(handle))
+      yield* admitTurn(handle, operation)
       // This turn is done when the loop lets *its* message go, which can
       // happen while the loop stays busy with a follow-up.
       yield* awaitTurnCompletion(handle, baseline, operation.message.id).pipe(orCleanup(handle))
@@ -705,12 +692,8 @@ export const buildAgentLoopActorHandlers = (config: {
 
         case "Cancel":
         case "Interrupt":
-          if (isActiveLoopState(projectedState)) {
-            yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
-            return
-          }
-          const loopState = yield* handle.snapshot
-          if (isActiveLoopState(loopState)) {
+          // The projection can lag the machine by a step; the snapshot is authoritative.
+          if (isActiveLoopState(projectedState) || isActiveLoopState(yield* handle.snapshot)) {
             yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
           }
           return
@@ -770,20 +753,19 @@ export const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            const projectedState = yield* handle.runtimeState
-            if (projectedState._tag !== "WaitingForInteraction") {
-              const state = yield* handle.snapshot
-              if (state._tag !== "WaitingForInteraction") {
-                if (state._tag !== "Idle") return
-                const message = yield* latestIncompleteUserTurn
-                if (Option.isNone(message)) return
-                const baseline = yield* turnFailureBaseline(handle)
-                yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
-                yield* awaitTurnCompletion(handle, baseline, message.value.id)
-                return
-              }
+            const waiting = (state: { readonly _tag: string }) =>
+              state._tag === "WaitingForInteraction"
+            if (waiting(yield* handle.runtimeState) || waiting(yield* handle.snapshot)) {
+              return yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
             }
-            yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
+            // A reply to a loop that lost its turn (a restart mid-interaction)
+            // resumes that turn instead; the interaction is answered inside it.
+            if ((yield* handle.snapshot)._tag !== "Idle") return
+            const message = yield* latestIncompleteUserTurn
+            if (Option.isNone(message)) return
+            const baseline = yield* turnFailureBaseline(handle)
+            yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
+            yield* awaitTurnCompletion(handle, baseline, message.value.id)
           }).pipe(provideActorWorkspace),
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
@@ -812,47 +794,7 @@ export const buildAgentLoopActorHandlers = (config: {
             const envelopes = yield* eventStorage
               .listEvents({ sessionId: operation.sessionId, branchId: operation.branchId })
               .pipe(Effect.catchEager(() => Effect.succeed([])))
-            let turns = 0
-            let durationMs = 0
-            let costUsd = 0
-            let lastInputTokens = 0
-            let compactions = 0
-            let context = Option.none<ModelContextMetrics>()
-            for (const { event } of envelopes) {
-              switch (event._tag) {
-                case "TurnCompleted":
-                  turns++
-                  durationMs += event.durationMs
-                  break
-                case "ModelContextProjected":
-                  if (event.compacted) compactions++
-                  context = Option.some({
-                    estimatedTokens: event.estimatedTokens,
-                    availableInputTokens: event.availableInputTokens,
-                    contextLimitTokens: event.contextLimitTokens,
-                    omittedMessages: event.omittedMessages,
-                    handoffMessageId: event.handoffMessageId,
-                    compactions,
-                  })
-                  break
-                case "StreamEnded":
-                  if (!Predicate.isUndefined(event.usage)) {
-                    lastInputTokens = event.usage.inputTokens
-                  }
-                  if (!Predicate.isUndefined(event.costUsd)) {
-                    costUsd += event.costUsd
-                  }
-                  break
-              }
-            }
-            const metrics = {
-              turns,
-              durationMs,
-              costUsd,
-              lastInputTokens,
-            }
-            if (Option.isSome(context)) Object.assign(metrics, { context: context.value })
-            return metrics
+            return foldSessionMetrics(envelopes)
           }).pipe(provideActorWorkspace),
       ),
       RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
