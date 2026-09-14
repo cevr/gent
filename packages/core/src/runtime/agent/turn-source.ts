@@ -439,7 +439,12 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       }),
     })
   }
-  const contextLimit = modelOption.value.contextLength
+  // The agent's own window wins over the catalog: config or a run override can shrink it.
+  const contextLimit = Option.getOrUndefined(
+    Option.orElse(Option.fromUndefinedOr(resolved.agent.contextLength), () =>
+      Option.fromUndefinedOr(modelOption.value.contextLength),
+    ),
+  )
   if (Predicate.isUndefined(contextLimit)) {
     return yield* new ModelContextCapabilityError({
       failure: ModelContextCapabilityFailure.cases.MissingContextLimit.make({

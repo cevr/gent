@@ -72,6 +72,7 @@ export const applyAgentOverrides = (
       allowedTools: value?.allowedTools,
       deniedTools: value?.deniedTools,
       reasoningEffort: value?.reasoningEffort,
+      contextLength: value?.contextLength,
       systemPromptAddendum: Option.getOrUndefined(systemPromptAddendum),
     }),
   })

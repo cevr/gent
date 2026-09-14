@@ -92,4 +92,53 @@ describe("native model compaction integration", () => {
       Effect.timeout("15 seconds"),
     )
   })
+
+  it.live("a smaller agent context window hands off history the catalog window would keep", () => {
+    const sessionId = SessionId.make("small-window-session")
+    const branchId = BranchId.make("small-window-branch")
+    // ~3,000 tokens: far under the 128k test catalog limit, over a 6k window minus reserves.
+    const oldMessages = Array.from({ length: 12 }, (_, index) =>
+      Message.cases.regular.make({
+        id: MessageId.make(`small-old-${index + 1}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [Prompt.textPart({ text: `small-old-${index + 1} ${"x".repeat(1_000)}` })],
+        createdAt: dateFromMillis(1_000 + index),
+      }),
+    )
+    let providerCalls = 0
+    const providerLayer = LanguageModelLayers.testStream(() => {
+      providerCalls += 1
+      let text = "small response"
+      if (providerCalls === 1) text = "small bounded summary"
+      return Effect.succeed(
+        Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })]),
+      )
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* ensureStorageParents({ sessionId, branchId })
+        const storage = yield* MessageStorage
+        yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
+          discard: true,
+        })
+        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "small current turn"), {
+          runSpec: { overrides: { contextLength: 6_000 } },
+        })
+
+        expect(providerCalls).toBe(2)
+        const durable = yield* storage.listMessages(branchId)
+        const markers = durable.filter(
+          (message) => message.metadata?.customType === "context-window",
+        )
+        expect(markers).toHaveLength(1)
+      }),
+    ).pipe(
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
+      Effect.timeout("15 seconds"),
+    )
+  })
 })
