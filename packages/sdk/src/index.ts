@@ -63,7 +63,6 @@ export type {
   MessagePart,
   ProjectedMessage,
   ToolInteraction,
-  PermissionRule,
   SessionId,
   BranchId,
   MessageId,

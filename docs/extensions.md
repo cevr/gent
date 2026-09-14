@@ -58,7 +58,6 @@ You need at most 7 concepts to write a complete extension:
 | 4   | `request`         | Extension-to-extension typed RPC                    |
 | 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration       |
 | 6   | `defineAgent`     | Spawnable subagent                                  |
-| 7   | `PermissionRule`  | Allow/deny rule for tool patterns                   |
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
 `"modelDriver"`, `"externalDriver"`. Hook kinds: `"systemPrompt"`,
@@ -87,7 +86,7 @@ Public authoring surface:
 | Hooks           | `host.on(kind, handler)` and hook input/output types                         |
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
 | Stable ids      | `ExtensionId`, `ToolCallId`                                                  |
-| Policies/errors | `PermissionRule`, capability/provider-auth/agent-run author-facing errors    |
+| Errors          | capability/provider-auth/agent-run author-facing errors                      |
 | Host facts      | `ExtensionHost.host` and `ExtensionHost.Process`                             |
 | Serialization   | Message/output projection helpers safe to expose across extension boundaries |
 
@@ -202,8 +201,8 @@ export default defineExtension({
   returned to the model
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
-- Optional: `readonly`, `destructive`, `interactive`, `permissionRules`,
-  `prompt`, `promptSnippet`, `promptGuidelines`
+- Optional: `readonly`, `destructive`, `interactive`, `prompt`,
+  `promptSnippet`, `promptGuidelines`
 
 `readonly` and `destructive` are provider hints lowered to Effect AI's
 `AiTool.Readonly` / `AiTool.Destructive` annotations. They are not authority

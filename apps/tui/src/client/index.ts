@@ -12,7 +12,6 @@ export {
   type AuthMethod,
   type AuthAuthorization,
   type MessagePart,
-  type PermissionRule,
   type ImageInfo,
   extractText,
   extractReasoning,

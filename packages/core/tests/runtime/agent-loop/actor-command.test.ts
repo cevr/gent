@@ -4,7 +4,6 @@ import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { request, type RequestCapability, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "../../../src/domain/permission"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ProcessLocalToolReplay } from "../../../src/runtime/agent/process-local-tool-replay"
 import { narrowR } from "../../helpers/effect"
@@ -92,7 +91,6 @@ const makeRuntimeLayer = (
     eventStoreLayer,
     recorderLayer,
     toolRunnerLayer,
-    Permission.Live(),
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     BunServices.layer,

@@ -482,7 +482,6 @@ export function createSessionController(props: {
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" })),
     openReasoningPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "reasoning" })),
-    openPermissions: () => dispatchSessionUi(SessionUiEvent.cases.OpenPermissions.make({})),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
   })
 

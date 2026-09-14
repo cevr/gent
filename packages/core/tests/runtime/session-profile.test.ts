@@ -10,7 +10,6 @@ import {
   Option,
   Path,
   Ref,
-  Schema,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -29,8 +28,6 @@ import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { ExtensionId } from "../../src/domain/ids"
 
 const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
-
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 class SessionProfileResourceMarker extends Context.Service<
   SessionProfileResourceMarker,
@@ -134,52 +131,6 @@ describe("session profile resolution", () => {
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })),
-      )
-    }).pipe(Effect.provide(BunPlatformLive)),
-  )
-
-  it.scopedLive("keeps permission rules scoped to the session cwd instead of the launch cwd", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const launch = yield* fs.makeTempDirectoryScoped()
-      const secondary = yield* fs.makeTempDirectoryScoped()
-      const home = yield* fs.makeTempDirectoryScoped()
-
-      const writeProjectConfig = (
-        cwd: string,
-        permissions: ReadonlyArray<Record<string, string>>,
-      ) =>
-        Effect.gen(function* () {
-          const configDir = path.join(cwd, ".gent")
-          yield* fs.makeDirectory(configDir, { recursive: true })
-          yield* fs.writeFileString(
-            path.join(configDir, "config.json"),
-            encodeJson({ permissions }),
-          )
-        })
-
-      yield* writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
-      yield* writeProjectConfig(secondary, [])
-
-      yield* Effect.gen(function* () {
-        const cache = yield* SessionProfileCache
-        const launchProfile = yield* cache.resolve(launch)
-        const secondaryProfile = yield* cache.resolve(secondary)
-
-        const launchPermission = yield* launchProfile.permissionService.check("bash", {
-          command: "ls -la",
-        })
-        const secondaryPermission = yield* secondaryProfile.permissionService.check("bash", {
-          command: "ls -la",
-        })
-
-        expect(launchPermission).toBe("denied")
-        expect(secondaryPermission).toBe("allowed")
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
-        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("c".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )

@@ -27,7 +27,6 @@ import {
   type LoadedExtension,
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
-import type { PermissionRule } from "../../domain/permission.js"
 import type { RequestCapability } from "../../domain/capability/request.js"
 import {
   getToolId,
@@ -64,7 +63,6 @@ export interface ResolvedExtensions {
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
-  readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -375,15 +373,6 @@ export const resolveExtensions = (
     if (Option.isSome(prompt)) promptSectionsMap.set(prompt.value.id, prompt.value)
   }
 
-  // Permission rules are collected from WINNERS, not raw extractions:
-  // otherwise overriding `bash` without `permissionRules` would still inherit
-  // builtin denies.
-  const permissionRules: PermissionRule[] = []
-  for (const { capability: cap } of capabilityWinners.values()) {
-    if (!isToolCapability(cap)) continue
-    const rules = getToolMetadata(cap).permissionRules
-    if (rules) permissionRules.push(...rules)
-  }
   const slashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionHooks = compileExtensionHooks(sorted)
@@ -399,7 +388,6 @@ export const resolveExtensions = (
     modelDrivers,
     externalDrivers,
     promptSections: promptSectionsMap,
-    permissionRules,
     slashCommands,
     extensionHooks,
     extensions: sorted,

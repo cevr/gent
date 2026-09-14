@@ -41,7 +41,6 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import { defineResource } from "../../src/domain/resource"
-import type { PermissionService } from "../../src/domain/permission"
 import {
   CapabilityError,
   ExtensionContext,
@@ -112,9 +111,6 @@ describe("extension command RPCs", () => {
       expect("provideCapabilityAccessNeeds" in ExtensionApi).toBe(false)
     }),
   )
-  const allowAllPermission = {
-    check: () => Effect.succeed("allowed" satisfies "allowed"),
-  } satisfies PermissionService
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
     Effect.gen(function* () {
       const resolved = resolveExtensions(extensions)
@@ -134,7 +130,6 @@ describe("extension command RPCs", () => {
         cwd,
         resolved,
         layerContext,
-        permissionService: allowAllPermission,
         registryService: Context.get(layerContext, ExtensionRegistry),
         driverRegistryService: Context.get(layerContext, DriverRegistry),
         baseSections: [],

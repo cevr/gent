@@ -1,11 +1,10 @@
 /**
- * ConfigService tests - permission persistence and first-run setup
+ * ConfigService tests - config persistence and first-run setup
  */
 
 import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { PermissionRule } from "../../src/domain/permission"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "../../src/domain/agent"
 import { ModelId } from "../../src/domain/model"
 import { ConfigService, UserConfig } from "../../src/runtime/config-service"
@@ -16,27 +15,23 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 describe("user configuration", () => {
   describe("in-memory reads and writes", () => {
     it.live("seeded initial config reads back unchanged", () => {
-      const initial = new UserConfig({
-        permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
-      })
+      const initial = new UserConfig({ disabledExtensions: ["@gent/todo"] })
       return ConfigService.use((cfg) => cfg.get()).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            expect(result.permissions?.length).toBe(1)
-            expect(result.permissions?.[0]?.tool).toBe("Bash")
+            expect(result.disabledExtensions).toEqual(["@gent/todo"])
           }),
         ),
         Effect.provide(ConfigService.Test(initial)),
       )
     })
 
-    it.live("written permission rule is visible on next read", () =>
+    it.live("a written field is visible on next read", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.set({ permissions: [new PermissionRule({ tool: "Read", action: "allow" })] })
+        yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
         const result = yield* cfg.get()
-        expect(result.permissions?.length).toBe(1)
-        expect(result.permissions?.[0]?.tool).toBe("Read")
+        expect(result.disabledExtensions).toEqual(["@gent/todo"])
       }).pipe(Effect.provide(ConfigService.Test())),
     )
   })
@@ -48,12 +43,6 @@ describe("user configuration", () => {
       yield* cfg.set({ trustedProjects })
       expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
       yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
-      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
-      yield* cfg.addPermissionRule(
-        new PermissionRule({ tool: "Bash", pattern: "rm", action: "deny" }),
-      )
-      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
-      yield* cfg.removePermissionRule("Bash", "rm")
       expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
       yield* cfg.setDriverOverride(
         AgentName.make("cowork"),
@@ -107,60 +96,17 @@ describe("user configuration", () => {
     )
   })
 
-  describe("Permission rules", () => {
-    it.live("seeded permission rules are exposed verbatim", () => {
-      const initial = new UserConfig({
-        permissions: [
-          new PermissionRule({ tool: "Bash", action: "deny" }),
-          new PermissionRule({ tool: "Read", action: "allow" }),
-        ],
-      })
-      return ConfigService.use((cfg) =>
-        cfg.get().pipe(Effect.map((c) => c.permissions ?? [])),
-      ).pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result.length).toBe(2))),
-        Effect.provide(ConfigService.Test(initial)),
-      )
-    })
-
-    it.live("appended permission rule appears on next read", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-
-        // Add rule
-        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
-
-        // Verify
-        const result = (yield* cfg.get()).permissions ?? []
-        expect(result.length).toBe(1)
-        expect(result[0]?.tool).toBe("Bash")
-        expect(result[0]?.action).toBe("deny")
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.live("repeated appends accumulate rules in order", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-
-        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
-        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Read", action: "allow" }))
-        yield* cfg.addPermissionRule(
-          new PermissionRule({ tool: "Write", pattern: "/etc", action: "deny" }),
-        )
-
-        const result = (yield* cfg.get()).permissions ?? []
-        expect(result.length).toBe(3)
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.scopedLive("concurrent live appends preserve every user rule", () =>
+  describe("concurrent writes", () => {
+    it.scopedLive("concurrent live writes preserve every user entry", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const cwd = yield* fs.makeTempDirectoryScoped()
         const home = yield* fs.makeTempDirectoryScoped()
-        const tools = Array.from({ length: 24 }, (_, index) => `ConcurrentTool${index}`)
-        const allRulesWriteStarted = yield* Deferred.make<void>()
+        const agents = Array.from({ length: 24 }, (_, index) =>
+          AgentName.make(`concurrent-agent-${index}`),
+        )
+        const allEntriesWriteStarted = yield* Deferred.make<void>()
         const observedConfigWrites = yield* Ref.make(0)
         const delayedFsLayer = Layer.effect(
           FileSystem.FileSystem,
@@ -175,15 +121,15 @@ describe("user configuration", () => {
                     const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
                       content,
                     ).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
-                    const count = decoded.permissions?.length ?? 0
-                    if (count === tools.length) {
+                    const count = Object.keys(decoded.driverOverrides ?? {}).length
+                    if (count === agents.length) {
                       // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                      yield* Deferred.succeed(allRulesWriteStarted, undefined).pipe(
+                      yield* Deferred.succeed(allEntriesWriteStarted, undefined).pipe(
                         Effect.catchEager(() => Effect.void),
                       )
                     }
                     if (count === 1) {
-                      yield* Deferred.await(allRulesWriteStarted).pipe(
+                      yield* Deferred.await(allEntriesWriteStarted).pipe(
                         Effect.timeoutOption("50 millis"),
                       )
                     }
@@ -202,12 +148,12 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           yield* Effect.forEach(
-            tools,
-            (tool) => cfg.addPermissionRule(new PermissionRule({ tool, action: "allow" })),
+            agents,
+            (agent) => cfg.setDriverOverride(agent, ModelDriverRef.make({ id: "anthropic" })),
             { concurrency: 16 },
           )
-          const result = (yield* cfg.get()).permissions ?? []
-          expect(result.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
+          const result = Object.keys((yield* cfg.get()).driverOverrides ?? {})
+          expect(result.sort()).toEqual([...agents].sort())
           expect(yield* Ref.get(observedConfigWrites)).toBeGreaterThan(0)
           const persistedText = yield* fs.readFileString(
             path.join(home, ConfigService.USER_CONFIG_RELATIVE),
@@ -215,56 +161,10 @@ describe("user configuration", () => {
           const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
             persistedText,
           )
-          expect(persisted.permissions?.map((rule) => rule.tool).sort()).toEqual([...tools].sort())
+          expect(Object.keys(persisted.driverOverrides ?? {}).sort()).toEqual([...agents].sort())
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
-    )
-
-    it.live("removing a rule by tool drops the matching entry", () => {
-      const initial = new UserConfig({
-        permissions: [
-          new PermissionRule({ tool: "Bash", action: "deny" }),
-          new PermissionRule({ tool: "Read", action: "allow" }),
-        ],
-      })
-      return Effect.gen(function* () {
-        const cfg = yield* ConfigService
-
-        // Remove Bash rule
-        // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
-        yield* cfg.removePermissionRule("Bash", undefined)
-
-        const result = (yield* cfg.get()).permissions ?? []
-        expect(result.length).toBe(1)
-        expect(result[0]?.tool).toBe("Read")
-      }).pipe(Effect.provide(ConfigService.Test(initial)))
-    })
-
-    it.live("pattern-scoped removal leaves the unpatterned rule intact", () => {
-      const initial = new UserConfig({
-        permissions: [
-          new PermissionRule({ tool: "Bash", pattern: "rm", action: "deny" }),
-          new PermissionRule({ tool: "Bash", action: "allow" }),
-        ],
-      })
-      return Effect.gen(function* () {
-        const cfg = yield* ConfigService
-
-        // Remove only the pattern-specific rule
-        yield* cfg.removePermissionRule("Bash", "rm")
-
-        const result = (yield* cfg.get()).permissions ?? []
-        expect(result.length).toBe(1)
-        expect(result[0]?.pattern).toBeUndefined()
-      }).pipe(Effect.provide(ConfigService.Test(initial)))
-    })
-
-    it.live("removing a missing rule is a no-op", () =>
-      // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
-      ConfigService.use((cfg) => cfg.removePermissionRule("NonExistent", undefined)).pipe(
-        Effect.provide(ConfigService.Test()),
-      ),
     )
   })
 
@@ -295,17 +195,15 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("permission updates preserve previously stored disabledExtensions", () =>
+    it.live("a later update preserves previously stored disabledExtensions", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
-        yield* cfg.set({
-          permissions: [new PermissionRule({ tool: "Bash", action: "deny" })],
-        })
+        yield* cfg.set({ trustedProjects: ["/trusted/project"] })
         const result = yield* cfg.get()
         expect(result.disabledExtensions?.length).toBe(1)
         expect(result.disabledExtensions?.[0]).toBe("@gent/todo")
-        expect(result.permissions?.length).toBe(1)
+        expect(result.trustedProjects).toEqual(["/trusted/project"])
       }).pipe(Effect.provide(ConfigService.Test())),
     )
   })
@@ -397,29 +295,14 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("appending a permission rule preserves driverOverrides", () =>
+    it.live("an unrelated update preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
           ExternalDriverRef.make({ id: "acp-claude-code" }),
         )
-        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
-        const result = yield* cfg.get()
-        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.live("removing a permission rule preserves driverOverrides", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride(
-          AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
-        )
-        yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
-        // oxlint-disable-next-line effect/noNullish -- Exercise the existing absent-value boundary contract.
-        yield* cfg.removePermissionRule("Bash", undefined)
+        yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
         const result = yield* cfg.get()
         expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
       }).pipe(Effect.provide(ConfigService.Test())),

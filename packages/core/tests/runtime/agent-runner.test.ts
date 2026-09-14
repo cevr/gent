@@ -78,7 +78,6 @@ import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { Permission } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,
@@ -235,14 +234,12 @@ const probeBranchTools: BranchToolFeature<never> = {
 const runnerDeps = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
   BunPlatformLive,
-  Permission.Live(),
   RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),
 )
 const parentServices = Layer.mergeAll(
   Layer.succeed(CurrentBranchToolFeature, probeBranchTools),
-  Permission.Live(),
   RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ConfigService.Test(),
   ModelRegistry.Test(),

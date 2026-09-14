@@ -37,9 +37,6 @@ const declarationsOf = (source: ToolDeclarations): ToolDeclarations => ({
   }),
   ...(Predicate.isNotUndefined(source.interactive) && { interactive: source.interactive }),
   ...(Predicate.isNotUndefined(source.dispatches) && { dispatches: source.dispatches }),
-  ...(Predicate.isNotUndefined(source.permissionRules) && {
-    permissionRules: source.permissionRules,
-  }),
   ...(Predicate.isNotUndefined(source.prompt) && { prompt: source.prompt }),
 })
 

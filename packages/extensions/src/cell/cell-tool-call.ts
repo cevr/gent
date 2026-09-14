@@ -1,9 +1,5 @@
 import { type ToolCallId, getToolId } from "@gent/core/extensions/api"
-import {
-  Permission,
-  ToolRunner,
-  type ResolvedToolCapability,
-} from "@gent/core/extensions/branch-tools"
+import { ToolRunner, type ResolvedToolCapability } from "@gent/core/extensions/branch-tools"
 import { Effect, Option, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { CellToolCallSuspended } from "./cell-kernel.js"
@@ -25,8 +21,6 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
   readonly binding: Option.Option<ResolvedToolCapability>
 }) {
   const runner = yield* ToolRunner
-  // Require an explicit host policy. ToolRunner's legacy missing-policy default is not sufficient.
-  const permission = yield* Permission
   if (
     Option.isSome(params.binding) &&
     getToolId(params.binding.value.capability) !== params.request.name
@@ -47,7 +41,6 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
       params.binding,
     )
     .pipe(
-      Effect.provideService(Permission, permission),
       Effect.mapError(
         (pending) =>
           new CellToolCallSuspended({

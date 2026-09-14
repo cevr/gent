@@ -23,7 +23,6 @@ interface SessionCommandRegistryProps {
   readonly openForkPicker: () => void
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
-  readonly openPermissions: () => void
   readonly openAuth: () => void
 }
 
@@ -202,14 +201,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         }),
       )(resolveModelQuery(props.client.models(), query))
     },
-  },
-  {
-    id: "session.permissions",
-    title: "View/Edit Permissions",
-    category: "Session",
-    slash: "permissions",
-    slashPriority: 0,
-    onSelect: props.openPermissions,
   },
   {
     id: "session.auth",

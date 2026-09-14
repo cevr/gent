@@ -8,7 +8,6 @@ import {
 } from "effect/unstable/rpc"
 import { SessionId } from "../domain/ids.js"
 import { Model } from "../domain/model.js"
-import { PermissionRule } from "../domain/permission.js"
 import { GentRpcError } from "./errors.js"
 import { SessionRpcs } from "./rpcs/session.js"
 import {
@@ -18,7 +17,6 @@ import {
   CallbackAuthInput,
   ClearDriverOverrideInput,
   DeleteAuthKeyInput,
-  DeletePermissionRuleInput,
   DriverListResult,
   ExtensionHealthSnapshot,
   ExtensionRpcRequestInput,
@@ -87,7 +85,7 @@ class AuthRpcs extends RpcGroup.make(
 ).prefix("auth.") {}
 
 // ============================================================================
-// Extension + driver + model + permission
+// Extension + driver + model
 // ============================================================================
 
 class ExtensionRpcs extends RpcGroup.make(
@@ -120,14 +118,6 @@ class ExtensionRpcs extends RpcGroup.make(
   }),
   Rpc.make("model.list", {
     success: Schema.Array(Model),
-    error: GentRpcError,
-  }),
-  Rpc.make("permission.listRules", {
-    success: Schema.Array(PermissionRule),
-    error: GentRpcError,
-  }),
-  Rpc.make("permission.deleteRule", {
-    payload: DeletePermissionRuleInput.fields,
     error: GentRpcError,
   }),
 ) {}

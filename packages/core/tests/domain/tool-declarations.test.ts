@@ -29,7 +29,6 @@ const declaredTool = tool({
   promptGuidelines: ["prefer this tool"],
   interactive: true,
   dispatches: true,
-  permissionRules: [],
   prompt: { id: "declared", content: "how to use it", priority: 50 },
   execute: () => Effect.succeed("done"),
 })
@@ -41,7 +40,6 @@ describe("tool declarations", () => {
     expect(metadata.promptGuidelines).toEqual(["prefer this tool"])
     expect(metadata.interactive).toBe(true)
     expect(metadata.dispatches).toBe(true)
-    expect(metadata.permissionRules).toEqual([])
     expect(metadata.prompt?.id).toBe("declared")
   })
 
@@ -50,7 +48,6 @@ describe("tool declarations", () => {
     expect(declaredTool.promptGuidelines).toEqual(["prefer this tool"])
     expect(declaredTool.interactive).toBe(true)
     expect(declaredTool.dispatches).toBe(true)
-    expect(declaredTool.permissionRules).toEqual([])
     expect(declaredTool.prompt?.id).toBe("declared")
   })
 
@@ -61,7 +58,6 @@ describe("tool declarations", () => {
       "promptGuidelines",
       "interactive",
       "dispatches",
-      "permissionRules",
       "prompt",
     ]) {
       expect(Object.hasOwn(metadata, key)).toBe(false)

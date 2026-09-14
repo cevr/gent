@@ -29,7 +29,6 @@ import type {
   ExtensionSetupServices,
   LoadedExtension,
 } from "../domain/extension.js"
-import { AllowAllPermission } from "../domain/permission.js"
 import { ProcessGenerationId } from "../domain/process-generation.js"
 import {
   resolveExtensions,
@@ -292,7 +291,6 @@ export class SessionProfileCache extends Context.Service<
               cwd,
               resolved,
               layerContext,
-              permissionService: AllowAllPermission,
               registryService: Context.get(layerContext, ExtensionRegistry),
               driverRegistryService: Context.get(layerContext, DriverRegistry),
               baseSections: [],

@@ -24,7 +24,6 @@ import {
   type Message,
   type MessageId,
   type MessagePart,
-  type PermissionRule,
   type ProjectedMessage,
   type QueueEntryInfo,
   type QueueSnapshot,
@@ -52,7 +51,6 @@ import { workspaceHeadersForCwd } from "./transport-headers.js"
 
 export type {
   MessagePart,
-  PermissionRule,
   AuthProviderInfo,
   AuthAuthorization,
   AuthMethod,

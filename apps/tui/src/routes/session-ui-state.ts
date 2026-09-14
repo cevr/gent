@@ -20,7 +20,6 @@ export type SessionOverlayState =
   | { readonly _tag: "fork"; readonly messages: readonly Message[] }
   | { readonly _tag: "mermaid" }
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
-  | { readonly _tag: "permissions" }
   | { readonly _tag: "model" }
   | { readonly _tag: "reasoning" }
   | { readonly _tag: "extension"; readonly overlayId: string }
@@ -58,7 +57,6 @@ export const SessionUiEvent = Schema.TaggedUnion({
   OpenFork: { messages: Schema.Array(Message) },
   OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
-  OpenPermissions: {},
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenExtensionOverlay: { overlayId: Schema.String },
   CloseOverlay: {},
@@ -139,13 +137,6 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: event.picker },
-        },
-        effects: [],
-      }),
-      OpenPermissions: (): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          overlay: { _tag: "permissions" },
         },
         effects: [],
       }),

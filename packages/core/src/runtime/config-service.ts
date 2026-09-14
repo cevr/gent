@@ -11,14 +11,12 @@ import {
   SynchronizedRef,
 } from "effect"
 import { AgentName, AgentRunOverridesSchema, DriverRef } from "../domain/agent.js"
-import { PermissionRule } from "../domain/permission.js"
 import { omitUndefined } from "../domain/guards.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 
 // User config schema - stored at ~/.gent/config.json
 
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
-  permissions: Schema.optional(Schema.Array(PermissionRule)),
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
   /**
@@ -51,15 +49,6 @@ const nonEmptyRecord = <A>(record: Readonly<Record<AgentName, A>>) =>
 const configUpdates = {
   set: (current: UserConfig, partial: Partial<UserConfig>): UserConfig =>
     new UserConfig({ ...current, ...omitUndefined(partial) }),
-  addPermissionRule: (current: UserConfig, rule: PermissionRule): UserConfig =>
-    new UserConfig({ ...current, permissions: [...(current.permissions ?? []), rule] }),
-  removePermissionRule: (current: UserConfig, tool: string, pattern?: string): UserConfig =>
-    new UserConfig({
-      ...current,
-      permissions: nonEmpty(
-        (current.permissions ?? []).filter((r) => !(r.tool === tool && r.pattern === pattern)),
-      ),
-    }),
   setDriverOverride: (current: UserConfig, agent: AgentName, driver: DriverRef): UserConfig =>
     new UserConfig({
       ...current,
@@ -77,7 +66,6 @@ const configUpdates = {
 
 /**
  * Merge user + project configs. Per-field semantics:
- *   - permissions: concatenated (project first, then user — historical order).
  *   - disabledExtensions: concatenated (user first — historical order).
  *   - trustedProjects: user config only; project config cannot grant trust.
  *   - driverOverrides, agents: object spread; project entries shadow user
@@ -87,7 +75,6 @@ const configUpdates = {
  */
 const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig =>
   new UserConfig({
-    permissions: nonEmpty([...(project.permissions ?? []), ...(user.permissions ?? [])]),
     disabledExtensions: nonEmpty([
       ...(user.disabledExtensions ?? []),
       ...(project.disabledExtensions ?? []),
@@ -117,8 +104,6 @@ export interface ConfigServiceService {
    */
   readonly getFresh: (cwd: string) => Effect.Effect<UserConfig, ConfigLoadError>
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
-  readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
-  readonly removePermissionRule: (tool: string, pattern?: string) => Effect.Effect<void>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  Use this rather than `set({ driverOverrides })` so callers don't have
    *  to remember the partial-merge semantics — `set({ driverOverrides: undefined })`
@@ -159,7 +144,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       )
 
       const UserConfigJson = Schema.fromJsonString(UserConfig)
-      const defaultUserConfig = new UserConfig({ permissions: [] })
+      const defaultUserConfig = new UserConfig({})
 
       // State: user + project configs
       const userConfigRef = yield* SynchronizedRef.make<UserConfig>(new UserConfig({}))
@@ -287,22 +272,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           }))
         }),
 
-        addPermissionRule: Effect.fn("ConfigService.addPermissionRule")(function* (rule) {
-          yield* mutateUserConfig((current) => ({
-            updated: configUpdates.addPermissionRule(current, rule),
-            save: true,
-          }))
-        }),
-
-        removePermissionRule: Effect.fn("ConfigService.removePermissionRule")(
-          function* (tool, pattern) {
-            yield* mutateUserConfig((current) => ({
-              updated: configUpdates.removePermissionRule(current, tool, pattern),
-              save: true,
-            }))
-          },
-        ),
-
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
             updated: configUpdates.setDriverOverride(current, agent, driver),
@@ -349,12 +318,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             }),
           set: (partial) =>
             Ref.update(userConfigRef, (current) => configUpdates.set(current, partial)),
-          addPermissionRule: (rule) =>
-            Ref.update(userConfigRef, (current) => configUpdates.addPermissionRule(current, rule)),
-          removePermissionRule: (tool, pattern) =>
-            Ref.update(userConfigRef, (current) =>
-              configUpdates.removePermissionRule(current, tool, pattern),
-            ),
           setDriverOverride: (agent, driver) =>
             Ref.update(userConfigRef, (current) =>
               configUpdates.setDriverOverride(current, agent, driver),

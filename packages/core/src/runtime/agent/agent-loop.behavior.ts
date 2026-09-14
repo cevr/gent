@@ -63,7 +63,6 @@ import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
 import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
-import { AllowAllPermission, Permission } from "../../domain/permission.js"
 import { resolveTurnProfile as resolveSessionTurnProfile } from "../session-runtime-context.js"
 import {
   buildIdleState,
@@ -292,7 +291,6 @@ export const makeAgentLoopBehavior = (
             }),
         ),
       )
-    const permissionService = yield* Effect.serviceOption(Permission)
 
     const hostProvider = yield* makeExtensionHostContextProvider({
       extensionRegistry,
@@ -304,8 +302,6 @@ export const makeAgentLoopBehavior = (
       },
     })
 
-    const defaultPermission = Option.getOrElse(permissionService, () => AllowAllPermission)
-
     const resolveTurnProfile = provideAgentLoopRuntimeContext(runtimeContext)(
       resolveSessionTurnProfile({
         sessionId,
@@ -313,7 +309,6 @@ export const makeAgentLoopBehavior = (
         profileCache,
         defaults: {
           driverRegistry,
-          permission: defaultPermission,
           baseSections,
         },
       }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),

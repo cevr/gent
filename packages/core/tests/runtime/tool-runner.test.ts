@@ -7,7 +7,6 @@ import { tool, ExtensionContext } from "@gent/core/extensions/api"
 import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
 import { executeToolCalls } from "../../src/runtime/agent/turn-tool-execution"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { Permission, PermissionRule } from "../../src/domain/permission"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -79,7 +78,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -148,7 +146,6 @@ describe("tool execution", () => {
 
       const deps = Layer.mergeAll(
         registryLayer,
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -257,7 +254,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -309,7 +305,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -355,7 +350,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -381,53 +375,6 @@ describe("tool execution", () => {
       const error = errorFromResult(result)
       expect(error).toContain("Tool 'strict' input failed:")
       expect(error).toContain("path")
-    }))
-  test("returns 'Permission denied' error when tool is denied by permission rules", () =>
-    Effect.gen(function* () {
-      const SafeTool = tool({
-        id: "safe",
-        description: "A safe tool",
-        params: Schema.Struct({}),
-        output: Schema.Struct({ ok: Schema.Boolean }),
-        execute: () => Effect.succeed({ ok: true }),
-      })
-      const denyAllPermission = Permission.Live([new PermissionRule({ tool: "*", action: "deny" })])
-      const deps = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make("test") },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { tools: [SafeTool] },
-            },
-          ]),
-        ),
-        denyAllPermission,
-        EventPublisher.Test(),
-        ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      )
-      const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
-      const layer = Layer.mergeAll(deps, runnerLayer)
-      const result = yield* Effect.gen(function* () {
-        const runner = yield* ToolRunner
-        const toolCallId = ToolCallId.make("tc1")
-        return yield* runner.run({ toolCallId, toolName: "safe", input: {} }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("s"),
-              branchId: BranchId.make("b"),
-              toolCallId,
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-        )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result.isFailure).toBe(true)
-      const error = errorFromResult(result)
-      expect(error).toBe("Permission denied")
     }))
   test("uses the provided tool context without reconstructing it", () =>
     Effect.gen(function* () {
@@ -465,7 +412,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -521,7 +467,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -584,7 +529,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -661,7 +605,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         EventPublisher.Test(),
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -736,7 +679,6 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        Permission.Live(),
         eventPublisherLayer,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),

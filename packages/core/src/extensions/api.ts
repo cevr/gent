@@ -97,7 +97,6 @@ export { AuthMethod } from "../domain/auth.js"
 export { type Message, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
 export { messagePartsDisplayText } from "../domain/message-part-display.js"
-export { PermissionRule } from "../domain/permission.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).

@@ -25,7 +25,6 @@ import { ExtensionLoadError, type LoadedExtension } from "../../src/domain/exten
 import { validateExtensionPackage } from "../../src/domain/extension-package-shape"
 import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
-import { PermissionRule } from "../../src/domain/permission"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { ExtensionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
@@ -69,14 +68,12 @@ describe("defineExtension", () => {
 
   test("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
-      // PermissionRule + PromptSection are bundled on the Capability
-      // they decorate (here: `myTool.permissionRules`, `myTool.prompt`).
+      // The PromptSection is bundled on the Capability it decorates (`myTool.prompt`).
       const myTool = tool({
         id: "echo",
         description: "echo",
         params: Schema.Struct({}),
         output: Schema.String,
-        permissionRules: [new PermissionRule({ tool: "echo", action: "allow" })],
         prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
@@ -106,7 +103,6 @@ describe("defineExtension", () => {
       if (Predicate.isUndefined(firstModelCap)) return
       const modelCapMetadata = getToolMetadata(firstModelCap)
       expect(String(getToolId(firstModelCap))).toBe("echo")
-      expect(modelCapMetadata?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCapMetadata?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(DEFAULT_AGENT_NAME)
       expect(contributions.hooks?.[0]?.kind).toBe("systemPrompt")

@@ -9,7 +9,7 @@ The resource evolution plan is in [`docs/malleability.md`](docs/malleability.md)
 `gent` is organized around five nouns:
 
 - `Server` — process-wide services only: storage, auth stores, platform, transport wiring, connection tracking.
-- `Profile` — cwd-scoped policy and extension graph: permissions, drivers, hooks, resources, capability leaves.
+- `Profile` — cwd-scoped extension graph: drivers, hooks, resources, capability leaves.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
 - `Resource` — long-lived services, schedules, lifecycle, and extension-owned state.
@@ -485,7 +485,7 @@ Key properties:
   requests approval, the command closes the request, saves a paired failed result,
   and returns an explicit failure. Redelivery preserves that failure without
   running the tool again. Interactive tools use native or external session turns.
-- **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.
+- **No permission rules.** A tool that guards a call asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC.
 
 Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-pending-reader.ts` (pending storage read seam), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
 
@@ -674,8 +674,7 @@ returns a failure without executing it. Already admitted cells still use saved
 operation recovery and never evaluate their source again.
 
 `runtime/code-cell/cell-tool-call.ts` adapts one already-bound host call to
-`ToolRunner.runBound`. It requires an explicit `Permission` service and does not
-resolve a missing binding by name. The caller still owns the durable operation
+`ToolRunner.runBound`. It does not resolve a missing binding by name. The caller still owns the durable operation
 receipt. Execution returns the original tool result.
 A separate result conversion runs after persistence and maps failures to cell errors.
 `CellToolCallSuspended` instead carries the pending interaction and inner call
@@ -858,7 +857,7 @@ host-owned design. It should expose:
 - agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
   helpers needed for turn-scoped subagent dispatch;
 - stable ids and author-facing schemas: `ExtensionId`,
-  `ToolCallId`, `PermissionRule`, output/message projection
+  `ToolCallId`, output/message projection
   helpers that are safe to serialize across the extension boundary;
 - host facts: `ExtensionHost.host` and `ExtensionHost.Process`, a small public view over
   host-owned platform facts such as OS info, executable path, home directory,

@@ -52,7 +52,6 @@ import {
   type CreateBranchInput,
   type CreateSessionInput,
   type DeleteAuthKeyInput,
-  type DeletePermissionRuleInput,
   type ExtensionRpcRequestInput,
   type ForkBranchInput,
   type GetSessionSnapshotInput,
@@ -500,18 +499,8 @@ const RpcHandlers = GentRpcs.toLayer(
         })),
 
       // ----------------------------------------------------------------------
-      // Config / driver / model / auth / permission
+      // Config / driver / model / auth
       // ----------------------------------------------------------------------
-      "permission.listRules": () =>
-        configService
-          .get()
-          .pipe(
-            Effect.map((c) => Option.getOrElse(Option.fromUndefinedOr(c.permissions), () => [])),
-          ),
-
-      "permission.deleteRule": ({ tool, pattern }: DeletePermissionRuleInput) =>
-        configService.removePermissionRule(tool, pattern),
-
       "model.list": () => modelRegistry.list,
 
       "driver.list": () =>

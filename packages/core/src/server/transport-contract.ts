@@ -25,7 +25,6 @@ import {
   SessionId,
 } from "../domain/ids.js"
 import { Branch, BranchTreeNode, ProjectedMessage, Session } from "../domain/message.js"
-// PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import {
   SessionRuntimeMetrics,
@@ -156,12 +155,6 @@ export const UpdateSessionSettingsInput = Schema.Struct({
   ...SessionSettings.fields,
 })
 export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
-
-export const DeletePermissionRuleInput = Schema.Struct({
-  tool: Schema.String,
-  pattern: Schema.optional(Schema.String),
-})
-export type DeletePermissionRuleInput = typeof DeletePermissionRuleInput.Type
 
 export const SetAuthKeyInput = Schema.Struct({
   provider: Schema.String,

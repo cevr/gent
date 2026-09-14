@@ -31,7 +31,6 @@ import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"
 import { Auth } from "./auth"
-import { Permissions } from "./permissions"
 import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.js"
 
 export interface SessionProps {
@@ -316,8 +315,6 @@ export function Session(props: SessionProps) {
                   onClose={controller.closeOverlay}
                 />
               )
-            case "permissions":
-              return <Permissions onClose={controller.closeOverlay} />
             case "extension": {
               const Overlay = Option.fromNullishOr(ext.overlays().get(overlay.overlayId))
               if (Option.isNone(Overlay)) return <></>

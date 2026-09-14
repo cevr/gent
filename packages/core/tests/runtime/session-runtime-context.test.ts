@@ -8,7 +8,6 @@ import { dateFromMillis, Session } from "../../src/domain/message"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { AllowAllPermission } from "../../src/domain/permission"
 import {
   resolveTurnProfile,
   type TurnProfileDefaults,
@@ -28,7 +27,6 @@ import { SqliteStorage, StorageError } from "../../src/storage/sqlite-storage"
 import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
 import type { ExternalDriverContribution } from "../../src/domain/driver"
 import { ProcessRunnerLive } from "../../src/runtime/run-process"
-import type { PermissionService } from "../../src/domain/permission"
 import { testHostFacts } from "../../src/test-utils"
 
 const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
@@ -40,95 +38,81 @@ const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
   externalDrivers: new Map(),
 })
 describe("resolveTurnProfile", () => {
-  it.scopedLive(
-    "uses the stored session cwd to resolve profile-scoped permission and host context",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const launch = yield* fs.makeTempDirectoryScoped()
-        const secondary = yield* fs.makeTempDirectoryScoped()
-        const home = yield* fs.makeTempDirectoryScoped()
-        const writeProjectConfig = (
-          cwd: string,
-          permissions: ReadonlyArray<Record<string, string>>,
-        ) =>
-          Effect.gen(function* () {
-            const configDir = path.join(cwd, ".gent")
-            yield* fs.makeDirectory(configDir, { recursive: true })
-            yield* fs.writeFileString(
-              path.join(configDir, "config.json"),
-              encodeJson({ permissions }),
-            )
-          })
-        yield* writeProjectConfig(launch, [{ tool: "bash", action: "deny" }])
-        yield* writeProjectConfig(secondary, [{ tool: "bash", action: "allow" }])
-        const runtimeEnvironmentLive = RuntimeEnvironment.Live({
-          cwd: launch,
-          home,
-          platform: "darwin",
+  it.scopedLive("uses the stored session cwd to resolve the profile-scoped host context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const secondary = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const writeProjectConfig = (cwd: string) =>
+        Effect.gen(function* () {
+          const configDir = path.join(cwd, ".gent")
+          yield* fs.makeDirectory(configDir, { recursive: true })
+          yield* fs.writeFileString(path.join(configDir, "config.json"), encodeJson({}))
         })
-        const configServiceLive = ConfigService.Live.pipe(
-          Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
-        )
-        const sessionProfileCacheLive = SessionProfileCache.Live({
-          home,
-          platform: "darwin",
-          extensions: [],
-        }).pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              BunServices.layer,
-              processRunnerLive,
-              configServiceLive,
-              SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
-                Layer.provide(BunPlatformLive),
-              ),
-            ),
+      yield* writeProjectConfig(launch)
+      yield* writeProjectConfig(secondary)
+      const runtimeEnvironmentLive = RuntimeEnvironment.Live({
+        cwd: launch,
+        home,
+        platform: "darwin",
+      })
+      const configServiceLive = ConfigService.Live.pipe(
+        Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
+      )
+      const sessionProfileCacheLive = SessionProfileCache.Live({
+        home,
+        platform: "darwin",
+        extensions: [],
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            BunServices.layer,
+            processRunnerLive,
+            configServiceLive,
+            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
           ),
+        ),
+      )
+      const testLayer = Layer.mergeAll(
+        BunServices.layer,
+        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        emptyRegistryLayer,
+        emptyDriverRegistryLayer,
+        runtimeEnvironmentLive,
+        sessionProfileCacheLive,
+      )
+      yield* Effect.gen(function* () {
+        const sessionStorage = yield* SessionStorage
+        const extensionRegistry = yield* ExtensionRegistry
+        const profileCache = yield* SessionProfileCache
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* sessionStorage.createSession(
+          new Session({
+            id: SessionId.make("session-runtime-context-profile"),
+            cwd: secondary,
+            createdAt: now,
+            updatedAt: now,
+          }),
         )
-        const testLayer = Layer.mergeAll(
-          BunServices.layer,
-          SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
-          emptyRegistryLayer,
-          emptyDriverRegistryLayer,
-          runtimeEnvironmentLive,
-          sessionProfileCacheLive,
-        )
-        yield* Effect.gen(function* () {
-          const sessionStorage = yield* SessionStorage
-          const extensionRegistry = yield* ExtensionRegistry
-          const profileCache = yield* SessionProfileCache
-          const now = dateFromMillis(1_767_225_600_000)
-          yield* sessionStorage.createSession(
-            new Session({
-              id: SessionId.make("session-runtime-context-profile"),
-              cwd: secondary,
-              createdAt: now,
-              updatedAt: now,
-            }),
-          )
-          const hostProvider = yield* makeExtensionHostContextProvider({
-            host: testHostFacts().host,
-            extensionRegistry,
-          })
-          const resolved = yield* resolveTurnProfile({
-            sessionId: SessionId.make("session-runtime-context-profile"),
-            branchId: BranchId.make("branch-runtime-context-profile"),
-            profileCache,
-            defaults: {
-              driverRegistry: yield* DriverRegistry,
-              permission: AllowAllPermission,
-              baseSections: [],
-            },
-          }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
-          expect(resolved.turnHostCtx.cwd).toBe(secondary)
-          expect(yield* resolved.turnPermission.check("bash", { command: "ls -la" })).toBe(
-            "allowed",
-          )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(testLayer), Effect.scoped)
-      }).pipe(Effect.provide(BunPlatformLive)),
+        const hostProvider = yield* makeExtensionHostContextProvider({
+          host: testHostFacts().host,
+          extensionRegistry,
+        })
+        const resolved = yield* resolveTurnProfile({
+          sessionId: SessionId.make("session-runtime-context-profile"),
+          branchId: BranchId.make("branch-runtime-context-profile"),
+          profileCache,
+          defaults: {
+            driverRegistry: yield* DriverRegistry,
+            baseSections: [],
+          },
+        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
+        expect(resolved.turnHostCtx.cwd).toBe(secondary)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(testLayer), Effect.scoped)
+    }).pipe(Effect.provide(BunPlatformLive)),
   )
   it.live("falls back to host deps and defaults when no session profile is available", () =>
     Effect.gen(function* () {
@@ -137,9 +121,6 @@ describe("resolveTurnProfile", () => {
         home: "/tmp/runtime-context-home",
         platform: "test",
       })
-      const defaultPermission = {
-        check: () => Effect.succeed("denied" satisfies "denied"),
-      } satisfies PermissionService
       const driverRegistryContext = yield* Layer.build(
         DriverRegistry.fromResolved({
           modelDrivers: new Map(),
@@ -148,7 +129,6 @@ describe("resolveTurnProfile", () => {
       ).pipe(Effect.scoped)
       const defaults: TurnProfileDefaults = {
         driverRegistry: Context.get(driverRegistryContext, DriverRegistry),
-        permission: defaultPermission,
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
@@ -168,7 +148,6 @@ describe("resolveTurnProfile", () => {
           defaults,
         }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/runtime-context-default")
-        expect(yield* resolved.turnPermission.check("bash", { command: "ls -la" })).toBe("denied")
         expect(resolved.turnBaseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
         ])
@@ -206,7 +185,6 @@ describe("resolveTurnProfile", () => {
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
             defaults: {
               driverRegistry: yield* DriverRegistry,
-              permission: AllowAllPermission,
               baseSections: [],
             },
           }).pipe(
@@ -275,9 +253,6 @@ describe("resolveTurnProfile", () => {
           cwd: "/tmp/profile-driver-scope",
           resolved: resolveExtensions([]),
           layerContext: Context.makeUnsafe(new Map<string, unknown>()),
-          permissionService: {
-            check: () => Effect.succeed("allowed"),
-          },
           registryService: extensionRegistry,
           driverRegistryService: profileDriverRegistry,
           baseSections: [],
@@ -296,7 +271,6 @@ describe("resolveTurnProfile", () => {
           profileCache: fakeProfileCache,
           defaults: {
             driverRegistry: defaultDriverRegistry,
-            permission: AllowAllPermission,
             baseSections: [],
           },
         }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))

@@ -100,10 +100,6 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       respondPrompt: () => noRpcError(absent),
       respondHandoff: () => noRpcError({}),
     },
-    permission: {
-      listRules: () => noRpcError([]),
-      deleteRule: () => noRpcError(absent),
-    },
     model: {
       list: () => noRpcError([]),
     },

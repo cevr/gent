@@ -26,7 +26,6 @@ import {
 import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import { AgentName } from "../../../src/domain/agent"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { Permission } from "../../../src/domain/permission"
 import {
   AgentEvent,
   EventStore,
@@ -165,7 +164,6 @@ describe("interaction", () => {
       RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       ApprovalService.Test(),
-      Permission.Live(),
       BunServices.layer,
       ModelRegistry.Test(),
       GentPlatform.Test(),
@@ -959,11 +957,9 @@ describe("interaction", () => {
             yield* ensureStorageParents({ sessionId: intSessionId, branchId: intBranchId })
             const extensionRegistry = yield* ExtensionRegistry
             const driverRegistry = yield* DriverRegistry
-            const permission = yield* Permission
             const turnProfile = {
               turnExtensionRegistry: extensionRegistry,
               turnDriverRegistry: driverRegistry,
-              turnPermission: permission,
               turnBaseSections: [],
               turnHostCtx: testExtensionHostContext({
                 sessionId: intSessionId,

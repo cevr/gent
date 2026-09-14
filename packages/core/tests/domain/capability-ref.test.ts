@@ -15,7 +15,6 @@ import { defineRequests, getToolId, ref, request, tool } from "@gent/core/extens
 import { getToolMetadata, isToolCapability } from "../../src/domain/capability/tool"
 import type { RpcId, ToolId } from "../../src/domain/ids"
 import { ExtensionId } from "../../src/domain/ids"
-import { PermissionRule } from "../../src/domain/permission"
 
 describe("ref(capability)", () => {
   test("factories brand emitted bucket ids while accepting author strings", () => {
@@ -40,7 +39,6 @@ describe("ref(capability)", () => {
 
   test("tool lowers to a native Effect AI tool with Gent metadata annotations", () => {
     const params = Schema.Struct({ x: Schema.String })
-    const rule = new PermissionRule({ tool: "test.tool", action: "deny" })
     const prompt = { id: "tool.prompt", content: "Use carefully.", priority: 42 }
     const capability = tool({
       id: "test.tool",
@@ -52,7 +50,6 @@ describe("ref(capability)", () => {
       promptSnippet: "short",
       promptGuidelines: ["be precise"],
       interactive: true,
-      permissionRules: [rule],
       prompt,
       execute: () => Effect.succeed("ok"),
     })
@@ -68,7 +65,6 @@ describe("ref(capability)", () => {
     expect(metadata.promptSnippet).toBe("short")
     expect(metadata.promptGuidelines).toEqual(["be precise"])
     expect(metadata.interactive).toBe(true)
-    expect(metadata.permissionRules).toEqual([rule])
     expect(metadata.prompt).toEqual(prompt)
   })
 

@@ -19,7 +19,6 @@ import { ExtensionId } from "../../src/domain/ids"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
-import { PermissionRule } from "../../src/domain/permission"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { runToolWithCtx, testExtensionHostContext, testToolContext } from "../../src/test-utils"
 import { AgentDefinition } from "../../src/domain/agent"
@@ -140,34 +139,6 @@ describe("scope precedence", () => {
         ext("b", "project", { tools: [projectTool] }),
       ])
       return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
-    })
-
-    test("tool permissionRules: shadowed lower-scope rules do NOT survive", () => {
-      // A project-scope tool shadowing the builtin `bash` without
-      // `permissionRules` must NOT inherit the builtin's deny rules.
-      const builtinTool = tool({
-        id: "shadow-rules",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        permissionRules: [new PermissionRule({ tool: "shadow-rules", action: "deny" })],
-        execute: () => Effect.succeed("ok"),
-      })
-      const projectTool = tool({
-        id: "shadow-rules",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        // NO permissionRules — should remove the rule
-        execute: () => Effect.succeed("ok"),
-      })
-
-      const resolved = resolveExtensions([
-        ext("a", "builtin", { tools: [builtinTool] }),
-        ext("b", "project", { tools: [projectTool] }),
-      ])
-      // The deny rule must be gone — project shadowed the builtin entirely.
-      return Effect.sync(() => expect(resolved.permissionRules).toEqual([]))
     })
 
     test("same scope ties broken by extension id alphabetically", () => {

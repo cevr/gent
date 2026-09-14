@@ -48,7 +48,6 @@ const messagePartsToolResultParts = (
     if (part.type === "tool-result") return [part]
     return []
   })
-import { Permission } from "../../../src/domain/permission"
 import { SqliteStorage, type StorageError } from "../../../src/storage/sqlite-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
@@ -322,7 +321,6 @@ const makeLayerWithEvents = (
     toolRunnerLayer,
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ApprovalService.Test(),
-    Permission.Live(),
     BunServices.layer,
     ModelRegistry.Test(),
     ConfigService.Test(),

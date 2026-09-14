@@ -25,7 +25,6 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"
-import { Permission } from "../../../src/domain/permission"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
@@ -80,7 +79,6 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     ModelRegistry.Test(),
     GentPlatform.Test(),
     ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
-    Permission.Live(),
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )

@@ -1,5 +1,4 @@
 import { Effect, Option, Predicate } from "effect"
-import type { PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { Branch, Session } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
@@ -13,7 +12,6 @@ import type { AgentLoopTurnProfile } from "./agent/agent-loop.turn-profile.js"
 
 export interface TurnProfileDefaults {
   readonly driverRegistry: DriverRegistryService
-  readonly permission: PermissionService
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 
@@ -58,7 +56,6 @@ export const resolveTurnProfile = (params: {
       return {
         turnExtensionRegistry: hostProvider.defaultExtensionRegistry,
         turnDriverRegistry: params.defaults.driverRegistry,
-        turnPermission: params.defaults.permission,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
       }
@@ -66,7 +63,6 @@ export const resolveTurnProfile = (params: {
     return {
       turnExtensionRegistry: profile.value.registryService,
       turnDriverRegistry: profile.value.driverRegistryService,
-      turnPermission: profile.value.permissionService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo, profile.value.registryService),
       turnCapabilityContext: profile.value.layerContext,

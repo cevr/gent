@@ -117,4 +117,3 @@ export { ApprovalDecisionSchema, InteractionRequestRecord } from "../domain/inte
 
 // Ids and domain values a feature names.
 export { InteractionRequestId, ToolId } from "../domain/ids.js"
-export { Permission } from "../domain/permission.js"

@@ -13,7 +13,6 @@ import {
 } from "effect"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { AllowAllPermission, Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
@@ -281,11 +280,6 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
 ) {
   const hostCtx = yield* CurrentExtensionHostContext
   const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
-  const basePermissionOpt = yield* Effect.serviceOption(Permission)
-  const activePermission: PermissionService = Option.getOrElse(
-    basePermissionOpt,
-    () => AllowAllPermission,
-  )
   return yield* Effect.gen(function* () {
     yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
     yield* publishStarted({ ctx, toolCall })
@@ -328,35 +322,6 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
       return yield* finish(errorResult(toolCall, "Tool execution services unavailable"))
     }
     const executeKnownTool = Effect.gen(function* () {
-      const permCheckResult = yield* activePermission.check(toolCall.toolName, toolCall.input).pipe(
-        Effect.catchEager((e) =>
-          WideEvent.failDomain("permission_check_failed", {
-            message: String(e),
-          }).pipe(Effect.as("interceptor_failed")),
-        ),
-      )
-
-      if (permCheckResult === "interceptor_failed") {
-        yield* Effect.logWarning("tool.permission.check.failed").pipe(
-          Effect.annotateLogs({
-            toolName: toolCall.toolName,
-            toolCallId: toolCall.toolCallId,
-          }),
-        )
-        return errorResult(toolCall, "Permission check failed")
-      }
-
-      if (permCheckResult === "denied") {
-        yield* WideEvent.failDomain("permission_denied", { message: "Permission denied" })
-        yield* Effect.logInfo("tool.permission.denied").pipe(
-          Effect.annotateLogs({
-            toolName: toolCall.toolName,
-            toolCallId: toolCall.toolCallId,
-          }),
-        )
-        return errorResult(toolCall, "Permission denied")
-      }
-
       const executionToolkit = yield* makeExecutionToolkit({
         tool: toolEntry.value.capability,
         toolCall,

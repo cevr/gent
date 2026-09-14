@@ -6,7 +6,6 @@
  */
 
 import { type Effect, Schema } from "effect"
-import type { PermissionRule } from "./permission.js"
 import type { PromptSection } from "./prompt.js"
 import { ExtensionId, type RpcId, type ToolId } from "./ids.js"
 
@@ -65,8 +64,6 @@ export interface ToolDeclarations {
    * own binding. Declaring it keeps the loop from having to know tool names.
    */
   readonly dispatches?: boolean
-  /** Permission allow/deny rules gating execution. */
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** Static system-prompt section bundled with this tool. For dynamic
    *  prompt fragments resolved per-turn from services, use a turn projection hook. */
   readonly prompt?: PromptSection

@@ -38,7 +38,6 @@ import { ModelId } from "../../../src/domain/model"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../../src/domain/resource"
-import { Permission } from "../../../src/domain/permission"
 import { EventEnvelope, EventId, EventStore, type AgentEvent } from "../../../src/domain/event"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import type { EventPublisher } from "../../../src/domain/event-publisher"
@@ -381,7 +380,6 @@ export const makeLiveToolLayer = (
     ConfigService.Test(),
     EventStore.Memory,
     ApprovalService.Test(),
-    Permission.Live(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),

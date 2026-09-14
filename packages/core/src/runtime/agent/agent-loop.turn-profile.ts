@@ -1,6 +1,5 @@
 import { Context, Effect } from "effect"
 import type { ExtensionHostContext } from "../../domain/extension-services.js"
-import { Permission, type PermissionService } from "../../domain/permission.js"
 import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
@@ -11,7 +10,6 @@ import { provideCurrentHostCtx } from "./current-extension-host-context.js"
 export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService
   readonly turnDriverRegistry: DriverRegistryService
-  readonly turnPermission: PermissionService
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
   readonly turnCapabilityContext?: Context.Context<never>
@@ -38,7 +36,6 @@ export const runAgentLoopTurnProfile =
       Effect.provideService(CurrentAgentLoopTurnProfile, profile),
       Effect.provideService(ExtensionRegistry, profile.turnExtensionRegistry),
       Effect.provideService(DriverRegistry, profile.turnDriverRegistry),
-      Effect.provideService(Permission, profile.turnPermission),
       provideCurrentCapabilityContext(profile.turnCapabilityContext),
       provideCurrentHostCtx(profile.turnHostCtx),
     )

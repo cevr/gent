@@ -20,7 +20,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
   ExtensionContext,
   tool,
-  PermissionRule,
   type ExtensionContextService,
   type SessionId,
   ToolCallId,
@@ -37,8 +36,8 @@ import { OutputBuffer } from "./output-buffer.js"
 // Bash command classification for guardrails.
 //
 // Regex-based heuristic that flags destructive, external, and sensitive
-// commands for per-invocation permission prompts. NOT routed through the
-// Permission service (which would create blanket bash exemptions).
+// commands for one durable approval request per call. There are no saved
+// rules: every flagged call asks, and a call with no answerer fails closed.
 
 type BashRiskLevel = "safe" | "destructive" | "external" | "sensitive"
 
@@ -62,6 +61,10 @@ const DESTRUCTIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\bmkfs\b/, "mkfs (format filesystem)"],
   [/\bdd\s+if=/, "dd (raw disk write)"],
   [/\bsudo\s+rm\b/, "sudo rm"],
+  [
+    /\bgit\s+add\s+(-A\b|--all\b|\.(\s|$))/,
+    "git add everything (stages files other agents may own)",
+  ],
 ]
 
 const EXTERNAL_PATTERNS: Array<[RegExp, string]> = [
@@ -462,14 +465,6 @@ export const BashTool = tool({
     "Use for git, npm, and system commands — not file reads or searches",
     "Never use cat/head/tail/grep/find/ls when dedicated tools exist",
   ],
-  permissionRules: [
-    new PermissionRule({
-      tool: "bash",
-      pattern: "git\\s+(add\\s+[-.]|push\\s+--force|reset\\s+--hard|clean\\s+-f)",
-      action: "deny",
-    }),
-    new PermissionRule({ tool: "bash", pattern: "rm\\s+-rf\\s+/", action: "deny" }),
-  ],
   params: BashParams,
   output: BashResult,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
@@ -493,7 +488,7 @@ export const BashTool = tool({
       command = split.value.command
     }
 
-    // Guardrail check — ephemeral, not persisted through Permission service
+    // Guardrail check — one durable approval per flagged call
     const risk = classifyBashCommand(command)
     if (risk.level !== "safe") {
       const decision = yield* ctx.Interaction.approve({

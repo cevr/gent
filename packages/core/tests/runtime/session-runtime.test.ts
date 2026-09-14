@@ -47,7 +47,6 @@ import {
   SessionId,
   ToolCallId,
 } from "../../src/domain/ids"
-import { Permission } from "../../src/domain/permission"
 import { InteractionPendingError } from "../../src/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -165,7 +164,6 @@ const makeLiveToolRuntimeLayer = (
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     ApprovalService.Test(),
-    Permission.Live(),
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),

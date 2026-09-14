@@ -94,7 +94,6 @@ const currentHostParams = Effect.gen(function* () {
     turnGenerationId: profile.generationId,
     turnExtensionRegistry: profile.registryService,
     turnDriverRegistry: profile.driverRegistryService,
-    turnPermission: profile.permissionService,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(cell),
   }

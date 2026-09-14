@@ -1,14 +1,8 @@
 /** Profile declarations, catalog assembly, and isolated child resource wiring. */
 
-import { Context, DateTime, Effect, FileSystem, Layer, Path, Predicate } from "effect"
+import { Context, DateTime, Effect, FileSystem, Layer, Path } from "effect"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { type PromptSection } from "../domain/prompt.js"
-import {
-  type PermissionRule,
-  type PermissionService,
-  compilePermissionRules,
-  evaluatePermissionRules,
-} from "../domain/permission.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "./gent-platform.js"
 import {
@@ -59,7 +53,6 @@ export interface SessionProfile {
   readonly cwd: string
   readonly resolved: ResolvedExtensions
   readonly layerContext: RuntimeProfileServiceContext
-  readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -83,42 +76,6 @@ interface RuntimeProfileDeclarations {
   readonly coreSections: ReadonlyArray<PromptSection>
 }
 
-const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
-
-const makeProfilePermissionService = (params: {
-  readonly cwd: string
-  readonly configService: ConfigServiceService
-  readonly extensionRules: ReadonlyArray<PermissionRule>
-  readonly configOverride?: UserConfig
-}): PermissionService => {
-  const compiledExtensionRules = compilePermissionRules(params.extensionRules)
-
-  return {
-    check: Effect.fn("RuntimeProfile.permission.check")(function* (tool, args) {
-      let config: UserConfig
-      if (Predicate.isUndefined(params.configOverride)) {
-        config = yield* params.configService.get(params.cwd)
-      } else {
-        config = params.configOverride
-      }
-      const compiledConfigRules = compilePermissionRules(permissionRulesFromConfig(config))
-      return evaluatePermissionRules(
-        [...compiledExtensionRules, ...compiledConfigRules],
-        tool,
-        args,
-      )
-    }),
-  }
-}
-
-/**
- * Load extension declarations and static prompt inputs for a runtime profile.
- *
- * This function performs discovery, trusted extension setup, validation, and
- * prompt input loading. It does not build Resource layers or invoke Resource
- * lifecycle hooks. The returned declarations are consumed by the profile cache
- * before resource acquisition.
- */
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
 ): Effect.Effect<
@@ -234,12 +191,6 @@ export const buildSessionProfile = (params: {
       }),
     )
     const layerContext = yield* Layer.build(Layer.provideMerge(resourceLayer, baseLayers))
-    const permissionService = makeProfilePermissionService({
-      cwd: params.cwd,
-      configService: params.configService,
-      extensionRules: params.resolved.permissionRules,
-      configOverride: params.configOverride,
-    })
     // Extension sections shadow core sections by id.
     const sectionMap = new Map(params.coreSections.map((s) => [s.id, s]))
     for (const s of params.resolved.promptSections.values()) sectionMap.set(s.id, s)
@@ -247,7 +198,6 @@ export const buildSessionProfile = (params: {
       cwd: params.cwd,
       resolved: params.resolved,
       layerContext,
-      permissionService,
       registryService: Context.get(layerContext, ExtensionRegistry),
       driverRegistryService: Context.get(layerContext, DriverRegistry),
       baseSections: [...sectionMap.values()],
