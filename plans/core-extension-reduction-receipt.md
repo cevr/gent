@@ -1789,3 +1789,40 @@ with an empty `sessions.model_id`, so children still take the caller's
 `overrides` rather than a session setting; the root stayed on
 `anthropic/claude-opus-5`. Opus reported the 9 pre-existing Cents typecheck
 errors and did not touch them.
+
+## Prior-art pass (2026-09-14, `8598c184` → `cb422a69`)
+
+Seven commits from the ledger `plans/prior-art-review-2026-09-13.md`,
+merged fast-forward; 90 files, +1,080 −2,746; core 27,412 LOC
+(`packages/core/src`, was 27,495).
+
+| Commit     | Ledger     | Change                                                                                                                                               |
+| ---------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `1d7124d9` | R2, R3, R5 | `instructions` folded into `agents`; `webfetch` and `search_sessions` removed; cell guideline names `~/.gent/data.db`; turndown and linkedom dropped |
+| `fc134b9e` | R4         | `RetryPolicy` on `ModelDriverContribution.retry`; the loop keeps "re-run the step"                                                                   |
+| `fb9ad41f` | A2, A5     | durable `model-change` user message on a model switch; A5 verified, no change                                                                        |
+| `e9808c2e` | A1         | tool results capped at 8,000 chars with a `context.read` locator                                                                                     |
+| `d7dbf8e7` | R1         | permission rules, `/permissions` pane, `permission.*` RPCs removed; bash guardrails ask once                                                         |
+| `41c971aa` | R7, A4     | `classifyStep` → `StepOutcome`; policy and persistence match on it; `StreamEnded.outcome`                                                            |
+| `cb422a69` | Q4         | ARCHITECTURE.md Rules are sixteen numbered invariants with receipts plus a known-gaps list                                                           |
+
+R6 (agents-view server half) rejected: the live catalog
+(`ExtensionContext.Session.listActiveLoops`) and the stored catalog
+(`session.list`) differ after a restart. A3 (typed fan-in) stays a known gap.
+`agent-runner.ts` and `agent-loop.handlers.ts` are actor command handlers,
+not the stream fold; they did not shrink with R7.
+
+Gamut run 33 (opus-luna, at `cb422a69`, gate for the pass): Opus root at
+`low`, 5 Luna children, 18 tests green in 5m04s, $1.92, no continuation.
+`StreamEnded.outcome` on the root: 15 `ToolCalls`, 1 `Answered`; on the
+children: 26 `ToolCalls`, 5 `Answered`. Opus resolved two merges itself and
+reported the 9 pre-existing Cents typecheck errors.
+
+Files: `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`,
+`packages/core/src/domain/event.ts`, `packages/core/src/domain/driver.ts`,
+`packages/core/src/runtime/retry.ts`,
+`packages/core/src/providers/ai-transcript.ts`,
+`packages/core/src/server/session-mutations-live.ts`,
+`packages/extensions/src/agents.ts`, `packages/extensions/src/exec-tools/bash.ts`,
+`packages/core/tests/runtime/agent-loop/step-outcome.test.ts`,
+`ARCHITECTURE.md`, `plans/prior-art-review-2026-09-13.md`.
