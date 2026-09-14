@@ -182,6 +182,7 @@ const isMessageItem = Predicate.or(
 const collapsedUserLabel = (customType: string): Option.Option<string> => {
   if (customType === "goal-context") return Option.some("↻ goal continuation")
   if (customType === "context-window") return Option.some("⇣ new context window")
+  if (customType === "model-change") return Option.some("⇄ model changed")
   return Option.none()
 }
 
