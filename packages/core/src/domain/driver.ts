@@ -151,6 +151,36 @@ export interface ProviderAuthContribution {
   readonly callback?: (ctx: ProviderCallbackContext) => Effect.Effect<void, ProviderAuthError>
 }
 
+// ── RetryPolicy — the driver knows its own transient failure shapes ──
+
+/**
+ * How the loop retries a transient failure from this driver. A typed
+ * `AiError` decides by its own `isRetryable`; a raw error event the stream
+ * carried is transient when it matches `transientStreamEvent`. The loop only
+ * re-runs the step; nothing here is inferred from message text.
+ */
+export interface RetryPolicy {
+  /** Delay before the first retry, in milliseconds. */
+  readonly initialDelay: number
+  /** Upper bound of any delay, in milliseconds. */
+  readonly maxDelay: number
+  /** Multiplier applied to the delay after each attempt. */
+  readonly backoffFactor: number
+  /** Attempts in total, the first call included. */
+  readonly maxAttempts: number
+  /** Wire shape of a mid-stream error event this driver treats as transient. */
+  readonly transientStreamEvent: Schema.Top
+}
+
+/** Bounded backoff with no transient stream events; drivers spread and refine it. */
+export const DEFAULT_RETRY_POLICY: RetryPolicy = {
+  initialDelay: 2000,
+  maxDelay: 30000,
+  backoffFactor: 2,
+  maxAttempts: 3,
+  transientStreamEvent: Schema.Never,
+}
+
 // ── ModelDriverContribution — provider-shaped driver ──
 
 /**
@@ -179,6 +209,8 @@ export interface ModelDriverContribution {
   ) => ReadonlyArray<Model>
   /** Auth configuration — OAuth + API key methods + handlers. */
   readonly auth?: ProviderAuthContribution
+  /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
+  readonly retry?: RetryPolicy
 }
 
 // ── External-driver shapes ──

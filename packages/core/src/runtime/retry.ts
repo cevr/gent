@@ -1,47 +1,46 @@
 import { Cause, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
-import type { ProviderAuthError } from "../domain/driver.js"
+import { DEFAULT_RETRY_POLICY, type ProviderAuthError, type RetryPolicy } from "../domain/driver.js"
+import { parseModelId } from "../domain/model.js"
 import { ProviderError } from "../domain/provider-error.js"
-
-interface RetryConfig {
-  /** Delay before the first retry, in milliseconds. */
-  readonly initialDelay: number
-  /** Upper bound of any delay, in milliseconds. */
-  readonly maxDelay: number
-  /** Multiplier applied to the delay after each attempt. */
-  readonly backoffFactor: number
-  /** Attempts in total, the first call included. */
-  readonly maxAttempts: number
-}
-
-export const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  initialDelay: 2000,
-  maxDelay: 30000,
-  backoffFactor: 2,
-  maxAttempts: 3,
-}
+import type { DriverRegistryService } from "./extensions/driver-registry.js"
 
 /**
- * A request the provider accepted can still end with an error event inside
- * the stream. The provider libraries pass that event through as a raw part,
- * so its wire identifier is the only signal: Anthropic names the error type,
- * OpenAI names a code.
+ * The policy of the driver a turn will call: the agent's driver override
+ * first, else the provider segment of the model id. A driver without a
+ * policy, or no driver at all, retries under `DEFAULT_RETRY_POLICY`.
  */
-const TransientStreamEvent = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literals(["overloaded_error", "api_error", "rate_limit_error"]),
-  }),
-  Schema.Struct({ code: Schema.Literals(["server_error", "rate_limit_exceeded"]) }),
-])
+export const driverRetryPolicy = Effect.fn("Retry.driverRetryPolicy")(function* (
+  driverRegistry: DriverRegistryService,
+  request: { readonly modelId: string; readonly driverId?: string },
+) {
+  let driverId: Option.Option<string> = Option.map(
+    parseModelId(request.modelId),
+    ([provider]) => provider,
+  )
+  if (!Predicate.isUndefined(request.driverId)) driverId = Option.some(request.driverId)
+  if (Option.isNone(driverId)) return DEFAULT_RETRY_POLICY
+  const driver = yield* driverRegistry.getModel(driverId.value)
+  if (Predicate.isUndefined(driver) || Predicate.isUndefined(driver.retry)) {
+    return DEFAULT_RETRY_POLICY
+  }
+  return driver.retry
+})
 
 type ProviderOrAuthError = ProviderError | ProviderAuthError
 
-/** Only a transient `ProviderError` is retried; a credential failure escapes. */
-const isRetryable = (error: ProviderOrAuthError): error is ProviderError => {
-  if (!Schema.is(ProviderError)(error)) return false
-  if (AiError.isAiError(error.cause)) return error.cause.isRetryable
-  return Schema.is(TransientStreamEvent)(error.cause)
-}
+/**
+ * Only a transient `ProviderError` is retried; a credential failure escapes.
+ * A request the provider accepted can still end with an error event inside
+ * the stream; the driver's policy names the wire shapes that count.
+ */
+const isRetryable =
+  (policy: RetryPolicy) =>
+  (error: ProviderOrAuthError): error is ProviderError => {
+    if (!Schema.is(ProviderError)(error)) return false
+    if (AiError.isAiError(error.cause)) return error.cause.isRetryable
+    return Schema.is(policy.transientStreamEvent)(error.cause)
+  }
 
 const retryAfterMs = (error: ProviderError): Option.Option<number> => {
   if (!AiError.isAiError(error.cause)) return Option.none()
@@ -55,7 +54,7 @@ const JITTER_FRACTION = 0.25
 const retryDelay = (
   attempt: number,
   error: ProviderError,
-  config: RetryConfig,
+  config: RetryPolicy,
   jitter: number,
 ): number =>
   Option.match(retryAfterMs(error), {
@@ -74,13 +73,14 @@ interface RetryAttemptInfo {
 }
 
 /**
- * Retry a provider call on transient failure. The provider's own retry-after
- * wins over the backoff; both are capped at `maxDelay`. `onRetry` runs before
- * each wait with the delay the schedule will take.
+ * Retry a provider call on transient failure under the driver's policy. The
+ * provider's own retry-after wins over the backoff; both are capped at
+ * `maxDelay`. `onRetry` runs before each wait with the delay the schedule
+ * will take.
  */
 export const retryProviderCall =
   <R2 = never>(
-    config: RetryConfig = DEFAULT_RETRY_CONFIG,
+    config: RetryPolicy,
     options?: {
       readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
     },
@@ -88,6 +88,7 @@ export const retryProviderCall =
     effect: Effect.Effect<A, ProviderOrAuthError, R>,
   ) => Effect.Effect<A, ProviderOrAuthError, R | R2>) =>
   <A, R>(effect: Effect.Effect<A, ProviderOrAuthError, R>) => {
+    const retryable = isRetryable(config)
     // meta.attempt is 1-indexed: 1 after the first failure, 2 after the second.
     const schedule = Schedule.fromStepWithMetadata<
       ProviderOrAuthError,
@@ -98,7 +99,7 @@ export const retryProviderCall =
       never
     >(
       Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) => {
-        if (meta.attempt >= config.maxAttempts || !isRetryable(meta.input)) {
+        if (meta.attempt >= config.maxAttempts || !retryable(meta.input)) {
           return Cause.done(meta.attempt)
         }
         const error = meta.input
@@ -118,7 +119,7 @@ export const retryProviderCall =
       }),
     )
 
-    return Effect.retry(effect, { schedule, while: isRetryable }).pipe(
+    return Effect.retry(effect, { schedule, while: retryable }).pipe(
       Effect.withSpan("provider.retry"),
     )
   }

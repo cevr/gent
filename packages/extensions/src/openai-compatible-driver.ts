@@ -1,4 +1,4 @@
-import { Config, Effect, Layer, Option, Redacted } from "effect"
+import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { Model as AiModel } from "effect/unstable/ai"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
@@ -7,6 +7,7 @@ import {
   ProviderAuthError,
   defineExtension,
   ExtensionHost,
+  DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
   type ProviderHints,
   type ProviderResolution,
@@ -69,6 +70,13 @@ export const makeApiKeyCompatDriver = (params: {
 }): ModelDriverContribution => ({
   id: params.id,
   name: params.name,
+  retry: {
+    ...DEFAULT_RETRY_POLICY,
+    // An accepted request can still end with an error event inside the stream; the compatible APIs name a code.
+    transientStreamEvent: Schema.Struct({
+      code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
+    }),
+  },
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       let apiKey = params.envApiKey

@@ -1,16 +1,25 @@
 /**
  * Provider retry: which failures are retried, how long the schedule waits,
- * and what it reports. The only interface is `retryProviderCall`.
+ * and what it reports. The only interface is `retryProviderCall` under a
+ * driver `RetryPolicy`.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Duration, Effect, Exit, Fiber } from "effect"
+import { Duration, Effect, Exit, Fiber, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import * as AiError from "effect/unstable/ai/AiError"
-import { ProviderAuthError } from "../../src/domain/driver"
+import { DEFAULT_RETRY_POLICY, ProviderAuthError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/provider-error"
-import { DEFAULT_RETRY_CONFIG, retryProviderCall } from "../../src/runtime/retry"
+import { retryProviderCall } from "../../src/runtime/retry"
 
-const fast = { ...DEFAULT_RETRY_CONFIG, initialDelay: 1, maxDelay: 1, maxAttempts: 3 }
+/** The wire shapes the shipped Anthropic and OpenAI drivers name as transient. */
+const transientStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literals(["overloaded_error", "api_error", "rate_limit_error"]),
+  }),
+  Schema.Struct({ code: Schema.Literals(["server_error", "rate_limit_exceeded"]) }),
+])
+const policy = { ...DEFAULT_RETRY_POLICY, transientStreamEvent }
+const fast = { ...policy, initialDelay: 1, maxDelay: 1, maxAttempts: 3 }
 
 const rateLimited = (retryAfter: Duration.Duration) =>
   new ProviderError({
@@ -83,6 +92,7 @@ describe("provider retry", () => {
   it.effect("backs off exponentially with bounded jitter for a mid-stream overload", () =>
     Effect.gen(function* () {
       const { run, delays } = failThenSucceed(streamEvent({ type: "overloaded_error" }), 2, {
+        ...policy,
         initialDelay: 1000,
         maxDelay: 60_000,
         backoffFactor: 2,

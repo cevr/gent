@@ -5,6 +5,7 @@ import {
   AuthMethod,
   Model,
   ProviderAuthError,
+  DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderAuthorizationResult,
@@ -156,6 +157,13 @@ export const buildOpenAIModelDriver = (
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
+  retry: {
+    ...DEFAULT_RETRY_POLICY,
+    // An accepted request can still end with an error event inside the stream; OpenAI names its code.
+    transientStreamEvent: Schema.Struct({
+      code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
+    }),
+  },
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)

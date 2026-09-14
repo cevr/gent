@@ -15,6 +15,7 @@ import {
   defineExtension,
   ExtensionHost,
   ProviderAuthError,
+  DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderAuthorizationResult,
@@ -179,6 +180,13 @@ export const buildAnthropicModelDriver = (
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
+  retry: {
+    ...DEFAULT_RETRY_POLICY,
+    // An accepted request can still end with an error event inside the stream; Anthropic names its type.
+    transientStreamEvent: Schema.Struct({
+      type: Schema.Literals(["overloaded_error", "api_error", "rate_limit_error"]),
+    }),
+  },
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)

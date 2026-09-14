@@ -75,7 +75,7 @@ export {
   hook,
 } from "../domain/extension.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
-export { ProviderAuthError, TurnError } from "../domain/driver.js"
+export { DEFAULT_RETRY_POLICY, ProviderAuthError, TurnError } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction-request.js"
 export type {
   ModelDriverContribution,

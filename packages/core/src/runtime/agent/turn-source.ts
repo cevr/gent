@@ -50,7 +50,7 @@ import {
   windowMarkerMessage,
 } from "../model-context-window.js"
 import { ModelRegistry } from "../model-registry.js"
-import { DEFAULT_RETRY_CONFIG, retryProviderCall } from "../retry"
+import { driverRetryPolicy, retryProviderCall } from "../retry"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary"
 import {
   CurrentExtensionHostContext,
@@ -321,6 +321,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     modelRequest = { ...modelRequest, driverId: resolvedDriver.id }
   }
 
+  const retryPolicy = yield* driverRetryPolicy(driverRegistry, modelRequest)
+
   const modelRegistry = yield* ModelRegistry
   let contextModelId = resolved.modelId
   if (
@@ -544,7 +546,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // seam surfaces the typed auth failure; narrow the retry scope to
       // transient `ProviderError` only.
       effect.pipe(
-        retryProviderCall(DEFAULT_RETRY_CONFIG, {
+        retryProviderCall(retryPolicy, {
           onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
             publishEventOrDie(
               ProviderRetrying.make({
