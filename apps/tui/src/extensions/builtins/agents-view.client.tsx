@@ -189,87 +189,110 @@ export interface SubtreeCounts {
 }
 
 /** Section counts over every row descending from `root`, at any depth; the root itself is not counted. */
-export const subtreeCounts = (
+/** Descendants of `root` at any depth, in the server's parent-before-child order. */
+export const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
   root: Option.Option<{ readonly sessionId: string }>,
-): SubtreeCounts => {
-  const counts = { total: 0, running: 0, idle: 0, inactive: 0 }
-  if (Option.isNone(root)) return counts
+): ReadonlyArray<AgentRowEntry> => {
+  if (Option.isNone(root)) return []
   const known = new Set<string>([root.value.sessionId])
+  const descendants: Array<AgentRowEntry> = []
   let pending = rows.filter((row) => row.sessionId !== root.value.sessionId)
   for (;;) {
     const next = pending.filter(
       (row) => Predicate.isNotUndefined(row.parentSessionId) && known.has(row.parentSessionId),
     )
-    if (next.length === 0) return counts
+    if (next.length === 0) return descendants
     for (const row of next) {
-      counts.total += 1
-      counts[row.section] += 1
+      descendants.push(row)
       known.add(row.sessionId)
     }
     pending = pending.filter((row) => !known.has(row.sessionId))
   }
 }
 
-/** prime-agent's tray line: `● 1 running   ◐ 2 idle   ○ 3 inactive`. */
-export const traySegments = (
-  counts: SubtreeCounts,
-): ReadonlyArray<{
-  readonly section: AgentRowEntry["section"]
-  readonly text: string
-}> => [
-  { section: "running", text: `● ${counts.running} running` },
-  { section: "idle", text: `◐ ${counts.idle} idle` },
-  { section: "inactive", text: `○ ${counts.inactive} inactive` },
-]
+export const subtreeCounts = (
+  rows: ReadonlyArray<AgentRowEntry>,
+  root: Option.Option<{ readonly sessionId: string }>,
+): SubtreeCounts => {
+  const counts = { total: 0, running: 0, idle: 0, inactive: 0 }
+  for (const row of subtreeRows(rows, root)) {
+    counts.total += 1
+    counts[row.section] += 1
+  }
+  return counts
+}
 
 const TRAY_HINT = "^t agents"
+const TRAY_MAX_ROWS = 3
+
+/** The task a row is on: its name without the `agent: ` prefix the delegate title carries, else its cwd. */
+const taskFor = (row: AgentRowEntry): string => {
+  const agent = Option.getOrElse(Option.fromUndefinedOr(row.agent), () => "")
+  const name = Option.fromUndefinedOr(row.name).pipe(
+    Option.orElse(() => Option.fromUndefinedOr(row.cwd)),
+    Option.getOrElse(() => row.sessionId),
+  )
+  if (agent.length > 0 && name.startsWith(`${agent}: `)) return name.slice(agent.length + 2)
+  return name
+}
+
+/**
+ * fx's subagent rows: `<agent> working · <task>`, one per running child and
+ * nothing else. Past the cap the rest collapse into one count line.
+ */
+export const trayLines = (
+  running: ReadonlyArray<AgentRowEntry>,
+  width: number,
+): ReadonlyArray<{ readonly pulse: boolean; readonly text: string }> => {
+  const shown = running.slice(0, TRAY_MAX_ROWS)
+  const lines = shown.map((row) => {
+    const agent = Option.getOrElse(Option.fromUndefinedOr(row.agent), () => "agent")
+    return { pulse: true, text: truncate(`${agent} working · ${taskFor(row)}`, width) }
+  })
+  const rest = running.length - shown.length
+  if (rest > 0) lines.push({ pulse: false, text: `+${rest} more working` })
+  return lines
+}
 
 export function SubagentTray(props: { controller: AgentsController }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const counts = () => subtreeCounts(props.controller.rows(), props.controller.current())
-  // Switching sessions changes whose subtree the tray counts; refetch for it.
+  const tick = useSpinnerClock()
+  const running = () =>
+    subtreeRows(props.controller.rows(), props.controller.current()).filter(
+      (row) => row.section === "running",
+    )
+  // Switching sessions changes whose subtree the tray lists; refetch for it.
   createEffect(
     on(
       () => Option.getOrUndefined(Option.map(props.controller.current(), (row) => row.sessionId)),
       () => props.controller.refresh(""),
     ),
   )
-  const sectionColor = (section: AgentRowEntry["section"]) => {
-    if (section === "running") return theme.success
-    if (section === "idle") return theme.warning
-    return theme.textMuted
-  }
-  const segments = () => traySegments(counts())
-  const gap = () => {
-    const used = segments().reduce((sum, segment) => sum + segment.text.length + 3, 0)
-    // Margins, border, and padding take six columns; the text box is the rest.
-    return " ".repeat(Math.max(1, dimensions().width - 6 - used - TRAY_HINT.length))
+  // Two columns of padding, the pulse and its space, and the hint on the first line.
+  const textWidth = () => Math.max(8, dimensions().width - 4 - TRAY_HINT.length - 2)
+  const lines = () => trayLines(running(), textWidth())
+  const glyph = (pulse: boolean): string => {
+    if (pulse) return workingIconFrame(tick())
+    return " "
   }
   return (
-    <Show when={!props.controller.open() && counts().total > 0}>
-      <box
-        alignSelf="stretch"
-        marginLeft={1}
-        marginRight={1}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        title="subagents"
-        titleAlignment="left"
-        paddingLeft={1}
-        height={3}
-      >
-        <text wrapMode="none" style={{ fg: theme.textMuted }}>
-          <For each={segments()}>
-            {(segment) => (
-              <span style={{ fg: sectionColor(segment.section) }}>{`${segment.text}   `}</span>
-            )}
-          </For>
-          {gap()}
-          {TRAY_HINT}
-        </text>
+    <Show when={!props.controller.open() && running().length > 0}>
+      <box flexDirection="column" flexShrink={0} paddingLeft={1} paddingRight={1}>
+        <For each={lines()}>
+          {(line, index) => (
+            <text wrapMode="none">
+              <span style={{ fg: theme.success }}>{`${glyph(line.pulse)} `}</span>
+              <span style={{ fg: theme.textMuted }}>{line.text}</span>
+              <Show when={index() === 0}>
+                <span style={{ fg: theme.textMuted }}>
+                  {`${" ".repeat(Math.max(1, textWidth() - line.text.length + 2))}${TRAY_HINT}`}
+                </span>
+              </Show>
+            </text>
+          )}
+        </For>
       </box>
     </Show>
   )
