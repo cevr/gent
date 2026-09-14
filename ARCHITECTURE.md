@@ -316,6 +316,11 @@ Shape:
   prompt section at priority 70 beside the persona sections. Core builds no
   instruction text and the profile carries none; an edit to `AGENTS.md` reaches
   the next turn.
+- Tool-result spill: the model sees at most 8,000 characters of any tool
+  result (head plus tail); the stored message and its events keep the full
+  result, and the bounded result carries a `read` locator for
+  `context.read(toolCallId, { offset, limit })`. Context pressure drops before
+  compaction ever runs.
 - The cell subsumes host tools the Bun runtime already provides: `fetch` for
   network reads and `bun:sqlite` on `~/.gent/data.db` for past sessions. No
   `webfetch` or `search_sessions` tool ships; `read_session` stays as the

@@ -59,14 +59,19 @@ const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMes
   return Option.some(Prompt.assistantMessage({ content }))
 }
 
-/** Model-facing tool results keep this many characters. The transcript keeps the full result. */
-export const maximumModelToolResultChars = 64_000
+/**
+ * Model-facing tool results keep this many characters; anything larger is
+ * spilled. The transcript keeps the full result, and the bounded result
+ * carries the locator the model uses to page through it.
+ */
+export const maximumModelToolResultChars = 8_000
 
 const encodeToolResultJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Json))
 
 /**
- * Bound one tool result for the model with head-plus-tail text.
- * The stored message and its events keep the full result.
+ * Bound one tool result for the model with head-plus-tail text and a
+ * locator for the rest. The stored message and its events keep the full
+ * result; `context.read(toolCallId, { offset, limit })` in the cell pages it.
  */
 export const boundToolResultForModel = (
   part: Prompt.ToolResultPart,
@@ -84,6 +89,7 @@ export const boundToolResultForModel = (
       truncated: true,
       totalChars: bounded.totalChars,
       omittedChars: bounded.totalChars - maxChars,
+      read: `context.read("${part.id}", { offset, limit })`,
       text: bounded.text,
     },
   })

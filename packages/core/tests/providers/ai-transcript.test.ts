@@ -16,6 +16,7 @@ import { Schema } from "effect"
 const BoundedToolResult = Schema.Struct({
   truncated: Schema.Boolean,
   totalChars: Schema.Finite,
+  read: Schema.String,
   text: Schema.String,
 })
 
@@ -63,6 +64,8 @@ describe("AI transcript projection", () => {
     expect(boundedResult.truncated).toBe(true)
     expect(boundedResult.totalChars).toBe(full.length + '{"output":""}'.length)
     expect(boundedResult.text).toContain("characters truncated")
+    expect(boundedResult.read).toBe('context.read("tc-big", { offset, limit })')
+    expect(maximumModelToolResultChars).toBe(8_000)
     expect(boundedResult.text.length).toBeLessThan(full.length)
     // The stored part is unchanged and small results pass through untouched.
     expect(message.parts[0]).toEqual(part)
