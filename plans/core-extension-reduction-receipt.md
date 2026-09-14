@@ -1700,3 +1700,45 @@ tests green in 2m59s, $0.83, no continuation. Live check showed
 `● 1 running` mid-spawn and `◐ 5 idle` after. Gamut run 31 (opus-luna
 at `d0d8118c`): 5 Luna children, 5/5 receipts, 19 tests green in 8m11s,
 $1.26, no continuation; the poller kept `● 2 running` current mid-turn.
+
+## /model: a session-scoped model setting (2026-09-14)
+
+User directive: "we need a slash command to change the models", then
+"be sure to use the herdr cli to test the TUI and test the model changing
+flow" and "lets not use modals - only panes". Two commits on main
+(`07ef2ef5`, `acf2e2e8`), built in a Rift and fast-forwarded.
+
+A session now carries `modelId` next to `reasoningLevel` (migration
+`017_session_model`). One mutation, `session.updateSettings`, replaces
+`session.updateReasoningLevel` and sends both settings whole; the event
+`SessionSettingsUpdated` and `SessionSnapshot` carry both. In
+`turn-resolve.ts` the session's model wins over the agent definition,
+config `agents[name]`, and run-spec overrides; the acceptance test in
+`message-send.test.ts` proves a set-then-clear round trip against a
+config override.
+
+The TUI's `/model` opens a docked pane under the composer (same chrome
+as the agents pane, no overlay): typed filter, current model marked `●`,
+Enter selects. `/model <id or name>` resolves an exact id or a unique
+substring through `resolveModelQuery`; `/model default` clears. The pane
+lists only models whose provider has a registered driver (103 rows, not
+the 7,753 models.dev entries); the narrowing lives in the TUI because
+`model.list` is a catalogue cache ten test files depend on. The footer
+shows the session's model before the next turn streams.
+
+Two latent defects surfaced by the live run. `setError` set an agent
+status nothing rendered, so every slash-command error was invisible;
+the footer now shows it in red in place of the phase word. The migration
+"already applied" detector read only the SqlError's generic message and
+missed "duplicate column name" on the cause; the equal-time-order test
+now exercises it through migration 017.
+
+herdr run (pane `wZ:p18`, opus-luna testbed): picker opened, `luna`
+filtered to one row, Enter switched the footer to GPT-5.6 Luna at once,
+the next turn's `StreamEnded.model` was `openai/gpt-5.6-luna`, the
+`sessions.model_id` column held it, `gent -c` reloaded with the setting,
+`/model anthropic/claude-sonnet-5` set Sonnet 5, `/model claude` showed
+the 14-candidate error, `/model default` cleared and the next turn ran on
+Opus from config. Known gap: right after clearing, the footer falls back
+to the last streamed model until the next turn, because the client cannot
+resolve the config default itself.
