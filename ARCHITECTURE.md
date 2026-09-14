@@ -100,10 +100,13 @@ updates this list in the same commit.
 Kept here so the next pass starts from them, not from a fresh survey. Each
 names the decision that left it open.
 
-- **No typed fan-in for children.** `delegate` is foreground in one cell; an
-  orchestrator that wants to spawn without awaiting has no `collect`. Left
-  open until a gamut run shows the orchestrator wanting it (ledger A3,
-  `plans/prior-art-review-2026-09-13.md`).
+- **Typed fan-in for children (ledger A3) is rejected, not open.** The
+  cell already fans in: `Promise.all` over foreground `delegate` calls
+  returns typed `DelegateResult`s (gamut run 34: six in one cell), and
+  `background: true` returns a handle whose completion arrives as a user
+  message with `agent-child`/`agent-children` for inspection. A `collect`
+  would re-await what the cell awaits. Reopen only if a run shows a child
+  result needed inside a later cell before its message lands.
 - **The agents view keeps a server half.** The live catalog
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpcs/session.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
@@ -112,11 +115,6 @@ names the decision that left it open.
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
   `plans/core-extension-reduction-receipt.md` records the last measurement.
-- **`agent-loop.handlers.ts` still carries the loop's recovery reads.**
-  Admission is one path (`reserveAndStart`) and the metrics fold is pure
-  (`foldSessionMetrics`), but the incomplete-turn and prior-history scans
-  over storage live in the handlers; a later pass may move them behind the
-  behavior.
 
 ## Package Map
 

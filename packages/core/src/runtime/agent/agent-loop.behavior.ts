@@ -38,7 +38,7 @@ import {
 } from "../../domain/agent.js"
 import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import type { MessageMetadata } from "../../domain/message.js"
+import type { Message, MessageMetadata } from "../../domain/message.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
@@ -49,7 +49,7 @@ import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
-import type { MessageStorage } from "../../storage/message-storage.js"
+import { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
@@ -138,6 +138,10 @@ const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (
 export type AgentLoopBehavior = {
   persistenceFailure: Effect.Effect<void, AgentLoopError>
   readState: Effect.Effect<AgentLoopState>
+  /** The newest user message whose turn never completed; what a reopened loop resumes. */
+  incompleteUserTurn: Effect.Effect<Option.Option<Message>>
+  /** Whether this session has ever written to the branch; a cold loop with history wakes. */
+  hasPriorHistory: Effect.Effect<boolean>
   stateChanges: Stream.Stream<AgentLoopState>
   runtimeState: Effect.Effect<SessionRuntimeState>
   queueSnapshot: Effect.Effect<QueueSnapshot>
@@ -265,6 +269,8 @@ export const makeAgentLoopBehavior = (
     yield* ToolCallBindingStorage
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
+    const messageStorage = yield* MessageStorage
+    const recoveryEvents = yield* EventStorage
     const host = yield* makeExtensionHostPlatform
     const runtimeContext = yield* captureAgentLoopRuntimeContext
     const entityContext = yield* Effect.context<Entity.CurrentAddress>()
@@ -476,9 +482,44 @@ export const makeAgentLoopBehavior = (
       }),
     ).pipe(Effect.ignore)
 
+    const hasPriorHistory = messageStorage.listMessages(branchId).pipe(
+      Effect.catchEager(() => Effect.succeed([])),
+      Effect.map((messages) => messages.some((message) => message.sessionId === sessionId)),
+    )
+
+    const incompleteUserTurn = Effect.gen(function* () {
+      const envelopes = yield* recoveryEvents
+        .listEvents({ sessionId, branchId })
+        .pipe(Effect.catchEager(() => Effect.succeed([])))
+      const completed = new Set(
+        envelopes.flatMap(({ event }) => {
+          if (event._tag === "TurnCompleted" && Predicate.isNotUndefined(event.messageId)) {
+            return [event.messageId]
+          }
+          return []
+        }),
+      )
+      // Continuation prompts belong to the turn that persisted them; they
+      // never complete on their own and must not start a turn of their own.
+      const incomplete = envelopes.flatMap(({ event }) => {
+        if (
+          event._tag === "MessageReceived" &&
+          event.message.role === "user" &&
+          event.message.metadata?.customType !== "continuation" &&
+          !completed.has(event.message.id)
+        ) {
+          return [event.message]
+        }
+        return []
+      })
+      return Option.fromUndefinedOr(incomplete.at(-1))
+    })
+
     return {
       persistenceFailure: Deferred.await(persistenceFailure),
       readState,
+      incompleteUserTurn,
+      hasPriorHistory,
       stateChanges,
       runtimeState,
       queueSnapshot,

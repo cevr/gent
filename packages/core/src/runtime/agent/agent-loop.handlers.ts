@@ -247,52 +247,12 @@ export const buildAgentLoopActorHandlers = (config: {
       return value.value
     })
 
-    const hasPriorMessageHistory = Effect.gen(function* () {
-      const messages = yield* messageStorage
-        .listMessages(branchId)
-        .pipe(Effect.catchEager(() => Effect.succeed([])))
-      return messages.some((message) => message.sessionId === sessionId)
-    })
-
-    const latestIncompleteUserTurn = Effect.gen(function* () {
-      const envelopes = yield* eventStorage
-        .listEvents({ sessionId, branchId })
-        .pipe(Effect.catchEager(() => Effect.succeed([])))
-      const completed = new Set(
-        envelopes.flatMap((envelope) => {
-          if (
-            envelope.event._tag === "TurnCompleted" &&
-            !Predicate.isUndefined(envelope.event.messageId)
-          ) {
-            return [envelope.event.messageId]
-          }
-          return []
-        }),
-      )
-      // Continuation prompts belong to the turn that persisted them; they
-      // never complete on their own and must not start a turn of their own.
-      const incomplete = envelopes.filter(
-        (envelope) =>
-          envelope.event._tag === "MessageReceived" &&
-          envelope.event.message.role === "user" &&
-          envelope.event.message.metadata?.customType !== "continuation" &&
-          !completed.has(envelope.event.message.id),
-      )
-      const latest = Option.fromUndefinedOr(incomplete[incomplete.length - 1])
-      if (Option.isNone(latest) || latest.value.event._tag !== "MessageReceived") {
-        return Option.none()
-      }
-      return Option.some(latest.value.event.message)
-    })
-
-    const hasIncompleteUserTurn = latestIncompleteUserTurn.pipe(Effect.map(Option.isSome))
-
     /** A cold loop wakes for an explicit ask, an unfinished turn, or any prior history. */
-    const shouldWake = (input: { readonly wake?: boolean }) =>
+    const shouldWake = (handle: AgentLoopBehavior, input: { readonly wake?: boolean }) =>
       Effect.gen(function* () {
         if (input.wake === true) return true
-        if (yield* hasIncompleteUserTurn) return true
-        return yield* hasPriorMessageHistory
+        if (Option.isSome(yield* handle.incompleteUserTurn)) return true
+        return yield* handle.hasPriorHistory
       })
 
     const startNextQueuedTurnIfIdle = (
@@ -427,7 +387,7 @@ export const buildAgentLoopActorHandlers = (config: {
       yield* markWrite
       const item = yield* buildFollowUpItem(input)
       yield* handle.reserveStartOrQueueFollowUp(item, { queueOnly: true })
-      if (yield* shouldWake(input)) {
+      if (yield* shouldWake(handle, input)) {
         yield* Ref.set(wakeRequested, true)
         // A retained facade can enqueue after its original turn has ended.
         // The actor owns this wake; an active mutation releases its permit first.
@@ -442,7 +402,7 @@ export const buildAgentLoopActorHandlers = (config: {
       const wasAlreadyWarm = yield* markWrite
       const item = yield* buildFollowUpItem(input)
       yield* reserveAndStart(handle, item, { queueOnly: !wasAlreadyWarm })
-      if (!wasAlreadyWarm && (yield* shouldWake(input))) {
+      if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
         yield* startNextQueuedTurnIfIdle(handle)
       }
     })
@@ -527,7 +487,7 @@ export const buildAgentLoopActorHandlers = (config: {
           Effect.andThen(handle.refreshRuntimeState),
           Effect.andThen(
             Effect.gen(function* () {
-              const incompleteMessage = yield* latestIncompleteUserTurn
+              const incompleteMessage = yield* handle.incompleteUserTurn
               if (Option.isSome(incompleteMessage)) {
                 yield* handle
                   .startTurn({ message: incompleteMessage.value })
@@ -545,7 +505,7 @@ export const buildAgentLoopActorHandlers = (config: {
                 initialQueue.steering.length > 0 ||
                 initialQueue.followUp.length > 0
               if (!hasRecoveredQueue) return
-              if (queueRequestsWake(initialQueue) || (yield* hasPriorMessageHistory)) {
+              if (queueRequestsWake(initialQueue) || (yield* handle.hasPriorHistory)) {
                 yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
               }
             }),
@@ -761,7 +721,7 @@ export const buildAgentLoopActorHandlers = (config: {
             // A reply to a loop that lost its turn (a restart mid-interaction)
             // resumes that turn instead; the interaction is answered inside it.
             if ((yield* handle.snapshot)._tag !== "Idle") return
-            const message = yield* latestIncompleteUserTurn
+            const message = yield* handle.incompleteUserTurn
             if (Option.isNone(message)) return
             const baseline = yield* turnFailureBaseline(handle)
             yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))

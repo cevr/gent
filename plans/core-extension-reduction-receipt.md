@@ -1878,3 +1878,17 @@ against a 1,000,000 limit, so the compaction-after-spill measurement stays
 "none needed on the gamut"; the live store holds one compaction ever
 (2026-09-13, before the spill), 2,790 projections peaking at 46,919 tokens,
 and no compaction since the spill landed.
+
+## Recovery reads behind the behavior; A3 rejected (2026-09-14)
+
+`incompleteUserTurn` and `hasPriorHistory` are members of
+`AgentLoopBehavior` (`packages/core/src/runtime/agent/agent-loop.behavior.ts`);
+the actor handlers hold no storage scan of their own. Handlers 844 → 804
+lines, behavior 509 → 552. The loop, runner, and runtime suites pass (145
+tests). ARCHITECTURE.md drops the handler gap.
+
+A3 (typed fan-in) is rejected: `Promise.all` over foreground `delegate`
+calls is the fan-in, `background: true` returns a handle whose completion
+lands as a user message, and gamut run 34 ran six delegates in one cell
+without a `collect`. Recorded in `ARCHITECTURE.md` known gaps and the
+ledger status table.
