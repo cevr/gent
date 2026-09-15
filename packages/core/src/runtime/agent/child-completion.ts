@@ -3,6 +3,7 @@ import { agentRunUsage, type AgentName } from "../../domain/agent.js"
 import {
   type AgentEvent,
   AgentRunSucceeded,
+  clipPreview,
   EventStore,
   type TurnCompleted,
 } from "../../domain/event.js"
@@ -150,7 +151,7 @@ export class ChildCompletionDelivery extends Context.Service<
             usage: Option.getOrUndefined(
               Option.map(Option.fromUndefinedOr(completion.usage), agentRunUsage),
             ),
-            preview: text.slice(0, 200),
+            preview: clipPreview(text),
           }),
         )
       })

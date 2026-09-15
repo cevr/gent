@@ -67,3 +67,11 @@ export function headTailChars(text: string, maxChars: number = 64_000): HeadTail
     totalChars: total,
   }
 }
+
+/**
+ * Keep the head of `text` up to `maxChars`. A longer text ends in `marker`.
+ */
+export function clipChars(text: string, maxChars: number, marker: string = "…"): string {
+  if (text.length <= maxChars) return text
+  return text.slice(0, maxChars) + marker
+}

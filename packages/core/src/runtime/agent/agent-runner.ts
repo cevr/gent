@@ -17,6 +17,7 @@ import {
   AgentRunFailed,
   AgentRunSpawned,
   AgentRunSucceeded,
+  clipPreview,
   EventStore,
   type EventEnvelope,
   type TurnCompleted,
@@ -535,10 +536,12 @@ export const InProcessRunner: Layer.Layer<
             toolCalls: Option.getOrUndefined(toolCalls),
           })
           if (!isPrivate) {
-            let preview = success.text
-            if (preview.length > 200) preview = preview.slice(0, 200) + "…"
             yield* eventPublisher.publish(
-              AgentRunSucceeded.make({ ...receipt, usage: success.usage, preview }),
+              AgentRunSucceeded.make({
+                ...receipt,
+                usage: success.usage,
+                preview: clipPreview(success.text),
+              }),
             )
           }
           yield* WideEvent.set({

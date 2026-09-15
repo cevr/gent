@@ -1,4 +1,5 @@
 import { Option, Predicate, Result, Schema } from "effect"
+import { clipChars } from "./head-tail.js"
 
 /** Structured failure data. The runner, not the tool, owns transcript identity. */
 export class ToolResultFailure extends Schema.TaggedError<ToolResultFailure>()(
@@ -39,20 +40,14 @@ export const stringifyOutput = (value: unknown): string => {
   return Option.getOrElse(tryPrettyStringifyJson(value), () => String(value))
 }
 
+/** One-line tool summary for transcripts and the tool row; ASCII marker for plain terminals. */
+const clipSummary = (text: string): string => clipChars(text, 100, "...")
+
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
 export const summarizeOutput = (value: unknown): string => {
-  if (Predicate.isString(value)) {
-    const firstLine = value.split("\n")[0] ?? ""
-    if (firstLine.length > 100) {
-      return firstLine.slice(0, 100) + "..."
-    }
-    return firstLine
-  }
-  const json = tryStringifyJson(value)
-  if (Option.isSome(json)) {
-    const str = json.value
-    if (str.length > 100) return str.slice(0, 100) + "..."
-    return str
-  }
-  return String(value)
+  if (Predicate.isString(value)) return clipSummary(value.split("\n")[0] ?? "")
+  return Option.match(tryStringifyJson(value), {
+    onNone: () => String(value),
+    onSome: clipSummary,
+  })
 }

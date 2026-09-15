@@ -26,6 +26,7 @@ import {
 import { AgentName, ReasoningEffort } from "./agent"
 import { ModelId } from "./model"
 import { makeCursorReplayStream, makeSessionPubSubRegistry } from "./session-pubsub-registry"
+import { clipChars } from "./head-tail"
 
 // ============================================================================
 // Shared sub-schemas
@@ -353,6 +354,9 @@ export const AgentRunSpawned = AgentEvent.cases.AgentRunSpawned
 export type AgentRunSpawned = typeof AgentEvent.cases.AgentRunSpawned.Type
 export const AgentRunSucceeded = AgentEvent.cases.AgentRunSucceeded
 export type AgentRunSucceeded = typeof AgentEvent.cases.AgentRunSucceeded.Type
+/** Bounded child reply carried on `AgentRunSucceeded.preview`. Every producer clips through here. */
+const agentRunPreviewChars = 200
+export const clipPreview = (text: string): string => clipChars(text, agentRunPreviewChars)
 export const AgentRunFailed = AgentEvent.cases.AgentRunFailed
 export type AgentRunFailed = typeof AgentEvent.cases.AgentRunFailed.Type
 export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
