@@ -16,10 +16,10 @@ import {
   type AgentDefinition,
   BranchId,
   DEFAULT_AGENT_NAME,
-  SessionId,
   type AgentEvent,
   type AgentName,
   type CreateSessionInput,
+  type SessionId,
   type EventEnvelope,
   type MessageId,
   type Model,
@@ -159,13 +159,10 @@ export interface ClientSessionValue {
   isLoading: () => boolean
 
   // Session actions (fire-and-forget, update state internally)
-  // eslint-disable-next-line effect/noNullish -- callback is optional at this UI boundary.
-  createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
+  /** Create a session and make it the active one. */
+  createSession: () => void
   /** Open the session a confirmed handoff produces: linked to the current one, seeded with the summary. */
-  openHandoffSession: (
-    summary: string,
-    onCreated: (sessionId: SessionId, branchId: BranchId) => void,
-  ) => void
+  openHandoffSession: (summary: string) => void
   // eslint-disable-next-line effect/noNullish -- session switching accepts an optional agent override.
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
@@ -705,7 +702,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const createSessionWith = (
     input: Pick<CreateSessionInput, "parentSessionId" | "parentBranchId" | "initialPrompt">,
-    onCreated: Option.Option<(sessionId: SessionId, branchId: BranchId) => void>,
   ) => {
     dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
     const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
@@ -745,9 +741,6 @@ export function ClientProvider(props: ClientProviderProps) {
                 },
               }),
             )
-            if (Option.isSome(onCreated)) {
-              onCreated.value(SessionId.make(result.sessionId), BranchId.make(result.branchId))
-            }
           }),
         ),
         Effect.catchEager((err) =>
@@ -770,19 +763,16 @@ export function ClientProvider(props: ClientProviderProps) {
     isActive,
     isLoading,
 
-    createSession: (onCreated) => createSessionWith({}, Option.fromNullishOr(onCreated)),
+    createSession: () => createSessionWith({}),
 
-    openHandoffSession: (summary, onCreated) => {
+    openHandoffSession: (summary) => {
       const current = sessionOption()
       if (Option.isNone(current)) return
-      createSessionWith(
-        {
-          parentSessionId: current.value.sessionId,
-          parentBranchId: current.value.branchId,
-          initialPrompt: summary,
-        },
-        Option.some(onCreated),
-      )
+      createSessionWith({
+        parentSessionId: current.value.sessionId,
+        parentBranchId: current.value.branchId,
+        initialPrompt: summary,
+      })
     },
 
     switchSession: (sessionId, branchId, name, agent) => {

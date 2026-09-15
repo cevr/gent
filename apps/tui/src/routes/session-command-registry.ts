@@ -19,7 +19,6 @@ interface SessionCommandRegistryProps {
     readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
-  readonly navigateToCreatedSession: Parameters<ClientContextValue["createSession"]>[0]
   readonly openForkPicker: () => void
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
@@ -84,7 +83,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     slash: "new",
     aliases: ["clear"],
     slashPriority: 0,
-    onSelect: () => props.client.createSession(props.navigateToCreatedSession),
+    onSelect: () => props.client.createSession(),
   },
   {
     id: "session.sessions",

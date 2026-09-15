@@ -7,8 +7,6 @@ import type {
   Session as DomainSession,
 } from "@gent/sdk"
 import type { Session as ClientSession } from "./client/index"
-import { Route } from "./router"
-import type { AppRoute } from "./router"
 import { randomId } from "./utils/random-id"
 
 /**
@@ -61,7 +59,13 @@ export type InitialState =
 export interface AppBootstrap {
   // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence when no session is selected.
   readonly initialSession: ClientSession | undefined
-  readonly initialRoute: AppRoute
+  readonly initialPrompt: Option.Option<string>
+  /**
+   * The branches to resume from, when the session the startup flags picked
+   * has more than one. The session view mounts on the active branch and docks
+   * the picker over it; `None` means resume straight into the session.
+   */
+  readonly initialBranches: Option.Option<readonly Branch[]>
   readonly debugMode: boolean
   // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence when all providers are configured.
   readonly missingAuthProviders: readonly ProviderId[] | undefined
@@ -137,22 +141,28 @@ export const resolveAppBootstrap = (
         }
         return {
           initialSession: toSession(state.session),
-          initialRoute: Route.session(state.session.id, branchId.value, state.prompt),
+          initialPrompt: Option.fromNullishOr(state.prompt),
+          initialBranches: Option.none<readonly Branch[]>(),
           debugMode: options.debugMode,
           missingAuthProviders: Option.getOrUndefined(missingAuthProviders),
         }
       },
-      branchPicker: (state) => ({
-        initialSession: Option.getOrUndefined(Option.none<ClientSession>()),
-        initialRoute: Route.branchPicker(
-          state.session.id,
-          Option.getOrElse(Option.fromNullishOr(state.session.name), () => "Unnamed"),
-          state.branches,
-          state.prompt,
-        ),
-        debugMode: options.debugMode,
-        missingAuthProviders: Option.getOrUndefined(missingAuthProviders),
-      }),
+      branchPicker: (state) => {
+        // Same guard as `session`: the picker docks over a mounted session, so
+        // a record with no active branch has nothing to mount under it.
+        const branchId = Option.fromNullishOr(state.session.activeBranchId)
+        if (Option.isNone(branchId)) {
+          // eslint-disable-next-line effect/noThrowStatement -- synchronous render-boundary validation must throw.
+          throw new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" })
+        }
+        return {
+          initialSession: toSession(state.session),
+          initialPrompt: Option.fromNullishOr(state.prompt),
+          initialBranches: Option.some(state.branches),
+          debugMode: options.debugMode,
+          missingAuthProviders: Option.getOrUndefined(missingAuthProviders),
+        }
+      },
     }),
   )
 }

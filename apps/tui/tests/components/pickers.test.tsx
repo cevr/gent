@@ -12,7 +12,7 @@ import { createSignal } from "solid-js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, Message, MessageId, SessionId, dateFromMillis } from "@gent/core/protocol"
 import { MessagePicker } from "../../src/components/message-picker"
-import { BranchPicker } from "../../src/routes/branch-picker"
+import { BranchPicker } from "../../src/components/branch-picker"
 import type { Branch } from "../../src/client"
 import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
@@ -102,9 +102,14 @@ describe("Branch picker", () => {
         renderWithProviders(
           () => (
             <BranchPicker
+              open={true}
               sessionId={SessionId.make("session-test")}
               sessionName="Test Session"
               branches={[main, side]}
+              onSelect={() => {
+                switched.push("select")
+              }}
+              onClose={() => {}}
             />
           ),
           {
@@ -132,36 +137,62 @@ describe("Branch picker", () => {
     }),
   )
 
-  it.live("leaves the route on escape rather than dismissing the list", () =>
+  it.live("hands escape to the pane owner rather than dismissing the list itself", () =>
     Effect.gen(function* () {
-      // The list treats escape as its own dismissal. The route's handler has to
-      // win, or escape does nothing at all and the picker cannot be left.
-      let shutdowns = 0
+      // The select list treats escape as its own dismissal. The pane's handler
+      // has to win, or escape does nothing at all and the picker cannot be left.
+      let closes = 0
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
           <BranchPicker
+            open={true}
             sessionId={SessionId.make("session-test")}
             sessionName="Test Session"
             branches={[branch("branch-main", "main")]}
+            onSelect={() => {}}
+            onClose={() => {
+              closes += 1
+            }}
           />
         )),
       )
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => renderFrame(setup).includes("main"), "open"),
       )
-      // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
-      // teardown the route performs alongside it.
-      const destroy = setup.renderer.destroy.bind(setup.renderer)
-      setup.renderer.destroy = () => {
-        shutdowns += 1
-      }
       setup.mockInput.pressEscape()
       // The mock terminal holds an escape until the next frame.
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => shutdowns > 0, "left the route"),
+      yield* Effect.promise(() => waitForRenderedFrame(setup, () => closes > 0, "closed"))
+      expect(closes).toBe(1)
+    }),
+  )
+
+  it.live("resumes the branch the reader selects", () =>
+    Effect.gen(function* () {
+      const main = branch("branch-main", "main")
+      const side = branch("branch-side", "side-quest")
+      const selected: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <BranchPicker
+            open={true}
+            sessionId={SessionId.make("session-test")}
+            sessionName="Test Session"
+            branches={[main, side]}
+            onSelect={(branchId) => {
+              selected.push(branchId)
+            }}
+            onClose={() => {}}
+          />
+        )),
       )
-      setup.renderer.destroy = destroy
-      expect(shutdowns).toBe(1)
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("side-quest"), "open"),
+      )
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => waitForRenderedFrame(setup, () => selected.length > 0, "select"))
+      expect(selected).toEqual(["branch-side"])
     }),
   )
 })

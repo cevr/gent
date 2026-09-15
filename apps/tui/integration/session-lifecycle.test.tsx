@@ -4,7 +4,6 @@ import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../src/app"
 import { resolveInteractiveBootstrap } from "../src/app-bootstrap"
-import { useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
@@ -15,13 +14,10 @@ import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents })
-function StateProbe(props: {
-  readonly onReady: (ctx: { client: ClientContextValue; router: RouterContextValue }) => void
-}) {
+function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
   const client = useClient()
-  const router = useRouter()
   onMount(() => {
-    props.onReady({ client, router })
+    props.onReady({ client })
   })
   return <box />
 }
@@ -35,7 +31,7 @@ describe("session lifecycle", () => {
             const { client, runtime } = yield* Gent.test(
               baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
             )
-            let ctx = Option.none<{ client: ClientContextValue; router: RouterContextValue }>()
+            let ctx = Option.none<{ client: ClientContextValue }>()
             // Pre-resolve bootstrap (same as main.tsx now does)
             const { bootstrap } = yield* resolveInteractiveBootstrap({
               client,
@@ -54,7 +50,7 @@ describe("session lifecycle", () => {
                 {
                   client,
                   runtime,
-                  initialRoute: bootstrap.initialRoute,
+                  initialPrompt: bootstrap.initialPrompt,
                   initialSession: bootstrap.initialSession,
                   cwd: repoRoot,
                   width: 100,
@@ -66,7 +62,9 @@ describe("session lifecycle", () => {
             // Route should already be session
             expect(Option.isSome(ctx)).toBe(true)
             if (Option.isNone(ctx)) return
-            expect(ctx.value.router.route()._tag).toBe("session")
+            // The shell mounts whatever the client says is active; the bootstrap
+            // handed it a session, so that is what shows.
+            expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
             // waitForFrame polls until the composer renders — no pre-sleep
             // needed; the visible "ready/idle/❯" marker is the readiness signal.
             const frame = yield* waitForFrame(
@@ -91,7 +89,7 @@ describe("session lifecycle", () => {
             const { client, runtime } = yield* Gent.test(
               baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
             )
-            let ctx = Option.none<{ client: ClientContextValue; router: RouterContextValue }>()
+            let ctx = Option.none<{ client: ClientContextValue }>()
             // Pre-resolve bootstrap
             const { bootstrap } = yield* resolveInteractiveBootstrap({
               client,
@@ -110,7 +108,7 @@ describe("session lifecycle", () => {
                 {
                   client,
                   runtime,
-                  initialRoute: bootstrap.initialRoute,
+                  initialPrompt: bootstrap.initialPrompt,
                   initialSession: bootstrap.initialSession,
                   cwd: repoRoot,
                   width: 100,

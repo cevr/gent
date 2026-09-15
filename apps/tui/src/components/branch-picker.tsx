@@ -1,31 +1,45 @@
+/** @jsxImportSource @opentui/solid */
 /**
- * Branch picker route - choose branch when resuming multi-branch session
+ * Branch picker — one docked pane for choosing which loop of a session to
+ * resume.
+ *
+ * It used to be a route, and a router existed to reach it. Nothing ever
+ * navigated to that route: the bootstrap built it once, so the history stack
+ * behind it was always empty and escape could only quit. The pane keeps the
+ * behaviour and drops the router.
+ *
+ * The session underneath is already mounted on its active branch, so the pane
+ * only has to say which branch to switch to. It opens at boot when the resumed
+ * session has more than one branch, and on `/branches` after that. While it is
+ * open the startup prompt waits, so a reader never sends a `-p` prompt into a
+ * branch they did not choose.
+ *
+ * @module
  */
 
-import { createEffect, createSignal } from "solid-js"
-import { useRenderer } from "@opentui/solid"
+import { createEffect, createSignal, Show } from "solid-js"
 import { Effect, Option } from "effect"
 import { useTheme } from "../theme/index"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useClient } from "../client/index"
-import { useRouter } from "../router"
-import { useEnv } from "../env/context"
 import { useRuntime } from "../hooks/use-runtime"
-import { ChromePanel } from "../components/chrome-panel"
-import { SelectList, selectable, type SelectListRow } from "../components/select-list"
+import { ChromePanel } from "./chrome-panel"
+import { SelectList, selectable, type SelectListRow } from "./select-list"
 import type { Branch, BranchTreeNode } from "../client"
-import type { SessionId } from "@gent/core/protocol"
+import type { BranchId, SessionId } from "@gent/core/protocol"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/format-tool"
 
 export interface BranchPickerProps {
-  sessionId: SessionId
-  sessionName: string
-  branches: readonly Branch[]
-  prompt?: string
+  readonly open: boolean
+  readonly sessionId: SessionId
+  readonly sessionName: string
+  readonly branches: readonly Branch[]
+  readonly onSelect: (branchId: BranchId) => void
+  readonly onClose: () => void
 }
 
-const formatBranchLabel = (
+export const formatBranchLabel = (
   branch: Branch,
   messageCount: Option.Option<number> = Option.none(),
 ): string => {
@@ -37,7 +51,7 @@ const formatBranchLabel = (
   return `${name}${count}`
 }
 
-const collectCounts = (nodes: readonly BranchTreeNode[]) => {
+export const collectCounts = (nodes: readonly BranchTreeNode[]): Map<string, number> => {
   const map = new Map<string, number>()
   const walk = (list: readonly BranchTreeNode[]) => {
     for (const node of list) {
@@ -51,10 +65,7 @@ const collectCounts = (nodes: readonly BranchTreeNode[]) => {
 
 export function BranchPicker(props: BranchPickerProps) {
   const { theme } = useTheme()
-  const renderer = useRenderer()
   const client = useClient()
-  const router = useRouter()
-  const env = useEnv()
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime()
 
@@ -62,6 +73,7 @@ export function BranchPicker(props: BranchPickerProps) {
   const [error, setError] = createSignal(Option.none<string>())
 
   createEffect(() => {
+    if (!props.open) return
     cast(
       client.client.branch.getTree({ sessionId: props.sessionId }).pipe(
         Effect.tap((tree) =>
@@ -75,24 +87,8 @@ export function BranchPicker(props: BranchPickerProps) {
     )
   })
 
-  /**
-   * Escape leaves the route, not the list. This picker is where a session with
-   * several branches starts, so with nowhere to go back to the only way out is
-   * to quit.
-   */
-  const leave = () => {
-    if (router.canGoBack()) {
-      router.back()
-      return
-    }
-    renderer.destroy()
-    env.shutdown()
-  }
-
-  const panelWidth = () => Math.min(70, dimensions().width - 6)
-  const panelHeight = () => Math.min(16, dimensions().height - 6)
-  const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
-  const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
+  const paneHeight = () => Math.min(16, Math.max(6, dimensions().height - 8))
+  const rowWidth = () => Math.max(8, dimensions().width - 8)
 
   const rows = (): ReadonlyArray<SelectListRow<Branch>> =>
     props.branches.map((branch) =>
@@ -114,39 +110,38 @@ export function BranchPicker(props: BranchPickerProps) {
                 fg: foregroundColor(),
               }}
             >
-              {truncate(line(), panelWidth() - 4)}
+              {truncate(line(), rowWidth())}
             </text>
           </box>
         )
       }),
     )
 
-  const choose = (branch: Branch) => {
-    client.switchSession(props.sessionId, branch.id, props.sessionName)
-    router.navigateToSession(props.sessionId, branch.id, props.prompt)
-  }
-
   return (
-    <box flexDirection="column" width="100%" height="100%">
-      <ChromePanel.Root
+    <Show when={props.open}>
+      <box
+        height={paneHeight()}
+        alignSelf="stretch"
+        marginLeft={1}
+        marginRight={1}
+        backgroundColor={theme.backgroundMenu}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
+        flexDirection="column"
         title={`Resume: ${props.sessionName}`}
-        width={panelWidth()}
-        height={panelHeight()}
-        left={left()}
-        top={top()}
       >
-        <ChromePanel.Error error={Option.getOrUndefined(error())} />
-
         <SelectList
           id="branch-picker"
-          open={true}
+          open={props.open}
           rows={rows}
-          onSelect={choose}
-          onDismiss={leave}
+          onSelect={(branch) => props.onSelect(branch.id)}
+          onDismiss={props.onClose}
         />
 
-        <ChromePanel.Footer>Up/Down | Enter | Esc</ChromePanel.Footer>
-      </ChromePanel.Root>
-    </box>
+        <ChromePanel.Error error={Option.getOrUndefined(error())} />
+        <ChromePanel.Footer>{"↑↓ move   ↵ resume branch   esc close"}</ChromePanel.Footer>
+      </box>
+    </Show>
   )
 }

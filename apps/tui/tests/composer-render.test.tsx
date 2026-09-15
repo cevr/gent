@@ -51,6 +51,9 @@ function TestComposer(props: {
     onModelSelect: () => {},
     onReasoningSelect: () => {},
     onPromptSearchEvent: () => {},
+    currentSessionName: () => "Test Session",
+    onBranchPickerDismiss: () => {},
+    onBranchPickerSelect: () => {},
   } satisfies SessionController
   return (
     <SessionControllerContext.Provider value={mockController}>

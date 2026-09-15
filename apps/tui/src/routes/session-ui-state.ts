@@ -1,5 +1,5 @@
 import { Match, Schema } from "effect"
-import { Message } from "@gent/core/protocol"
+import { Branch, Message } from "@gent/core/protocol"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {
   PromptSearchEvent as PromptSearchEventSchema,
@@ -23,6 +23,12 @@ export type SessionOverlayState =
   | { readonly _tag: "model" }
   | { readonly _tag: "reasoning" }
   | { readonly _tag: "extension"; readonly overlayId: string }
+  /**
+   * The branch picker. The boot flow is the only thing that opens it, so
+   * escape quits: a reader who never chose a branch has nowhere to fall back
+   * to, which is what the old boot route did too.
+   */
+  | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
   | PromptSearchOverlayState
 
 /** How much of each tool group the inline transcript shows. `ctrl+o` cycles; `esc` collapses. */
@@ -59,6 +65,7 @@ export const SessionUiEvent = Schema.TaggedUnion({
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenExtensionOverlay: { overlayId: Schema.String },
+  OpenBranches: { branches: Schema.Array(Branch) },
   CloseOverlay: {},
   PromptSearch: {
     event: PromptSearchEventSchema,
@@ -144,6 +151,13 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: "extension", overlayId: event.overlayId },
+        },
+        effects: [],
+      }),
+      OpenBranches: (event): SessionUiTransitionResult => ({
+        state: {
+          ...state,
+          overlay: { _tag: "branches", branches: event.branches },
         },
         effects: [],
       }),

@@ -62,30 +62,36 @@ Startup blocks before render — `main.tsx` calls `waitForReady` + `resolveInter
 Providers wrap app in `main.tsx`:
 
 ```
-WorkspaceProvider → RouterProvider → ClientProvider → ExtensionUIProvider → App
+WorkspaceProvider → ClientProvider → ExtensionUIProvider → SessionShellProvider → App
 ```
 
-| Provider                   | Purpose                                                |
-| -------------------------- | ------------------------------------------------------ |
-| `WorkspaceProvider`        | cwd, gitRoot, gitStatus - static workspace info        |
-| `RouterProvider`           | route, navigate - routes are `session \| branchPicker` |
-| `ClientProvider`           | transport client, session state, event stream          |
-| `ExtensionUIProvider`      | extension loading, overlay/composer dispatch           |
-| `SessionControllerContext` | session-scoped: auth gate, overlays, composer state    |
+| Provider                   | Purpose                                              |
+| -------------------------- | ---------------------------------------------------- |
+| `WorkspaceProvider`        | cwd, gitRoot, gitStatus - static workspace info      |
+| `SessionShellProvider`     | the startup prompt, held until a session consumes it |
+| `ClientProvider`           | transport client, session state, event stream        |
+| `ExtensionUIProvider`      | extension loading, overlay/composer dispatch         |
+| `SessionControllerContext` | session-scoped: auth gate, overlays, composer state  |
 
 State ownership rules:
 
 - One workflow, one owner. If a flow has modes/transitions, give it one reducer or machine.
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
-- Auth is a route (`routes/auth.tsx`); the route is mounted as an overlay above the session view when the session controller's auth gate detects missing required providers.
+- Auth is a view (`routes/auth.tsx`); it mounts as an overlay above the session view when the session controller's auth gate detects missing required providers.
+- There is no router. `client.session()` says which session shows, `switchSession` is its one writer, and `App` keys the session mount on it.
 - `useRuntime()` is zero-arg — reads `useClient()` internally.
 - Composer reads from `SessionControllerContext`, not props.
 
-Routes (only 2):
+Views (only 1):
 
 - `src/routes/session.tsx` — provides `SessionControllerContext`
 - `src/routes/session-controller.ts` — `createSessionController()` + context
+
+The branch picker is a docked pane (`components/branch-picker.tsx`), not a
+view. The boot flow opens it over the mounted session when the resumed session
+has more than one branch; escape quits, because no branch was chosen yet. The
+command palette's "Branches" level switches branches after that.
 
 ## Compound Components
 

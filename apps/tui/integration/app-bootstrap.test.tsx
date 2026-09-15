@@ -4,7 +4,6 @@ import { Effect, Option } from "effect"
 import { onMount } from "solid-js"
 import { App } from "../src/app"
 import { resolveInitialState, resolveInteractiveBootstrap } from "../src/app-bootstrap"
-import { useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
@@ -13,13 +12,10 @@ import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/bui
 const baseLocalLayer = () => _baseLocalLayer({ agents: AllBuiltinAgents })
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
-function StateProbe(props: {
-  readonly onReady: (ctx: { client: ClientContextValue; router: RouterContextValue }) => void
-}) {
+function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
   const client = useClient()
-  const router = useRouter()
   onMount(() => {
-    props.onReady({ client, router })
+    props.onReady({ client })
   })
   return <box />
 }
@@ -93,9 +89,9 @@ describe("app bootstrap", () => {
               debugMode: false,
             })
             expect(bootstrap.initialSession).toBeDefined()
-            expect(bootstrap.initialRoute._tag).toBe("session")
+            expect(Option.isNone(bootstrap.initialBranches)).toBe(true)
             // Render with pre-resolved state
-            let ctx = Option.none<{ client: ClientContextValue; router: RouterContextValue }>()
+            let ctx = Option.none<{ client: ClientContextValue }>()
             const setup = yield* Effect.promise(() =>
               renderWithProviders(
                 () => (
@@ -111,7 +107,7 @@ describe("app bootstrap", () => {
                 {
                   client,
                   runtime,
-                  initialRoute: bootstrap.initialRoute,
+                  initialPrompt: bootstrap.initialPrompt,
                   initialSession: bootstrap.initialSession,
                   cwd: repoRoot,
                   width: 100,
@@ -123,7 +119,9 @@ describe("app bootstrap", () => {
             expect(Option.isSome(ctx)).toBe(true)
             if (Option.isNone(ctx)) return
             // Route should already be session — no loading transition needed
-            expect(ctx.value.router.route()._tag).toBe("session")
+            // The shell mounts whatever the client says is active; the bootstrap
+            // handed it a session, so that is what shows.
+            expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
             // waitForFrame polls until the loading marker clears — no
             // pre-sleep needed.
             const frame = yield* waitForFrame(

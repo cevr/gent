@@ -1,4 +1,12 @@
-import { createContext, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+} from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../env/context"
@@ -6,6 +14,7 @@ import { shutdownLog } from "../utils/client-logger"
 import { useRequiredContext } from "../utils/solid-context"
 import type {
   ActiveInteraction,
+  Branch,
   BranchId,
   MessageId,
   Message as DurableMessage,
@@ -38,7 +47,7 @@ import { useCommand } from "../command/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
-import { useRouter } from "../router"
+import { useSessionShell } from "../session-shell"
 import { formatError } from "../utils/format-error"
 import { useExtensionUI } from "../extensions/context"
 import { useChildSessions } from "../hooks/use-child-sessions"
@@ -99,6 +108,11 @@ export interface SessionController {
   dispatchComposer: (event: ComposerEvent) => void
   resolveAuthGate: () => void
   closeOverlay: () => void
+  /** The name the picker shows, and the name a branch switch keeps. */
+  currentSessionName: () => string
+  /** Escape in the branch picker: close it, or quit if the boot flow opened it. */
+  onBranchPickerDismiss: () => void
+  onBranchPickerSelect: (branchId: BranchId) => void
   onForkSelect: (messageId: MessageId) => void
   onModelSelect: (modelId: ModelId) => void
   /** `None` clears the session override so config/agent defaults apply. */
@@ -109,7 +123,12 @@ export interface SessionController {
 export function createSessionController(props: {
   sessionId: SessionId
   branchId: BranchId
-  initialPrompt?: string
+  /**
+   * Branches to dock the picker over at boot. Present only for the first
+   * session the process mounts, when the resumed session has more than one
+   * loop to choose between.
+   */
+  initialBranches: Option.Option<readonly Branch[]>
   debugMode?: boolean
   missingAuthProviders?: readonly string[]
 }): SessionController {
@@ -125,7 +144,7 @@ export function createSessionController(props: {
   }
   const command = useCommand()
   const ext = useExtensionUI()
-  const router = useRouter()
+  const shell = useSessionShell()
   const { cast } = useRuntime()
   const renderer = useRenderer()
   const env = useEnv()
@@ -169,6 +188,30 @@ export function createSessionController(props: {
   }
   const history = usePromptHistory()
 
+  const currentSessionName = (): string =>
+    Option.getOrElse(
+      Option.flatMap(Option.fromNullishOr(client.session()), (value) =>
+        Option.fromNullishOr(value.name),
+      ),
+      () => "Unnamed",
+    )
+
+  // ── Branch picker ──
+  //
+  // The boot flow opens the pane over the session it just mounted on its
+  // active branch. Until a branch is chosen, nothing behind the pane may act
+  // on the reader's behalf: the startup prompt waits and the auth gate holds,
+  // because both are about a branch the reader has not picked yet.
+
+  const [uiState, setUiState] = createSignal(SessionUiState.initial())
+
+  /**
+   * Whether the reader still owes this session a branch. Its own signal, not a
+   * read of the overlay: the auth gate writes the overlay, so deriving the
+   * gate from the overlay would make the auth check re-run on its own effect.
+   */
+  const [branchPickerOpen, setBranchPickerOpen] = createSignal(Option.isSome(props.initialBranches))
+
   // ── Auth gate ──
   const [controllerState, setControllerState] = createSignal(
     initialSessionControllerState({
@@ -186,9 +229,10 @@ export function createSessionController(props: {
   ) => setControllerState((current) => update(current))
   createEffect(
     on(
-      () => client.agent(),
-      (agentName) => {
+      [() => client.agent(), branchPickerOpen],
+      ([agentName, pickerOpen]) => {
         if (props.debugMode) return
+        if (pickerOpen) return
         Option.match(Option.fromNullishOr(agentName), {
           onNone: () => {},
           onSome: (resolvedAgent) => {
@@ -229,7 +273,6 @@ export function createSessionController(props: {
     !props.debugMode && (authGateState() !== "closed" || validatedAgent() !== client.agent())
   const { getChildren } = useChildSessions(client)
 
-  const [uiState, setUiState] = createSignal(SessionUiState.initial())
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const drafts = useComposerDrafts()
   const draftBranchId = props.branchId
@@ -256,7 +299,36 @@ export function createSessionController(props: {
     for (const effect of result.effects) handleSessionUiEffect(effect)
   }
 
+  // The picker is the first thing a resumed multi-branch session shows.
+  // `onMount` rather than an effect: the branches come from the bootstrap and
+  // never change, so this opens once and the reader owns the pane after that.
+  onMount(() => {
+    Option.match(props.initialBranches, {
+      onNone: () => {},
+      onSome: (branches) => {
+        dispatchSessionUi(SessionUiEvent.cases.OpenBranches.make({ branches }))
+      },
+    })
+  })
+
+  /**
+   * Escape leaves the picker, not the list. The boot flow is where a session
+   * with several branches starts, so with no branch chosen the only way out
+   * is to quit — the same exit the picker route had.
+   */
+  const onBranchPickerDismiss = () => {
+    exit()
+  }
+
+  const onBranchPickerSelect = (branchId: BranchId) => {
+    setBranchPickerOpen(false)
+    dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
+    if (branchId === props.branchId) return
+    client.switchSession(props.sessionId, branchId, currentSessionName())
+  }
+
   createEffect(() => {
+    if (branchPickerOpen()) return
     if (isBlockingAuthGate(authGateState()) && uiState().overlay._tag !== "auth") {
       dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: true }))
     }
@@ -268,11 +340,8 @@ export function createSessionController(props: {
     () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
   )
 
-  // Same wiring reason: the extension provider is an ancestor of the router, so
-  // it cannot navigate on its own.
   ext.setSwitchSessionDispatch((input) => {
     client.switchSession(input.sessionId, input.branchId, input.name)
-    router.navigateToSession(input.sessionId, input.branchId)
   })
 
   ext.setActivityProvider(() => {
@@ -351,13 +420,14 @@ export function createSessionController(props: {
         dispatchComposer(ComposerEvent.cases.DismissInteraction.make({ requestId }))
       },
       onBranchSwitch: (sessionId, branchId) => {
-        router.navigateToSession(sessionId, branchId)
+        client.switchSession(sessionId, branchId, currentSessionName())
       },
       onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
     },
-    props.initialPrompt,
-    // Gate prompt send on auth resolution — feed waits for stream + this signal
-    () => !authGatePending(),
+    Option.getOrUndefined(shell.promptFor(props.sessionId)),
+    // Gate prompt send on auth resolution and on the branch picker — the feed
+    // waits for the stream plus this signal.
+    () => !authGatePending() && !branchPickerOpen(),
   )
 
   const items = createMemo<SessionItem[]>(() => feed.items())
@@ -459,9 +529,6 @@ export function createSessionController(props: {
     command,
     ext,
     cast,
-    navigateToCreatedSession: (sessionId, branchId) => {
-      router.navigateToSession(sessionId, branchId)
-    },
     openForkPicker,
     openModelPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" })),
@@ -710,6 +777,9 @@ export function createSessionController(props: {
     onModelSelect,
     onReasoningSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
+    currentSessionName,
+    onBranchPickerDismiss,
+    onBranchPickerSelect,
   }
 }
 

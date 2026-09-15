@@ -3,19 +3,17 @@
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import { Option } from "effect"
 import { useClient } from "../../client/index"
-import { useRouter } from "../../router"
 import { OptionList } from "./option-list"
 
 /** Confirms a handoff. A confirmed one opens the new session seeded with the summary. */
 export function HandoffRenderer(props: InteractionRendererProps) {
   const client = useClient()
-  const router = useRouter()
   const resolve = (result: Parameters<InteractionRendererProps["resolve"]>[0]) => {
     props.resolve(result)
     if (!result.approved) return
-    client.openHandoffSession(props.event.text, (sessionId, branchId) =>
-      router.navigateToSession(sessionId, branchId),
-    )
+    // `openHandoffSession` activates the new session on the client, and the
+    // shell mounts whatever that says. Nothing left to navigate.
+    client.openHandoffSession(props.event.text)
   }
   return (
     <OptionList

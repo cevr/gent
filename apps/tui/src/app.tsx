@@ -1,22 +1,24 @@
-import { Switch, Match, Show, ErrorBoundary } from "solid-js"
+import { createSignal, Show, ErrorBoundary } from "solid-js"
 import { Option, Schema } from "effect"
+import type { Branch } from "@gent/core/protocol"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/context"
-import { useRouter, isRoute, type AppRoute } from "./router"
 import { Session } from "./routes/session"
-import { BranchPicker } from "./routes/branch-picker"
+import { useClientSession } from "./client/index"
 import { KeyboardScopeProvider, useScopedKeyboard } from "./keyboard/context"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./env/context"
-
-type SessionRoute = Extract<AppRoute, { _tag: "session" }>
-type BranchPickerRoute = Extract<AppRoute, { _tag: "branchPicker" }>
 
 export interface AppProps {
   missingAuthProviders?: readonly string[]
   debugMode?: boolean
   initialThemeMode?: "dark" | "light"
+  /**
+   * Branches the boot flow resumed into, when the session has more than one.
+   * The session mounts on its active branch and docks the picker over it.
+   */
+  initialBranches?: Option.Option<readonly Branch[]>
 }
 
 function AppContent(props: AppProps) {
@@ -28,50 +30,41 @@ function AppContent(props: AppProps) {
     env.shutdown()
     return true
   })
-  const router = useRouter()
-  const sessionRoute = (): SessionRoute | false => {
-    const route = router.route()
-    if (isRoute.session(route)) return route
-    return false
-  }
-  const branchPickerRoute = (): BranchPickerRoute | false => {
-    const route = router.route()
-    if (isRoute.branchPicker(route)) return route
-    return false
-  }
+
+  // Which session shows is the client's to say. `switchSession` is the one
+  // writer, and every pane that moves the reader between sessions already
+  // goes through it, so keying the mount on it is all the router ever did.
+  const sessionClient = useClientSession()
+  const active = () => Option.getOrUndefined(Option.fromNullishOr(sessionClient.session()))
+
+  // The boot picker belongs to the first session this process mounts. A later
+  // switch is a session the reader already chose, so it docks nothing.
+  //
+  // Read once and remember the answer: Solid re-reads a prop every time the
+  // child touches it, so a getter that consumes the branches would hand the
+  // first read `Some` and every read after it `None`.
+  const [bootBranches, setBootBranches] = createSignal(
+    Option.getOrElse(Option.fromNullishOr(props.initialBranches), () =>
+      Option.none<readonly Branch[]>(),
+    ),
+  )
 
   return (
     <box flexDirection="column" width="100%" height="100%">
-      <Switch>
-        <Match when={sessionRoute()} keyed>
-          {(route) => (
+      <Show when={active()} keyed fallback={<CommandPalette />}>
+        {(session) => {
+          const branches = bootBranches()
+          setBootBranches(Option.none())
+          return (
             <Session
-              sessionId={route.sessionId}
-              branchId={route.branchId}
-              initialPrompt={route.prompt}
+              sessionId={session.sessionId}
+              branchId={session.branchId}
+              initialBranches={branches}
               debugMode={props.debugMode}
               missingAuthProviders={props.missingAuthProviders}
             />
-          )}
-        </Match>
-        <Match when={branchPickerRoute()}>
-          {(r) => {
-            const route = r()
-            return (
-              <BranchPicker
-                sessionId={route.sessionId}
-                sessionName={route.sessionName}
-                branches={route.branches}
-                prompt={route.prompt}
-              />
-            )
-          }}
-        </Match>
-      </Switch>
-
-      {/* Command Palette */}
-      <Show when={!sessionRoute()}>
-        <CommandPalette />
+          )
+        }}
       </Show>
     </box>
   )

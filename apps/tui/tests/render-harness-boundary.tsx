@@ -16,7 +16,7 @@ import type { DomainSession, GentNamespacedClient, GentRuntime, Session } from "
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { TerminalDimensionsProvider } from "../src/terminal-dimensions"
 import { ComposerDraftsProvider } from "../src/components/composer-drafts"
-import { RouterProvider, Route, type AppRoute } from "../src/router"
+import { SessionShellProvider } from "../src/session-shell"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
 import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
@@ -218,7 +218,7 @@ export const renderWithProviders = (
     runtime?: GentRuntime
     initialSession?: DomainSession | Session
     initialAgent?: AgentName
-    initialRoute?: AppRoute
+    initialPrompt?: Option.Option<string>
     width?: number
     height?: number
     cwd?: string
@@ -262,14 +262,15 @@ export const renderWithProviders = (
                       env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
                     >
                       <CommandProvider>
-                        <RouterProvider
-                          initialRoute={
-                            options?.initialRoute ??
-                            Route.session(
-                              SessionId.make("test-session"),
-                              BranchId.make("test-branch"),
-                            )
-                          }
+                        <SessionShellProvider
+                          initialPrompt={Option.getOrElse(
+                            Option.fromNullishOr(options?.initialPrompt),
+                            () => Option.none<string>(),
+                          )}
+                          initialSessionId={Option.map(
+                            toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                            (session) => session.sessionId,
+                          )}
                         >
                           <WorkspaceProvider
                             cwd={options?.cwd ?? defaultWorkspaceCwd}
@@ -289,7 +290,7 @@ export const renderWithProviders = (
                               <ExtensionUIProvider>{node()}</ExtensionUIProvider>
                             </ClientProvider>
                           </WorkspaceProvider>
-                        </RouterProvider>
+                        </SessionShellProvider>
                       </CommandProvider>
                     </EnvProvider>
                   </ThemeProvider>

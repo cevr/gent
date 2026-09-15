@@ -29,7 +29,6 @@ import { pickerQueryText, pickerText } from "./picker-text"
 import { textWidth } from "../platform/text-width-adapter"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
-import { useRouter } from "../router"
 import { useTheme } from "../theme/index"
 
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
@@ -84,7 +83,6 @@ export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
   const client = useClient()
-  const router = useRouter()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(CommandPaletteState.initial())
 
@@ -150,7 +148,7 @@ export function CommandPalette() {
       id: "session.new",
       title: "+ New Session",
       onSelect: () => {
-        client.createSession((sessionId, branchId) => router.navigateToSession(sessionId, branchId))
+        client.createSession()
         closePalette()
       },
     }
@@ -172,7 +170,6 @@ export function CommandPalette() {
             const branchId = Option.fromNullishOr(session.activeBranchId)
             if (Option.isNone(branchId)) return
             client.switchSession(session.id, branchId.value, session.name ?? "Unnamed")
-            router.navigateToSession(session.id, branchId.value)
             closePalette()
           },
         })
@@ -251,9 +248,7 @@ export function CommandPalette() {
         category: "Session",
         shortcut: "Ctrl+N",
         onSelect: () => {
-          client.createSession((sessionId, branchId) =>
-            router.navigateToSession(sessionId, branchId),
-          )
+          client.createSession()
           closePalette()
         },
       },

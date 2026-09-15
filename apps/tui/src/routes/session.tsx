@@ -6,7 +6,13 @@ import { createMemo, createSignal, For, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { Option, Predicate, Schema } from "effect"
 import type { RGBA } from "@opentui/core"
-import { ModelId, ReasoningEffort, type BranchId, type SessionId } from "@gent/core/protocol"
+import {
+  ModelId,
+  ReasoningEffort,
+  type Branch,
+  type BranchId,
+  type SessionId,
+} from "@gent/core/protocol"
 import { MessageList } from "../components/message-list"
 import { NativeTranscript } from "../components/native-transcript"
 import { Composer } from "../components/composer"
@@ -15,6 +21,7 @@ import { pickerText } from "../components/picker-text"
 import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
+import { BranchPicker } from "../components/branch-picker"
 import { MessagePicker } from "../components/message-picker"
 import {
   DEFAULT_ROW_ID,
@@ -36,7 +43,8 @@ import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.j
 export interface SessionProps {
   sessionId: SessionId
   branchId: BranchId
-  initialPrompt?: string
+  /** Branches to dock the picker over at boot; `None` resumes straight in. */
+  initialBranches: Option.Option<readonly Branch[]>
   debugMode?: boolean
   missingAuthProviders?: readonly string[]
 }
@@ -281,6 +289,20 @@ export function Session(props: SessionProps) {
             onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
             onClose={controller.closeOverlay}
           />
+          {(() => {
+            const overlay = controller.uiState().overlay
+            if (overlay._tag !== "branches") return <></>
+            return (
+              <BranchPicker
+                open={true}
+                sessionId={props.sessionId}
+                sessionName={controller.currentSessionName()}
+                branches={overlay.branches}
+                onSelect={controller.onBranchPickerSelect}
+                onClose={controller.onBranchPickerDismiss}
+              />
+            )
+          })()}
           <ExtensionWidgets slot="below-input" />
         </box>
 
