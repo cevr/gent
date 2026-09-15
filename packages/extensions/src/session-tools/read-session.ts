@@ -55,11 +55,6 @@ const MAX_TREE_CHARS = 120_000
 const EXTRACT_ADDENDUM =
   "Extract only the information relevant to the stated goal from the given transcript. Cite files and decisions. Do not run tools."
 
-export function truncate(s: string, max: number): string {
-  if (s.length > max) return s.slice(0, max) + "…"
-  return s
-}
-
 export const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]>): string =>
   messagePartsDisplayText(parts, { maxToolChars: MAX_TOOL_ARG_CHARS })
 

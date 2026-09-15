@@ -1,15 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
-import {
-  Clock,
-  Config,
-  Effect,
-  Layer,
-  Option,
-  Redacted,
-  Ref,
-  Schema,
-  SynchronizedRef,
-} from "effect"
+import { Clock, Effect, Layer, Option, Redacted, Ref, Schema, SynchronizedRef } from "effect"
 import {
   AuthMethod,
   defineExtension,
@@ -47,9 +37,7 @@ import {
   type AnthropicPlatformApi,
 } from "./platform-adapter.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-
-const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
-  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none()))
+import { readOptionalEnv } from "../openai-compatible-driver.js"
 
 // Credential cache + refresh logic live in `AnthropicCredentialService`
 // (Effect-native). The OAuth path provides this service into the layer

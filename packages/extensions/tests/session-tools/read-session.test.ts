@@ -1,11 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  truncate,
-  renderMessageParts,
-  renderSessionTree,
-} from "../../src/session-tools/read-session.js"
+import { renderMessageParts, renderSessionTree } from "../../src/session-tools/read-session.js"
 import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-display"
 import {
   dateFromMillis,
@@ -14,16 +10,6 @@ import {
   type MessagePart,
 } from "@gent/core-internal/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-
-describe("truncate", () => {
-  test("under max → unchanged", () => {
-    expect(truncate("hello", 10)).toBe("hello")
-  })
-
-  test("over max → sliced + '…'", () => {
-    expect(truncate("hello world", 5)).toBe("hello…")
-  })
-})
 
 describe("messagePartsDisplayText", () => {
   test("read-session subpath exports renderMessageParts", () => {
