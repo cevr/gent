@@ -87,6 +87,7 @@ export type MessageChunkRow = typeof MessageChunkRow.Type
 
 const EventRow = Schema.Struct({
   id: EventId,
+  event_tag: Schema.String,
   event_json: Schema.String,
   created_at: Schema.Finite,
   trace_id: Schema.NullOr(Schema.String),

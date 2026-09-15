@@ -4,13 +4,13 @@
  * Provided by `SqliteStorage` from the shared SQLite client.
  */
 
-import { Clock, Context, Effect, Layer, Option, Predicate, Schema } from "effect"
+import { Array as Arr, Clock, Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import {
+  AgentEvent,
   EventEnvelope,
   EventId,
   getEventBranchId,
   getEventSessionId,
-  type AgentEvent,
   type AgentEventTag,
 } from "../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
@@ -35,6 +35,13 @@ export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("Ev
 
 export type EventStorageError = StorageError | EventDecodeError
 const isEventDecodeError = Schema.is(EventDecodeError)
+
+/**
+ * A retired event type stays in the table after its feature is removed. Replay
+ * skips those rows with a warning instead of making the whole session
+ * unloadable; a known tag with a bad payload is corruption and still fails.
+ */
+const isKnownEventTag = (tag: string): boolean => Object.hasOwn(AgentEvent.cases, tag)
 
 const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(function* (params: {
   eventId: EventId
@@ -142,7 +149,9 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             const workspaceId = yield* CurrentWorkspaceId
             const sinceId = afterId ?? 0
             const rawRows = yield* Option.match(Option.fromUndefinedOr(branchId), {
-              onSome: (branchId) => sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
+              onSome: (
+                branchId,
+              ) => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
                     FROM events e
                     JOIN sessions s ON s.id = e.session_id
                     WHERE e.session_id = ${sessionId}
@@ -150,7 +159,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                       AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
                       AND e.id > ${sinceId}
                     ORDER BY e.id ASC`,
-              onNone: () => sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
+              onNone: () => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
                     FROM events e
                     JOIN sessions s ON s.id = e.session_id
                     WHERE e.session_id = ${sessionId}
@@ -159,8 +168,14 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                     ORDER BY e.id ASC`,
             })
             const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
-            return yield* Effect.forEach(rows, (row) =>
+            const envelopes = yield* Effect.forEach(rows, (row) =>
               Effect.gen(function* () {
+                if (!isKnownEventTag(row.event_tag)) {
+                  yield* Effect.logWarning("event.retired-tag-skipped").pipe(
+                    Effect.annotateLogs({ event_id: row.id, event_tag: row.event_tag }),
+                  )
+                  return Option.none<EventEnvelope>()
+                }
                 const decoded = yield* decodePersistedEvent({
                   eventId: row.id,
                   eventJson: row.event_json,
@@ -174,9 +189,10 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                 if (!Predicate.isNull(row.trace_id)) {
                   Object.assign(fields, { traceId: row.trace_id })
                 }
-                return EventEnvelope.make(fields)
+                return Option.some(EventEnvelope.make(fields))
               }),
             )
+            return Arr.getSomes(envelopes)
           },
           Effect.mapError(mapEventStorageError("Failed to list events")),
         ),
