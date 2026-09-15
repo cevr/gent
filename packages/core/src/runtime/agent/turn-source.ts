@@ -2,8 +2,6 @@ import { Effect, Option, Predicate, Result, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   ErrorOccurred,
-  type EventEnvelope,
-  MessageReceived,
   ModelContextProjected,
   ProviderRetrying,
 } from "../../domain/event.js"
@@ -14,7 +12,6 @@ import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../.
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { Message } from "../../domain/message.js"
-import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { calculateCost, type ModelId } from "../../domain/model.js"
 import { ModelRegistry } from "../model-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -24,7 +21,7 @@ import {
   type CollectedTurnResponse,
   collectFailedModelTurnResponse,
 } from "./turn-response.js"
-import { persistMessageParts } from "./turn-persistence.js"
+import { persistMessageParts, persistMessageReceived } from "./turn-persistence.js"
 import { type ResolvedTurnContext } from "./turn-resolve.js"
 import { convertTools, ToolRunner } from "./tool-runner.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
@@ -32,7 +29,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { CurrentToolCall } from "./current-tool-call.js"
 import { ProviderError } from "../../domain/provider-error.js"
-import { StorageError } from "../../domain/storage-error.js"
+import type { StorageError } from "../../domain/storage-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver, type ResolveModelRequest } from "../../providers/model-resolver.js"
 import { EventStorage } from "../../storage/event-storage.js"
@@ -311,33 +308,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
   })
   const eventPublisher = yield* EventPublisher
-  const messageStorage = yield* MessageStorage
-  const storageTransaction = yield* makeStorageTransaction
-  // Summaries and window markers persist the same way: once, with a delivered event.
-  const persistDurableMessage = (message: Message) =>
-    Effect.gen(function* () {
-      const persisted = yield* storageTransaction(
-        Effect.gen(function* () {
-          const existing = yield* messageStorage.getMessage(message.id)
-          if (Predicate.isNotUndefined(existing)) {
-            return { message: existing, envelope: Option.none<EventEnvelope>() }
-          }
-          yield* messageStorage.createMessageIfAbsent(message)
-          const stored = yield* messageStorage.getMessage(message.id)
-          if (Predicate.isUndefined(stored)) {
-            return yield* new StorageError({ message: "Summary was not readable after insertion" })
-          }
-          return {
-            message: stored,
-            envelope: Option.some(
-              yield* eventPublisher.append(MessageReceived.make({ message: stored })),
-            ),
-          }
-        }),
-      )
-      if (Option.isSome(persisted.envelope)) yield* eventPublisher.deliver(persisted.envelope.value)
-      return persisted.message
-    })
+  // Summaries and window markers persist the same way every durable message
+  // does: once, with a delivered event.
+  const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
   // The model can ask, from inside a dispatching tool, for a fresh window or a
   // focused summary. A branch with no such tool has no ledger and no
   // directives, so the read falls back to an inert one.

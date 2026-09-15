@@ -5,6 +5,7 @@ import { type BranchId, type MessageId, type SessionId } from "../../domain/ids.
 import type { Message } from "../../domain/message.js"
 import { type ModelId } from "../../domain/model.js"
 import type { StorageError } from "../../domain/storage-error.js"
+import type { EventStorageError } from "../../storage/event-storage.js"
 import {
   handoffAnchorWithinTurn,
   type ModelContextBudget,
@@ -82,7 +83,7 @@ const handoffPlan = (
  * loop hands off when the window overflows, or when the model asked.
  */
 export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(
-  function* (params: {
+  function* <PersistR = never>(params: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly modelId: ModelId
@@ -92,7 +93,9 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     readonly project: (
       messages: ReadonlyArray<Message>,
     ) => Effect.Effect<ModelContextProjection, ModelContextProjectionError>
-    readonly persist: (message: Message) => Effect.Effect<Message, StorageError | EventStoreError>
+    readonly persist: (
+      message: Message,
+    ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
     readonly summaryModel: CompactionRequest["summaryModel"]
   }) {
     const eventPublisher = yield* EventPublisher
