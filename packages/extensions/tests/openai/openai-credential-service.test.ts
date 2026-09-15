@@ -14,12 +14,11 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Deferred, Effect, Fiber, Layer, Option, SynchronizedRef } from "effect"
 import { TestClock } from "effect/testing"
 import {
-  EMPTY_CREDENTIAL_CELL,
   OpenAICredentialService,
-  type CredentialCacheCell,
   type OpenAICredentialIO,
   type OpenAICredentials,
 } from "../../src/openai/credential-service.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 // ── Helpers ──
 const makeCreds = (label: string, expires: number): OpenAICredentials => ({
@@ -668,7 +667,10 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          const cellRef =
+            yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+              EMPTY_CREDENTIAL_CELL,
+            )
           // Build 1: authInfo with EXPIRING access → forces refresh.
           // After this, cellRef holds {access: "rotated-access", ...}.
           yield* Effect.gen(function* () {
@@ -747,7 +749,10 @@ describe("OpenAICredentialService — layerFromRef preserves cell across builds"
       })
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const cellRef = yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          const cellRef =
+            yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+              EMPTY_CREDENTIAL_CELL,
+            )
           // First "resolveModel" build — refreshes once.
           yield* Effect.gen(function* () {
             const svc = yield* OpenAICredentialService

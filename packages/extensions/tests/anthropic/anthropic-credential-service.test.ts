@@ -288,6 +288,36 @@ describe("AnthropicCredentialService — durable persist failure", () => {
       expect(Option.isNone(persistState.lastWritten)).toBe(true)
     }),
   )
+  it.live("failed write-back is retried on the next getFresh without a second refresh", () =>
+    Effect.gen(function* () {
+      const stale = makeCreds("stale", 30000)
+      const fresh = makeCreds("fresh", FAR_FUTURE)
+      let refreshCount = 0
+      const state: IOState = {
+        readResult: () => Effect.succeed(stale),
+        refreshResult: () => {
+          refreshCount += 1
+          return Effect.succeed(fresh)
+        },
+      }
+      const persistState: PersistState = { lastWritten: Option.none(), failNext: true }
+      const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          const failure = yield* Effect.exit(svc.getFresh)
+          expect(failure._tag).toBe("Failure")
+          const retry = yield* svc.getFresh
+          expect(retry.accessToken).toBe("fresh-access")
+          expect(refreshCount).toBe(1)
+          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
+            Option.some("fresh-access"),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(layer)),
+      )
+    }),
+  )
 })
 describe("AnthropicCredentialService — keychain miss falls through to refresh", () => {
   it.live("read fails → refresh succeeds → returns refreshed creds", () =>

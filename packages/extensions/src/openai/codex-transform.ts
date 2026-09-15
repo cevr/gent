@@ -37,7 +37,8 @@ import { Predicate, Effect, Option, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, Headers } from "effect/unstable/http"
 import type { HttpBody } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import type { OpenAICredentialServiceApi } from "./credential-service.js"
+import type { CredentialCache } from "../provider-credentials.js"
+import type { OpenAICredentials } from "./credential-service.js"
 
 // ── Codex routing ──
 
@@ -363,7 +364,9 @@ class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
  *     authorization from the auth picker) can kick in.
  */
 export const buildCodexTransformClient =
-  (creds: OpenAICredentialServiceApi): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  (
+    creds: CredentialCache<OpenAICredentials>,
+  ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
     client.pipe(
       HttpClient.mapRequestEffect((req) =>

@@ -20,9 +20,9 @@ import { buildCodexTransformClient } from "../../src/openai/codex-transform.js"
 import {
   OpenAICredentialService,
   type OpenAICredentialIO,
-  type OpenAICredentialServiceApi,
   type OpenAICredentials,
 } from "../../src/openai/credential-service.js"
+import type { CredentialCache } from "../../src/provider-credentials.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { runEffectBoundary } from "../run-effect-boundary.js"
 // ── Fake HttpClient ──
@@ -92,7 +92,7 @@ const decodeJsonRecord = (raw: string): Effect.Effect<JsonRecord> =>
 const buildCreds = (
   io: OpenAICredentialIO,
   authInfo: ProviderAuthInfo,
-): Promise<OpenAICredentialServiceApi> => {
+): Promise<CredentialCache<OpenAICredentials>> => {
   const layer = OpenAICredentialService.layerFromIO(io, authInfo)
   return runEffectBoundary(
     Layer.build(layer).pipe(

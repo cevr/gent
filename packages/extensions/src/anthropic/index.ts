@@ -26,16 +26,18 @@ import {
   PRIMARY_CLAUDE_SERVICE,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
+  type ClaudeCredentials,
 } from "./oauth.js"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 import { makeKeychainClientLayer } from "./keychain-client.js"
+import { AnthropicCredentialService } from "./credential-service.js"
 import {
-  AnthropicCredentialService,
   EMPTY_CREDENTIAL_CELL,
+  type CredentialCacheCell,
   type CredentialCacheCellRef,
-} from "./credential-service.js"
+} from "../provider-credentials.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 import {
@@ -130,18 +132,11 @@ const makeOauthAnthropicLayer = (
   modelName: string,
   config: AnthropicConfig,
   authInfo: ProviderAuthInfo,
-  credentialCellRef: CredentialCacheCellRef,
+  credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
   betaCellRef: Ref.Ref<BetaCacheCell>,
   platform: AnthropicPlatformApi,
 ) => {
-  const credentialLayer = AnthropicCredentialService.layerFromRefAndIO(
-    credentialCellRef,
-    {
-      read: readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
-      refresh: refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
-    },
-    authInfo,
-  )
+  const credentialLayer = AnthropicCredentialService.layerFromRef(credentialCellRef, authInfo)
   const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
 
   const clientLayer = Layer.unwrap(
@@ -173,7 +168,7 @@ const makeOauthAnthropicLayer = (
  * kill cross-request beta learning).
  */
 export const buildAnthropicModelDriver = (
-  credentialCellRef: CredentialCacheCellRef,
+  credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
   betaCellRef: Ref.Ref<BetaCacheCell>,
   envApiKey: Option.Option<string>,
   platform: AnthropicPlatformApi,
@@ -306,7 +301,8 @@ export const AnthropicExtension = defineExtension({
     // instance → one cell that lives until the runtime tears the
     // extension down. Setup is Effectful, so cache cells are allocated
     // through SynchronizedRef.make instead of an unsafe closure escape hatch.
-    const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+    const credentialCellRef =
+      yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
     const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
     yield* ctx.register(

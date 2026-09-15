@@ -10,7 +10,8 @@ import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/unstable/http"
 import { authorizeOpenAIDevice, type OAuthError } from "../../src/openai/oauth.js"
 import { buildOpenAIModelDriver } from "../../src/openai/index.js"
-import { EMPTY_CREDENTIAL_CELL } from "../../src/openai/credential-service.js"
+import type { OpenAICredentials } from "../../src/openai/credential-service.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
 
 interface Recorded {
   readonly path: string
@@ -191,7 +192,8 @@ describe("OpenAI device-code login", () => {
 
   it.live("registers the device-code method between the browser and API-key methods", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, new Map(), Option.none())
       const methods = Option.fromNullishOr(driver.auth?.methods).pipe(Option.getOrElse(() => []))
       expect(methods.map((method) => `${method.type}:${method.label}`)).toEqual([

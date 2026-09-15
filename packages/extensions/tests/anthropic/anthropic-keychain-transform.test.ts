@@ -23,10 +23,8 @@ import type { AnthropicKeychainEnv } from "../../src/anthropic/platform-adapter.
 const TEST_ENV: AnthropicKeychainEnv = {}
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
-import type {
-  AnthropicCredentialServiceApi,
-  AnthropicCredentialIO,
-} from "../../src/anthropic/credential-service.js"
+import type { AnthropicCredentialIO } from "../../src/anthropic/credential-service.js"
+import type { CredentialCache } from "../../src/provider-credentials.js"
 import { AnthropicCredentialService } from "../../src/anthropic/credential-service.js"
 import { AnthropicBetaCache, type AnthropicBetaCacheApi } from "../../src/anthropic/beta-cache.js"
 import type { ClaudeCredentials } from "../../src/anthropic/oauth.js"
@@ -107,7 +105,7 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
 // Capture the credential-service "instance" by running its layer once
 // and grabbing the service from context. The transform takes this
 // instance directly (closure-based, not yielded from R).
-const buildCreds = (io: AnthropicCredentialIO): Promise<AnthropicCredentialServiceApi> => {
+const buildCreds = (io: AnthropicCredentialIO): Promise<CredentialCache<ClaudeCredentials>> => {
   const host = testHostFacts().host
   const platformLayer = Layer.succeed(
     AnthropicPlatform,

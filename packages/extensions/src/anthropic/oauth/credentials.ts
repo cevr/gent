@@ -1,7 +1,8 @@
 import { Effect, Option, Schema } from "effect"
 import { ProviderAuthError } from "@gent/core/extensions/api"
+import { freshEnoughAt } from "../../provider-credentials.js"
 
-const ClaudeCredentials = Schema.Struct({
+export const ClaudeCredentials = Schema.Struct({
   accessToken: Schema.String,
   refreshToken: Schema.String,
   expiresAt: Schema.Finite,
@@ -25,16 +26,8 @@ const decodeOAuthTokenResponse = Schema.decodeUnknownOption(
 
 export type ClaudeCredentials = typeof ClaudeCredentials.Type
 
-/**
- * A credential is "fresh enough to use" if it expires more than 60s
- * from now. Below that, callers should refresh before sending it on
- * the wire — the Anthropic auth gate rejects a token in its last
- * minute and a refresh round-trip can take that long.
- */
-const FRESH_ENOUGH_MS = 60_000
-
 export const freshEnoughForUse = (creds: ClaudeCredentials, now: number): boolean =>
-  creds.expiresAt > now + FRESH_ENOUGH_MS
+  freshEnoughAt(creds.expiresAt, now)
 
 export const decodeCredentials = (
   raw: string,

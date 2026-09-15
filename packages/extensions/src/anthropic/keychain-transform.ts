@@ -69,7 +69,8 @@ import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import type { HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import type { AnthropicBetaCacheApi } from "./beta-cache.js"
-import type { AnthropicCredentialServiceApi } from "./credential-service.js"
+import type { CredentialCache } from "../provider-credentials.js"
+import type { ClaudeCredentials } from "./oauth.js"
 import {
   getLongContextBetasForWith,
   getModelBetas,
@@ -253,7 +254,7 @@ const buildOauthHeaders = (
  */
 export const buildKeychainTransformClient =
   (
-    creds: AnthropicCredentialServiceApi,
+    creds: CredentialCache<ClaudeCredentials>,
     betaCache: AnthropicBetaCacheApi,
     env: AnthropicKeychainEnv,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>

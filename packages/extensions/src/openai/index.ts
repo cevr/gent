@@ -23,11 +23,12 @@ import {
 } from "@effect/ai-openai"
 import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
+import { OpenAICredentialService, type OpenAICredentials } from "./credential-service.js"
 import {
-  OpenAICredentialService,
   EMPTY_CREDENTIAL_CELL,
+  type CredentialCacheCell,
   type CredentialCacheCellRef,
-} from "./credential-service.js"
+} from "../provider-credentials.js"
 import { buildCodexTransformClient } from "./codex-transform.js"
 import {
   buildOpenAiCompatConfig,
@@ -119,7 +120,7 @@ const makeOauthOpenAILayer = (
   modelName: string,
   config: OpenAiResponsesConfig,
   authInfo: ProviderAuthInfo,
-  credentialCellRef: CredentialCacheCellRef,
+  credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
 ) => {
   const credentialLayer = OpenAICredentialService.layerFromRef(credentialCellRef, authInfo)
 
@@ -151,7 +152,7 @@ const makeOauthOpenAILayer = (
  * calls share the same closure-owned cell.
  */
 export const buildOpenAIModelDriver = (
-  credentialCellRef: CredentialCacheCellRef,
+  credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
 ): ModelDriverContribution => ({
@@ -318,7 +319,8 @@ export const OpenAIExtension = defineExtension({
     // one cell that lives until the runtime tears the extension down.
     // Setup is Effectful, so the cache cell is allocated through
     // SynchronizedRef.make instead of an unsafe closure escape hatch.
-    const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+    const credentialCellRef =
+      yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
     // Pending OAuth callbacks keyed by authorizationId. Entries
     // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
     const pendingCallbacks = new Map<string, PendingCallbackEntry>()

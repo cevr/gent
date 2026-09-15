@@ -30,12 +30,9 @@ import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Layer, Match, Option, Ref, Schema, Stream, SynchronizedRef } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import { buildAnthropicModelDriver as buildAnthropicModelDriverLive } from "../../src/anthropic/index.js"
-import {
-  EMPTY_CREDENTIAL_CELL,
-  type CredentialCacheCell,
-} from "../../src/anthropic/credential-service.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
 import { EMPTY_BETA_CELL, type BetaCacheCell } from "../../src/anthropic/beta-cache.js"
-import { SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth.js"
+import { SYSTEM_IDENTITY_PREFIX, type ClaudeCredentials } from "../../src/anthropic/oauth.js"
 import { type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
@@ -236,9 +233,13 @@ describe("Anthropic chronological context", () => {
           options: { anthropic: { cacheControl: { type: "ephemeral" } } },
         })
         for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
-          const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell>({
-            creds: Option.some({ accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS }),
+          const credentialCellRef = yield* SynchronizedRef.make<
+            CredentialCacheCell<ClaudeCredentials>
+          >({
+            _tag: "Durable",
+            creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
             at: yield* Clock.currentTimeMillis,
+            invalidated: false,
           })
           const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
           const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
@@ -294,7 +295,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
   it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
@@ -305,12 +306,10 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       // assert the captured Authorization header reflects the seed, so
       // any regression that ignores the external Ref breaks the test.
       yield* SynchronizedRef.set(credentialCellRef, {
-        creds: Option.some({
-          accessToken: "seeded-bearer-token",
-          refreshToken: "r",
-          expiresAt: FUTURE_MS,
-        }),
+        _tag: "Durable",
+        creds: { accessToken: "seeded-bearer-token", refreshToken: "r", expiresAt: FUTURE_MS },
         at: yield* Clock.currentTimeMillis,
+        invalidated: false,
       })
       const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
@@ -325,11 +324,13 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
         yield* SynchronizedRef.set(credentialCellRef, {
-          creds: Option.some({ accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS }),
+          _tag: "Durable",
+          creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
           at: yield* Clock.currentTimeMillis,
+          invalidated: false,
         })
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
@@ -350,15 +351,13 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
         yield* SynchronizedRef.set(credentialCellRef, {
-          creds: Option.some({
-            accessToken: "first-token",
-            refreshToken: "r",
-            expiresAt: FUTURE_MS,
-          }),
+          _tag: "Durable",
+          creds: { accessToken: "first-token", refreshToken: "r", expiresAt: FUTURE_MS },
           at: yield* Clock.currentTimeMillis,
+          invalidated: false,
         })
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
         const model1 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
@@ -371,12 +370,10 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         // observing this update through the shared Ref. Asserting the second
         // request uses "second-token" pins the Ref-sharing semantics.
         yield* SynchronizedRef.set(credentialCellRef, {
-          creds: Option.some({
-            accessToken: "second-token",
-            refreshToken: "r",
-            expiresAt: FUTURE_MS,
-          }),
+          _tag: "Durable",
+          creds: { accessToken: "second-token", refreshToken: "r", expiresAt: FUTURE_MS },
           at: yield* Clock.currentTimeMillis,
+          invalidated: false,
         })
         const model2 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState2 = makeFakeFetchState()
@@ -387,11 +384,13 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
   it.live("OAuth resolveModel layer reads beta exclusions from betaCellRef the test owns", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
       yield* SynchronizedRef.set(credentialCellRef, {
-        creds: Option.some({ accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS }),
+        _tag: "Durable",
+        creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
         at: yield* Clock.currentTimeMillis,
+        invalidated: false,
       })
       // Pre-seed beta exclusions so the model's default 1M-context beta
       // is NOT sent. If the production beta cache used a fresh internal
@@ -415,7 +414,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   it.live("API-key resolveModel layer sends x-api-key (no Bearer)", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
@@ -431,7 +430,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
         const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
@@ -448,7 +447,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   it.live("API-key path does not touch the OAuth cache Refs", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
       const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))

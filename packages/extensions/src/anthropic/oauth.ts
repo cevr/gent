@@ -16,10 +16,10 @@ export {
   type ClaudeAccount,
 } from "./oauth/accounts.js"
 export {
+  ClaudeCredentials,
   freshEnoughForUse,
   parseOAuthResponse,
   updateCredentialBlob,
-  type ClaudeCredentials,
 } from "./oauth/credentials.js"
 export {
   PRIMARY_CLAUDE_SERVICE,

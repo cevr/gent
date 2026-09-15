@@ -20,11 +20,8 @@ import { Effect, Layer, Option, Schema, Stream, SynchronizedRef } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "../helpers/external-wire.js"
 import { buildOpenAIModelDriver } from "../../src/openai/index.js"
-import {
-  EMPTY_CREDENTIAL_CELL,
-  type CredentialCacheCell,
-  type OpenAICredentials,
-} from "../../src/openai/credential-service.js"
+import type { OpenAICredentials } from "../../src/openai/credential-service.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
   makeFakeFetchState,
@@ -48,7 +45,7 @@ const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   type: "api",
   key,
 })
-const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell => ({
+const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell<OpenAICredentials> => ({
   _tag: "Durable",
   creds,
   at: NOW_MS,
@@ -125,7 +122,8 @@ const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchSta
 describe("OpenAI cache routing", () => {
   it.live("API-key requests preserve cache routing for generation and streaming", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make(EMPTY_CREDENTIAL_CELL)
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
       const codec = Schema.fromJsonString(
         Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
@@ -166,7 +164,7 @@ describe("OpenAI cache routing", () => {
 
   it.live("OAuth requests retain the supplied cache key across calls", () =>
     Effect.gen(function* () {
-      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell>(
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
         makeDurableCell({
           access: "cache-test-token",
           refresh: "r",
@@ -195,7 +193,7 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
   it.live("stale callback state fails instead of reporting success", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
       const callback = Option.fromUndefinedOr(driver.auth?.callback)
       if (Option.isNone(callback)) {
@@ -221,7 +219,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
   it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthOpenAILayer` regressed to allocating its own internal
@@ -251,7 +249,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
         yield* SynchronizedRef.set(
           credentialCellRef,
           makeDurableCell({
@@ -280,7 +278,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
   it.live("OAuth resolveModel layer omits x-api-key (no SDK-injected Bearer placeholder)", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       yield* SynchronizedRef.set(
         credentialCellRef,
         makeDurableCell({
@@ -312,7 +310,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
         yield* SynchronizedRef.set(
           credentialCellRef,
           makeDurableCell({
@@ -350,7 +348,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
   it.live("OAuth resolves the Astra review model", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
       const model = yield* driver.resolveModel("gpt-6-astra", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
@@ -367,7 +365,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
   it.live("OAuth resolveModel rejects models the Codex backend does not serve", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
       const error = yield* driver.resolveModel("gpt-3.5-turbo", makeOAuthInfo()).pipe(Effect.flip)
       expect(error.message).toMatch(/not available with ChatGPT OAuth/)
@@ -387,7 +385,7 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
         yield* SynchronizedRef.set(
           credentialCellRef,
           makeDurableCell({
@@ -441,7 +439,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
-          yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
         const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
         const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
@@ -458,7 +456,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
   it.live("API-key path does not touch the OAuth credential cell Ref", () =>
     Effect.gen(function* () {
       const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
       const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
