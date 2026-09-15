@@ -54,4 +54,26 @@ or Worth exploring.
 
 ## extensions — pass 1
 
-(pending the agent's full list)
+The agent's original E5/E7/E8 text was lost with the transcript; the rows
+below record what was verified and acted on.
+
+| #   | Finding                                                                                                                         | Verdict                                                                              | Status                                                                                   |
+| --- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| E1  | `promptGuidelines` on read/grep/bash repeated the same "use the fs tools" prose three times                                     | confirmed                                                                            | landed `56ca6bcc` (one bash guideline; read/grep carry none)                             |
+| E2  | bash read-only detection was a prefix check; compound commands (`ls; rm`, `$(...)`, `xargs`, `-exec`) slipped past as read-only | Strong                                                                               | landed `56ca6bcc` (`classifyBashCommand`: every segment read-only and no hidden command) |
+| E3  | anthropic and openai provider modules each own a credential cache with the same persist/invalidate shape                        | Strong; one `makeCredentialCache<C>` behind both Tags                                | landed `7746f9d0`                                                                        |
+| E4  | ACP adapter could sit on the vendor SDK instead of the hand-rolled protocol half                                                | Worth exploring; do not delete ACP (see [[project-acp-adapter-fills-external-seam]]) | open                                                                                     |
+| E5  | (text lost)                                                                                                                     | —                                                                                    | re-run on pass 2                                                                         |
+| E6  | eight cell test files gated on `process.platform === "darwin"` although the cell has no darwin-only dependency                  | confirmed (suite green ungated)                                                      | landed `56ca6bcc`                                                                        |
+| E7  | (text lost)                                                                                                                     | —                                                                                    | re-run on pass 2                                                                         |
+| E8  | (text lost)                                                                                                                     | —                                                                                    | re-run on pass 2                                                                         |
+| E+  | model compaction sent whole messages to the summarizer; one oversized tool result starved the older turns                       | Strong (found while reading E1)                                                      | landed `c5858158` (`MODEL_COMPACTION_MESSAGE_CHARS` clip per message)                    |
+
+## tui — markdown history (user request, 2026-09-15)
+
+`NativeTranscript` committed items with the synchronous
+`writeSolidToScrollback`, before opentui's async tree-sitter highlight
+concealed `##` and backticks; opencode awaits `ScrollbackSurface.settle()`
+first. Landed `629e300c`: surface render, settle, commit, serialized on one
+fiber chain with the replay reset. Verified in pane `wZ:p18` on session
+`01a0a3c8-9c97-759e-ac97-4edefea5384f`.
