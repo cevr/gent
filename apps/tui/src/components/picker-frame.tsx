@@ -30,21 +30,31 @@ export const pickerHeight = (itemCount: number, terminalRows: number): number =>
  * The columns a picker row may use.
  *
  * A picker rules off top and bottom only, so unlike a docked pane it spends
- * no columns on side borders or margins: a row loses its own left pad and
- * nothing else. Budgeting the Dock's allowance here would truncate every row
- * five columns short of the rule.
+ * nothing on side borders or margins. What it does spend sits inside: a row
+ * is drawn in the list body, and `ChromePanel.Body` pads one column each
+ * side, so a row keeps its own left pad on top of those two.
+ *
+ * Budgeting only the row's own pad leaves a line exactly as wide as the
+ * terminal, and a row that fills its last column wraps the tail — a
+ * right-aligned age lands on a line of its own.
  */
 export interface PickerGeometry {
-  /** Columns a row may use: the row's own left pad is all it spends. */
+  /**
+   * Columns a row may use: the list body pads 1 each side and the row itself
+   * pads 1 more on the left, so a row spends 3 of the rule's columns.
+   */
   readonly rowWidth: () => number
-  /** A `Section` pads both sides, so it has one column less than a row. */
+  /**
+   * A `Section` sits outside the body's padding and pads 1 each side, and
+   * carries no extra row pad — one column more than {@link rowWidth}.
+   */
   readonly sectionWidth: () => number
 }
 
 export const usePickerGeometry = (): PickerGeometry => {
   const dimensions = useTerminalDimensions()
   return {
-    rowWidth: () => Math.max(0, dimensions().width - 1),
+    rowWidth: () => Math.max(0, dimensions().width - 3),
     sectionWidth: () => Math.max(0, dimensions().width - 2),
   }
 }

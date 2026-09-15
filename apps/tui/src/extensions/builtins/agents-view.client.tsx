@@ -486,7 +486,14 @@ export function AgentsPane(
         const section = () => item.row.section
         return (
           <box id={id} backgroundColor={background()} paddingLeft={1}>
-            <text style={{ fg: lineColor(item.row, section(), selected()) }}>
+            {/* One row, one line: the age is right-aligned into the budget, so
+                an overflowing label is cut rather than wrapped under it, the
+                way the autocomplete popup and the thread rows clamp theirs. */}
+            <text
+              wrapMode="none"
+              truncate
+              style={{ fg: lineColor(item.row, section(), selected()) }}
+            >
               <span style={{ fg: glyphColorFor(section(), selected()) }}>
                 {rowLine(item.row, selected()).slice(0, 1)}
               </span>

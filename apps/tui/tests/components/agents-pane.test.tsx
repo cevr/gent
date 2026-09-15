@@ -7,11 +7,12 @@
  * the overlay that owns them.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Clock, Effect, Option } from "effect"
 import { createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import { AgentsPane, makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
+import { usePickerGeometry } from "../../src/components/picker-frame"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-transport"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
@@ -23,6 +24,24 @@ const row = (id: string, name: string, depth: number): AgentRowEntry => ({
   name,
   live: false,
   depth,
+})
+
+/**
+ * A row that has run, so `ageFor` yields a real age.
+ *
+ * The age is the only part of a row drawn against the right edge, so a
+ * fixture without `updatedAt` cannot overflow the budget however long its
+ * name is: the width tests above passed against a visibly wrapping pane
+ * because every row they drew had an empty age column.
+ *
+ * `updatedAt` is an instant the caller resolves from the clock, not a
+ * duration: the pane reads the wall clock to format the age.
+ */
+const agedRow = (id: string, name: string, updatedAt: number): AgentRowEntry => ({
+  ...row(id, name, 0),
+  section: "idle",
+  live: true,
+  updatedAt,
 })
 
 describe("Agents pane navigation", () => {
@@ -449,9 +468,144 @@ describe("Agents pane framing", () => {
       const rowLine = Option.getOrThrow(
         Option.fromNullishOr(lines.find((line) => line.includes("WWW"))),
       )
-      // The name is truncated to the row's budget, so the drawn row reaching
-      // the rule's own width is what says the budget is the picker's.
-      expect(rowLine.trimEnd().length).toBeGreaterThan(rule.trimEnd().length - 3)
+      // A row spends exactly 3 of the rule's columns: the list body pads 1
+      // each side and the row pads 1 more on the left. Landing on that number
+      // says the budget is the picker's — a docked pane's allowance would cut
+      // the row 5 columns further in — and that it is not overspent, which
+      // wraps the age onto a line of its own.
+      expect(rowLine.trimEnd().length).toBe(rule.trimEnd().length - 3)
+    }),
+  )
+
+  it.live("keeps a row's age on the row's own line in a narrow pane", () =>
+    Effect.gen(function* () {
+      // Observed at 58 columns: every row wrapped its age onto a line of its
+      // own. A row is drawn inside the list body, which pads a column each
+      // side, and pads one more itself — so a budget that only counts the
+      // row's own pad draws a line as wide as the terminal and the age falls
+      // off the end.
+      const now = yield* Clock.currentTimeMillis
+      const aged = agedRow("aged", "New Chat", now - 60_000)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AgentsPane
+              open={true}
+              controller={{
+                rows: () => [aged],
+                current: () => Option.none(),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                open: () => true,
+                setOpen: () => {},
+              }}
+              onSelect={() => {}}
+              onToggle={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 58, height: 24 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("New Chat"), "aged row"),
+      )
+      const lines = renderFrame(setup).split("\n")
+
+      // The age rides the row that names the agent, not a line by itself.
+      const rowLine = Option.getOrThrow(
+        Option.fromNullishOr(lines.find((line) => line.includes("New Chat"))),
+      )
+      expect(rowLine).toContain("1m")
+      expect(lines.some((line) => line.trim() === "1m")).toBe(false)
+
+      // The drawn row ends one column short of the rule: the body keeps its
+      // right pad. A row that reaches the rule itself has overspent and is
+      // what pushes the age onto the next line.
+      const rule = Option.getOrThrow(
+        Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
+      )
+      expect(rowLine.trimEnd().length).toBe(rule.trimEnd().length - 1)
+    }),
+  )
+
+  it.live("cuts an overlong label instead of wrapping it under the row", () =>
+    Effect.gen(function* () {
+      // With the budget right, `rowLine` already builds exactly the columns a
+      // row may spend, so the clamp on the row's text changes nothing here —
+      // removing it keeps this green. It is kept for the reason the sibling
+      // rows carry theirs: a future row built wider than the budget is cut,
+      // not reflowed under its own line.
+      const now = yield* Clock.currentTimeMillis
+      const aged = agedRow("long", "L".repeat(400), now - 2 * 24 * 60 * 60 * 1000)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AgentsPane
+              open={true}
+              controller={{
+                rows: () => [aged],
+                current: () => Option.none(),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                open: () => true,
+                setOpen: () => {},
+              }}
+              onSelect={() => {}}
+              onToggle={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 58, height: 24 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("LLL"), "long row"),
+      )
+      const lines = renderFrame(setup).split("\n")
+
+      // One line carries the label, and it carries the age too.
+      const labelLines = lines.filter((line) => line.includes("LLL"))
+      expect(labelLines.length).toBe(1)
+      expect(labelLines[0]).toContain("2d")
+      expect(lines.some((line) => line.trim() === "2d")).toBe(false)
+
+      // A cut row ends where an uncut one does, one column inside the rule.
+      const rule = Option.getOrThrow(
+        Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
+      )
+      expect(labelLines[0]?.trimEnd().length).toBe(rule.trimEnd().length - 1)
+    }),
+  )
+
+  it.live("budgets a row the columns it actually spends", () =>
+    Effect.gen(function* () {
+      // The drawn row cannot witness this once the text is clamped: the clamp
+      // cuts a line to the row's box whatever the budget says, so an
+      // overspent budget still draws one unwrapped line. The numbers are the
+      // only place the spend stays visible, and the wrap follows from them —
+      // a row spends the body's two pad columns plus its own.
+      const seen: Array<{ row: number; section: number }> = []
+      const Probe = () => {
+        const { rowWidth, sectionWidth } = usePickerGeometry()
+        seen.push({ row: rowWidth(), section: sectionWidth() })
+        return <text>probe</text>
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Probe />, { width: 58, height: 24 }),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("probe"), "probe"),
+      )
+      expect(seen[0]).toEqual({ row: 55, section: 56 })
     }),
   )
 
