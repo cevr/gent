@@ -95,7 +95,6 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     specifier: Option.none(),
     enforced: true,
   },
-  // Report-only until its real findings are worked off; see the S13 receipt.
   {
     prefix: "packages/extensions/src/",
     exempt: [],
@@ -103,7 +102,7 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: false,
+    enforced: true,
   },
 ]
 

@@ -1,13 +1,6 @@
 import { Effect, Schema } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
-// Handoff Tool Error
-
-export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
-
 // Handoff Tool Params
 
 export const HandoffParams = Schema.Struct({

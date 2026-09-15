@@ -16,52 +16,6 @@ export class Implementation extends Schema.Class<Implementation>("AcpImplementat
   version: Schema.String,
 }) {}
 
-// ── Content Blocks (discriminated on `type`, not `_tag` — matches ACP wire format) ──
-
-export class TextContent extends Schema.Class<TextContent>("AcpTextContent")({
-  type: Schema.Literal("text"),
-  text: Schema.String,
-}) {}
-
-export class ImageContent extends Schema.Class<ImageContent>("AcpImageContent")({
-  type: Schema.Literal("image"),
-  data: Schema.String,
-  mimeType: Schema.String,
-}) {}
-
-// ── MCP Server Config ──
-
-export class McpEnvVar extends Schema.Class<McpEnvVar>("AcpMcpEnvVar")({
-  name: Schema.String,
-  value: Schema.String,
-}) {}
-
-export class McpServerStdio extends Schema.Class<McpServerStdio>("AcpMcpServerStdio")({
-  name: Schema.String,
-  command: Schema.String,
-  args: Schema.optional(Schema.Array(Schema.String)),
-  env: Schema.optional(Schema.Array(McpEnvVar)),
-}) {}
-
-export class McpHeaderEntry extends Schema.Class<McpHeaderEntry>("AcpMcpHeaderEntry")({
-  name: Schema.String,
-  value: Schema.String,
-}) {}
-
-export class McpServerHttp extends Schema.Class<McpServerHttp>("AcpMcpServerHttp")({
-  type: Schema.Literal("http"),
-  name: Schema.String,
-  url: Schema.String,
-  headers: Schema.optional(Schema.Array(McpHeaderEntry)),
-}) {}
-
-export class McpServerSse extends Schema.Class<McpServerSse>("AcpMcpServerSse")({
-  type: Schema.Literal("sse"),
-  name: Schema.String,
-  url: Schema.String,
-  headers: Schema.optional(Schema.Array(McpHeaderEntry)),
-}) {}
-
 // ── Initialize ──
 
 export class FsCapabilities extends Schema.Class<FsCapabilities>("AcpFsCapabilities")({
@@ -134,46 +88,6 @@ export class PromptResponse extends Schema.Class<PromptResponse>("AcpPromptRespo
   stopReason: StopReason,
 }) {}
 
-// ── Cancel (notification — no response) ──
-
-export class CancelNotification extends Schema.Class<CancelNotification>("AcpCancelNotification")({
-  sessionId: Schema.String,
-}) {}
-
-// ── Session Update Notifications ──
-
-export class ContentChunkUpdate extends Schema.Class<ContentChunkUpdate>("AcpContentChunkUpdate")({
-  sessionUpdate: Schema.Literals(["agent_message_chunk", "agent_thought_chunk"]),
-  content: Schema.Unknown,
-}) {}
-
-export class ToolCallNotification extends Schema.Class<ToolCallNotification>(
-  "AcpToolCallNotification",
-)({
-  sessionUpdate: Schema.Literal("tool_call"),
-  toolCallId: Schema.String,
-  title: Schema.optional(Schema.String),
-  kind: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.String),
-}) {}
-
-export class ToolCallUpdateNotification extends Schema.Class<ToolCallUpdateNotification>(
-  "AcpToolCallUpdateNotification",
-)({
-  sessionUpdate: Schema.Literal("tool_call_update"),
-  toolCallId: Schema.String,
-  status: Schema.optional(Schema.String),
-  title: Schema.optional(Schema.String),
-}) {}
-
-/** Discriminate on sessionUpdate field. We only care about these variants. */
-export const SessionUpdate = Schema.Union([
-  ContentChunkUpdate,
-  ToolCallNotification,
-  ToolCallUpdateNotification,
-])
-export type SessionUpdate = typeof SessionUpdate.Type
-
 export class SessionNotification extends Schema.Class<SessionNotification>(
   "AcpSessionNotification",
 )({
@@ -196,22 +110,3 @@ export class RequestPermissionRequest extends Schema.Class<RequestPermissionRequ
   toolCall: Schema.Unknown,
   options: Schema.Array(PermissionOption),
 }) {}
-
-export class PermissionOutcomeSelected extends Schema.Class<PermissionOutcomeSelected>(
-  "AcpPermissionOutcomeSelected",
-)({
-  outcome: Schema.Literal("selected"),
-  optionId: Schema.String,
-}) {}
-
-export class PermissionOutcomeCancelled extends Schema.Class<PermissionOutcomeCancelled>(
-  "AcpPermissionOutcomeCancelled",
-)({
-  outcome: Schema.Literal("cancelled"),
-}) {}
-
-export const PermissionOutcome = Schema.Union([
-  PermissionOutcomeSelected,
-  PermissionOutcomeCancelled,
-])
-export type PermissionOutcome = typeof PermissionOutcome.Type

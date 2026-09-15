@@ -198,7 +198,7 @@ export const handoff = tool({ run: () => "HandoffError happened" })
       },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.enforced).toBe(false)
+    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`HandoffError`")
     expect(findings[0]?.message).toContain("delete it")
   })
