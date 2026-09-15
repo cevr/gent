@@ -3,17 +3,21 @@
  *
  * Extensions register prefixes and item sources via autocompleteItems.
  * The popup looks up contributions by the active prefix, fetches items
- * via createResource, and renders them uniformly.
+ * via createResource, and renders them through the shared list.
+ *
+ * The popup sits under the composer and shares its keys with it: while it
+ * has nothing to select, enter still sends the draft and the arrows still
+ * move the caret. The list is open only while it has rows, which is what
+ * binds and unbinds those keys; escape closes the popup either way.
  */
 
-import { createSignal, createMemo, createResource, For, Show } from "solid-js"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import { createMemo, createResource, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
+import { SelectList, selectable, type SelectListRow } from "./select-list"
 import { truncate } from "../utils/truncate"
-import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useExtensionUI } from "../extensions/context"
 import { useClient } from "../client/index"
@@ -35,10 +39,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const extensionUI = useExtensionUI()
   const { log } = useClient()
 
-  const [rawSelectedIndex, setSelectedIndex] = createSignal(0)
-
-  let scrollRef = Option.none<ScrollBoxRenderable>()
-
   // Find contributions matching the active prefix
   const contributions = createMemo((): AutocompleteContribution[] =>
     extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type),
@@ -52,67 +52,27 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     (): readonly [string, string] => [props.state.type, props.state.filter],
-    ([_prefix, filter]): Promise<AutocompleteItem[]> => {
-      setSelectedIndex(0)
-      return runAutocompleteContributions(
+    ([_prefix, filter]): Promise<AutocompleteItem[]> =>
+      runAutocompleteContributions(
         contributions(),
         filter,
         extensionUI.clientRuntime,
         (prefix, reason) => {
           log.error("autocomplete.contribution.failed", { prefix, error: reason })
         },
-      )
-    },
+      ),
   )
 
   // Use .latest for stale-while-revalidate: keeps showing previous results
   // during refetch instead of flashing "Loading..."
   const visibleItems = () => Option.getOrElse(Option.fromNullishOr(items.latest), () => [])
+  const hasItems = () => visibleItems().length > 0
 
-  // Clamp index reactively
-  const selectedIndex = createMemo(() => {
-    const list = visibleItems()
-    const idx = rawSelectedIndex()
-    if (idx >= list.length) return Math.max(0, list.length - 1)
-    return idx
-  })
-
-  useScrollSync(() => `ac-item-${selectedIndex()}`, {
-    getRef: () => Option.getOrUndefined(scrollRef),
-  })
-
-  // Handle keyboard navigation
+  // The list binds escape only while it has rows; the popup closes on it always.
   useScopedKeyboard((e) => {
-    const list = visibleItems()
-    if (e.name === "escape") {
-      props.onClose()
-      return true
-    }
-
-    if (list.length === 0) return false
-
-    if (e.name === "return" || e.name === "tab") {
-      const item = Option.fromNullishOr(list[selectedIndex()])
-      if (Option.isSome(item)) props.onSelect(item.value.id)
-      return true
-    }
-
-    if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
-      setSelectedIndex((i) => {
-        if (i > 0) return i - 1
-        return list.length - 1
-      })
-      return true
-    }
-
-    if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
-      setSelectedIndex((i) => {
-        if (i < list.length - 1) return i + 1
-        return 0
-      })
-      return true
-    }
-    return false
+    if (e.name !== "escape") return false
+    props.onClose()
+    return true
   })
 
   const dimensions = useTerminalDimensions()
@@ -124,13 +84,67 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     Option.getOrElse(Option.fromNullishOr(contributions()[0]), () => ({ title: props.state.type }))
       .title
 
-  const loading = () => items.loading && visibleItems().length === 0
-  const empty = () => !items.loading && visibleItems().length === 0
+  const loading = () => items.loading && !hasItems()
   const labelWidth = () => Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
 
   const footerHint = () => {
     if (dimensions().width < 44) return "↑↓ Move · ↵ Select · Esc Close"
     return "↑↓ Navigate     Enter Select     Esc Close"
+  }
+
+  const rows = (): ReadonlyArray<SelectListRow<AutocompleteItem>> =>
+    visibleItems().map((item) =>
+      selectable(item, (isSelected, id) => {
+        const textColor = () => {
+          if (isSelected()) return theme.primary
+          return theme.text
+        }
+        const descriptionColor = () => {
+          if (isSelected()) return theme.primary
+          return theme.textMuted
+        }
+        const description = () => Option.fromNullishOr(item.description)
+        return (
+          <box id={id} paddingLeft={1} flexDirection="row" height={1} gap={2}>
+            <text
+              width={labelWidth() - 2}
+              flexShrink={0}
+              wrapMode="none"
+              truncate
+              style={{
+                fg: textColor(),
+              }}
+            >
+              <span style={{ bold: isSelected() }}>{truncate(item.label, labelWidth() - 2)}</span>
+            </text>
+            <text flexGrow={1} wrapMode="none" truncate style={{ fg: descriptionColor() }}>
+              {/* Optional description is supplied by the external extension contribution. */}
+              <Show when={Option.getOrUndefined(description())}>
+                {(text) => (
+                  <span
+                    style={{
+                      fg: descriptionColor(),
+                      dim: !isSelected(),
+                    }}
+                  >
+                    {truncate(text(), dimensions().width - labelWidth() - 2)}
+                  </span>
+                )}
+              </Show>
+            </text>
+          </box>
+        )
+      }),
+    )
+
+  const emptyRow = () => {
+    let label = "No matches"
+    if (loading()) label = "Loading…"
+    return (
+      <box paddingLeft={1}>
+        <text style={{ fg: theme.textMuted }}>{label}</text>
+      </box>
+    )
   }
 
   return (
@@ -147,66 +161,23 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         </text>
       </ChromePanel.Section>
 
-      {/* Items / Loading / Empty */}
-      <ChromePanel.Body
-        ref={(value) => (scrollRef = Option.some(value))}
-        paddingLeft={0}
-        paddingRight={0}
-      >
-        <Show when={loading()}>
-          <box paddingLeft={1}>
-            <text style={{ fg: theme.textMuted }}>Loading…</text>
-          </box>
-        </Show>
-        <Show when={empty()}>
-          <box paddingLeft={1}>
-            <text style={{ fg: theme.textMuted }}>No matches</text>
-          </box>
-        </Show>
-        <For each={visibleItems()}>
-          {(item, index) => {
-            const isSelected = () => selectedIndex() === index()
-            const textColor = () => {
-              if (isSelected()) return theme.primary
-              return theme.text
-            }
-            const descriptionColor = () => {
-              if (isSelected()) return theme.primary
-              return theme.textMuted
-            }
-            return (
-              <box id={`ac-item-${index()}`} paddingLeft={2} flexDirection="row" height={1} gap={2}>
-                <text
-                  width={labelWidth() - 2}
-                  flexShrink={0}
-                  wrapMode="none"
-                  truncate
-                  style={{
-                    fg: textColor(),
-                  }}
-                >
-                  <span style={{ bold: isSelected() }}>
-                    {truncate(item.label, labelWidth() - 2)}
-                  </span>
-                </text>
-                <text flexGrow={1} wrapMode="none" truncate style={{ fg: descriptionColor() }}>
-                  {/* Optional description is supplied by the external extension contribution. */}
-                  <Show when={Option.getOrUndefined(Option.fromNullishOr(item.description))}>
-                    <span
-                      style={{
-                        fg: descriptionColor(),
-                        dim: !isSelected(),
-                      }}
-                    >
-                      {truncate(item.description ?? "", dimensions().width - labelWidth() - 2)}
-                    </span>
-                  </Show>
-                </text>
-              </box>
-            )
-          }}
-        </For>
-      </ChromePanel.Body>
+      <SelectList
+        id="autocomplete"
+        open={hasItems()}
+        rows={rows}
+        sticky={() => Option.some(0)}
+        empty={emptyRow}
+        extraKeys={(event, selected) => {
+          if (event.name !== "tab") return false
+          Option.match(selected, {
+            onNone: () => {},
+            onSome: (item) => props.onSelect(item.id),
+          })
+          return true
+        }}
+        onSelect={(item) => props.onSelect(item.id)}
+        onDismiss={props.onClose}
+      />
     </PickerFrame>
   )
 }
