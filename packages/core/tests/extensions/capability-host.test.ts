@@ -10,6 +10,7 @@ import { BunServices } from "@effect/platform-bun"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { CapabilityError, CapabilityNotFoundError } from "../../src/domain/capability"
 import {
+  defineRequests,
   ExtensionContext,
   request,
   tool,
@@ -361,6 +362,52 @@ describe("extension capability registries", () => {
       expect(Schema.is(CapabilityError)(result)).toBe(true)
       if (!Schema.is(CapabilityError)(result)) return
       expect(result.reason).toMatch(/output validation failed/)
+    }))
+
+  test("a bound handler's own tagged error reaches the caller as CapabilityError under its ids", () =>
+    Effect.gen(function* () {
+      class DiskFull extends Schema.TaggedError<DiskFull>()("DiskFull", {
+        message: Schema.String,
+      }) {}
+      const { Save } = defineRequests(extensionId, {
+        Save: request({
+          id: "save",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          execute: () => new DiskFull({ message: "no space left on device" }),
+        }),
+      })
+      const resolved = resolveExtensions([extWith("builtin", [Save])])
+      const result = yield* expectRpcFailure(runRpc(resolved.rpcRegistry, Save.id, { value: "x" }))
+      expect(result).toEqual(
+        new CapabilityError({
+          extensionId,
+          capabilityId: "save",
+          reason: "no space left on device",
+        }),
+      )
+    }))
+
+  test("a CapabilityError the handler built passes through a bound request unchanged", () =>
+    Effect.gen(function* () {
+      const built = new CapabilityError({
+        extensionId: ExtensionId.make("@other/owner"),
+        capabilityId: "elsewhere",
+        reason: "forwarded",
+      })
+      const { Forward } = defineRequests(extensionId, {
+        Forward: request({
+          id: "forward",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          execute: () => Effect.fail(built),
+        }),
+      })
+      const resolved = resolveExtensions([extWith("builtin", [Forward])])
+      const result = yield* expectRpcFailure(
+        runRpc(resolved.rpcRegistry, Forward.id, { value: "x" }),
+      )
+      expect(result).toBe(built)
     }))
 
   test("handler defects are coerced into typed CapabilityError", () =>

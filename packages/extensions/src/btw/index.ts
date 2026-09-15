@@ -10,7 +10,6 @@
  */
 import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema, Scope } from "effect"
 import {
-  CapabilityError,
   defineExtension,
   defineRequests,
   defineResource,
@@ -118,9 +117,6 @@ export const sideQuestionPrompt = (input: SideQuestionInput): string => {
 
 // ── Requests ──
 
-const askError = (reason: string) =>
-  new CapabilityError({ extensionId: BTW_EXTENSION_ID, capabilityId: "btw.ask", reason })
-
 export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
   Ask: request({
     id: "btw.ask",
@@ -128,67 +124,64 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       "Start a side question over the branch history without touching the branch; read the answer through btw.progress",
     input: SideQuestionInput,
     output: SideQuestionOutput,
-    execute: Effect.fn("BtwRpc.Ask")(
-      function* (input: SideQuestionInput) {
-        const question = input.question.trim()
-        if (question.length === 0) {
-          return yield* new SideQuestionError({ message: "Side question is empty" })
-        }
-        if ([...question].length > MAXIMUM_SIDE_QUESTION_CHARS) {
-          return yield* new SideQuestionError({
-            message: `Side question exceeds ${MAXIMUM_SIDE_QUESTION_CHARS} characters`,
-          })
-        }
-        const ctx = yield* ExtensionContext
-        const agent = yield* requireCurrentAgent
-        const runs = yield* SideQuestionRuns
-        const branchId = String(ctx.branchId)
-        const current = yield* runs.get(branchId)
-        if (Option.isSome(current) && !current.value.done) {
-          return yield* new SideQuestionError({ message: "A side question is already in flight" })
-        }
-        yield* runs.set(branchId, { question, text: "", done: false })
-        // The pulse tells the client to read progress; failures there never touch the run.
-        const pulse = ctx.State.changed().pipe(Effect.ignore)
-        yield* pulse
-        const finish = (change: (run: SideQuestionRun) => SideQuestionRun) =>
-          runs.update(branchId, change).pipe(Effect.andThen(pulse))
-        // Services are captured here: the run continues after this request's scope closes.
-        const work = ctx.Agent.run({
-          agent,
-          prompt: sideQuestionPrompt({ question, previous: input.previous }),
-          runSpec: makeRunSpec({
-            history: "inherit",
-            visibility: "private",
-            overrides: {
-              allowedTools: [],
-              deniedTools: ["cell"],
-              reasoningEffort: "none",
-              systemPromptAddendum: SIDE_QUESTION_INSTRUCTION,
-            },
-          }),
-          observe: (event) => {
-            if (event._tag !== "StreamChunk") return Effect.void
-            return runs
-              .update(branchId, (run) => ({ ...run, text: run.text + event.chunk }))
-              .pipe(Effect.andThen(pulse))
+    execute: Effect.fn("BtwRpc.Ask")(function* (input: SideQuestionInput) {
+      const question = input.question.trim()
+      if (question.length === 0) {
+        return yield* new SideQuestionError({ message: "Side question is empty" })
+      }
+      if ([...question].length > MAXIMUM_SIDE_QUESTION_CHARS) {
+        return yield* new SideQuestionError({
+          message: `Side question exceeds ${MAXIMUM_SIDE_QUESTION_CHARS} characters`,
+        })
+      }
+      const ctx = yield* ExtensionContext
+      const agent = yield* requireCurrentAgent
+      const runs = yield* SideQuestionRuns
+      const branchId = String(ctx.branchId)
+      const current = yield* runs.get(branchId)
+      if (Option.isSome(current) && !current.value.done) {
+        return yield* new SideQuestionError({ message: "A side question is already in flight" })
+      }
+      yield* runs.set(branchId, { question, text: "", done: false })
+      // The pulse tells the client to read progress; failures there never touch the run.
+      const pulse = ctx.State.changed().pipe(Effect.ignore)
+      yield* pulse
+      const finish = (change: (run: SideQuestionRun) => SideQuestionRun) =>
+        runs.update(branchId, change).pipe(Effect.andThen(pulse))
+      // Services are captured here: the run continues after this request's scope closes.
+      const work = ctx.Agent.run({
+        agent,
+        prompt: sideQuestionPrompt({ question, previous: input.previous }),
+        runSpec: makeRunSpec({
+          history: "inherit",
+          visibility: "private",
+          overrides: {
+            allowedTools: [],
+            deniedTools: ["cell"],
+            reasoningEffort: "none",
+            systemPromptAddendum: SIDE_QUESTION_INSTRUCTION,
           },
-        }).pipe(
-          Effect.flatMap((result) =>
-            finish((run) => {
-              if (result._tag === "error") return { ...run, done: true, error: result.error }
-              return { ...run, done: true, answer: result.text }
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            finish((run) => ({ ...run, done: true, error: Cause.pretty(cause) })),
-          ),
-        )
-        yield* runs.fork(work)
-        return { started: true }
-      },
-      (effect) => Effect.mapError(effect, (cause) => askError(cause.message)),
-    ),
+        }),
+        observe: (event) => {
+          if (event._tag !== "StreamChunk") return Effect.void
+          return runs
+            .update(branchId, (run) => ({ ...run, text: run.text + event.chunk }))
+            .pipe(Effect.andThen(pulse))
+        },
+      }).pipe(
+        Effect.flatMap((result) =>
+          finish((run) => {
+            if (result._tag === "error") return { ...run, done: true, error: result.error }
+            return { ...run, done: true, answer: result.text }
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          finish((run) => ({ ...run, done: true, error: Cause.pretty(cause) })),
+        ),
+      )
+      yield* runs.fork(work)
+      return { started: true }
+    }),
   }),
   Progress: request({
     id: "btw.progress",

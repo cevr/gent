@@ -127,6 +127,11 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off",
   },
   {
+    file: "packages/core/src/domain/capability/request.ts",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.",
+  },
+  {
     file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off",

@@ -6,7 +6,6 @@
 
 import { Effect, Schema } from "effect"
 import {
-  CapabilityError,
   defineExtension,
   ExtensionContext,
   ExtensionHost,
@@ -94,16 +93,7 @@ const command = (params: {
           sourceId: `${params.id}:${yield* ctx.Process.randomId}`,
           content: params.recipe(input.trim(), quotedPath),
         })
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new CapabilityError({
-              extensionId: WORKFLOWS_EXTENSION_ID,
-              capabilityId: params.id,
-              reason: cause.message,
-            }),
-        ),
-      ),
+      }),
   })
 
 const WorkflowCommands = [

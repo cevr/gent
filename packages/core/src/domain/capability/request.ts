@@ -13,14 +13,14 @@
  * @module
  */
 
-import { Option, type Effect, type Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ExtensionId, RpcId, type ExtensionId as ExtensionIdType } from "../ids.js"
 import {
   type RequestCapability as RequestCapabilityApi,
   type ErasedCapabilityEffect,
   type CapabilityEffect,
   type CapabilityRef,
-  type CapabilityError,
+  CapabilityError,
 } from "../capability.js"
 import type { PromptSection } from "../prompt.js"
 
@@ -53,13 +53,27 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly prompt?: PromptSection
   readonly input: Schema.Codec<Input, unknown, never, never>
   readonly output: Schema.Codec<Output, unknown, never, never>
-  readonly effect: ErasedCapabilityEffect<CapabilityError>
+  /**
+   * A bound request fails with `CapabilityError` under its ids; an unbound
+   * one passes the handler's own error to the registry, which seals it.
+   */
+  readonly effect: ErasedCapabilityEffect<RequestFailure>
   readonly [REQUEST_REF]: CapabilityRef<Input, Output>
   readonly [REQUEST_REF_STATE]: RequestRefState<Input, Output>
 }
 
+/** What a request handler may fail with: its own tagged error, or a `CapabilityError` it built. */
+interface RequestFailure {
+  readonly message: string
+}
+
 /** Author-facing input to `request({...})`. */
-export interface RequestInput<Input = unknown, Output = unknown, R = never> {
+export interface RequestInput<
+  Input = unknown,
+  Output = unknown,
+  R = never,
+  E extends RequestFailure = CapabilityError,
+> {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
   /** Schema for validating `input` at the boundary. */
@@ -85,8 +99,12 @@ export interface RequestInput<Input = unknown, Output = unknown, R = never> {
     readonly category?: string
     readonly keybind?: string
   }
-  /** The request handler. */
-  readonly execute: CapabilityEffect<Input, Output, R>
+  /**
+   * The request handler. It fails with its own tagged error; the factory
+   * wraps that into the `CapabilityError` the wire carries, under the id
+   * this input names and the extension `defineRequests`/`defineExtension` bind.
+   */
+  readonly execute: CapabilityEffect<Input, Output, R, E>
 }
 
 /**
@@ -95,8 +113,8 @@ export interface RequestInput<Input = unknown, Output = unknown, R = never> {
  * read via the `ref(capability)` accessor — so callers no longer hand-roll a
  * parallel `*Ref` const next to every request.
  */
-export function request<Input, Output, R = never>(
-  input: RequestInput<Input, Output, R>,
+export function request<Input, Output, R = never, E extends RequestFailure = CapabilityError>(
+  input: RequestInput<Input, Output, R, E>,
 ): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
@@ -106,8 +124,7 @@ export function request(input: {
   readonly description?: string
   readonly readonly?: boolean
   readonly slash?: RequestInput<unknown, unknown>["slash"]
-  // oxlint-disable-next-line effect/noUnknownParameters -- Implementation overload accepts the erased runtime payload before schema dispatch.
-  readonly execute: (input: unknown) => Effect.Effect<unknown, CapabilityError, unknown>
+  readonly execute: ErasedCapabilityEffect<RequestFailure>
 }): RequestCapability {
   const rpcId = RpcId.make(input.id)
   const refState: RequestRefState = {
@@ -136,6 +153,20 @@ export function request(input: {
     input: refState.input,
     output: refState.output,
   } as unknown as CapabilityRef
+  // A handler's own error becomes the wire error under the ids this factory
+  // and the binding already hold; an unbound request leaves the error to the
+  // registry, which names the ids it routed by.
+  const asCapabilityError = (error: RequestFailure): RequestFailure =>
+    Option.match(refState.extensionId, {
+      onNone: () => error,
+      onSome: (extensionId) => {
+        if (Schema.is(CapabilityError)(error)) return error
+        return new CapabilityError({ extensionId, capabilityId: rpcId, reason: error.message })
+      },
+    })
+  const effect: ErasedCapabilityEffect<RequestFailure> = (value) =>
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.
+    Effect.mapError(input.execute(value), asCapabilityError)
   const capability: RequestCapabilityApi = {
     _tag: "request",
     id: rpcId,
@@ -145,7 +176,7 @@ export function request(input: {
     input: input.input,
     output: input.output,
     prompt: input.prompt,
-    effect: input.execute,
+    effect,
     ref: refValue,
   }
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The factory applies its private brand and typed reference at the runtime membrane.

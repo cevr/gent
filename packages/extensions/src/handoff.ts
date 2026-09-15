@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import {
-  CapabilityError,
   defineExtension,
   ExtensionContext,
   ExtensionHost,
@@ -29,16 +28,7 @@ const HandoffCommand = request({
         content:
           "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session.",
       })
-    }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new CapabilityError({
-            extensionId: EXTENSION_ID,
-            capabilityId: "handoff-command",
-            reason: cause.message,
-          }),
-      ),
-    ),
+    }),
 })
 
 export const HandoffExtension = defineExtension({

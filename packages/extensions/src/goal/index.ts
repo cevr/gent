@@ -1,6 +1,5 @@
 import { Effect, Option, Predicate, Schema } from "effect"
 import {
-  CapabilityError,
   defineExtension,
   ExtensionContext,
   ExtensionHost,
@@ -260,13 +259,6 @@ const parseBudget = (args: string): ParsedGoalArgs =>
     }),
   })
 
-const commandError = (cause: { readonly message: string }) =>
-  new CapabilityError({
-    extensionId: GOAL_EXTENSION_ID,
-    capabilityId: "goal-command",
-    reason: cause.message,
-  })
-
 const GoalCommand = request({
   id: "goal-command",
   description: "Set or view a persistent goal; supports status, pause, resume, and clear",
@@ -323,7 +315,7 @@ const GoalCommand = request({
           yield* queueGoalMessage(goal, continuationPrompt(goal))
         }
       }
-    }).pipe(Effect.mapError(commandError)),
+    }),
 })
 
 // ── Model-facing tool ──

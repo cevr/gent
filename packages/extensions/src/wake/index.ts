@@ -28,7 +28,6 @@ import {
   Scope,
 } from "effect"
 import {
-  CapabilityError,
   defineExtension,
   defineRequests,
   defineResource,
@@ -511,23 +510,11 @@ export const WakeRpc = defineRequests(WAKE_EXTENSION_ID, {
     description: "The alarms and monitors still pending on the current branch",
     input: Schema.Struct({}),
     output: WakePending,
-    execute: Effect.fn("WakeRpc.List")(
-      function* () {
-        const now = yield* Clock.currentTimeMillis
-        const entries = yield* readWakeEntries()
-        return { now, entries }
-      },
-      (effect) =>
-        Effect.mapError(
-          effect,
-          (cause) =>
-            new CapabilityError({
-              extensionId: WAKE_EXTENSION_ID,
-              capabilityId: "wake.list",
-              reason: cause.message,
-            }),
-        ),
-    ),
+    execute: Effect.fn("WakeRpc.List")(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const entries = yield* readWakeEntries()
+      return { now, entries }
+    }),
   }),
 })
 
