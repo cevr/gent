@@ -181,3 +181,17 @@ src 28,167 LOC. server/, domain/, providers/, runtime/ periphery, storage/, regi
 | C14 | `truncateDisplayText` in message-part-display.ts is byte-equivalent to `clipChars(text, max, "…")`                                                     | Worth exploring; fold                                | in flight (rift `core-pass3`) |
 | C15 | `estimateTextTokens` re-declared in `extensions/src/compaction/model-compaction.ts`; compaction budget can desync from the projection budget           | Worth exploring; one export                          | in flight (rift `core-pass3`) |
 | C16 | `ExtensionProtocolError.phase` has six literals; one producer, the `phase` parameter is never passed; the TUI ignores the field                        | Worth exploring; narrow or drop                      | in flight (rift `core-pass3`) |
+
+## sdk / server / tooling / e2e — pass 3 (2026-09-15, after `84a6093c`)
+
+sdk 2,160, server 86, tooling 2,505, e2e 311 src LOC. Client, namespaced proxy, lock, logger, fingerprint, guards, fixtures checked; nothing else above Speculative.
+
+| #   | Finding                                                                                                                                                                                               | Verdict                                                                   | Status                           |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------- |
+| S16 | `packages/tooling` has no tsconfig and no `typecheck` script; root tsconfig `include: []`; 2,505 LOC of guards never typechecked (D2 shape)                                                           | Strong; add tsconfig + script, fix what it reports                        | in flight (rift `tooling-pass3`) |
+| S17 | `suppression-inventory.ts` `line` field is written, never read (`_line` discarded); 46/51 entries drifted, 12 name suppressions that no longer exist, 16 exact duplicates                             | Strong; drop `line`, dedupe, delete dead, flag an approval with no match  | in flight (rift `tooling-pass3`) |
+| S18 | `apps/server/src/main.ts` reads `GENT_CWD`, `GENT_DB_PATH`, `GENT_SERVER_ID`; no setter anywhere (S1a shape)                                                                                          | Worth exploring; delete the three reads (personal library, no operator)   | in flight (rift `tooling-pass3`) |
+| S19 | `GentObservability`, `seedDebugSession`, `BuildFingerprint` on the `@gent/sdk` root reach only the name snapshot test; the scan has no entry-point row for the SDK index (opencode root is six lines) | Strong; drop from index, add a `@gent/sdk` row to `SCANNED_SURFACES`      | in flight (rift `tooling-pass3`) |
+| S20 | six e2e PTY tests assert only that the prompt glyph or typed text is still on screen, or an output byte count                                                                                         | Worth exploring; delete three, give two an observable assertion or delete | in flight (rift `tooling-pass3`) |
+
+Cross-package note for tui pass 3: `apps/tui/src/ops/local-health.ts:168-174` declares a second `ServerLockEntry` schema beside the SDK's.
