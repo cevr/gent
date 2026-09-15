@@ -169,6 +169,7 @@ C7 policy scope note from the pass: the three caps live in `domain/agent.ts:188-
 Landed `742a80c4`: 16 names deleted from `acp-agents/schema.ts` and `handoff-tool.ts` (the nine the scan flagged plus seven the deletions exposed); extensions row `enforced: true`, probe exits 1 on a planted export. Scan blind spot noted: `testsCount: true` counts names inside fixture strings in `packages/tooling/tests/export-consumers.test.ts`, which hid `SessionUpdate` and `HandoffError`. Fix candidate: exclude `packages/tooling/tests` from consumer scans.
 
 Gamut run 19 at `b91cce78` (sonnet-sonnet): 19 tests green, 2m22s, $0.98, 16 steps, 5 children, turn_records max step 16.
+Gamut run 20 at `7f2648c3` (sonnet-sonnet, binary at `79341310`, after C17 split, S21-S25 logger, T24-T27): 19 tests green, 2m39s, $0.96, 17 steps, 5 children, all six tasks; TUI rendered the full run with the 15 theme colors gone (T24 pane check).
 
 ## core — pass 3 (2026-09-15, after `84a6093c`)
 
