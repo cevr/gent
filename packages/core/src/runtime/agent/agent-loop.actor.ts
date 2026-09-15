@@ -78,7 +78,6 @@ import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import {
   AgentLoopError,
   emptyLoopQueueState,
-  foldSessionMetrics,
   projectRuntimeState,
   queueRequestsWake,
   turnFailureEpoch,
@@ -94,7 +93,6 @@ import {
 } from "./agent-loop.behavior.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import { EventStorage } from "../../storage/event-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
@@ -260,7 +258,6 @@ const buildAgentLoopActorHandlers = (config: {
       effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
     const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
-    const eventStorage = yield* EventStorage
     const operations = yield* SessionOperationStorage
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
     const closed = yield* Ref.make(false)
@@ -859,17 +856,6 @@ const buildAgentLoopActorHandlers = (config: {
       GetState: Effect.fn("AgentLoop.GetState")(
         ({ operation }: HandlerRequest<BranchCommandInput>) =>
           branchCommand(operation, rejectIfTerminated, (handle) => handle.runtimeState),
-      ),
-      GetMetrics: Effect.fn("AgentLoop.GetMetrics")(
-        ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          Effect.gen(function* () {
-            yield* ensureTarget(operation)
-            yield* rejectIfTerminated
-            const envelopes = yield* eventStorage
-              .listEvents({ sessionId: operation.sessionId, branchId: operation.branchId })
-              .pipe(Effect.catchEager(() => Effect.succeed([])))
-            return foldSessionMetrics(envelopes)
-          }).pipe(provideActorWorkspace),
       ),
       RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
         ({ operation }: HandlerRequest<RequestExtensionInput>) =>

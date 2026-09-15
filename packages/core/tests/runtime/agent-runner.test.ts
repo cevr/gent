@@ -283,13 +283,6 @@ const sessionRuntimeStub = (
         requestExtension: () => Effect.void,
         drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-        getMetrics: () =>
-          Effect.succeed({
-            turns: 0,
-            durationMs: 0,
-            costUsd: 0,
-            lastInputTokens: 0,
-          }),
         getState: () => SubscriptionRef.get(runtimeState),
         watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
         terminateSession: () => Effect.void,

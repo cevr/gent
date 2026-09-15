@@ -14,6 +14,7 @@ import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
+import { foldSessionMetrics } from "../runtime/agent/agent-loop.state.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/agent/turn-resolve.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -113,6 +114,8 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
       return {
         projectedMessages: projectMessagesWithToolInteractions(messages, toolCallDurations(events)),
         lastEventId,
+        // The same read answers the HUD totals: one branch log, folded once.
+        metrics: foldSessionMetrics(events),
       }
     }),
   )
@@ -141,23 +144,6 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     session,
   )
 
-  // Cumulative metrics (turns, cost, last-model) are the authority for
-  // client HUD displays. Keeping them on the snapshot means the TUI
-  // hydrates cost/tokens from here instead of re-deriving by joining
-  // streamed events against a client-side model registry.
-  const metrics = yield* sessionRuntime
-    .getMetrics({ sessionId: input.sessionId, branchId: input.branchId })
-    .pipe(
-      Effect.catchEager(() =>
-        Effect.succeed({
-          turns: 0,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        }),
-      ),
-    )
-
   // Extension state is no longer hydrated through the session snapshot —
   // clients call the extension's typed `client.extension.request(...)` on
   // mount and subscribe to `ExtensionStateChanged` events for refetch
@@ -175,7 +161,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     resolvedReasoningLevel: Option.getOrUndefined(settings.reasoningLevel),
     activeBranchId: session.activeBranchId,
     runtime,
-    metrics,
+    metrics: snapshotState.metrics,
   })
 })
 

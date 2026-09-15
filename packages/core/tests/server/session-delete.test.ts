@@ -278,7 +278,7 @@ describe("session.delete", () => {
   })
 
   it.live(
-    "rejects public read boundaries for deleted sessions (events, watchRuntime, getState, getMetrics, queue.get)",
+    "rejects public read boundaries for deleted sessions (events, watchRuntime, getSnapshot, queue.get)",
     () =>
       Effect.scoped(
         Effect.gen(function* () {

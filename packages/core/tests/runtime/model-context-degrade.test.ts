@@ -14,6 +14,7 @@ import {
 } from "../../src/runtime/model-context-compactor"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
+import { getSessionSnapshot } from "../../src/server/rpc-handlers"
 import { EventStorage } from "../../src/storage/event-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
@@ -99,7 +100,7 @@ describe("context compaction degrade path", () => {
             (envelope) => envelope.event,
           )
           const durable = yield* (yield* MessageStorage).listMessages(branchId)
-          const metrics = yield* runtime.getMetrics({ sessionId, branchId })
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
           return { events, durable, metrics }
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),

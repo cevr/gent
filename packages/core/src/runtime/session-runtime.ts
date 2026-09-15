@@ -59,7 +59,7 @@ const SESSION_TERMINATION_CONCURRENCY = 16
 import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { resolveExistingSessionBranch } from "./session-runtime-context.js"
 import { AgentLoopError } from "./agent/agent-loop.state.js"
-import type { SessionRuntimeMetrics, SessionRuntimeState } from "./agent/agent-loop.state.js"
+import type { SessionRuntimeState } from "./agent/agent-loop.state.js"
 import type { ProcessRunner } from "./run-process.js"
 
 export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
@@ -227,9 +227,6 @@ export interface SessionRuntimeService {
   readonly getQueuedMessages: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
-  readonly getMetrics: (
-    input: SessionRuntimeTarget,
-  ) => Effect.Effect<SessionRuntimeMetrics, SessionRuntimeError>
   readonly getState: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<SessionRuntimeState, SessionRuntimeError>
@@ -547,11 +544,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         redeliverPendingActorMessages(input).pipe(
           Effect.andThen(ref.execute(AgentLoopActor.GetQueue.make({ ...input, ...ids }))),
         ),
-      ),
-
-    getMetrics: (input) =>
-      actorCommand("getMetrics", input, (ref, ids) =>
-        ref.execute(AgentLoopActor.GetMetrics.make({ ...input, ...ids })),
       ),
 
     getState: (input) =>

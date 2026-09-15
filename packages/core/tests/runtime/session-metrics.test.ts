@@ -10,6 +10,7 @@ import { textStep } from "../../src/test-utils/sequence-steps"
 import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
 import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
+import { getSessionSnapshot } from "../../src/server/rpc-handlers"
 import { EventStorage } from "../../src/storage/event-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
@@ -60,7 +61,7 @@ const createSessionBranch = (modelIdLabel = "test/priced") =>
     )
     return { sessionId, branchId }
   })
-describe("SessionRuntime metrics", () => {
+describe("session metrics", () => {
   it.live("StreamEnded.costUsd is frozen at emit time and summed into metrics.costUsd", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
@@ -99,7 +100,7 @@ describe("SessionRuntime metrics", () => {
                 }
               > => e._tag === "StreamEnded",
             )
-          const metrics = yield* runtime.getMetrics({ sessionId, branchId })
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
           const receipts = envelopes
             .map((e) => e.event)
             .filter(
@@ -175,7 +176,7 @@ describe("SessionRuntime metrics", () => {
           const projected = envelopes
             .map((e) => e.event)
             .filter((e) => e._tag === "ModelContextProjected")
-          const metrics = yield* runtime.getMetrics({ sessionId, branchId })
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
           return { projected, metrics }
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
@@ -203,15 +204,15 @@ describe("SessionRuntime metrics", () => {
             content: "one",
             agentOverride: AgentName.make("cowork"),
           })
-          const first = yield* runtime.getMetrics({ sessionId, branchId })
-          const second = yield* runtime.getMetrics({ sessionId, branchId })
+          const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+          const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
           return { first, second }
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
       )
       // Two reads over the same event log must return the same cost. The cost
       // is frozen on StreamEnded at emit time — changes to pricing or the
-      // registry between getMetrics calls cannot shift historical costs.
+      // registry between snapshot reads cannot shift historical costs.
       expect(result.first.costUsd).toBe(result.second.costUsd)
       expect(result.first.costUsd).toBeGreaterThan(0)
     }),
@@ -250,7 +251,7 @@ describe("SessionRuntime metrics", () => {
                 }
               > => e._tag === "StreamEnded",
             )
-          const metrics = yield* runtime.getMetrics({ sessionId, branchId })
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
           return { streamEndeds, metrics }
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds")),

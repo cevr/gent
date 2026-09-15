@@ -39,7 +39,6 @@ export const followUpMessageIdForSource = (input: {
   )
 import {
   AgentLoopError,
-  SessionRuntimeMetrics,
   SessionRuntimeStateSchema,
 } from "./agent-loop.state.js"
 
@@ -190,12 +189,6 @@ export const AgentLoop = Actor.fromEntity(
     GetState: {
       payload: BranchCommandFields,
       success: SessionRuntimeStateSchema,
-      error: AgentLoopError,
-      id: branchTarget,
-    },
-    GetMetrics: {
-      payload: BranchCommandFields,
-      success: SessionRuntimeMetrics,
       error: AgentLoopError,
       id: branchTarget,
     },

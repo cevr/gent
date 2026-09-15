@@ -143,7 +143,6 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       sendToolResult: () => noRpcError(absent),
       interrupt: () => noRpcError(absent),
       getState: () => noRpcError(absent),
-      getMetrics: () => noRpcError(absent),
     },
   } satisfies Record<string, MockNamespace>
 
