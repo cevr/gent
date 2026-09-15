@@ -19,7 +19,6 @@ import { bindRequestCapabilityExtension } from "../../src/domain/capability/requ
 import {
   compileToolPolicy,
   ExtensionRegistry,
-  listSlashCommands,
   resolveExtensions,
 } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
@@ -557,7 +556,7 @@ describe("resolveExtensions — slash command discovery", () => {
   test("slash-decorated request appears in commands", () => {
     const cap = makeSlashRequest("echo", { description: "Echo the args back." })
     const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { requests: [cap] })])
-    const commands = listSlashCommands(resolved)
+    const commands = resolved.slashCommands
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
@@ -576,7 +575,7 @@ describe("resolveExtensions — slash command discovery", () => {
       execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExt("@test/request", "builtin", { requests: [cap] })])
-    const command = listSlashCommands(resolved).find((c) => c.name === "inspect")
+    const command = resolved.slashCommands.find((c) => c.name === "inspect")
     expect(cap.description).toBe("Registry description.")
     expect(command?.displayName).toBe("Inspect")
     expect(command?.description).toBe("Slash menu description.")
@@ -589,13 +588,13 @@ describe("resolveExtensions — slash command discovery", () => {
     const projectCap = makeRequest("act")
     const project = makeExt("@test/shadow", "project", { requests: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
-    const commands = listSlashCommands(resolved)
+    const commands = resolved.slashCommands
     expect(commands.map((c) => c.name)).not.toContain("act")
   })
   test("request without slash metadata does not appear in the slash-backed command list", () => {
     const cap = makeRequest("rpc-only")
     const resolved = resolveExtensions([makeExt("@test/rpc-only", "builtin", { requests: [cap] })])
-    const commands = listSlashCommands(resolved)
+    const commands = resolved.slashCommands
     expect(commands.map((c) => c.name)).not.toContain("rpc-only")
   })
   // ── Model capability surface ────────────────────────────────────────

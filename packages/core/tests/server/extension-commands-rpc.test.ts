@@ -25,11 +25,7 @@ import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { messageSingleText } from "../../src/domain/message-part-display"
 import type { Message } from "../../src/domain/message"
-import {
-  ExtensionRegistry,
-  listSlashCommands,
-  resolveExtensions,
-} from "../../src/runtime/extensions/registry"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"
@@ -152,11 +148,11 @@ describe("extension command RPCs", () => {
       ],
     },
   })
-  it.live("listSlashCommands returns registered commands", () =>
+  it.live("resolved slash commands list registered commands", () =>
     narrowR(
       Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
-        const cmds = listSlashCommands(registry.getResolved())
+        const cmds = registry.getResolved().slashCommands
         const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
         expect(testCmds).toHaveLength(2)
         expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")

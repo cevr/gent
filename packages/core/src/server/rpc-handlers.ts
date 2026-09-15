@@ -8,11 +8,7 @@ import { SessionId, type BranchId, type ExtensionId, type RequestId } from "../d
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import {
-  ExtensionRegistry,
-  listSlashCommands,
-  type ExtensionRegistryService,
-} from "../runtime/extensions/registry.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
@@ -664,7 +660,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          return listSlashCommands(registry.getResolved()).map(
+          return registry.getResolved().slashCommands.map(
             (command) =>
               new SlashCommandInfo({
                 name: command.name,

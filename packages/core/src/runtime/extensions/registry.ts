@@ -531,9 +531,6 @@ export class ExtensionRegistry extends Context.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-export const listSlashCommands = (resolved: ResolvedExtensions): ReadonlyArray<SlashCommand> =>
-  resolved.slashCommands
-
 // Tool filtering — pure helper for agent tool visibility
 
 const filterToolsForAgent = (
