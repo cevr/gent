@@ -99,30 +99,34 @@ describe("AuthGuard", () => {
     registryLayer: Layer.Layer<ExtensionRegistry | DriverRegistry>,
   ) => AuthGuard.Live.pipe(Layer.provide(Auth.Test(seed)), Layer.provide(registryLayer))
 
-  it.live("requiredProviders is exactly the provider of the main agent's model", () => {
+  it.live("only the main agent's model provider is marked required", () => {
     const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      const result = yield* guard.requiredProviders()
-      expect(result).toEqual([ProviderId.make("anthropic")])
+      const result = yield* guard.listProviders()
+      expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
+        ProviderId.make("anthropic"),
+      ])
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("missingRequiredProviders returns the main agent's provider when no keys", () => {
+  it.live("a required provider without a stored key reports hasKey false", () => {
     const layer = guardLayerWithSeed({}, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      const result = yield* guard.missingRequiredProviders()
-      expect(result).toEqual([ProviderId.make("anthropic")])
+      const result = yield* guard.listProviders()
+      expect(result.filter((p) => p.required && !p.hasKey).map((p) => p.provider)).toEqual([
+        ProviderId.make("anthropic"),
+      ])
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("missingRequiredProviders clears when keys are present", () => {
+  it.live("a required provider with a stored key reports hasKey true", () => {
     const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-anthropic") }, testRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      const result = yield* guard.missingRequiredProviders()
-      expect(result).toEqual([])
+      const result = yield* guard.listProviders()
+      expect(result.filter((p) => p.required && !p.hasKey)).toEqual([])
     }).pipe(Effect.provide(layer))
   })
 
@@ -142,8 +146,10 @@ describe("AuthGuard", () => {
     const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      const result = yield* guard.requiredProviders()
-      expect(result).toEqual([ProviderId.make("anthropic")])
+      const result = yield* guard.listProviders()
+      expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
+        ProviderId.make("anthropic"),
+      ])
     }).pipe(Effect.provide(layer))
   })
 
@@ -151,10 +157,11 @@ describe("AuthGuard", () => {
     const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
     return Effect.gen(function* () {
       const guard = yield* AuthGuard
-      const result = yield* guard.requiredProviders({ agentName: AgentName.make("helper:google") })
-      expect(result).toContain(ProviderId.make("anthropic"))
-      expect(result).toContain(ProviderId.make("google"))
-      expect(result).not.toContain(ProviderId.make("openai"))
+      const result = yield* guard.listProviders({ agentName: AgentName.make("helper:google") })
+      const required = result.filter((p) => p.required).map((p) => p.provider)
+      expect(required).toContain(ProviderId.make("anthropic"))
+      expect(required).toContain(ProviderId.make("google"))
+      expect(required).not.toContain(ProviderId.make("openai"))
     }).pipe(Effect.provide(layer))
   })
 
@@ -165,13 +172,13 @@ describe("AuthGuard", () => {
       // main is an anthropic-modeled agent, but config-routes through
       // an external driver (e.g. Claude Code SDK). The external driver
       // owns its own auth, so model providers should not be required.
-      const result = yield* guard.requiredProviders({
+      const result = yield* guard.listProviders({
         agentName: DEFAULT_AGENT_NAME,
         driverOverrides: {
           [DEFAULT_AGENT_NAME]: ExternalDriverRef.make({ id: "acp-claude-code" }),
         },
       })
-      expect(result).toEqual([])
+      expect(result.filter((p) => p.required)).toEqual([])
     }).pipe(Effect.provide(layer))
   })
 })

@@ -220,13 +220,9 @@ export class Auth extends Context.Service<Auth, AuthService>()("@gent/core/src/d
 // ── Auth guard ──────────────────────────────────────────────────────────
 
 interface AuthGuardService {
-  readonly requiredProviders: (query?: AuthProviderQuery) => Effect.Effect<readonly ProviderId[]>
   readonly listProviders: (
     query?: AuthProviderQuery,
   ) => Effect.Effect<readonly AuthProviderInfo[], AuthError>
-  readonly missingRequiredProviders: (
-    query?: AuthProviderQuery,
-  ) => Effect.Effect<readonly ProviderId[], AuthError>
 }
 
 export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
@@ -234,16 +230,6 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
 ) {
   // ↑ co-located with `Auth`; the deterministic-keys rule allows the
   //   secondary tag to keep `<file>/<ClassName>`.
-  static Test = (providers: readonly AuthProviderInfo[] = []): Layer.Layer<AuthGuard> =>
-    Layer.succeed(
-      AuthGuard,
-      AuthGuard.of({
-        requiredProviders: () => Effect.succeed([]),
-        listProviders: () => Effect.succeed(providers),
-        missingRequiredProviders: () =>
-          Effect.succeed(providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)),
-      }),
-    )
 
   /**
    * Live `AuthGuard`. The guard's logic is inseparable from the auth
@@ -327,18 +313,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
           return providers
         })
 
-        const missingRequiredProviders = Effect.fn("AuthGuard.missingRequiredProviders")(function* (
-          query: AuthProviderQuery = {},
-        ) {
-          const providers = yield* listProviders(query)
-          return providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)
-        })
-
-        return AuthGuard.of({
-          requiredProviders: (query) => Effect.sync(() => requiredProviders(query)),
-          listProviders,
-          missingRequiredProviders,
-        })
+        return AuthGuard.of({ listProviders })
       }),
     )
 }

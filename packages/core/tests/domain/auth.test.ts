@@ -1,18 +1,16 @@
-import { ProviderId } from "../../src/domain/model"
 /**
- * Locks the consolidated `domain/auth` module — `Auth` service +
- * `AuthGuard` service + the `Auth.Info` schema.
+ * Locks the consolidated `domain/auth` module — the `Auth` service and
+ * the `Auth.Info` schema.
  *
  * Exercises:
  *   - `Auth.Test` round-trip (set / get / remove).
  *   - `Auth.Live` against a real on-disk directory, including
  *     "corrupt file is discarded and reported".
- *   - `AuthGuard.Test` smoke.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { Auth, AuthGuard, AuthInfo } from "../../src/domain/auth.js"
+import { Auth, AuthInfo } from "../../src/domain/auth.js"
 
 describe("Auth", () => {
   describe("Auth.Test", () => {
@@ -103,23 +101,4 @@ describe("Auth", () => {
     )
   })
 
-  describe("AuthGuard.Test", () => {
-    it.live("returns the seeded provider list and computes missing required", () =>
-      Effect.gen(function* () {
-        const guard = yield* AuthGuard
-        const providers = yield* guard.listProviders()
-        expect(providers.length).toBe(2)
-
-        const missing = yield* guard.missingRequiredProviders()
-        expect(missing.map(String)).toEqual(["needs-key"])
-      }).pipe(
-        Effect.provide(
-          AuthGuard.Test([
-            { provider: ProviderId.make("has-key"), hasKey: true, required: true },
-            { provider: ProviderId.make("needs-key"), hasKey: false, required: true },
-          ]),
-        ),
-      ),
-    )
-  })
 })
