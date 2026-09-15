@@ -1,17 +1,8 @@
-import { makeClientActivityLayer } from "../src/extensions/client-activity"
-import { Deferred, Effect, Layer, ManagedRuntime, Option } from "effect"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { Deferred, Effect, Option } from "effect"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
-import {
-  type ClientShellDefinition,
-  makeClientLifecycleLayer,
-  makeClientShellLayer,
-  makeClientWorkspaceLayer,
-} from "../src/extensions/client-services"
-import {
-  makeClientTransportLayer,
-  type ClientShellTransportDefinition,
-} from "../src/extensions/client-transport"
+import type { ClientShellDefinition } from "../src/extensions/client-services"
+import type { ClientShellTransportDefinition } from "../src/extensions/client-transport"
+import { makeClientRuntime } from "../src/extensions/client-runtime"
 import type {
   AnyExtensionClientModule,
   BorderLabelPosition,
@@ -75,27 +66,20 @@ export const makeClientTestTransport = (
 export const makeClientExtensionRuntime = (
   opts: ClientExtensionHarnessOptions = {},
 ): ClientRuntime =>
-  ManagedRuntime.make(
-    Layer.mergeAll(
-      BunFileSystem.layer,
-      makeClientActivityLayer(() => ({ state: "idle" })),
-      BunServices.layer,
-      makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
-      makeClientShellLayer({
-        sendMessage: () => {},
-        openOverlay: () => {},
-        closeOverlay: () => {},
-        switchSession: () => {},
-        run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
-        cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
-          Effect.runFork(effect)
-        },
-        ...Option.getOrElse(Option.fromUndefinedOr(opts.shell), () => ({})),
-      }),
-      makeClientTransportLayer(opts.transport ?? makeClientTestTransport(opts)),
-      makeClientLifecycleLayer({ addCleanup: () => {} }),
+  makeClientRuntime({
+    transport: Option.getOrElse(Option.fromUndefinedOr(opts.transport), () =>
+      makeClientTestTransport(opts),
     ),
-  )
+    workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
+    shell: {
+      run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
+      cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
+        Effect.runFork(effect)
+      },
+      ...Option.getOrElse(Option.fromUndefinedOr(opts.shell), () => ({})),
+    },
+    activity: () => ({ state: "idle" }),
+  })
 
 export const runClientExtensionSetup = (
   runtime: ClientRuntime,
@@ -116,5 +100,3 @@ export const findBorderLabel = (
   contributions: ClientContributions,
   position: BorderLabelPosition,
 ) => contributions.borderLabels?.find((entry) => entry.position === position)
-
-export const makeClientRuntime = (): ClientRuntime => makeClientExtensionRuntime()

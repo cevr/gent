@@ -20,9 +20,8 @@ import {
   type Accessor,
   type JSX,
 } from "solid-js"
-import { Effect, Layer, ManagedRuntime, Option, Scope } from "effect"
+import { Effect, Option, Scope } from "effect"
 import { useRequiredContext } from "../utils/solid-context"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -36,17 +35,12 @@ import type {
   OverlayComponent,
 } from "./client-facets.js"
 import { loadExtensionUi } from "../services/extension-context-boundary"
-import { makeClientTransportLayer } from "./client-transport"
-import {
-  makeClientWorkspaceLayer,
-  makeClientShellLayer,
-  makeClientLifecycleLayer,
-} from "./client-services"
+import { makeClientRuntime } from "./client-runtime"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace/context"
 import { useClient } from "../client/context"
 
-import { makeClientActivityLayer, type ClientActivitySnapshot } from "./client-activity"
+import type { ClientActivitySnapshot } from "./client-activity"
 
 export interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
@@ -147,37 +141,30 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
   // (send/sendMessage/overlays). The loader's `invokeSetup` runs each
   // setup against this runtime.
-  const clientRuntime: ClientRuntime = ManagedRuntime.make(
-    Layer.mergeAll(
-      BunFileSystem.layer,
-      makeClientActivityLayer(() => activityProvider()()),
-      BunServices.layer,
-      makeClientTransportLayer({
-        client: client.client,
-        runtime: client.runtime,
-        currentSession: () => {
-          const current = Option.fromNullishOr(client.session())
-          if (Option.isNone(current)) return Option.getOrUndefined(Option.none())
-          return { sessionId: current.value.sessionId, branchId: current.value.branchId }
-        },
-        onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
-        onSessionEvent: (cb) => client.onSessionEvent(cb),
-      }),
-      makeClientWorkspaceLayer({
-        cwd: workspace.cwd,
-        home: workspace.home,
-      }),
-      makeClientShellLayer({
-        sendMessage: (content) => client.sendMessage(content),
-        openOverlay: (id) => overlayDispatch().open(id),
-        closeOverlay: () => overlayDispatch().close(),
-        switchSession: (input) => switchSessionDispatch()(input),
-        run: client.runtime.run,
-        cast: client.runtime.cast,
-      }),
-      makeClientLifecycleLayer({ addCleanup }),
-    ),
-  )
+  const clientRuntime: ClientRuntime = makeClientRuntime({
+    transport: {
+      client: client.client,
+      runtime: client.runtime,
+      currentSession: () => {
+        const current = Option.fromNullishOr(client.session())
+        if (Option.isNone(current)) return Option.getOrUndefined(Option.none())
+        return { sessionId: current.value.sessionId, branchId: current.value.branchId }
+      },
+      onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
+      onSessionEvent: (cb) => client.onSessionEvent(cb),
+    },
+    workspace: { cwd: workspace.cwd, home: workspace.home },
+    shell: {
+      sendMessage: (content) => client.sendMessage(content),
+      openOverlay: (id) => overlayDispatch().open(id),
+      closeOverlay: () => overlayDispatch().close(),
+      switchSession: (input) => switchSessionDispatch()(input),
+      run: client.runtime.run,
+      cast: client.runtime.cast,
+    },
+    activity: () => activityProvider()(),
+    lifecycle: { addCleanup },
+  })
 
   if (props.scope) {
     Effect.runSync(

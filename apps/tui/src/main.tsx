@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { makeClientActivityLayer } from "./extensions/client-activity"
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
@@ -14,7 +13,6 @@ import {
   Fiber,
   Layer,
   Logger,
-  ManagedRuntime,
   Option,
   Runtime,
   Schema,
@@ -34,7 +32,6 @@ import {
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { App } from "./app"
 import { TerminalDimensionsProvider } from "./terminal-dimensions"
 import { ComposerDraftsProvider } from "./components/composer-drafts"
@@ -69,12 +66,7 @@ import {
 } from "@gent/sdk"
 import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
-import { makeClientTransportLayer } from "./extensions/client-transport"
-import {
-  makeClientLifecycleLayer,
-  makeClientShellLayer,
-  makeClientWorkspaceLayer,
-} from "./extensions/client-services"
+import { makeClientRuntime } from "./extensions/client-runtime"
 import type { ClientRuntime } from "./extensions/client-facets.js"
 import {
   extensionHealthError,
@@ -169,30 +161,17 @@ const runHeadlessTurn = (
   }
 
   const resolvedBranchId = branchId.value
-  const clientRuntime: ClientRuntime = ManagedRuntime.make(
-    Layer.mergeAll(
-      BunFileSystem.layer,
-      makeClientActivityLayer(),
-      BunServices.layer,
-      makeClientTransportLayer({
-        client: bundle.client,
-        runtime: bundle.runtime,
-        currentSession: () => ({ sessionId: state.session.id, branchId: resolvedBranchId }),
-        onExtensionStateChanged: () => () => {},
-        onSessionEvent: () => () => {},
-      }),
-      makeClientWorkspaceLayer({ cwd, home }),
-      makeClientShellLayer({
-        sendMessage: () => {},
-        openOverlay: () => {},
-        closeOverlay: () => {},
-        switchSession: () => {},
-        run: bundle.runtime.run,
-        cast: bundle.runtime.cast,
-      }),
-      makeClientLifecycleLayer({ addCleanup: () => {} }),
-    ),
-  )
+  const clientRuntime: ClientRuntime = makeClientRuntime({
+    transport: {
+      client: bundle.client,
+      runtime: bundle.runtime,
+      currentSession: () => ({ sessionId: state.session.id, branchId: resolvedBranchId }),
+      onExtensionStateChanged: () => () => {},
+      onSessionEvent: () => () => {},
+    },
+    workspace: { cwd, home },
+    shell: { run: bundle.runtime.run, cast: bundle.runtime.cast },
+  })
 
   return Effect.gen(function* () {
     const parentSpan = yield* resolveParentSpan()

@@ -5,21 +5,14 @@
  * discovery, override precedence, disabled gating, invalid-file tolerance,
  * overlay state, autocomplete visibility, and startup with an active session.
  */
-import { makeClientActivityLayer } from "../src/extensions/client-activity"
 import { it, describe, expect, test } from "effect-bun-test"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
-import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { Cause, Effect, Option, Schema } from "effect"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
-import {
-  makeClientLifecycleLayer,
-  makeClientShellLayer,
-  makeClientWorkspaceLayer,
-} from "../src/extensions/client-services"
-import { makeClientTransportLayer } from "../src/extensions/client-transport"
+import { makeClientRuntime } from "../src/extensions/client-runtime"
 import { BranchId, SessionId } from "@gent/core/protocol"
 class ExtensionIntegrationTestError extends Schema.TaggedError<ExtensionIntegrationTestError>()(
   "ExtensionIntegrationTestError",
@@ -52,30 +45,17 @@ const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => 
   Effect.runFork(effect)
 }
 
-const testRuntime = ManagedRuntime.make(
-  Layer.mergeAll(
-    BunFileSystem.layer,
-    makeClientActivityLayer(),
-    BunServices.layer,
-    makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
-    makeClientShellLayer({
-      sendMessage: () => {},
-      openOverlay: () => {},
-      closeOverlay: () => {},
-      switchSession: () => {},
-      run: runTestShellEffect,
-      cast: castTestShellEffect,
-    }),
-    makeClientTransportLayer({
-      client: stubClient,
-      runtime: stubRuntime,
-      currentSession: () => Option.getOrUndefined(Option.none()),
-      onExtensionStateChanged: () => () => {},
-      onSessionEvent: () => () => {},
-    }),
-    makeClientLifecycleLayer({ addCleanup: () => {} }),
-  ),
-)
+const testRuntime = makeClientRuntime({
+  transport: {
+    client: stubClient,
+    runtime: stubRuntime,
+    currentSession: () => Option.getOrUndefined(Option.none()),
+    onExtensionStateChanged: () => () => {},
+    onSessionEvent: () => () => {},
+  },
+  workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
+  shell: { run: runTestShellEffect, cast: castTestShellEffect },
+})
 const loadTuiExtensions = (
   opts: Omit<Parameters<typeof _loadTuiExtensions>[0], "runtime"> & {
     runtime?: Parameters<typeof _loadTuiExtensions>[0]["runtime"]
