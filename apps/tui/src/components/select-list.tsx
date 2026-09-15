@@ -79,10 +79,10 @@ export function transitionSelectList(
       Match.tagsExhaustive({
         Open: (event) => SelectListState.initial(event.selectedIndex),
         Anchor: (event) => ({ ...state, selectedIndex: event.selectedIndex }),
-        Backspace: () => ({
-          query: state.query.slice(0, -1),
-          selectedIndex: 0,
-        }),
+        Backspace: () => {
+          if (state.query.length === 0) return state
+          return { query: state.query.slice(0, -1), selectedIndex: 0 }
+        },
         MoveUp: (event) => ({
           ...state,
           selectedIndex: wrapIndex(state.selectedIndex, event.itemCount, -1),
@@ -147,11 +147,25 @@ export const decoration = <A,>(render: () => JSX.Element): SelectListRow<A> => (
   render: () => render(),
 })
 
+/**
+ * The two moves a pane makes on the list from outside a key press.
+ *
+ * A pane that swaps the rows under the reader — a level pushed, a category
+ * cycled — wants the cursor back at the top, and sometimes the query gone
+ * with it. Neither is a key the list can see, so the pane asks through this.
+ */
+export interface SelectListApi {
+  /** As if the pane opened again: query cleared, cursor on the sticky row. */
+  readonly reset: () => void
+  /** Move the cursor without touching the query. */
+  readonly moveTo: (index: number) => void
+}
+
 export interface SelectListFilter {
   /**
    * Called on every query change. A pane that filters its own rows locally
-   * reads the query back from {@link SelectListApi.query}; a pane whose
-   * server owns the search refetches here.
+   * keeps the query it was handed; a pane whose server owns the search
+   * refetches here.
    */
   readonly onQueryChange: (query: string) => void
   /** Draw the `› query│` row above the list. Defaults to true. */
@@ -186,6 +200,8 @@ export interface SelectListProps<A> {
    * than keeping a second index of its own.
    */
   readonly onCursor?: (selected: Option.Option<A>) => void
+  /** Handed the list's {@link SelectListApi} once, on mount. */
+  readonly api?: (api: SelectListApi) => void
 }
 
 /**
@@ -218,17 +234,32 @@ export function SelectList<A>(props: SelectListProps<A>) {
   // Opening resets the pane: the query goes, and the sticky rule picks the row.
   // The reset reaches the filter owner too. A pane that keeps the query itself
   // would otherwise reopen showing an empty input over a still-filtered list.
+  const reset = () => {
+    const index = Option.getOrElse(anchor(values()), () => 0)
+    setState(SelectListState.initial(index))
+    if (props.filter) props.filter.onQueryChange("")
+  }
   createEffect(
     on(
       () => props.open,
       (open) => {
-        if (!open) return
-        const index = Option.getOrElse(anchor(values()), () => 0)
-        setState(SelectListState.initial(index))
-        if (props.filter) props.filter.onQueryChange("")
+        if (open) reset()
       },
     ),
   )
+
+  if (props.api) {
+    props.api({
+      reset,
+      moveTo: (index) =>
+        setState((current) =>
+          transitionSelectList(
+            current,
+            SelectListEvent.cases.Anchor.make({ selectedIndex: Math.max(0, index) }),
+          ),
+        ),
+    })
+  }
 
   // A pane that unmounts its list on close never sees `open` go false, so the
   // reset runs from cleanup as well: the filter owner is told the query is gone

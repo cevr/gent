@@ -24,10 +24,13 @@ export interface PaletteLevel {
   readonly onEnter?: () => void
 }
 
+/**
+ * What the palette owns beyond its list: the level stack and the category
+ * lens on the current level. The query and the cursor belong to the
+ * `SelectList` it mounts.
+ */
 export interface CommandPaletteState {
   readonly levelStack: readonly PaletteLevel[]
-  readonly selectedIndex: number
-  readonly searchQuery: string
   readonly category: string
 }
 
@@ -49,19 +52,12 @@ export const CommandPaletteEvent = Schema.TaggedUnion({
   Close: {},
   PushLevel: { level: PaletteLevelSchema },
   PopLevel: {},
-  SearchTyped: { char: Schema.String },
-  SearchBackspaced: {},
-  ClearSearch: {},
   SelectCategory: { category: Schema.String },
-  MoveUp: { itemCount: Schema.Finite },
-  MoveDown: { itemCount: Schema.Finite },
 })
 export type CommandPaletteEvent = Schema.Schema.Type<typeof CommandPaletteEvent>
 
 const initial = (): CommandPaletteState => ({
   levelStack: [],
-  selectedIndex: 0,
-  searchQuery: "",
   category: "",
 })
 
@@ -69,49 +65,15 @@ const currentLevel = (state: CommandPaletteState): Option.Option<PaletteLevel> =
   Array.last(state.levelStack)
 
 const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPaletteState => ({
-  ...state,
   levelStack: [...state.levelStack, level],
   category: "",
-  selectedIndex: 0,
-  searchQuery: "",
 })
 
 const popLevel = (state: CommandPaletteState): CommandPaletteState => {
   if (state.levelStack.length <= 1) return state
   return {
-    ...state,
     levelStack: state.levelStack.slice(0, -1),
     category: "",
-    selectedIndex: 0,
-    searchQuery: "",
-  }
-}
-
-const setSearchQuery = (state: CommandPaletteState, searchQuery: string): CommandPaletteState => ({
-  ...state,
-  searchQuery,
-  selectedIndex: 0,
-})
-
-const moveSelection = (
-  state: CommandPaletteState,
-  itemCount: number,
-  direction: "up" | "down",
-): CommandPaletteState => {
-  if (itemCount <= 0) return state
-  if (direction === "up") {
-    let selectedIndex = itemCount - 1
-    if (state.selectedIndex > 0) selectedIndex = state.selectedIndex - 1
-    return {
-      ...state,
-      selectedIndex,
-    }
-  }
-  let selectedIndex = 0
-  if (state.selectedIndex < itemCount - 1) selectedIndex = state.selectedIndex + 1
-  return {
-    ...state,
-    selectedIndex,
   }
 }
 
@@ -130,12 +92,7 @@ export function transitionCommandPalette(
       Close: () => initial(),
       PushLevel: (event) => pushLevel(state, event.level),
       PopLevel: () => popLevel(state),
-      SearchTyped: (event) => setSearchQuery(state, state.searchQuery + event.char),
-      SearchBackspaced: () => setSearchQuery(state, state.searchQuery.slice(0, -1)),
-      ClearSearch: () => setSearchQuery(state, ""),
-      SelectCategory: (event) => ({ ...state, category: event.category, selectedIndex: 0 }),
-      MoveUp: (event) => moveSelection(state, event.itemCount, "up"),
-      MoveDown: (event) => moveSelection(state, event.itemCount, "down"),
+      SelectCategory: (event) => ({ ...state, category: event.category }),
     }),
   )
 }

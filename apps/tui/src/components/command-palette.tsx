@@ -1,15 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import {
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  For,
-  Show,
-  Suspense,
-} from "solid-js"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import { createEffect, createMemo, createResource, createSignal, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { matchSorter } from "match-sorter"
 import { Option } from "effect"
@@ -25,10 +16,9 @@ import {
 } from "./command-palette-state"
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
+import { SelectList, selectable, type SelectListApi, type SelectListRow } from "./select-list"
 import { truncate, truncateStart } from "../utils/truncate"
 import { textWidth } from "../platform/text-width-adapter"
-import { useScrollSync } from "../hooks/use-scroll-sync"
-import { useScopedKeyboard } from "../keyboard/context"
 import { useTheme } from "../theme/index"
 
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
@@ -85,12 +75,12 @@ export function CommandPalette() {
   const client = useClient()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(CommandPaletteState.initial())
-
-  let scrollRef = Option.none<ScrollBoxRenderable>()
-
-  useScrollSync(() => `item-${state().selectedIndex}`, {
-    getRef: () => Option.getOrUndefined(scrollRef),
-  })
+  // The list owns the query and the cursor; the palette keeps a copy of the
+  // query to filter with and a handle to reset the list when a level changes.
+  const [searchQuery, setSearchQuery] = createSignal("")
+  let list = Option.none<SelectListApi>()
+  const resetList = () => Option.match(list, { onNone: () => {}, onSome: (api) => api.reset() })
+  const listToTop = () => Option.match(list, { onNone: () => {}, onSome: (api) => api.moveTo(0) })
 
   const dispatch = (event: Parameters<typeof transitionCommandPalette>[1]) => {
     setState((current) => transitionCommandPalette(current, event))
@@ -220,6 +210,7 @@ export function CommandPalette() {
 
   const pushLevel = (level: PaletteLevel) => {
     dispatch(CommandPaletteEvent.cases.PushLevel.make({ level }))
+    resetList()
     level.onEnter?.()
   }
 
@@ -279,13 +270,15 @@ export function CommandPalette() {
   // ── Derived state ──
 
   const currentLevel = () => CommandPaletteState.currentLevel(state())
-  const searchQuery = () => state().searchQuery
 
-  const levelItems = createMemo<readonly PaletteItem[]>(() => {
-    const level = currentLevel()
-    if (Option.isNone(level)) return []
-    return level.value.source() ?? []
-  })
+  /** `None` while the level's request is pending. */
+  const levelSource = createMemo(() =>
+    Option.flatMap(currentLevel(), (level) => Option.fromNullishOr(level.source())),
+  )
+  const loading = () => Option.isNone(levelSource())
+  const levelItems = createMemo<readonly PaletteItem[]>(() =>
+    Option.getOrElse(levelSource(), (): readonly PaletteItem[] => []),
+  )
 
   const categories = createMemo(() => [
     "",
@@ -315,12 +308,12 @@ export function CommandPalette() {
       return
     }
     dispatch(CommandPaletteEvent.cases.PopLevel.make({}))
+    resetList()
   }
 
-  const handleSelect = () => {
-    const item = Option.fromNullishOr(filteredItems()[state().selectedIndex])
-    if (Option.isNone(item) || item.value.disabled) return
-    item.value.onSelect()
+  const handleSelect = (item: PaletteItem) => {
+    if (item.disabled === true) return
+    item.onSelect()
   }
 
   const cycleCategory = (backward: boolean) => {
@@ -328,72 +321,24 @@ export function CommandPalette() {
     let step = 1
     if (backward) step = -1
     const index = (items.indexOf(category()) + step + items.length) % items.length
-    dispatch(CommandPaletteEvent.cases.SelectCategory.make({ category: items[index] ?? "" }))
+    dispatch(
+      CommandPaletteEvent.cases.SelectCategory.make({
+        category: Option.getOrElse(Option.fromNullishOr(items[index]), () => ""),
+      }),
+    )
+    listToTop()
   }
 
+  // Escape clears a query before it leaves a level, and backspace on an empty
+  // query walks back a level. Both are the list's keys otherwise, so the pane
+  // claims them only in those cases.
   const escapeLevel = () => {
     if (searchQuery().length > 0) {
-      dispatch(CommandPaletteEvent.cases.ClearSearch.make({}))
+      resetList()
       return
     }
     popLevel()
   }
-
-  useScopedKeyboard(
-    (event) => {
-      if (event.name === "tab") {
-        cycleCategory(event.shift === true)
-        return true
-      }
-      if (event.name === "escape") {
-        escapeLevel()
-        return true
-      }
-
-      if (event.name === "left") {
-        popLevel()
-        return true
-      }
-
-      if (event.name === "backspace") {
-        if (searchQuery().length > 0) {
-          dispatch(CommandPaletteEvent.cases.SearchBackspaced.make({}))
-          return true
-        }
-        if (state().levelStack.length > 1) {
-          popLevel()
-          return true
-        }
-        return false
-      }
-
-      if (event.name === "return" || event.name === "right") {
-        handleSelect()
-        return true
-      }
-
-      if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
-        dispatch(CommandPaletteEvent.cases.MoveUp.make({ itemCount: filteredItems().length }))
-        return true
-      }
-
-      if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
-        dispatch(CommandPaletteEvent.cases.MoveDown.make({ itemCount: filteredItems().length }))
-        return true
-      }
-
-      if (event.sequence?.length === 1) {
-        const code = event.sequence.charCodeAt(0)
-        if (code >= 32 && code <= 126) {
-          dispatch(CommandPaletteEvent.cases.SearchTyped.make({ char: event.sequence }))
-          return true
-        }
-      }
-
-      return false
-    },
-    { when: () => command.paletteOpen() },
-  )
 
   createEffect(() => {
     if (command.paletteOpen()) {
@@ -442,62 +387,57 @@ export function CommandPalette() {
   const visibleQuery = () =>
     truncateStart(searchQuery(), dimensions().width - 3 - textWidth(queryPrefix()))
 
-  const LoadingIndicator = () => (
-    <box paddingLeft={1}>
-      <text style={{ fg: theme.textMuted }}>Loading…</text>
-    </box>
-  )
-
-  const ItemList = () => (
-    <>
-      <For each={filteredItems()}>
-        {(item, index) => {
-          const isSelected = () => state().selectedIndex === index()
-          const disabled = item.disabled === true
-          const itemTextColor = () => {
-            if (disabled) return theme.textMuted
-            if (isSelected()) return theme.primary
-            return theme.text
-          }
-          const metaColor = () => {
-            if (disabled) return theme.textMuted
-            if (isSelected()) return theme.primary
-            return theme.textMuted
-          }
-          const detail = () => {
-            let text = item.description ?? ""
-            if (item.shortcut) text += ` [${item.shortcut}]`
-            return truncate(text, dimensions().width - labelWidth() - 3)
-          }
-          return (
-            <box id={`item-${index()}`} paddingLeft={1} flexDirection="row" height={1} gap={2}>
-              <text
-                width={labelWidth() - 2}
-                flexShrink={0}
-                wrapMode="none"
-                truncate
-                style={{ fg: itemTextColor() }}
-              >
-                <span style={{ bold: isSelected() && !disabled }}>
-                  {truncate(item.title, labelWidth() - 2)}
-                </span>
+  const rows = (): ReadonlyArray<SelectListRow<PaletteItem>> =>
+    filteredItems().map((item) =>
+      selectable(item, (isSelected, id) => {
+        const disabled = item.disabled === true
+        const itemTextColor = () => {
+          if (disabled) return theme.textMuted
+          if (isSelected()) return theme.primary
+          return theme.text
+        }
+        const metaColor = () => {
+          if (disabled) return theme.textMuted
+          if (isSelected()) return theme.primary
+          return theme.textMuted
+        }
+        const detail = () => {
+          let text = Option.getOrElse(Option.fromNullishOr(item.description), () => "")
+          if (item.shortcut) text += ` [${item.shortcut}]`
+          return truncate(text, dimensions().width - labelWidth() - 3)
+        }
+        return (
+          <box id={id} paddingLeft={1} flexDirection="row" height={1} gap={2}>
+            <text
+              width={labelWidth() - 2}
+              flexShrink={0}
+              wrapMode="none"
+              truncate
+              style={{ fg: itemTextColor() }}
+            >
+              <span style={{ bold: isSelected() && !disabled }}>
+                {truncate(item.title, labelWidth() - 2)}
+              </span>
+            </text>
+            <Show when={hasDetails()}>
+              <text flexGrow={1} wrapMode="none" truncate style={{ fg: metaColor() }}>
+                {detail()}
               </text>
-              <Show when={hasDetails()}>
-                <text flexGrow={1} wrapMode="none" truncate style={{ fg: metaColor() }}>
-                  {detail()}
-                </text>
-              </Show>
-            </box>
-          )
-        }}
-      </For>
-      <Show when={filteredItems().length === 0}>
-        <box paddingLeft={1}>
-          <text style={{ fg: theme.textMuted }}>No matches</text>
-        </box>
-      </Show>
-    </>
-  )
+            </Show>
+          </box>
+        )
+      }),
+    )
+
+  const emptyRow = () => {
+    let label = "No matches"
+    if (loading()) label = "Loading…"
+    return (
+      <box paddingLeft={1}>
+        <text style={{ fg: theme.textMuted }}>{label}</text>
+      </box>
+    )
+  }
 
   return (
     <Show when={command.paletteOpen()}>
@@ -517,15 +457,40 @@ export function CommandPalette() {
           </text>
         </ChromePanel.Section>
 
-        <ChromePanel.Body
-          ref={(element) => {
-            scrollRef = Option.some(element)
+        <SelectList
+          id="command-palette"
+          open={command.paletteOpen()}
+          rows={rows}
+          filter={{ onQueryChange: setSearchQuery, showInput: false }}
+          empty={emptyRow}
+          api={(api) => (list = Option.some(api))}
+          extraKeys={(event, selected) => {
+            if (event.name === "tab") {
+              cycleCategory(event.shift === true)
+              return true
+            }
+            if (event.name === "escape") {
+              escapeLevel()
+              return true
+            }
+            if (event.name === "left") {
+              popLevel()
+              return true
+            }
+            if (event.name === "backspace" && searchQuery().length === 0) {
+              if (state().levelStack.length <= 1) return false
+              popLevel()
+              return true
+            }
+            if (event.name === "right") {
+              Option.match(selected, { onNone: () => {}, onSome: handleSelect })
+              return true
+            }
+            return false
           }}
-        >
-          <Suspense fallback={<LoadingIndicator />}>
-            <ItemList />
-          </Suspense>
-        </ChromePanel.Body>
+          onSelect={handleSelect}
+          onDismiss={escapeLevel}
+        />
       </PickerFrame>
     </Show>
   )

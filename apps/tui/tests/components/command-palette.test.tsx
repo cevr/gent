@@ -49,6 +49,42 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
+  it.live("wraps the cursor at both ends through the shared list", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 28 }),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (frame) => frame.includes("Commands") && frame.includes("Branches"),
+          "commands root",
+        ),
+      )
+      // Up from the first row lands on the last: Branches, whose level shows
+      // "Back" in the footer where the root shows "Close".
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("Esc Back"), "branches level"),
+      )
+      setup.mockInput.pressEscape()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("Esc Close"), "root again"),
+      )
+      // Down from the last row lands on the first: Sessions.
+      setup.mockInput.pressArrow("up")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("+ New Session"), "sessions level"),
+      )
+    }),
+  )
+
   it.live("switches sessions through the sessions palette", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
