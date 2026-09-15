@@ -1664,13 +1664,27 @@ describe("AgentRunner", () => {
 // Session depth guard
 // ============================================================================
 describe("session depth guard", () => {
+  const depthStorage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   const run = <A, E>(
     effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
-  ) =>
-    effect.pipe(
-      Effect.timeout("4 seconds"),
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
-    )
+  ) => effect.pipe(Effect.timeout("4 seconds"), Effect.provide(depthStorage))
+
+  /** Admission needs the publisher and platform too, not storage alone. */
+  const admissionLayer = Layer.mergeAll(
+    depthStorage,
+    BunPlatformLive,
+    Layer.provide(
+      EventPublisherLive,
+      Layer.mergeAll(
+        depthStorage,
+        Layer.provide(EventStoreLive, depthStorage),
+        ExtensionRegistry.fromResolved(resolveExtensions([])),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ),
+    ),
+  )
+  const runAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.timeout("4 seconds"), Effect.provide(admissionLayer))
   const makeSession = (id: string, parentSessionId?: string) => {
     const fields = {
       id: SessionId.make(id),
@@ -1751,23 +1765,36 @@ describe("session depth guard", () => {
       }),
     ),
   )
+  // These two assert the guard itself, not the arithmetic that feeds it: they
+  // call admission, so removing the depth check in `admitChildSession` fails
+  // them. Asserting `depth >= MAX` only restates `buildSessionChain`.
+  const admitUnder = (parentSessionId: string) =>
+    admitChildSession({
+      agent: { name: DEFAULT_AGENT_NAME },
+      prompt: "child of a deep parent",
+      parentSessionId: SessionId.make(parentSessionId),
+      parentBranchId: BranchId.make(`branch-${parentSessionId}`),
+      cwd: "/tmp",
+    })
+
   it.live("parent at max depth blocks child spawn", () =>
-    run(
+    runAdmission(
       Effect.gen(function* () {
         yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH)
-        const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
-        const parentDepth = yield* getSessionDepth(parentId)
-        expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
+        const error = yield* admitUnder(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`).pipe(Effect.flip)
+        expect(error.message).toContain(
+          `Agent run depth limit reached (max ${DEFAULT_MAX_AGENT_RUN_DEPTH})`,
+        )
       }),
     ),
   )
   it.live("parent below max depth allows child spawn", () =>
-    run(
+    runAdmission(
       Effect.gen(function* () {
         yield* buildSessionChain(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
-        const parentId = SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
-        const parentDepth = yield* getSessionDepth(parentId)
-        expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
+        const child = yield* admitUnder(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
+        const stored = yield* (yield* SessionStorage).getSession(child.sessionId)
+        expect(stored?.parentSessionId).toBe(SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`))
       }),
     ),
   )
