@@ -10,6 +10,7 @@ import {
   type ToolInteraction,
   projectMessage,
 } from "./message.js"
+import { clipChars } from "./head-tail.js"
 import { encodeToolOutput, stringifyOutput, summarizeOutput } from "./tool-output.js"
 
 interface ImagePartProjection {
@@ -53,11 +54,6 @@ interface IndexedToolCallState extends ToolCallPartProjection {
 
 interface MessagePartsDisplayTextOptions {
   readonly maxToolChars?: number
-}
-
-const truncateDisplayText = (text: string, max: number): string => {
-  if (text.length > max) return text.slice(0, max) + "…"
-  return text
 }
 
 type JsonEncoderInput = Parameters<typeof encodeToolOutput>[0]
@@ -365,7 +361,7 @@ export const messagePartsDisplayText = (
     const toolCall = messagePartToolCall(part)
     if (!Predicate.isUndefined(toolCall)) {
       chunks.push(
-        `### tool: ${toolCall.toolName}\n${truncateDisplayText(
+        `### tool: ${toolCall.toolName}\n${clipChars(
           stringifyDisplayValue(toolCall.input),
           maxToolChars,
         )}`,
@@ -375,7 +371,7 @@ export const messagePartsDisplayText = (
 
     const toolResult = messagePartToolResult(part)
     if (!Predicate.isUndefined(toolResult)) {
-      chunks.push(`result: ${truncateDisplayText(toolResult.text, maxToolChars)}`)
+      chunks.push(`result: ${clipChars(toolResult.text, maxToolChars)}`)
     }
   }
 
