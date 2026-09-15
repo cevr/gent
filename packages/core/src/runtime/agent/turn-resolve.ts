@@ -4,6 +4,7 @@ import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
+  effectiveModelDriver,
   resolveAgentDriver,
   resolveAgentModel,
   type AgentName as AgentNameType,
@@ -254,5 +255,9 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     reasoning: Option.getOrUndefined(settings.reasoningLevel),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,
+    modelDriver: effectiveModelDriver(
+      Option.fromUndefinedOr(dispatchAgent.driver),
+      settings.modelId,
+    ),
   }
 })

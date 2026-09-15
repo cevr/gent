@@ -1,15 +1,19 @@
 /**
  * resolveAgentDriver — pure precedence tests.
+ * effectiveModelDriver — the one derivation of driver id and catalog model id.
  */
 import { describe, test, expect } from "bun:test"
+import { Option } from "effect"
 import {
   AgentDefinition,
   AgentName,
   ExternalDriverRef,
   ModelDriverRef,
+  effectiveModelDriver,
   resolveAgentDriver,
   type DriverRef,
 } from "../../src/domain/agent"
+import { ModelId } from "../../src/domain/model"
 
 const makeAgent = (
   name: string,
@@ -73,5 +77,51 @@ describe("agent driver precedence", () => {
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("model")
     expect(result.source).toBe("config")
+  })
+})
+
+describe("effective model driver", () => {
+  const modelId = ModelId.make("anthropic/claude-sonnet-5")
+  const absentDriver = Option.none<DriverRef>()
+
+  test("no driver routes by the provider segment and keeps the model id", () => {
+    const result = effectiveModelDriver(absentDriver, modelId)
+    expect(result.driverId).toEqual(Option.some("anthropic"))
+    expect(result.contextModelId).toBe(modelId)
+  })
+
+  test("a model driver override replaces the provider segment in the context model id", () => {
+    const result = effectiveModelDriver(
+      Option.some(ModelDriverRef.make({ id: "anthropic-proxy" })),
+      modelId,
+    )
+    expect(result.driverId).toEqual(Option.some("anthropic-proxy"))
+    expect(result.contextModelId).toBe(ModelId.make("anthropic-proxy/claude-sonnet-5"))
+  })
+
+  test("a model driver without an id falls back to the provider segment", () => {
+    const result = effectiveModelDriver(Option.some(ModelDriverRef.make({})), modelId)
+    expect(result.driverId).toEqual(Option.some("anthropic"))
+    expect(result.contextModelId).toBe(modelId)
+  })
+
+  test("an external driver leaves the model path on the provider segment", () => {
+    const result = effectiveModelDriver(
+      Option.some(ExternalDriverRef.make({ id: "acp-claude-code" })),
+      modelId,
+    )
+    expect(result.driverId).toEqual(Option.some("anthropic"))
+    expect(result.contextModelId).toBe(modelId)
+  })
+
+  test("an unparseable model id yields no driver and an unchanged context model id", () => {
+    const bare = ModelId.make("claude-sonnet-5")
+    const result = effectiveModelDriver(
+      Option.some(ModelDriverRef.make({ id: "anthropic-proxy" })),
+      bare,
+    )
+    expect(result.driverId).toEqual(Option.some("anthropic-proxy"))
+    expect(result.contextModelId).toBe(bare)
+    expect(effectiveModelDriver(absentDriver, bare).driverId).toEqual(Option.none())
   })
 })

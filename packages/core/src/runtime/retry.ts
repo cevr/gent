@@ -1,24 +1,18 @@
 import { Cause, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
 import { DEFAULT_RETRY_POLICY, type ProviderAuthError, type RetryPolicy } from "../domain/driver.js"
-import { parseModelId } from "../domain/model.js"
 import { ProviderError } from "../domain/provider-error.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 
 /**
- * The policy of the driver a turn will call: the agent's driver override
- * first, else the provider segment of the model id. A driver without a
- * policy, or no driver at all, retries under `DEFAULT_RETRY_POLICY`.
+ * The policy of the driver a turn will call, by its effective driver id
+ * (`effectiveModelDriver` in `domain/agent.ts`). A driver without a policy,
+ * or no driver at all, retries under `DEFAULT_RETRY_POLICY`.
  */
 export const driverRetryPolicy = Effect.fn("Retry.driverRetryPolicy")(function* (
   driverRegistry: DriverRegistryService,
-  request: { readonly modelId: string; readonly driverId?: string },
+  driverId: Option.Option<string>,
 ) {
-  let driverId: Option.Option<string> = Option.map(
-    parseModelId(request.modelId),
-    ([provider]) => provider,
-  )
-  if (!Predicate.isUndefined(request.driverId)) driverId = Option.some(request.driverId)
   if (Option.isNone(driverId)) return DEFAULT_RETRY_POLICY
   const driver = yield* driverRegistry.getModel(driverId.value)
   if (Predicate.isUndefined(driver) || Predicate.isUndefined(driver.retry)) {

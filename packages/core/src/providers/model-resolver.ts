@@ -65,8 +65,11 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     })
   }
   const [parsedProviderName, modelName] = parsed.value
-  let providerName: string = parsedProviderName
-  if (!Predicate.isUndefined(request.driverId)) providerName = request.driverId
+  // The loop passes the effective driver id; a bare request routes by the provider segment.
+  const providerName: string = Option.getOrElse(
+    Option.fromUndefinedOr(request.driverId),
+    () => parsedProviderName,
+  )
   const authStore = yield* Auth
   const defaultRegistry = yield* DriverRegistry
   let driverRegistry = defaultRegistry

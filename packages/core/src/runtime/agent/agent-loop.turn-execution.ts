@@ -30,7 +30,7 @@ import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import { assistantMessageIdForTurn, Message } from "../../domain/message.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
-import { calculateCost, ModelId, parseModelId } from "../../domain/model.js"
+import { calculateCost, type ModelId } from "../../domain/model.js"
 import { ModelRegistry } from "../model-registry.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
@@ -495,7 +495,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     }
     return yield* modelResolver.resolve(request)
   })
-  let modelRequest: ResolveModelRequest = {
+  const { driverId, contextModelId } = resolved.modelDriver
+  const modelRequest: ResolveModelRequest = {
     modelId: resolved.modelId,
     hints: {
       temperature: resolved.temperature,
@@ -503,29 +504,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       cacheKey: params.sessionId,
     },
     driverRegistry,
-  }
-  if (
-    Predicate.isNotUndefined(resolvedDriver) &&
-    resolvedDriver._tag === "model" &&
-    Predicate.isNotUndefined(resolvedDriver.id)
-  ) {
-    modelRequest = { ...modelRequest, driverId: resolvedDriver.id }
+    driverId: Option.getOrUndefined(driverId),
   }
 
-  const retryPolicy = yield* driverRetryPolicy(driverRegistry, modelRequest)
+  const retryPolicy = yield* driverRetryPolicy(driverRegistry, driverId)
 
   const modelRegistry = yield* ModelRegistry
-  let contextModelId = resolved.modelId
-  if (
-    Predicate.isNotUndefined(resolvedDriver) &&
-    resolvedDriver._tag === "model" &&
-    Predicate.isNotUndefined(resolvedDriver.id)
-  ) {
-    const parsedModelId = parseModelId(resolved.modelId)
-    if (Option.isSome(parsedModelId)) {
-      contextModelId = ModelId.make(`${resolvedDriver.id}/${parsedModelId.value[1]}`)
-    }
-  }
   const modelOption = yield* modelRegistry.get(contextModelId)
   if (Option.isNone(modelOption)) {
     return yield* new ModelContextCapabilityError({

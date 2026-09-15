@@ -2,7 +2,7 @@ import { Context, Option, Predicate, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import { branded, BranchId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import type { AgentEvent, TurnCompleted } from "./event.js"
-import { ModelId } from "./model"
+import { ModelId, parseModelId } from "./model"
 import { omitUndefined } from "./guards.js"
 
 // Agent definitions
@@ -134,6 +134,43 @@ export const resolveAgentDriver = (
     return { driver: fromConfig, source: "config" }
   }
   return { driver: agent.driver, source: "default" }
+}
+
+/** The model driver a turn dispatches through, and the catalog id of the model it reaches. */
+export interface EffectiveModelDriver {
+  /** The agent's model driver when it names one, else the provider segment of the model id. */
+  readonly driverId: Option.Option<string>
+  /** `driver/model` as the model catalog sees it: a driver override replaces the provider segment. */
+  readonly contextModelId: ModelId
+}
+
+/**
+ * Derive the effective model driver once. The resolver, the retry policy,
+ * and the model catalog all read this one result instead of re-parsing the
+ * model id against the driver reference.
+ */
+export const effectiveModelDriver = (
+  driver: Option.Option<DriverRef>,
+  modelId: ModelId,
+): EffectiveModelDriver => {
+  const parsed = parseModelId(modelId)
+  const override = Option.flatMap(driver, (ref) => {
+    if (ref._tag !== "model") return Option.none()
+    return Option.fromUndefinedOr(ref.id)
+  })
+  return Option.match(override, {
+    onNone: () => ({
+      driverId: Option.map(parsed, ([provider]) => provider),
+      contextModelId: modelId,
+    }),
+    onSome: (id) => ({
+      driverId: Option.some(id),
+      contextModelId: Option.match(parsed, {
+        onNone: () => modelId,
+        onSome: ([, modelName]) => ModelId.make(`${id}/${modelName}`),
+      }),
+    }),
+  })
 }
 
 // ── RunSpec — per-run dispatch configuration ──

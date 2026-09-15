@@ -7,6 +7,7 @@ import {
   DEFAULT_AGENT_NAME,
   type AgentDefinition as AgentDefinitionType,
   type DriverRef,
+  type EffectiveModelDriver,
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
@@ -308,6 +309,8 @@ export type ResolvedTurn = {
   tools?: ReadonlyArray<ToolCapability>
   agent?: AgentDefinitionType
   driver?: DriverRef
+  /** Derived once at resolution; the resolver, retry policy, and catalog lookup share it. */
+  modelDriver: EffectiveModelDriver
 }
 
 // ── Phase-tagged loop state (flat, actor-owned) ──
