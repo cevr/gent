@@ -1923,3 +1923,30 @@ and `estimateTokens` counted a 16k-char cell result at its stored size while
 the model sees the 8k spill. `736235db` fixes the estimate
 (`boundToolResultForModel` in the budget). The bindings note stays open.
 The run was stopped by hand after 13 minutes.
+
+## Thread pane; recovery ignores runtime user-role lines (2026-09-15, `5c6f2161` → `a06fdcc9`)
+
+`/thread` (`apps/tui/src/extensions/builtins/thread-view.client.tsx`, 560
+lines with the pane) docks a pane under the composer over the chain of
+sessions (`parentSessionId`, root first) and the context windows on each
+branch (one per `context-window` marker anchor). A row reads
+`window N · M messages · K summarized · <first ask>` with an age; the detail
+line shows the selected window's summary first line; Enter switches to
+another session in the chain. Client-first: `ClientTransport.listSessions`
+and `listMessages(branchId)` are the only reads. Seven tests in
+`apps/tui/tests/components/thread-view.test.tsx`. Verified in the terminal
+on the run-36 Task 5 child: 2 sessions, 3 windows, the live window marked.
+
+Opening that finished child exposed a resume bug: the handoff marker is a
+user-role message persisted mid-turn with no `TurnCompleted` of its own, so
+`incompleteUserTurn` answered it and the provider rejected the transcript as
+prefill (`5a93b6b2` fixes it: `RuntimeUserMessageType` = continuation,
+context-window, model-change; `isRuntimeUserMessage` excludes them; the
+constants are pinned to the literal type; the test fails on the old
+predicate). The Task 4 child I reopened before the fix restarted its loop for
+the same reason.
+
+Thread model decision: a thread is a view, not a record. Session-per-handoff
+was rejected: it would cost a new actor entity, branch resources, the cell
+kernel's retained bindings, and re-keyed children on every handoff, and run
+36 handed off twelve times inside one turn.
