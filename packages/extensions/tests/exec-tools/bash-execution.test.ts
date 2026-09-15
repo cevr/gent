@@ -147,6 +147,77 @@ describe("background shell through a cell", () => {
       }).pipe(Effect.timeout("8 seconds")),
     10_000,
   )
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "bounds a huge completion notice and points at the stored tool result",
+    () =>
+      Effect.gen(function* () {
+        // Far past the model-facing bound, so the notice must be cut.
+        const lineCount = 4000
+        const input = yield* Schema.encodeEffect(Schema.fromJsonString(BashParams))({
+          command: `seq 1 ${lineCount} | sed 's/^/line /'`,
+          run_in_background: true,
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: `await tools.call("bash", ${input})` }),
+          textStep("started"),
+          textStep("received completion"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          durableApproval: true,
+        })
+        const notice = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(
+            ({ event }) =>
+              event._tag === "MessageReceived" &&
+              event.message.parts.some(
+                (part) =>
+                  part.type === "text" &&
+                  part.text.includes("Background command completed (exit code 0)"),
+              ),
+          ),
+          Stream.map(({ event }) => {
+            if (event._tag !== "MessageReceived") return ""
+            return event.message.parts
+              .map((part) => {
+                if (part.type === "text") return part.text
+                return ""
+              })
+              .join("")
+          }),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({
+          sessionId,
+          branchId,
+          content: "Run the big background shell test",
+        })
+        yield* Fiber.join(completed)
+        const text = Array.from(yield* Fiber.join(notice)).join("")
+
+        // The user-role notice carries a bounded copy, not the whole output.
+        expect(text.length).toBeLessThan(maximumModelToolResultChars * 2)
+        expect(text).toContain("characters truncated")
+        expect(text).toContain("characters omitted")
+        // Head and tail both survive, so the model can page either way.
+        expect(text).toContain("line 1\n")
+        expect(text).toContain(`line ${lineCount}`)
+        // The locator points back at the stored tool result.
+        expect(text).toContain("context.read(")
+        expect(text).toContain("{ offset, limit }")
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
 })
 
 const stubCtx = testToolContext({

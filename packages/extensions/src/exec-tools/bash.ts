@@ -19,6 +19,8 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
   ExtensionContext,
+  headTailChars,
+  maximumModelToolResultChars,
   tool,
   type ExtensionContextService,
   type SessionId,
@@ -284,10 +286,23 @@ const queueBackgroundFollowUp = (params: {
     }).pipe(Effect.catchEager(() => Effect.void))
   })
 
+/**
+ * The completion notice is a user-role message, and core bounds only tool
+ * results, so this bounds it here at the same budget. The full output stays in
+ * the stored tool result, which the notice points at: the cell pages the rest
+ * with `context.read(toolCallId, { offset, limit })`.
+ */
+const boundedNotice = (toolCallId: ToolCallId, message: string): string => {
+  const bounded = headTailChars(message, maximumModelToolResultChars)
+  if (!bounded.truncated) return bounded.text
+  const omitted = bounded.totalChars - maximumModelToolResultChars
+  return `${bounded.text}\n\n[${omitted} of ${bounded.totalChars} characters omitted; read the rest with context.read("${toolCallId}", { offset, limit })]`
+}
+
 const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBashTerminalState) =>
   Effect.gen(function* () {
     const command = state.command
-    const message = state.message ?? ""
+    const message = boundedNotice(target.toolCallId, state.message ?? "")
     if (state.status === "completed") {
       const exitCode = state.exitCode ?? 0
       yield* queueBackgroundFollowUp({
