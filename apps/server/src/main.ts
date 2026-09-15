@@ -23,16 +23,13 @@ const resolveProvider = (value: Option.Option<string>) => {
 
 const resolveLaunch = Effect.gen(function* () {
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
-  const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
   const homeOpt = yield* Config.option(Config.string("HOME"))
   const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
-  const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
   const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
   const persistenceOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
   const providerOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
   const shellOpt = yield* Config.option(Config.string("SHELL"))
-  const serverIdOpt = yield* Config.option(Config.string("GENT_SERVER_ID"))
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
 
   const isManaged = Option.contains(serverModeOpt, "shared")
@@ -40,11 +37,8 @@ const resolveLaunch = Effect.gen(function* () {
   let idleShutdown = Option.none<IdleShutdownSpec>()
   if (isManaged) idleShutdown = Option.some({ idleMs: finiteOr(idleTimeoutOpt, 30_000) })
 
-  // `GENT_DATA_DIR` names the directory holding `data.db`. `GENT_DB_PATH`
-  // names that file outright and wins.
-  const dbPath = Option.orElse(dbPathOpt, () =>
-    Option.map(dataDirOpt, (dataDir) => joinPath(dataDir, "data.db")),
-  )
+  // `GENT_DATA_DIR` names the directory holding `data.db`.
+  const dbPath = Option.map(dataDirOpt, (dataDir) => joinPath(dataDir, "data.db"))
   let state = Gent.state.sqlite({
     home: Option.getOrUndefined(homeOpt),
     dbPath: Option.getOrUndefined(dbPath),
@@ -54,13 +48,12 @@ const resolveLaunch = Effect.gen(function* () {
   return {
     isManaged,
     options: {
-      cwd: Option.getOrElse(cwdOpt, () => process.cwd()),
+      cwd: process.cwd(),
       port: finiteOr(portRaw, 3000),
       state,
       provider: resolveProvider(providerOpt),
       authDirectory: Option.getOrUndefined(authDirectoryOpt),
       shell: Option.getOrUndefined(shellOpt),
-      serverId: Option.getOrUndefined(serverIdOpt),
       idleShutdown: Option.getOrUndefined(idleShutdown),
     },
   }
