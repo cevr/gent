@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, FileSystem, Layer } from "effect"
+import { Effect, FileSystem, Layer, Option } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "../../src/fs-tools/read.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/runtime-environment"
@@ -46,6 +46,45 @@ describe("ReadTool", () => {
         runToolWithCtx(ReadTool, { path: "/nonexistent/file.txt" }, ctx),
       )
       expect(result._tag).toBe("Failure")
+    }),
+  )
+
+  readTest("a truncated read reports the offset that continues without a gap", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const testFile = `${tmpDir}/paged.txt`
+      const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`)
+      yield* fs.writeFileString(testFile, lines.join("\n"))
+
+      const first = yield* runToolWithCtx(ReadTool, { path: testFile, limit: 4 }, ctx)
+      expect(first.truncated).toBe(true)
+      expect(first.nextOffset).toBe(5)
+      expect(first.content).toContain("4\tline 4")
+      expect(first.content).not.toContain("line 5")
+
+      const second = yield* runToolWithCtx(
+        ReadTool,
+        { path: testFile, offset: Option.getOrThrow(Option.fromNullishOr(first.nextOffset)) },
+        ctx,
+      )
+      // The line-number column is right-padded to the widest number in the page.
+      expect(second.content.split("\n")[0]).toBe(" 5\tline 5")
+      expect(second.truncated).toBe(false)
+      expect(Option.isNone(Option.fromNullishOr(second.nextOffset))).toBe(true)
+    }),
+  )
+
+  readTest("a complete read reports no continuation offset", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const testFile = `${tmpDir}/whole.txt`
+      yield* fs.writeFileString(testFile, "only line")
+
+      const result = yield* runToolWithCtx(ReadTool, { path: testFile }, ctx)
+      expect(result.truncated).toBe(false)
+      expect(Option.isNone(Option.fromNullishOr(result.nextOffset))).toBe(true)
     }),
   )
 
