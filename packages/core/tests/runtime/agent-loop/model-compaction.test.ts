@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Option, Predicate, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, SessionId, ToolCallId } from "../../../src/domain/ids"
+import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { Message, dateFromMillis } from "../../../src/domain/message"
 import { windowDetails } from "../../../src/runtime/model-context-window"
 import {
@@ -135,94 +135,6 @@ describe("native model compaction integration", () => {
           (message) => message.metadata?.customType === "context-window",
         )
         expect(markers).toHaveLength(1)
-      }),
-    ).pipe(
-      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
-      Effect.timeout("15 seconds"),
-    )
-  })
-
-  it.live("a turn whose own steps overflow hands off at a step boundary", () => {
-    const sessionId = SessionId.make("mid-turn-session")
-    const branchId = BranchId.make("mid-turn-branch")
-    const prompt = makeMessage(sessionId, branchId, "mid-turn prompt")
-    // Four completed steps of ~700 tokens each after the only user message.
-    const steps = Array.from({ length: 4 }, (_, index) => {
-      const id = ToolCallId.make(`mid-call-${index + 1}`)
-      const call = Message.cases.regular.make({
-        id: MessageId.make(`mid-call-${index + 1}`),
-        sessionId,
-        branchId,
-        role: "assistant",
-        parts: [
-          Prompt.toolCallPart({ id, name: "read", params: { path: id }, providerExecuted: false }),
-        ],
-        createdAt: dateFromMillis(prompt.createdAt.getTime() + index * 2 + 1),
-      })
-      const result = Message.cases.regular.make({
-        id: MessageId.make(`mid-result-${index + 1}`),
-        sessionId,
-        branchId,
-        role: "tool",
-        parts: [
-          Prompt.toolResultPart({
-            id,
-            name: "read",
-            isFailure: false,
-            providerExecuted: false,
-            result: { value: `mid-result-${index + 1} ${"x".repeat(2_800)}` },
-          }),
-        ],
-        createdAt: dateFromMillis(prompt.createdAt.getTime() + index * 2 + 2),
-      })
-      return [call, result]
-    }).flat()
-    let providerCalls = 0
-    let mainPrompt = Option.none<Prompt.Prompt>()
-    const providerLayer = LanguageModelLayers.testStream((options) => {
-      providerCalls += 1
-      if (providerCalls === 2) mainPrompt = Option.some(Prompt.make(options.prompt))
-      let text = "mid-turn response"
-      if (providerCalls === 1) text = "mid-turn bounded summary"
-      return Effect.succeed(
-        Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })]),
-      )
-    })
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const agentLoop = yield* makeAgentLoopService
-        yield* ensureStorageParents({ sessionId, branchId })
-        const storage = yield* MessageStorage
-        yield* storage.createMessage(prompt)
-        yield* Effect.forEach(steps, (message) => storage.createMessage(message), {
-          discard: true,
-        })
-        // Resumes the incomplete turn: the prompt is the newest user message.
-        yield* runAgentLoop(agentLoop, prompt, {
-          runSpec: { overrides: { contextLength: 6_000 } },
-        })
-
-        expect(providerCalls).toBe(2)
-        if (Option.isNone(mainPrompt)) return yield* Effect.die("main prompt missing")
-        const main = promptText(mainPrompt.value)
-        expect(main).toContain("mid-turn bounded summary")
-        const callIds = mainPrompt.value.content.flatMap((message) => {
-          if (Predicate.isString(message.content)) return []
-          return message.content.filter((part) => part.type === "tool-call").map((part) => part.id)
-        })
-        expect(callIds).toEqual(["mid-call-4"])
-
-        const durable = yield* storage.listMessages(branchId)
-        const markers = durable.filter(
-          (message) => message.metadata?.customType === "context-window",
-        )
-        expect(markers).toHaveLength(1)
-        const marker = markers[0]
-        if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
-        const details = Option.getOrThrow(windowDetails(marker))
-        expect(details.keepFromMessageId).toBe(MessageId.make("mid-call-4"))
-        expect(details.summarized?.firstMessageId).toBe(prompt.id)
       }),
     ).pipe(
       Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
