@@ -21,6 +21,7 @@ import {
 } from "effect"
 
 import type { LogLevel } from "effect/LogLevel"
+import type { PlatformError, Scope } from "effect"
 import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
 
 // =============================================================================
@@ -100,7 +101,18 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
   },
 )
 
-const makeJsonFileLogger = (path: string) =>
+/**
+ * Batched JSON file logger: one entry per line, appended to `path`, flushed
+ * every 250 ms and once more when the scope closes. The server and the TUI
+ * client both write this shape, so `gent doctor` reads one format.
+ */
+export const makeJsonFileLogger = (
+  path: string,
+): Effect.Effect<
+  Logger.Logger<unknown, void>,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const logFile = yield* fs.open(path, { flag: "a+" })

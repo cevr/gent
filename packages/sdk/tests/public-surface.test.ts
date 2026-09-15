@@ -21,6 +21,7 @@ describe("SDK public surface", () => {
       "extractText",
       "getLocalHostname",
       "isPidAlive",
+      "makeJsonFileLogger",
       "probeServerLockEntryIdentity",
       "readServerLock",
       "removeServerLock",

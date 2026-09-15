@@ -19,7 +19,7 @@ import {
   Scope,
   Tracer,
 } from "effect"
-import { makeClientTraceLogger } from "./utils/client-trace-logger"
+import { clientTraceLogger } from "./utils/client-trace-logger"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
 import {
@@ -680,7 +680,7 @@ const cli = Command.run(command, {
   version: "0.0.0",
 })
 const TraceLoggerLayer = Layer.unwrap(
-  makeClientTraceLogger().pipe(Effect.map((logger) => Logger.layer([logger]))),
+  clientTraceLogger.pipe(Effect.map((logger) => Logger.layer([logger]))),
 )
 const CliRuntimeLayer = Layer.merge(PlatformLayer, Layer.provide(TraceLoggerLayer, PlatformLayer))
 const mainEffect = Effect.scoped(
