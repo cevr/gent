@@ -22,7 +22,7 @@
  *   `_tag` string, a doc comment), which are not consumption.
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
- *   `packages/sdk/src/index.ts`) exposes names with `export { X } from "..."`. Consumption is read from the import
+ *   `packages/sdk/src/index.ts`, `packages/extensions/src/client.ts`) exposes names with `export { X } from "..."`. Consumption is read from the import
  *   itself, through the entry point's specifier, by files outside the
  *   declaring package: a symbol a core test imports over a relative path does
  *   not count, and a name on a `@ts-expect-error` line asserts absence rather
@@ -105,6 +105,15 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     enforced: true,
   },
   {
+    prefix: "packages/extensions/src/client.ts",
+    exempt: [],
+    outsideOf: ["packages/extensions/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/extensions/client"),
+    enforced: true,
+  },
+  {
     prefix: "packages/extensions/src/",
     exempt: [],
     outsideOf: [],
@@ -169,8 +178,13 @@ const reExportedNames = (
   for (const [index, line] of text.split("\n").entries()) {
     if (!inBlock && /^export\s+(?:type\s+)?\{/.test(line)) inBlock = true
     else if (!inBlock) continue
-    for (const match of line.matchAll(/(?:^|[{,])\s*(?:type\s+)?([A-Za-z_][A-Za-z0-9_]*)/g)) {
-      Option.match(Option.fromNullishOr(match[1]), {
+    for (const match of line.matchAll(
+      /(?:^|[{,])\s*(?:type\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?/g,
+    )) {
+      const exposed = Option.orElse(Option.fromNullishOr(match[2]), () =>
+        Option.fromNullishOr(match[1]),
+      )
+      Option.match(exposed, {
         onNone: () => {},
         onSome: (name) => {
           if (name !== "export" && name !== "type" && name !== "from") {

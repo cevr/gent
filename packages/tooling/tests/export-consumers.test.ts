@@ -357,6 +357,40 @@ const x: Api.ToolCapability = Api.tool({})`,
     ).toEqual([])
   })
 
+  test("an extensions client name only the extensions package imports is reported", () => {
+    const findings = findingsFor([
+      {
+        file: "packages/extensions/src/client.ts",
+        text: `export { WakeRpc, WakeEntry } from "./wake/protocol.js"\n`,
+      },
+      {
+        file: "packages/extensions/tests/wake.test.ts",
+        text: `import { WakeEntry } from "@gent/extensions/client"`,
+      },
+      {
+        file: "apps/tui/src/extensions/builtins/wake.client.tsx",
+        text: `import { WakeRpc } from "@gent/extensions/client.js"`,
+      },
+    ])
+    expect(findings.map((finding) => finding.enforced)).toEqual([true])
+    expect(findings[0]?.message).toContain('"WakeEntry"')
+    expect(findings[0]?.message).toContain("@gent/extensions/client")
+  })
+
+  test("a re-export alias is consumed under the alias, not the source name", () => {
+    const source = `export { type WakePending as WakePendingType } from "./wake/protocol.js"\n`
+    expect(declaredNames("packages/extensions/src/client.ts", source)).toEqual(["WakePendingType"])
+    expect(
+      findingsFor([
+        { file: "packages/extensions/src/client.ts", text: source },
+        {
+          file: "apps/tui/tests/components/wake-tray.test.tsx",
+          text: `import type { WakePendingType } from "@gent/extensions/client"`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
   test("a test outside core is a real consumer of the public API", () => {
     expect(
       findingsFor([
