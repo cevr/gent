@@ -309,3 +309,23 @@ src 21,971 LOC. Platform, routes, components, extensions, client, hooks, utils, 
 | T31 | `routes/session-ui-state.ts:10-14` declares a field-identical copy of `components/prompt-search-state.ts:14-24` and copies field-by-field in both directions (`:79-88` rebuild, `:163` call, `:168-175` unpack); the consumer takes the component shape (`prompt-search-palette.tsx:21,25`)                                                                                                                             | Worth exploring | open   |
 
 Checked, not reported: theme `Omit` + optional re-add is load-bearing (only `fx.json` sets `selectedListItemText`/`backgroundMenu`); surviving `diff*`/`markdown*`/`backgroundMenu` colors all have readers; the 521-export sweep's eight hits are own-file props interfaces (the pass-4 exemption class); `utils/wait-for.ts` fails the deletion test (inlining moves the retry loop into a Solid effect body); `client/event-hub.ts:79` trailing import is S25-shaped cosmetics; `utils/format-error.ts` and `routes/auth-state.ts` have no adapter to collapse.
+
+## extensions — pass 5 (2026-09-15, after `cb90d7ab`) — CLOSED
+
+**extensions pass 5: closed, no findings above Speculative.** First package to close.
+
+src 15,801 LOC, 98 files, 19 tools; every module read — the cell cluster (~25 files), both provider drivers plus `openai-compatible-driver.ts`, `acp-agents/`, `fs-tools/`, `exec-tools/`, `network-tools/`, `session-tools/`, `interaction-tools/`, `compaction/`, `delegate/`, `skills/`, `goal/`, `wake/`, `btw/`, `agents-view/`, `workflows.ts`, `handoff.ts`, `client.ts`, `agents.ts`, `index.ts`.
+
+Pass-4 open question resolved — the 429/529 transient-retry block stays in `anthropic/keychain-transform.ts`: `openai/codex-transform.ts:327-346` has no transient-retry block at all, `provider-http.ts` has exactly two consumers (`keychain-transform.ts:71`, `codex-transform.ts:39`), `isTransientStatus`/`TransientResponseError`/the `Schedule.exponential` retry appear only at `keychain-transform.ts:97-107,315-335`, and 529 is Anthropic-only (`:56-59`). No second consumer exists; the duplication is not real.
+
+Dead-export sweep: 442 names checked both directions over `packages/`, `apps/`, `tests/` with the Mach-O binary excluded. Five hits, all the pass-4 same-file-interface exemption class (`branch-state-store.ts:14`, `provider-credentials.ts:63`, `fs-tools/file-index.ts:25`, `fs-tools/edit.ts:87`, `btw/index.ts:48`).
+
+Orphan probe: six cell modules have no test naming them but all six have real in-src consumers, so none is orphaned (`cell-namespace-storage.ts`, `cell-tool-call-recovery.ts`, `cell-input.ts`, `cell-operation-receipt.ts`, `current-cell-tool-operation.ts`, `dispatching-tool-storage.ts` — the last also guarded at `packages/tooling/tests/core-feature-independence.test.ts:24`, which E15 was rejected to protect).
+
+`provider-http.ts` has no test of its own but both consumers drive its 401 invalidate-and-retry-once path (`tests/anthropic/anthropic-keychain-transform.test.ts:640-709`, `tests/openai/openai-codex-transform.test.ts:785-801`). The E23 extraction is covered.
+
+Extension-authority rule holds: six `core-internal` imports, all `GentPlatform`/`BunGentPlatformLive`; no `FileLockService` or `ExtensionStatePublisher` in extensions src; no leaf takes a ctx parameter; the one `static Test` (`skills/skills.ts:187`) has real consumers.
+
+Five duplication probes dismissed on the deletion test (collapsing each parameterizes a helper and moves complexity): approve-metadata literals, `.gent` path building, truncation constants, the `State.changed`/`queueFollowUp` pulse pairs, and the three hint-to-config mappers whose wire keys and reasoning strategies differ three ways.
+
+Prior art: pi scatters retry per API surface; opencode-v2 centralizes classification in `packages/ai/src/provider-error.ts:124-137`. Gent's split — loop policy in `packages/core/src/runtime/retry.ts` plus one provider-specific HTTP block — is no worse than either. Nothing to add, nothing to remove.
