@@ -837,31 +837,32 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     /**
      * Where a turn stands.
      *
-     * The record answers it in one read. A turn written before the record
-     * existed has no row; for those the message probe re-derives the same
-     * answer and writes the record, so the scan happens at most once per turn.
+     * The record answers in one read. Two cases still read messages:
+     *
+     * - The record names a pending step. Its assistant message carries the
+     *   call arguments, which the row deliberately does not duplicate.
+     * - The turn has no row. Either it is starting -- its first step has not
+     *   committed yet, so there is nothing to resume -- or it was written
+     *   before the record existed. The probe separates those two, and adopts
+     *   whatever it derives, so it runs at most once per turn.
      */
     const resolveTurnPosition = Effect.fn("AgentLoop.resolveTurnPosition")(function* (
       messageId: RunningState["message"]["id"],
     ) {
+      const settled: ReadonlyArray<Prompt.ToolCallPart> = []
+      const noPendingStep = {
+        step: 0,
+        pendingAssistant: Option.none<Message>(),
+        pendingToolCalls: settled,
+      }
       const record = yield* readTurnRecord(messageId)
-      const hasRecord =
-        record.step > 0 || record.continuations > 0 || record.pendingToolCalls.length > 0
-      if (hasRecord) {
-        if (record.pendingToolCalls.length === 0) {
-          const settled: ReadonlyArray<Prompt.ToolCallPart> = []
-          return {
-            step: record.step,
-            pendingAssistant: Option.none<Message>(),
-            pendingToolCalls: settled,
-          }
-        }
+      if (record.pendingToolCalls.length > 0) {
         const pendingStep = record.step + 1
         const assistant = yield* messageStorage.getMessage(
           assistantMessageIdForTurn(messageId, pendingStep),
         )
-        // The record names a pending step whose assistant message is gone:
-        // trust the messages, not the row.
+        // A row naming a step whose assistant message is gone is stale: the
+        // messages, never the row, decide what actually happened.
         if (Predicate.isNotUndefined(assistant)) {
           return {
             step: record.step,
@@ -869,8 +870,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             pendingToolCalls: toolCallsFromMessage(assistant),
           }
         }
+      } else if (record.step > 0 || record.continuations > 0) {
+        return { ...noPendingStep, step: record.step }
       }
 
+      // No usable row. Derive the position from the messages once, then adopt
+      // it. A turn that is only starting exits on the first missing id.
       let lastCompletedStep = 0
       let pendingAssistant = Option.none<Message>()
       let pendingToolCalls: ReadonlyArray<Prompt.ToolCallPart> = []
@@ -894,7 +899,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }
         lastCompletedStep = step
       }
-      // Adopt the derived position so the next resume reads the row.
+      // A turn that has committed nothing owns no position worth storing.
+      if (lastCompletedStep === 0 && Option.isNone(pendingAssistant)) return noPendingStep
       const derivedPending: ReadonlyArray<PendingToolCall> = pendingToolCalls.map((toolCall) => ({
         id: toolCall.id,
         name: toolCall.name,
