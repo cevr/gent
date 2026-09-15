@@ -72,7 +72,6 @@ export const GrepTool = tool({
   readonly: true,
   description: "Search file contents with regex. Returns matching lines.",
   promptSnippet: "Search file contents with regex",
-  promptGuidelines: ["Use instead of bash grep/rg"],
   params: GrepParams,
   output: GrepResult,
   execute: Effect.fn("GrepTool.execute")(function* (params) {

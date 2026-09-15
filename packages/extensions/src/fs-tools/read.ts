@@ -45,7 +45,6 @@ export const ReadTool = tool({
   readonly: true,
   description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",
   promptSnippet: "Read file contents with line numbers",
-  promptGuidelines: ["Use read instead of bash cat/head/tail"],
   params: ReadParams,
   output: ReadResult,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
@@ -67,7 +66,7 @@ export const ReadTool = tool({
 
     if (stat.type === "Directory") {
       return yield* new ReadError({
-        message: `Cannot read directory. Use glob or bash ls to list directory contents.`,
+        message: `Cannot read directory. Use bash ls to list directory contents.`,
         path: filePath,
       })
     }

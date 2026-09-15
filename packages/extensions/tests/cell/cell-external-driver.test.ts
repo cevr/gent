@@ -26,7 +26,7 @@ const CellResult = Schema.Struct({
   result: Schema.Struct({ display: Schema.String }),
 })
 
-describe.skipIf(process.platform !== "darwin")("external driver cell dispatch", () => {
+describe("external driver cell dispatch", () => {
   it.scopedLive(
     "an external executor runs code through the branch's persistent cell",
     () =>

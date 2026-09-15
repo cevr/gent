@@ -45,7 +45,7 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
   },
 })
 
-describe.skipIf(process.platform !== "darwin")("shipped model surface", () => {
+describe("shipped model surface", () => {
   it.scopedLive(
     "advertises only cell and serves builtin host tools inside it",
     () =>

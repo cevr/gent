@@ -18,7 +18,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
 
-describe.skipIf(process.platform !== "darwin")("cell approvals", () => {
+describe("cell approvals", () => {
   it.scopedLive(
     "resumes fresh cell approvals without replaying source for allow and deny",
     () =>

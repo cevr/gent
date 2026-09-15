@@ -68,7 +68,7 @@ const setupCalls = Effect.fn("test.setupCells")(function* (
   )
 })
 
-describe.skipIf(process.platform !== "darwin")("recorded cell execution", () => {
+describe("recorded cell execution", () => {
   it.scopedLive(
     "records reset once and does not clear newer state on repeat",
     () =>

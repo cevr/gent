@@ -30,7 +30,7 @@ const hasReply = (text: string) => (items: ReadonlyArray<Message>) =>
 const windowMarkers = (items: ReadonlyArray<Message>) =>
   items.filter((message) => message.metadata?.customType === CONTEXT_WINDOW_MESSAGE_TYPE)
 
-describe.skipIf(process.platform !== "darwin")("model context directives from a cell", () => {
+describe("model context directives from a cell", () => {
   it.scopedLive(
     "a handoff leads the window until a bare context window replaces it",
     () =>

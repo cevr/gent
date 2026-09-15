@@ -77,8 +77,19 @@ const EXTERNAL_PATTERNS: Array<[RegExp, string]> = [
 ]
 
 // Sensitive patterns only match write-context commands, not read-only tools
-// like grep/rg/cat/less/head/tail that may reference these filenames.
+// like grep/rg/cat/less/head/tail that may reference these filenames. The
+// exemption holds only when every segment of a compound command is read-only
+// and nothing hides a second command in a substitution or heredoc.
 const READ_ONLY_PREFIX = /^\s*(cat|less|head|tail|grep|rg|ag|ack|wc|file|stat|ls|bat|find)\b/
+const SEGMENT_SEPARATOR = /;|&&|\|\|?|\n/
+const HIDDEN_COMMAND = /\$\(|`|<<|\beval\b|\bxargs\b|-exec\b|-delete\b/
+function isReadOnlyCommand(command: string): boolean {
+  if (HIDDEN_COMMAND.test(command)) return false
+  return command
+    .split(SEGMENT_SEPARATOR)
+    .filter((segment) => segment.trim() !== "")
+    .every((segment) => READ_ONLY_PREFIX.test(segment))
+}
 const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*\.env\b/, "modifies .env file"],
   [/\b(cp|mv|rm|edit|write|chmod|chown)\b.*credentials/i, "modifies credentials"],
@@ -90,14 +101,14 @@ const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
 
 const SAFE_RISK: BashRisk = { level: "safe", reason: "" }
 
-function classifyBashCommand(command: string): BashRisk {
+export function classifyBashCommand(command: string): BashRisk {
   for (const [pattern, reason] of DESTRUCTIVE_PATTERNS) {
     if (pattern.test(command)) return { level: "destructive", reason }
   }
   for (const [pattern, reason] of EXTERNAL_PATTERNS) {
     if (pattern.test(command)) return { level: "external", reason }
   }
-  if (!READ_ONLY_PREFIX.test(command)) {
+  if (!isReadOnlyCommand(command)) {
     for (const [pattern, reason] of SENSITIVE_PATTERNS) {
       if (pattern.test(command)) return { level: "sensitive", reason }
     }
@@ -461,10 +472,7 @@ export const BashTool = tool({
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   promptSnippet: "Execute shell commands",
-  promptGuidelines: [
-    "Use for git, npm, and system commands — not file reads or searches",
-    "Never use cat/head/tail/grep/find/ls when dedicated tools exist",
-  ],
+  promptGuidelines: ["Use the read/grep/edit/write tools instead of cat/head/tail/grep/sed"],
   params: BashParams,
   output: BashResult,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {

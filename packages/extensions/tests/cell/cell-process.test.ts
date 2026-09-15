@@ -21,7 +21,7 @@ import { buildCellExecutable, buildCellWorker as buildWorker } from "./cell-work
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
-describe.skipIf(process.platform !== "darwin")("cell worker process", () => {
+describe("cell worker process", () => {
   it.scopedLive(
     "runs a compiled worker with retained values, the Bun runtime, and the host environment",
     () =>

@@ -55,7 +55,7 @@ it.scopedLive("rejects cell dispatch without a branch owner", () =>
   ),
 )
 
-describe.skipIf(process.platform !== "darwin")("branch cell lifetime", () => {
+describe("branch cell lifetime", () => {
   it.scopedLive(
     "controls children across kernel reset and reads a completed child reply",
     () =>

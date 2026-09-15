@@ -18,7 +18,7 @@ import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
-describe.skipIf(process.platform !== "darwin")("foreground child cell", () => {
+describe("foreground child cell", () => {
   it.scopedLive(
     "a child delegated from a cell runs its own cell instead of refusing as a nested outer cell",
     () =>
