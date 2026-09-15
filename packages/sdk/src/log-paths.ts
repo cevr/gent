@@ -5,8 +5,7 @@
  * multiple gent instances don't clobber each other and old logs are easy to
  * identify by time.
  *
- * File naming: `<hash>-<ts>-server.log`, `<hash>-<ts>-server-trace.log`,
- *              `<hash>-<ts>-client.log`
+ * File naming: `<hash>-<ts>-server.log`, `<hash>-<ts>-client.log`
  */
 
 import { DateTime, Effect, FileSystem, Option } from "effect"
@@ -51,21 +50,20 @@ const processStartTs = (): string => {
 interface LogPaths {
   readonly dir: string
   readonly log: string
-  readonly trace: string
   readonly client: string
 }
 
 /**
  * Build log paths for a given cwd identity. Pure — no I/O. App entrypoints
  * (e.g. TUI) that need a stable path before Effect startup can call this
- * directly; Effect-aware callers should use {@link resolveLogPaths}.
+ * directly; Effect-aware callers run {@link ensureLogDir} once at startup and
+ * then call {@link buildLogPaths}.
  */
 export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => {
   const prefix = `${hashCwd(cwd)}-${processStartTs()}`
   return {
     dir: LOG_DIR,
     log: `${LOG_DIR}/${prefix}-server.log`,
-    trace: `${LOG_DIR}/${prefix}-server-trace.log`,
     client: `${LOG_DIR}/${prefix}-client.log`,
   }
 }

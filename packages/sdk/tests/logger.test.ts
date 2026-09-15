@@ -10,7 +10,6 @@ describe("buildLogPaths", () => {
       const paths = buildLogPaths("/Users/example/repo")
       expect(paths.dir).toBe(LOG_DIR)
       expect(paths.log.startsWith(`${LOG_DIR}/`)).toBe(true)
-      expect(paths.trace.endsWith("-server-trace.log")).toBe(true)
       expect(paths.client.endsWith("-client.log")).toBe(true)
     }),
   )
