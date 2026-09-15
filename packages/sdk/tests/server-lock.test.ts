@@ -14,7 +14,6 @@ import {
   removeServerLock,
   validateServerLockEntry,
   serverLockIdentityOf,
-  canSignalServerLockEntry,
   signalIfIdentityOwned,
 } from "../src/server-lock"
 
@@ -204,14 +203,6 @@ describe("Server Lock Ownership", () => {
     }),
   )
 
-  it.live("canSignalServerLockEntry requires same host and live PID", () =>
-    Effect.gen(function* () {
-      expect(yield* canSignalServerLockEntry(makeEntry())).toBe(true)
-      expect(yield* canSignalServerLockEntry(makeEntry({ hostname: "other-host" }))).toBe(false)
-      expect(yield* canSignalServerLockEntry(makeEntry({ pid: 99999999 }))).toBe(false)
-    }).pipe(Effect.provide(PlatformLayer)),
-  )
-
   it.scopedLive("PID-reused stale server locks are removed without SIGTERM", () =>
     provideFs(
       Effect.gen(function* () {
@@ -325,6 +316,22 @@ describe("signalIfIdentityOwned", () => {
       })
       expect(result).toBe("skipped")
       expect(probeCalled).toBe(false)
+    }).pipe(Effect.provide(PlatformLayer)),
+  )
+
+  it.scopedLive("skips a lock from another host without probing", () =>
+    Effect.gen(function* () {
+      let probeCalled = false
+      const { result, signals } = yield* signalIfIdentityOwned(
+        makeEntry({ hostname: "other-host", pid: process.pid }),
+        () => {
+          probeCalled = true
+          return Effect.succeed(true)
+        },
+      ).pipe(withSignalTrap)
+      expect(result).toBe("skipped")
+      expect(probeCalled).toBe(false)
+      expect(signals).toEqual([])
     }).pipe(Effect.provide(PlatformLayer)),
   )
 

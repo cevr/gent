@@ -142,7 +142,7 @@ export const serverLockIdentityOf = (entry: ServerLockEntry): ServerLockIdentity
   buildFingerprint: entry.buildFingerprint,
 })
 
-export const canSignalServerLockEntry = (
+const canSignalServerLockEntry = (
   entry: ServerLockEntry,
 ): Effect.Effect<boolean, never, GentPlatform> =>
   Effect.gen(function* () {
