@@ -27,6 +27,23 @@ export const pickerHeight = (itemCount: number, terminalRows: number): number =>
   Math.min(Math.min(Math.max(itemCount, 1), 6) + 5, Math.max(6, Math.floor(terminalRows / 2) + 1))
 
 /**
+ * The rule counted in lines a pane actually draws, not items it holds.
+ *
+ * {@link pickerHeight} budgets one body line per item, which is right for a
+ * flat list. A pane that opens each group with a heading, or draws a detail
+ * line under the list, spends more lines than it has items: counting items
+ * alone starves the body, so the last rows fall past the rule and the detail
+ * line overprints them.
+ *
+ * `extraLines` is what the pane draws beyond its selectable rows — headings
+ * already counted among `drawnItems`, plus any trailing chrome.
+ */
+export const pickerLines = (drawnItems: number, extraLines: number): number => {
+  if (drawnItems === 0) return 0
+  return drawnItems + extraLines
+}
+
+/**
  * The columns a picker row may use.
  *
  * A picker rules off top and bottom only, so unlike a docked pane it spends

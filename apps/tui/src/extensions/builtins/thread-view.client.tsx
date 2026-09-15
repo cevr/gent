@@ -19,6 +19,12 @@ import { DateTime, Effect, Option, Schema } from "effect"
 import { createSignal, Show } from "solid-js"
 import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
 import { ChromePanel } from "../../components/chrome-panel"
+import {
+  PickerFrame,
+  pickerHeight,
+  pickerLines,
+  usePickerGeometry,
+} from "../../components/picker-frame"
 import { formatAge, plural } from "../../components/message-list-utils"
 import {
   SelectList,
@@ -26,6 +32,7 @@ import {
   selectable,
   type SelectListRow,
 } from "../../components/select-list"
+import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
 import { truncate } from "../../utils/truncate"
 import {
@@ -379,7 +386,11 @@ export function ThreadPane(
         active.sessionId === window.sessionId && active.branchId === window.branchId,
     })
 
-  const { rowWidth, sectionWidth } = ChromePanel.useDockGeometry()
+  // The same framing the slash-command popup and the agents pane use: ruled
+  // off top and bottom under the composer, so a row budgets the picker's
+  // columns rather than a bordered pane's.
+  const { rowWidth, sectionWidth } = usePickerGeometry()
+  const dimensions = useTerminalDimensions()
 
   const marker = (window: ThreadWindow): string => {
     if (isCurrent(window) && window.index === windows().filter(isCurrent).length) return "› "
@@ -432,9 +443,18 @@ export function ThreadPane(
   const title = () =>
     `Thread · ${plural(props.controller.sessions(), "session")} · ${plural(windows().length, "window")}`
 
+  // A heading opens each session and a detail line sits under the list, so the
+  // pane draws more lines than it has windows.
+  const paneHeight = () =>
+    pickerHeight(pickerLines(threadItems(windows()).length, 1), dimensions().height)
+
   return (
     <Show when={props.open}>
-      <ChromePanel.Dock title={title()}>
+      <PickerFrame
+        height={paneHeight()}
+        title={title()}
+        footer={"↑↓ move   ↵ open session   esc close"}
+      >
         <SelectList
           id="thread"
           open={props.open}
@@ -459,8 +479,7 @@ export function ThreadPane(
         </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
-        <ChromePanel.Footer>{"↑↓ move   ↵ open session   esc close"}</ChromePanel.Footer>
-      </ChromePanel.Dock>
+      </PickerFrame>
     </Show>
   )
 }

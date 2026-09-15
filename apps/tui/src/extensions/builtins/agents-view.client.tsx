@@ -18,7 +18,12 @@ import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
 import { ref } from "@gent/core/extensions/api"
 import { ChromePanel } from "../../components/chrome-panel"
-import { PickerFrame, pickerHeight, usePickerGeometry } from "../../components/picker-frame"
+import {
+  PickerFrame,
+  pickerHeight,
+  pickerLines,
+  usePickerGeometry,
+} from "../../components/picker-frame"
 import {
   SelectList,
   decoration,
@@ -508,20 +513,10 @@ export function AgentsPane(
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
     Option.some(Math.max(0, values.findIndex(isCurrent)))
 
-  /**
-   * The picker height rule, counted in lines the pane actually draws.
-   *
-   * `pickerHeight` budgets one body row per item, which is right for a flat
-   * list. This pane opens each section with a heading and adds a detail line
-   * under the list, so counting rows alone starves the body: the headings
-   * push the last rows past the rule and the detail line overprints them.
-   */
-  const drawnLines = () => {
-    const items = paneItems(visible()).length
-    if (visible().length === 0) return items
-    return items + 1
-  }
-  const paneHeight = () => pickerHeight(drawnLines(), dimensions().height)
+  // A heading opens each section and a detail line sits under the list, so the
+  // pane draws more lines than it has rows.
+  const paneHeight = () =>
+    pickerHeight(pickerLines(paneItems(visible()).length, 1), dimensions().height)
 
   return (
     <Show when={props.open}>

@@ -2,7 +2,8 @@ import { createSignal, Show } from "solid-js"
 import { Option } from "effect"
 import { ReasoningEffort, type Model } from "@gent/core/protocol"
 import { useTheme } from "../theme/index"
-import { ChromePanel } from "./chrome-panel"
+import { useTerminalDimensions } from "../terminal-dimensions"
+import { PickerFrame, pickerHeight, usePickerGeometry } from "./picker-frame"
 import { truncate } from "../utils/truncate"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 
@@ -51,8 +52,10 @@ export interface SettingsPickerProps {
 
 /**
  * A docked filter list under the composer, shared by `/model` and `/think`.
- * A pane, not a modal: it spans the width and keeps a fixed row budget so a
- * short terminal does not collapse the list.
+ *
+ * A pane, not a modal: it is ruled off top and bottom under the composer, the
+ * same framing the slash-command popup and the agents pane draw, so the
+ * columns come from the picker's budget rather than a bordered box.
  */
 export function SettingsPicker(props: SettingsPickerProps) {
   const { theme } = useTheme()
@@ -60,7 +63,12 @@ export function SettingsPicker(props: SettingsPickerProps) {
 
   const visible = () => filterRows(props.rows, query())
 
-  const { rowWidth } = ChromePanel.useDockGeometry()
+  const { rowWidth } = usePickerGeometry()
+  const dimensions = useTerminalDimensions()
+
+  // The query row draws above the list, so the pane spends one line more than
+  // it has rows; `pickerHeight` budgets one body row per item.
+  const paneHeight = () => pickerHeight(visible().length + 1, dimensions().height)
 
   const rows = (): ReadonlyArray<SelectListRow<PickerRow>> =>
     visible().map((row) =>
@@ -99,7 +107,11 @@ export function SettingsPicker(props: SettingsPickerProps) {
 
   return (
     <Show when={props.open}>
-      <ChromePanel.Dock title={`${props.title} · ${visible().length}`}>
+      <PickerFrame
+        height={paneHeight()}
+        title={`${props.title} · ${visible().length}`}
+        footer={"type to filter · ↑↓ move · ↵ select · esc close"}
+      >
         <SelectList
           id="settings-picker"
           open={props.open}
@@ -110,9 +122,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
           onSelect={(row) => props.onSelect(row.id)}
           onDismiss={props.onClose}
         />
-
-        <ChromePanel.Footer>type to filter · ↑↓ move · ↵ select · esc close</ChromePanel.Footer>
-      </ChromePanel.Dock>
+      </PickerFrame>
     </Show>
   )
 }
