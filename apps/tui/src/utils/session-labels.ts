@@ -1,8 +1,13 @@
 import { Option } from "effect"
 import type { RGBA } from "@opentui/core"
-import type { BorderLabelItem } from "./border-segments"
 import { formatTokens } from "./format-tool"
 import type { ModelContextMetrics } from "@gent/core/protocol"
+
+/** One colored label on the composer frame rule. */
+export interface BorderLabelItem {
+  text: string
+  color: RGBA
+}
 
 interface ThemeColors {
   textMuted: RGBA
@@ -59,4 +64,43 @@ export function buildTopRightLabels(
   }
 
   return items
+}
+
+/** `repo/sub/dir (branch)`: the cwd relative to the git root, else its last segment. */
+export function formatCwdGit(
+  cwd: string,
+  gitRoot: Option.Option<string>,
+  branch: Option.Option<string>,
+): string {
+  let label: string
+  if (Option.isSome(gitRoot)) {
+    const repoParts = gitRoot.value.split("/")
+    const repoName = Option.getOrElse(
+      Option.fromNullishOr(repoParts[repoParts.length - 1]),
+      () => "",
+    )
+    if (cwd === gitRoot.value) {
+      label = repoName
+    } else if (cwd.startsWith(gitRoot.value + "/")) {
+      label = repoName + "/" + cwd.slice(gitRoot.value.length + 1)
+    } else {
+      label = Option.getOrElse(Option.fromNullishOr(repoParts[repoParts.length - 1]), () => cwd)
+    }
+  } else {
+    const parts = cwd.split("/")
+    label = Option.getOrElse(Option.fromNullishOr(parts[parts.length - 1]), () => cwd)
+  }
+
+  if (Option.isSome(branch) && branch.value.length > 0) {
+    return `${label} (${branch.value})`
+  }
+  return label
+}
+
+export function formatElapsed(ms: number): string {
+  const secs = Math.floor(ms / 1000)
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remainingSecs = secs % 60
+  return `${mins}m ${remainingSecs}s`
 }

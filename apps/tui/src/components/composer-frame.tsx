@@ -1,5 +1,5 @@
 import { createMemo, For, Show, type JSX } from "solid-js"
-import type { BorderLabelItem } from "../utils/border-segments"
+import type { BorderLabelItem } from "../utils/session-labels"
 import { useTheme } from "../theme/index"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { textWidth } from "../platform/text-width-adapter"

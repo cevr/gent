@@ -32,8 +32,12 @@ import {
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/context"
-import { formatCwdGit, formatElapsed, type BorderLabelItem } from "../components/bordered-input"
-import { buildTopRightLabels } from "../utils/session-labels"
+import {
+  buildTopRightLabels,
+  formatCwdGit,
+  formatElapsed,
+  type BorderLabelItem,
+} from "../utils/session-labels"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"

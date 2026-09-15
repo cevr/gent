@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import { MessageId } from "@gent/core/protocol"
 import { RGBA } from "@opentui/core"
-import { buildTopRightLabels } from "../src/utils/session-labels"
+import { buildTopRightLabels, formatCwdGit } from "../src/utils/session-labels"
 
 const absent = Option.getOrUndefined(Option.none())
 
@@ -107,5 +107,32 @@ describe("buildTopRightLabels", () => {
     const labels = buildTopRightLabels(absent, 0, absent, theme, { debugMode: true })
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("debug")
+  })
+})
+
+describe("formatCwdGit", () => {
+  test("cwd at the git root shows the repo name", () => {
+    expect(formatCwdGit("/home/u/repo", Option.some("/home/u/repo"), Option.none())).toBe("repo")
+  })
+
+  test("cwd under the git root shows the path relative to the repo", () => {
+    expect(formatCwdGit("/home/u/repo/apps/tui", Option.some("/home/u/repo"), Option.none())).toBe(
+      "repo/apps/tui",
+    )
+  })
+
+  test("cwd outside the git root falls back to the repo name", () => {
+    expect(formatCwdGit("/elsewhere", Option.some("/home/u/repo"), Option.none())).toBe("repo")
+  })
+
+  test("no git root shows the last cwd segment", () => {
+    expect(formatCwdGit("/home/u/scratch", Option.none(), Option.none())).toBe("scratch")
+  })
+
+  test("a non-empty branch is appended in parentheses", () => {
+    expect(formatCwdGit("/home/u/repo", Option.some("/home/u/repo"), Option.some("main"))).toBe(
+      "repo (main)",
+    )
+    expect(formatCwdGit("/home/u/repo", Option.some("/home/u/repo"), Option.some(""))).toBe("repo")
   })
 })
