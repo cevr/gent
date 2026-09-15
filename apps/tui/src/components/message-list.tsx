@@ -60,6 +60,10 @@ const HandoffDetails = Schema.Struct({
 })
 type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
+
+/** A fired alarm shows the note the model left itself, not the full wake line. */
+const WakeDetails = Schema.Struct({ note: Schema.String })
+const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
 const PREVIEW_LINES = 20
 
 const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
@@ -183,12 +187,20 @@ const isMessageItem = Predicate.or(
 const collapsedUserLabel = (
   customType: string,
   handoff: Option.Option<HandoffDetails>,
+  wake: Option.Option<typeof WakeDetails.Type>,
 ): Option.Option<string> => {
   if (customType === "goal-context") return Option.some("↻ goal continuation")
   if (customType === "context-window") return Option.some(windowLabel(handoff))
   if (customType === "model-change") return Option.some("⇄ model changed")
+  if (customType === "wake") return Option.some(wakeLabel(wake))
   return Option.none()
 }
+
+const wakeLabel = (wake: Option.Option<typeof WakeDetails.Type>): string =>
+  Option.match(wake, {
+    onNone: () => "⏰ alarm fired",
+    onSome: (value) => `⏰ alarm fired · ${value.note}`,
+  })
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
 const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
@@ -214,7 +226,11 @@ function UserMessage(props: {
   const collapsedLabel = () =>
     Option.fromUndefinedOr(props.customType).pipe(
       Option.flatMap((customType) =>
-        collapsedUserLabel(customType, decodeHandoffDetails(props.details)),
+        collapsedUserLabel(
+          customType,
+          decodeHandoffDetails(props.details),
+          decodeWakeDetails(props.details),
+        ),
       ),
       Option.filter(() => !props.fullDetail),
     )

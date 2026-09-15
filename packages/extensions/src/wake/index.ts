@@ -4,8 +4,10 @@
  * The model sets one when it is waiting on CI, a deploy, or a remote queue,
  * then answers and goes idle. When the alarm fires the extension queues a
  * user-role `wake` message on the same branch and wakes the loop, so the
- * next turn starts with the note the model left itself. Alarms live in a
- * branch-scoped resource: closing the branch cancels them.
+ * next turn starts with the note the model left itself. Timers live in a
+ * branch-scoped resource; the alarms themselves live in one file per branch
+ * under the gent home, so the next turn after a restart re-arms what is
+ * still pending and fires at once what came due while the process was down.
  */
 import {
   Cause,
@@ -58,18 +60,22 @@ export const WakeResult = Schema.Struct({
   note: Schema.String,
 })
 
-export interface WakeAlarm {
-  readonly wakeId: string
-  readonly dueAt: number
-  readonly note: string
-}
+export const WakeAlarm = Schema.Struct({
+  wakeId: Schema.String,
+  dueAt: Schema.Finite,
+  note: Schema.String,
+})
+export type WakeAlarm = typeof WakeAlarm.Type
 
 export interface WakeAlarmsService {
-  /** Forks a timer that runs `fire` at `dueAt`; the branch scope owns it. */
+  /**
+   * Forks a timer that runs `fire` at `dueAt`; the branch scope owns it.
+   * False when a timer for that id is already pending.
+   */
   readonly schedule: (
     alarm: WakeAlarm,
     fire: Effect.Effect<void, ExtensionServiceError>,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<boolean>
   readonly pending: Effect.Effect<ReadonlyArray<WakeAlarm>>
 }
 
@@ -91,7 +97,9 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
       })
     const schedule: WakeAlarmsService["schedule"] = (alarm, fire) =>
       Effect.gen(function* () {
-        yield* Ref.update(alarms, (current) => new Map(current).set(alarm.wakeId, alarm))
+        const current = yield* Ref.get(alarms)
+        if (current.has(alarm.wakeId)) return false
+        yield* Ref.set(alarms, new Map(current).set(alarm.wakeId, alarm))
         const now = yield* Clock.currentTimeMillis
         yield* Effect.sleep(Duration.millis(Math.max(0, alarm.dueAt - now))).pipe(
           Effect.andThen(fire),
@@ -104,6 +112,7 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
           Effect.ensuring(forget(alarm.wakeId)),
           Effect.forkIn(scope),
         )
+        return true
       })
     return WakeAlarms.of({
       schedule,
@@ -144,6 +153,88 @@ const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis)
 export const wakeMessage = (alarm: WakeAlarm) =>
   `Alarm ${alarm.wakeId} fired at ${isoOf(alarm.dueAt)}. ${alarm.note}`
 
+// ── Durable half: one file per branch ──
+
+const codec = Schema.fromJsonString(Schema.Array(WakeAlarm))
+const decode = Schema.decodeUnknownEffect(codec)
+const encode = Schema.encodeSync(codec)
+
+const wakePath = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  return {
+    directory: ctx.Files.join(ctx.home, "wakes"),
+    file: ctx.Files.join(ctx.home, "wakes", `${ctx.branchId}.json`),
+  }
+})
+
+/** The alarms still pending on this branch; a missing file is an empty list. */
+export const readAlarms = Effect.fn("WakeStore.read")(function* () {
+  const ctx = yield* ExtensionContext
+  const { file } = yield* wakePath
+  if (!(yield* ctx.Files.exists(file))) return []
+  const text = yield* ctx.Files.read(file)
+  return yield* decode(text).pipe(
+    Effect.mapError(
+      (cause) => new WakeError({ message: `Wake file ${file} is invalid: ${cause.message}` }),
+    ),
+  )
+})
+
+const writeAlarms = Effect.fn("WakeStore.write")(function* (alarms: ReadonlyArray<WakeAlarm>) {
+  const ctx = yield* ExtensionContext
+  const { directory, file } = yield* wakePath
+  yield* ctx.Files.makeDirectory(directory, { recursive: true })
+  const staging = `${file}.${yield* ctx.Process.randomId}.tmp`
+  yield* ctx.Files.write(staging, encode(alarms))
+  yield* ctx.Files.rename(staging, file)
+})
+
+const modifyAlarms = (update: (alarms: ReadonlyArray<WakeAlarm>) => ReadonlyArray<WakeAlarm>) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const { file } = yield* wakePath
+    yield* ctx.FileLock.withLock(
+      file,
+      Effect.gen(function* () {
+        const current = yield* readAlarms()
+        yield* writeAlarms(update(current))
+      }),
+    )
+  })
+
+/**
+ * Starts the timer for one stored alarm. Firing queues the wake message and
+ * drops the alarm from the file; an id already ticking is left alone.
+ */
+const armAlarm = Effect.fn("WakeTool.arm")(function* (alarm: WakeAlarm) {
+  const ctx = yield* ExtensionContext
+  const alarms = yield* WakeAlarms
+  const fire = ctx.Session.queueFollowUp({
+    sourceId: `wake:${alarm.wakeId}`,
+    content: wakeMessage(alarm),
+    metadata: {
+      customType: WAKE_MESSAGE_TYPE,
+      extensionId: WAKE_EXTENSION_ID,
+      details: { note: alarm.note },
+    },
+    wake: true,
+  })
+  const forget = modifyAlarms((current) =>
+    current.filter((entry) => entry.wakeId !== alarm.wakeId),
+  ).pipe(Effect.ignore, Effect.provideService(ExtensionContext, ctx))
+  return yield* alarms.schedule(alarm, fire.pipe(Effect.ensuring(forget)))
+})
+
+/** Re-arms every alarm the file still holds; past-due ones fire at once. */
+export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
+  const pending = yield* readAlarms()
+  let armed = 0
+  for (const alarm of pending) {
+    if (yield* armAlarm(alarm)) armed += 1
+  }
+  return armed
+})
+
 export const WakeTool = tool({
   id: "wake",
   readonly: true,
@@ -159,19 +250,11 @@ export const WakeTool = tool({
   output: WakeResult,
   execute: Effect.fn("WakeTool.execute")(function* (params: typeof WakeParams.Type) {
     const ctx = yield* ExtensionContext
-    const alarms = yield* WakeAlarms
     const now = yield* Clock.currentTimeMillis
     const dueAt = yield* dueAtOf(params, now)
     const alarm: WakeAlarm = { wakeId: yield* ctx.Process.randomId, dueAt, note: params.note }
-    yield* alarms.schedule(
-      alarm,
-      ctx.Session.queueFollowUp({
-        sourceId: `wake:${alarm.wakeId}`,
-        content: wakeMessage(alarm),
-        metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID },
-        wake: true,
-      }),
-    )
+    yield* modifyAlarms((current) => [...current, alarm])
+    yield* armAlarm(alarm)
     return { wakeId: alarm.wakeId, dueAt: isoOf(dueAt), note: alarm.note }
   }),
 })
@@ -181,6 +264,18 @@ export const WakeExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", WakeTool)
+    // The branch resource starts without a session facade, so the first turn
+    // after a restart is where stored alarms get their timers back.
+    yield* host.on("turnProjection", () =>
+      rearmPendingAlarms().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("wake.rearm.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
+        Effect.as({}),
+      ),
+    )
     yield* host.register(
       "resource",
       defineResource({

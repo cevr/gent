@@ -372,6 +372,50 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a fired alarm collapses to its note until full detail is on", () =>
+    Effect.gen(function* () {
+      const wakeMessage: Message = {
+        ...userMessage(
+          "regular-message",
+          "wake-1",
+          "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run bun test and report.",
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: {
+          customType: "wake",
+          extensionId: "@gent/wake",
+          details: { note: "Run bun test and report." },
+        },
+      }
+      const collapsed = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[wakeMessage]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      const collapsedFrame = renderFrame(collapsed)
+      expect(collapsedFrame).toContain("alarm fired · Run bun test and report.")
+      expect(collapsedFrame).not.toContain("fired at 2026")
+      const expanded = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[wakeMessage]}
+            disclosure="collapsed"
+            fullDetail={true}
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      expect(renderFrame(expanded)).toContain("fired at 2026")
+    }),
+  )
+
   it.live("keeps multiline user text visible in a narrow transcript", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
