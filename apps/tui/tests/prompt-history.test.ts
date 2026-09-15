@@ -1,20 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
-
-// Extract the pure logic from use-prompt-history for testing
-// We test canNavigateAtCursor and the navigate state machine
-
-function canNavigateAtCursor(
-  direction: "up" | "down",
-  cursorPos: number,
-  textLength: number,
-  inHistory: boolean,
-): boolean {
-  const pos = Math.max(0, Math.min(cursorPos, textLength))
-  if (inHistory) return pos === 0 || pos === textLength
-  if (direction === "up") return pos === 0
-  return pos === textLength
-}
+import { canNavigateAtCursor } from "../src/hooks/use-prompt-history"
 
 describe("canNavigateAtCursor", () => {
   test("up at cursor 0 → true", () => {
@@ -53,7 +39,11 @@ describe("canNavigateAtCursor", () => {
   })
 })
 
-// Test the navigate state machine without Solid reactivity
+/**
+ * The store itself is a Solid singleton (`use-prompt-history.ts:94-109`), so the
+ * index/saved-entry bookkeeping is modeled here while the cursor gate under test
+ * is the real `canNavigateAtCursor`.
+ */
 describe("prompt history navigation", () => {
   type NavigationResult =
     | { readonly handled: false }

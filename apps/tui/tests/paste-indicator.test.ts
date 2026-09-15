@@ -1,38 +1,12 @@
 import { describe, test, expect } from "bun:test"
+import {
+  countLines,
+  createPasteManager,
+  isLargePaste,
+} from "../src/components/use-composer-controller"
 
-// Paste indicator constants and functions (matching composer controller)
-const PASTE_THRESHOLD_LINES = 3
-const PASTE_THRESHOLD_LENGTH = 150
-
-function countLines(text: string): number {
-  return text.split("\n").length
-}
-
-function isLargePaste(inserted: string): boolean {
-  return countLines(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
-}
-
-// Simplified version for testing - real implementation uses module-level counter
-let testPasteIdCounter = 0
-const testPasteStore = new Map<string, string>()
-
-function createPastePlaceholder(text: string): string {
-  const id = `paste-${++testPasteIdCounter}`
-  testPasteStore.set(id, text)
-  const lines = countLines(text)
-  return `[Pasted ~${lines} lines #${id}]`
-}
-
-function expandPastePlaceholders(text: string): string {
-  return text.replace(/\[Pasted ~\d+ lines #(paste-\d+)\]/g, (match, id) => {
-    const content = testPasteStore.get(id)
-    if (content) {
-      testPasteStore.delete(id)
-      return content
-    }
-    return match
-  })
-}
+// The paste manager is per-controller: each composer owns its id counter and
+// store, so every test makes its own rather than resetting shared state.
 
 describe("countLines", () => {
   test("counts single line", () => {
@@ -80,98 +54,95 @@ describe("isLargePaste", () => {
   })
 
   test("returns true if either condition is met", () => {
-    // 3 lines but short
     expect(isLargePaste("a\nb\nc")).toBe(true)
-    // 1 line but 150+ chars
     expect(isLargePaste("x".repeat(150))).toBe(true)
   })
 })
 
-describe("createPastePlaceholder", () => {
+describe("createPlaceholder", () => {
   test("creates placeholder with line count", () => {
-    const text = "line1\nline2\nline3"
-    const placeholder = createPastePlaceholder(text)
+    const paste = createPasteManager()
+    const placeholder = paste.createPlaceholder("line1\nline2\nline3")
     expect(placeholder).toMatch(/\[Pasted ~3 lines #paste-\d+\]/)
   })
 
   test("stores original text for later retrieval", () => {
-    testPasteStore.clear()
-    testPasteIdCounter = 0
+    const paste = createPasteManager()
     const text = "original content\nwith lines"
-    const placeholder = createPastePlaceholder(text)
+    const placeholder = paste.createPlaceholder(text)
     expect(placeholder).toBe("[Pasted ~2 lines #paste-1]")
-    expect(testPasteStore.get("paste-1")).toBe(text)
+    expect(paste.expandPlaceholders(placeholder)).toBe(text)
   })
 
   test("increments ID for each placeholder", () => {
-    testPasteStore.clear()
-    testPasteIdCounter = 0
-    createPastePlaceholder("a\nb\nc")
-    createPastePlaceholder("x\ny\nz")
-    expect(testPasteStore.has("paste-1")).toBe(true)
-    expect(testPasteStore.has("paste-2")).toBe(true)
+    const paste = createPasteManager()
+    expect(paste.createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
+    expect(paste.createPlaceholder("x\ny\nz")).toBe("[Pasted ~3 lines #paste-2]")
+  })
+
+  test("each manager owns its own id sequence", () => {
+    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
+    expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
   })
 })
 
-describe("expandPastePlaceholders", () => {
+describe("expandPlaceholders", () => {
   test("expands single placeholder", () => {
-    testPasteStore.clear()
-    testPasteIdCounter = 0
+    const paste = createPasteManager()
     const original = "line1\nline2\nline3"
-    const placeholder = createPastePlaceholder(original)
+    const placeholder = paste.createPlaceholder(original)
 
-    const expanded = expandPastePlaceholders(`Before ${placeholder} after`)
-    expect(expanded).toBe(`Before ${original} after`)
+    expect(paste.expandPlaceholders(`Before ${placeholder} after`)).toBe(`Before ${original} after`)
   })
 
   test("expands multiple placeholders", () => {
-    testPasteStore.clear()
-    testPasteIdCounter = 0
+    const paste = createPasteManager()
     const text1 = "first\npaste\ncontent"
     const text2 = "second\npaste\nhere"
-    const p1 = createPastePlaceholder(text1)
-    const p2 = createPastePlaceholder(text2)
+    const p1 = paste.createPlaceholder(text1)
+    const p2 = paste.createPlaceholder(text2)
 
-    const input = `Start ${p1} middle ${p2} end`
-    const expanded = expandPastePlaceholders(input)
-    expect(expanded).toBe(`Start ${text1} middle ${text2} end`)
+    expect(paste.expandPlaceholders(`Start ${p1} middle ${p2} end`)).toBe(
+      `Start ${text1} middle ${text2} end`,
+    )
   })
 
   test("removes placeholder from store after expansion", () => {
-    testPasteStore.clear()
-    testPasteIdCounter = 0
-    const text = "a\nb\nc"
-    const placeholder = createPastePlaceholder(text)
-    expect(testPasteStore.size).toBe(1)
+    const paste = createPasteManager()
+    const placeholder = paste.createPlaceholder("a\nb\nc")
 
-    expandPastePlaceholders(placeholder)
-    expect(testPasteStore.size).toBe(0)
+    expect(paste.expandPlaceholders(placeholder)).toBe("a\nb\nc")
+    // Second expansion finds nothing left to substitute.
+    expect(paste.expandPlaceholders(placeholder)).toBe(placeholder)
   })
 
   test("preserves unknown placeholders", () => {
-    testPasteStore.clear()
+    const paste = createPasteManager()
     const input = "text with [Pasted ~5 lines #paste-unknown] placeholder"
-    const expanded = expandPastePlaceholders(input)
-    expect(expanded).toBe(input)
+    expect(paste.expandPlaceholders(input)).toBe(input)
   })
 
   test("handles text without placeholders", () => {
+    const paste = createPasteManager()
     const input = "just regular text without any placeholders"
-    const expanded = expandPastePlaceholders(input)
-    expect(expanded).toBe(input)
+    expect(paste.expandPlaceholders(input)).toBe(input)
   })
 
   test("handles empty string", () => {
-    expect(expandPastePlaceholders("")).toBe("")
+    expect(createPasteManager().expandPlaceholders("")).toBe("")
+  })
+
+  test("clear drops stored pastes", () => {
+    const paste = createPasteManager()
+    const placeholder = paste.createPlaceholder("a\nb\nc")
+    paste.clear()
+    expect(paste.expandPlaceholders(placeholder)).toBe(placeholder)
   })
 })
 
 describe("paste workflow integration", () => {
   test("full paste and expand cycle", () => {
-    testPasteStore.clear()
-    testPasteIdCounter = 0
-
-    // Simulate paste detection
+    const paste = createPasteManager()
     const pastedCode = `function example() {
   const x = 1
   const y = 2
@@ -179,15 +150,10 @@ describe("paste workflow integration", () => {
 }`
     expect(isLargePaste(pastedCode)).toBe(true)
 
-    // Create placeholder
-    const placeholder = createPastePlaceholder(pastedCode)
+    const placeholder = paste.createPlaceholder(pastedCode)
     expect(placeholder).toMatch(/\[Pasted ~5 lines #paste-\d+\]/)
 
-    // User types around it
     const userInput = `Check this code: ${placeholder}`
-
-    // On submit, expand
-    const submitted = expandPastePlaceholders(userInput)
-    expect(submitted).toBe(`Check this code: ${pastedCode}`)
+    expect(paste.expandPlaceholders(userInput)).toBe(`Check this code: ${pastedCode}`)
   })
 })

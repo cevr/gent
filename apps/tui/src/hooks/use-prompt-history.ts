@@ -47,7 +47,7 @@ export const writeEntries = (home: string, items: ReadonlyArray<string>) =>
     yield* fs.writeFileString(paths.file, encodeHistoryStore(HistoryStore.make({ entries: items })))
   }).pipe(Effect.ignoreCause)
 
-function canNavigateAtCursor(
+export function canNavigateAtCursor(
   direction: "up" | "down",
   cursorPos: number,
   textLength: number,

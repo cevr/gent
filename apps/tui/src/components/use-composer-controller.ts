@@ -23,15 +23,16 @@ import { useExtensionUI } from "../extensions/context"
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
 
-function countLines(text: string): number {
+export function countLines(text: string): number {
   return text.split("\n").length
 }
 
-function isLargePaste(inserted: string): boolean {
+export function isLargePaste(inserted: string): boolean {
   return countLines(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
 }
 
-function createPasteManager() {
+/** Per-controller: each composer owns its placeholder ids and store. */
+export function createPasteManager() {
   let idCounter = 0
   const store = new Map<string, string>()
 
