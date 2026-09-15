@@ -385,7 +385,7 @@ describe("FX transcript treatment", () => {
         metadata: {
           customType: "wake",
           extensionId: "@gent/wake",
-          details: { note: "Run bun test and report." },
+          details: { kind: "alarm", outcome: "fired", note: "Run bun test and report." },
         },
       }
       const collapsed = yield* Effect.promise(() =>

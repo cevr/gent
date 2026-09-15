@@ -29,6 +29,7 @@ import {
 } from "./message-list-utils"
 import { formatGenericToolText } from "./tool-renderers/generic-format"
 import type { DisclosureLevel } from "../routes/session-ui-state"
+import { WakeDetails } from "@gent/extensions/client.js"
 export type { ToolCall }
 export type { DisclosureLevel }
 
@@ -61,8 +62,7 @@ const HandoffDetails = Schema.Struct({
 type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
-/** A fired alarm shows the note the model left itself, not the full wake line. */
-const WakeDetails = Schema.Struct({ note: Schema.String })
+/** A fired wake shows what fired and the note the model left itself, not the full line. */
 const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
 const PREVIEW_LINES = 20
 
@@ -187,7 +187,7 @@ const isMessageItem = Predicate.or(
 const collapsedUserLabel = (
   customType: string,
   handoff: Option.Option<HandoffDetails>,
-  wake: Option.Option<typeof WakeDetails.Type>,
+  wake: Option.Option<WakeDetails>,
 ): Option.Option<string> => {
   if (customType === "goal-context") return Option.some("↻ goal continuation")
   if (customType === "context-window") return Option.some(windowLabel(handoff))
@@ -196,11 +196,17 @@ const collapsedUserLabel = (
   return Option.none()
 }
 
-const wakeLabel = (wake: Option.Option<typeof WakeDetails.Type>): string =>
+const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
   Option.match(wake, {
     onNone: () => "⏰ alarm fired",
-    onSome: (value) => `⏰ alarm fired · ${value.note}`,
+    onSome: (value) => `${wakeHead(value)} · ${value.note}`,
   })
+
+const wakeHead = (value: WakeDetails): string => {
+  if (value.kind === "alarm") return "⏰ alarm fired"
+  if (value.outcome === "timed-out") return "◉ monitor timed out"
+  return "◉ monitor matched"
+}
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
 const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>

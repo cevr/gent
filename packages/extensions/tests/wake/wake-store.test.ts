@@ -15,14 +15,14 @@ import {
 } from "@gent/core-internal/domain/extension-services"
 import {
   rearmPendingAlarms,
-  WakeAlarm,
   WakeAlarms,
   WakeAlarmsLive,
+  WakeEntry,
   WakeTool,
 } from "../../src/wake/index.js"
 
 const branchId = BranchId.make("wake-branch")
-const encodeAlarms = Schema.encodeSync(Schema.fromJsonString(Schema.Array(WakeAlarm)))
+const encodeAlarms = Schema.encodeSync(Schema.fromJsonString(Schema.Array(WakeEntry)))
 
 const contextWith = (home: string, queued: Ref.Ref<ReadonlyArray<string>>) =>
   testToolContext({
@@ -40,7 +40,7 @@ const contextWith = (home: string, queued: Ref.Ref<ReadonlyArray<string>>) =>
 const readFile = (home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    return yield* fs.readFileString(`${home}/wakes/${branchId}.json`)
+    return yield* fs.readFileString(`${home}/.gent/wakes/${branchId}.json`)
   }).pipe(Effect.provide(BunFileSystem.layer))
 
 describe("wake store", () => {
@@ -72,12 +72,12 @@ describe("wake store", () => {
       const queued = yield* Ref.make<ReadonlyArray<string>>([])
       const ctx: ExtensionContextService = contextWith(home, queued)
       const fs = yield* FileSystem.FileSystem
-      yield* fs.makeDirectory(`${home}/wakes`, { recursive: true })
+      yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
       yield* fs.writeFileString(
-        `${home}/wakes/${branchId}.json`,
+        `${home}/.gent/wakes/${branchId}.json`,
         encodeAlarms([
-          { wakeId: "past", dueAt: 1_000, note: "CI should be done" },
-          { wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" },
+          { _tag: "alarm", wakeId: "past", dueAt: 1_000, note: "CI should be done" },
+          { _tag: "alarm", wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" },
         ]),
       )
       const armed = yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
@@ -89,7 +89,7 @@ describe("wake store", () => {
       const again = yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       expect(again).toBe(0)
       const alarms = yield* WakeAlarms
-      expect((yield* alarms.pending).map((alarm) => alarm.wakeId)).toEqual(["later"])
+      expect(yield* alarms.pending).toEqual(["later"])
     }).pipe(
       Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer)),
       Effect.timeout("8 seconds"),

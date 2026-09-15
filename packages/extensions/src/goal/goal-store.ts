@@ -11,12 +11,12 @@ const codec = Schema.fromJsonString(GoalSnapshot)
 const decode = Schema.decodeUnknownEffect(codec)
 const encode = Schema.encodeSync(codec)
 
-/** Goals live beside the other host-owned state under the gent home, one file per branch. */
+/** Goals live beside the other host-owned state under `~/.gent`, one file per branch. */
 const goalPath = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
   return {
-    directory: ctx.Files.join(ctx.home, "goals"),
-    file: ctx.Files.join(ctx.home, "goals", `${ctx.branchId}.json`),
+    directory: ctx.Files.join(ctx.home, ".gent", "goals"),
+    file: ctx.Files.join(ctx.home, ".gent", "goals", `${ctx.branchId}.json`),
   }
 })
 

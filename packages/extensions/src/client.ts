@@ -25,3 +25,13 @@ export {
 } from "./btw/btw-protocol.js"
 export { BtwRpc } from "./btw/index.js"
 export { AgentsViewRpc, type AgentRowEntry } from "./agents-view/protocol.js"
+export {
+  WAKE_EXTENSION_ID,
+  WAKE_MESSAGE_TYPE,
+  WakeDetails,
+  WakeEntry,
+  WakePending,
+  type WakeEntry as WakeEntryType,
+  type WakePending as WakePendingType,
+} from "./wake/protocol.js"
+export { WakeRpc } from "./wake/index.js"

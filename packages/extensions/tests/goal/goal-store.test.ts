@@ -44,9 +44,9 @@ describe("goal store", () => {
       ])
       // Only the final snapshot remains; staging files are renamed away.
       const fs = yield* FileSystem.FileSystem
-      expect(yield* fs.readDirectory(`${home}/goals`)).toEqual([`${branchId}.json`])
+      expect(yield* fs.readDirectory(`${home}/.gent/goals`)).toEqual([`${branchId}.json`])
       const snapshot = yield* Schema.decodeEffect(Schema.fromJsonString(GoalSnapshot))(
-        yield* fs.readFileString(`${home}/goals/${branchId}.json`),
+        yield* fs.readFileString(`${home}/.gent/goals/${branchId}.json`),
       )
       expect(Option.fromUndefinedOr(snapshot.goal?.status)).toEqual(Option.some("complete"))
     }).pipe(Effect.provide(BunFileSystem.layer)),
