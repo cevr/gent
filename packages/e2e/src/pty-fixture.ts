@@ -1,5 +1,5 @@
 import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { Clock, Config, Effect, Option } from "effect"
+import { Clock, Effect } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { seedAuthBoundary } from "./auth-seed-boundary"
 
@@ -9,10 +9,6 @@ const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathnam
   "",
 )
 const tuiDir = `${repoRoot}/apps/tui`
-const clientLogPath = Effect.gen(function* () {
-  const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "")
-  return `${home}/.gent/logs/Users-cvr-Developer-personal-gent-apps-tui/gent-client.log`
-})
 
 export interface TestContext {
   readonly pty: IPty
@@ -93,16 +89,6 @@ export const spawnWithDir = (
     cleanup,
   }
 }
-
-export const resetClientLog: Effect.Effect<void> = clientLogPath.pipe(
-  Effect.flatMap((path) => Effect.tryPromise(() => Bun.file(path).delete())),
-  Effect.ignoreCause,
-)
-
-export const readClientLog: Effect.Effect<string> = clientLogPath.pipe(
-  Effect.flatMap((path) => Effect.tryPromise(() => Bun.file(path).text())),
-  Effect.catchCause(() => Effect.succeed("")),
-)
 
 export const seedAndSpawn = (extraArgs: string[] = []) =>
   Effect.gen(function* () {

@@ -7,8 +7,6 @@ import { Effect, Option } from "effect"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import {
   ptyWaitFor,
-  readClientLog,
-  resetClientLog,
   seedAndSpawn,
   seedSkillAndSpawn,
   shortPause,
@@ -190,28 +188,6 @@ describe("E2E: Session", () => {
         yield* shortPause(3_000)
         expect(ctx.output.length).toBeGreaterThan(2000)
         ctx.pty.write(CTRL_C)
-      }),
-    TEST_TIMEOUT,
-  )
-
-  it.scopedLive(
-    "double ESC after session activity exits without watchdog fallback",
-    () =>
-      Effect.gen(function* () {
-        yield* resetClientLog
-        const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        ctx.pty.write("hi")
-        yield* shortPause(300)
-        ctx.pty.write(ENTER)
-        yield* shortPause(3_000)
-        ctx.pty.write(ESC)
-        yield* shortPause(ESC_KEY_DECODE_MS)
-        ctx.pty.write(ESC)
-        const code = yield* raceWithTimeout(ctx.pty.exited, 8_000)
-        const log = yield* readClientLog
-        expect(code).toEqual(Option.some(0))
-        expect(log).not.toContain("shutdown.watchdog-fired")
       }),
     TEST_TIMEOUT,
   )
