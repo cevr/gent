@@ -24,6 +24,7 @@ export {
   Branch,
   Message,
   MessagePart,
+  MessageSegment,
   ProjectedMessage,
   Session,
   ToolInteraction,

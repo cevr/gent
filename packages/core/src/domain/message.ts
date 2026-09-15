@@ -94,9 +94,31 @@ export type Message = Schema.Schema.Type<typeof Message>
 export type RegularMessage = Extract<Message, { _tag: "regular" }>
 export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
 
+/**
+ * One ordered piece of an assistant answer, in the order the model produced it.
+ *
+ * The transcript renders these in sequence; a client that only wants the text
+ * still reads `parts`. `tool-call` names an interaction on the same projected
+ * message, so a client resolves it by id instead of copying the payload.
+ */
+const TextSegmentStruct = Schema.TaggedStruct("text", { content: Schema.String })
+const ReasoningSegmentStruct = Schema.TaggedStruct("reasoning", { content: Schema.String })
+const ImageSegmentStruct = Schema.TaggedStruct("image", { mediaType: Schema.String })
+const ToolCallSegmentStruct = Schema.TaggedStruct("tool-call", { toolCallId: ToolCallId })
+
+export const MessageSegment = Schema.Union([
+  TextSegmentStruct,
+  ReasoningSegmentStruct,
+  ImageSegmentStruct,
+  ToolCallSegmentStruct,
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type MessageSegment = Schema.Schema.Type<typeof MessageSegment>
+
 const ProjectedMessageFields = {
   ...MessageFields,
   toolInteractions: Schema.Array(ToolInteraction),
+  /** Assistant answer pieces in production order; empty for other roles. */
+  segments: Schema.Array(MessageSegment),
 }
 
 const RegularProjectedMessageStruct = Schema.TaggedStruct("regular", ProjectedMessageFields)
@@ -146,6 +168,37 @@ export const copyMessageToBranch = (
   return Message.cases.regular.make(fields)
 }
 
+/** Assistant answer pieces in production order. Other roles produce none. */
+const messageSegments = (
+  message: Message,
+  toolInteractions: ReadonlyArray<ToolInteraction>,
+): ReadonlyArray<MessageSegment> => {
+  if (message.role !== "assistant") return []
+  const interactionIds = new Set(toolInteractions.map((interaction) => String(interaction.id)))
+  const segments: MessageSegment[] = []
+  for (const part of message.parts) {
+    if (part.type === "text") {
+      segments.push(MessageSegment.cases.text.make({ content: part.text }))
+      continue
+    }
+    if (part.type === "reasoning") {
+      segments.push(MessageSegment.cases.reasoning.make({ content: part.text }))
+      continue
+    }
+    if (part.type === "file" && part.mediaType.startsWith("image/")) {
+      segments.push(MessageSegment.cases.image.make({ mediaType: part.mediaType }))
+      continue
+    }
+    // A call without a projected interaction has no payload to show yet.
+    if (part.type === "tool-call" && interactionIds.has(part.id)) {
+      segments.push(
+        MessageSegment.cases["tool-call"].make({ toolCallId: ToolCallId.make(part.id) }),
+      )
+    }
+  }
+  return segments
+}
+
 export const projectMessage = (
   message: Message,
   toolInteractions: ReadonlyArray<ToolInteraction>,
@@ -153,6 +206,7 @@ export const projectMessage = (
   const fields = {
     ...messageFields(message),
     toolInteractions,
+    segments: messageSegments(message, toolInteractions),
   }
   if (message._tag === "interjection")
     return ProjectedMessage.cases.interjection.make({ ...fields, role: "user" })

@@ -61,6 +61,7 @@ export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.j
 export type {
   Message,
   MessagePart,
+  MessageSegment,
   ProjectedMessage,
   ToolInteraction,
   SessionId,

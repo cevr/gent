@@ -42,6 +42,66 @@ describe("message part projection", () => {
       turnDurationMs: undefined,
     })
 
+  test("an assistant answer projects its pieces in the order the model produced them", () => {
+    const message = makeMessage("a-segments", "assistant", [
+      Prompt.reasoningPart({ text: "thinking" }),
+      Prompt.textPart({ text: "before" }),
+      Prompt.toolCallPart({ id: "tc-1", name: "read", params: {}, providerExecuted: false }),
+      Prompt.textPart({ text: "after" }),
+      Prompt.toolCallPart({ id: "tc-2", name: "read", params: {}, providerExecuted: false }),
+    ])
+    const [projected] = projectMessagesWithToolInteractions([
+      message,
+      makeMessage("t-segments", "tool", [
+        Prompt.toolResultPart({
+          id: "tc-1",
+          name: "read",
+          result: "ok",
+          isFailure: false,
+          providerExecuted: false,
+        }),
+      ]),
+    ])
+    expect(projected?.segments).toEqual([
+      { _tag: "reasoning", content: "thinking" },
+      { _tag: "text", content: "before" },
+      { _tag: "tool-call", toolCallId: ToolCallId.make("tc-1") },
+      { _tag: "text", content: "after" },
+      // A call still running carries a segment; its interaction says "running".
+      { _tag: "tool-call", toolCallId: ToolCallId.make("tc-2") },
+    ])
+    expect(projected?.toolInteractions.map((entry) => entry.status)).toEqual([
+      "completed",
+      "running",
+    ])
+  })
+
+  test("an image part becomes a segment and a non-assistant message gets none", () => {
+    const assistant = Message.cases.regular.make({
+      id: MessageId.make("a-image"),
+      sessionId: SessionId.make("session-projection"),
+      branchId: BranchId.make("branch-projection"),
+      role: "assistant",
+      parts: [
+        Prompt.filePart({ mediaType: "image/png", data: "" }),
+        Prompt.filePart({ mediaType: "application/pdf", data: "" }),
+      ],
+      createdAt: dateFromMillis(0),
+    })
+    const user = Message.cases.regular.make({
+      id: MessageId.make("u-image"),
+      sessionId: SessionId.make("session-projection"),
+      branchId: BranchId.make("branch-projection"),
+      role: "user",
+      parts: [Prompt.textPart({ text: "hello" })],
+      createdAt: dateFromMillis(0),
+    })
+    const projected = projectMessagesWithToolInteractions([assistant, user])
+    // A non-image file carries no transcript segment.
+    expect(projected[0]?.segments).toEqual([{ _tag: "image", mediaType: "image/png" }])
+    expect(projected[1]?.segments).toEqual([])
+  })
+
   test("a tool call's duration is the gap between its started and terminal receipts", () => {
     const sessionId = SessionId.make("session-projection")
     const branchId = BranchId.make("branch-projection")

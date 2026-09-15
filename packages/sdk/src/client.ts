@@ -24,6 +24,7 @@ import {
   type Message,
   type MessageId,
   type MessagePart,
+  type MessageSegment,
   type ProjectedMessage,
   type QueueEntryInfo,
   type QueueSnapshot,
@@ -53,6 +54,7 @@ import { workspaceHeadersForCwd } from "./transport-headers.js"
 
 export type {
   MessagePart,
+  MessageSegment,
   AuthProviderInfo,
   AuthAuthorization,
   AuthMethod,
