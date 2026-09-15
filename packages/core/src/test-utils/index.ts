@@ -30,7 +30,7 @@ import type { EventStoreService } from "../domain/event.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
-export { testExtensionHostContext } from "./extension-host-context.js"
+export { testExtensionFiles, testExtensionHostContext } from "./extension-host-context.js"
 import { testExtensionHostPlatform } from "./extension-host-context.js"
 
 // Call Record

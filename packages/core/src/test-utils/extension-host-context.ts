@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Option, Random } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Path, Random } from "effect"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import {
   ExtensionServiceError,
@@ -82,38 +82,15 @@ const filesError = (operation: string) => (cause: unknown) => {
 }
 
 /**
- * Posix path helpers, spelled out so the stub needs neither a node import nor
- * a snapshot of the platform service. Tests run on posix paths only.
+ * The same `Path` service the production facet uses. The stub used to spell
+ * posix rules out by hand, which resolved a relative path from `/` instead of
+ * the process cwd and silently dropped a leading `..`; a test that passed
+ * against those rules could still fail in production. Effect's own posix
+ * implementation is a plain value, so the stub reads it once and shares it.
  */
-const segmentsOf = (path: string): ReadonlyArray<string> =>
-  path.split("/").filter((segment) => segment.length > 0 && segment !== ".")
-
-const normalize = (segments: ReadonlyArray<string>): ReadonlyArray<string> =>
-  segments.reduce<ReadonlyArray<string>>((kept, segment) => {
-    if (segment !== "..") return [...kept, segment]
-    return kept.slice(0, Math.max(0, kept.length - 1))
-  }, [])
-
-const posixJoin = (...paths: ReadonlyArray<string>): string => {
-  const joined = normalize(paths.flatMap(segmentsOf)).join("/")
-  const rooted = paths.some((path, index) => index === 0 && path.startsWith("/"))
-  if (rooted) return `/${joined}`
-  if (joined.length === 0) return "."
-  return joined
-}
-
-const posixResolve = (...paths: ReadonlyArray<string>): string => {
-  const lastAbsolute = paths.findLastIndex((path) => path.startsWith("/"))
-  if (lastAbsolute < 0) return posixJoin("/", ...paths)
-  return posixJoin(...paths.slice(lastAbsolute))
-}
-
-const posixDirname = (path: string): string => {
-  const cut = path.lastIndexOf("/")
-  if (cut < 0) return "."
-  if (cut === 0) return "/"
-  return path.slice(0, cut)
-}
+const testPath: Path.Path = Effect.runSync(
+  Effect.scoped(Layer.build(Path.layer).pipe(Effect.map((ctx) => Context.get(ctx, Path.Path)))),
+)
 
 /** Runs against the ambient file system, or reports its absence. */
 const onFileSystem = <A, E>(
@@ -132,7 +109,7 @@ const onFileSystem = <A, E>(
 export const testExtensionFiles = (): ExtensionFilesService => ({
   read: (path) => onFileSystem("read", (fs) => fs.readFileString(path)),
   write: (path, content, options) =>
-    onFileSystem("write", (fs) => makeFileWriter(fs, posixDirname)(path, content, options)),
+    onFileSystem("write", (fs) => makeFileWriter(fs, testPath.dirname)(path, content, options)),
   exists: (path) => onFileSystem("exists", (fs) => fs.exists(path)),
   stat: (path) =>
     onFileSystem("stat", (fs) =>
@@ -147,9 +124,9 @@ export const testExtensionFiles = (): ExtensionFilesService => ({
   makeDirectory: (path, options) =>
     onFileSystem("makeDirectory", (fs) => fs.makeDirectory(path, options)),
   rename: (from, to) => onFileSystem("rename", (fs) => fs.rename(from, to)),
-  resolve: (...paths) => posixResolve(...paths),
-  join: (...paths) => posixJoin(...paths),
-  dirname: (path) => posixDirname(path),
+  resolve: (...paths) => testPath.resolve(...paths),
+  join: (...paths) => testPath.join(...paths),
+  dirname: (path) => testPath.dirname(path),
 })
 
 export const testExtensionProcess = (host: ExtensionHostPlatform): ExtensionProcessService => ({

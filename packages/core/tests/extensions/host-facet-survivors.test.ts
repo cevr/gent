@@ -9,7 +9,7 @@
  * angle.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Path, Schema } from "effect"
 import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
 import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
 import { SessionStorage } from "../../src/storage/session-storage.js"
@@ -20,7 +20,7 @@ import { AgentName } from "../../src/domain/agent.js"
 import { requireCurrentAgent, ExtensionServiceError } from "@gent/core/extensions/api"
 import { provideExtensionServices } from "../../src/domain/extension-services.js"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
-import { testToolContext } from "../../src/test-utils/index.js"
+import { testExtensionFiles, testToolContext } from "../../src/test-utils/index.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
 import { testHostFacts } from "../../src/test-utils"
 
@@ -87,6 +87,48 @@ describe("host facet survivors after C9.5 prune", () => {
       expect(listed[0]!.id).toBe(BRANCH_ID)
     }).pipe(
       Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
+    ),
+  )
+})
+
+describe("test Files facet path parity", () => {
+  // The test facet used to spell posix rules out by hand. It resolved a
+  // relative path from `/` rather than the process cwd, and it dropped a
+  // leading `..` from a join, so a test could pass against rules production
+  // never applies. Both facets now read the same `Path` service.
+  it.live("resolves and joins exactly as the production facet does", () =>
+    Effect.gen(function* () {
+      const provider = yield* makeExtensionHostContextProvider({
+        host: testHostFacts().host,
+        extensionRegistry: {
+          extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
+          getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
+        },
+      })
+      const production = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID }).Files
+      const stub = testExtensionFiles()
+
+      // A relative path resolves from the process cwd, not from the root.
+      expect(stub.resolve("relative.txt")).toBe(production.resolve("relative.txt"))
+      expect(stub.resolve("relative.txt").startsWith(process.cwd())).toBe(true)
+      expect(stub.resolve("relative.txt")).not.toBe("/relative.txt")
+
+      // A leading `..` survives a relative join instead of being swallowed.
+      expect(stub.join("..", "file")).toBe(production.join("..", "file"))
+      expect(stub.join("..", "file")).toBe("../file")
+
+      // The rest of the surface agrees too.
+      expect(stub.resolve("/base", "sub")).toBe(production.resolve("/base", "sub"))
+      expect(stub.join("/a", "b", "..", "c")).toBe(production.join("/a", "b", "..", "c"))
+      expect(stub.dirname("/a/b/c.txt")).toBe(production.dirname("/a/b/c.txt"))
+      expect(stub.dirname("bare.txt")).toBe(production.dirname("bare.txt"))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          Path.layer,
+        ),
+      ),
     ),
   )
 })
