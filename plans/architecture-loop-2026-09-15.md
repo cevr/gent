@@ -169,3 +169,15 @@ C7 policy scope note from the pass: the three caps live in `domain/agent.ts:188-
 Landed `742a80c4`: 16 names deleted from `acp-agents/schema.ts` and `handoff-tool.ts` (the nine the scan flagged plus seven the deletions exposed); extensions row `enforced: true`, probe exits 1 on a planted export. Scan blind spot noted: `testsCount: true` counts names inside fixture strings in `packages/tooling/tests/export-consumers.test.ts`, which hid `SessionUpdate` and `HandoffError`. Fix candidate: exclude `packages/tooling/tests` from consumer scans.
 
 Gamut run 19 at `b91cce78` (sonnet-sonnet): 19 tests green, 2m22s, $0.98, 16 steps, 5 children, turn_records max step 16.
+
+## core — pass 3 (2026-09-15, after `84a6093c`)
+
+src 28,167 LOC. server/, domain/, providers/, runtime/ periphery, storage/, registry checked; nothing else above Speculative. Stale doc: `packages/core/AGENTS.md` names `recordToolResult`, which no longer exists.
+
+| #   | Finding                                                                                                                                                | Verdict                                              | Status                        |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- | ----------------------------- |
+| C12 | `EventStoreService.broadcast` is a Tag member with zero production callers; `deliver` is the acked, serialized write path (opencode has one `publish`) | Strong; drop from the Tag, keep as the private input | in flight (rift `core-pass3`) |
+| C13 | `listSlashCommands` is a C9-shaped bucket accessor; one production caller already holds `resolved`                                                     | Worth exploring; delete                              | in flight (rift `core-pass3`) |
+| C14 | `truncateDisplayText` in message-part-display.ts is byte-equivalent to `clipChars(text, max, "…")`                                                     | Worth exploring; fold                                | in flight (rift `core-pass3`) |
+| C15 | `estimateTextTokens` re-declared in `extensions/src/compaction/model-compaction.ts`; compaction budget can desync from the projection budget           | Worth exploring; one export                          | in flight (rift `core-pass3`) |
+| C16 | `ExtensionProtocolError.phase` has six literals; one producer, the `phase` parameter is never passed; the TUI ignores the field                        | Worth exploring; narrow or drop                      | in flight (rift `core-pass3`) |
