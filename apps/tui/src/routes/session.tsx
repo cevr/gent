@@ -37,6 +37,7 @@ import { buildTopRightLabels } from "../utils/session-labels"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"
+import { useClient } from "../client/index"
 import { Auth } from "./auth"
 import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.js"
 
@@ -72,7 +73,7 @@ export function Session(props: SessionProps) {
   const dimensions = useTerminalDimensions()
   const workspace = useWorkspace()
   const controller = createSessionController(props)
-  const client = controller.client
+  const client = useClient()
   const ext = useExtensionUI()
 
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
@@ -201,13 +202,13 @@ export function Session(props: SessionProps) {
           streaming={controller.activity().phase !== "idle"}
           footerHeight={footerHeight()}
           expanded={controller.uiState().transcriptExpanded}
-          disclosure={controller.disclosure()}
+          disclosure={controller.uiState().disclosure}
           displayRevision={controller.uiState().displayRevision}
           overlayOpen={command.paletteOpen() || controller.uiState().overlay._tag !== "none"}
           renderItems={(items, streaming) => (
             <MessageList
               items={items}
-              disclosure={controller.disclosure()}
+              disclosure={controller.uiState().disclosure}
               fullDetail={controller.uiState().transcriptExpanded}
               syntaxStyle={syntaxStyle}
               streaming={streaming}
@@ -320,9 +321,9 @@ export function Session(props: SessionProps) {
         />
 
         <PromptSearchPalette
-          state={controller.promptSearchState()}
-          entries={controller.promptEntries()}
-          onEvent={controller.onPromptSearchEvent}
+          state={controller.promptSearch.state()}
+          entries={controller.promptSearch.entries()}
+          onEvent={controller.promptSearch.onEvent}
         />
 
         {(() => {

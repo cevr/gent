@@ -453,7 +453,7 @@ export function useComposerController(): ComposerController {
   }
 
   useScopedKeyboard((event) => {
-    if (sc.promptSearchOpen() === true) return false
+    if (sc.promptSearch.isOpen()) return false
 
     // Shift+Tab toggles auto mode (opens goal overlay when inactive, cancels when active)
     const isShiftTab =
@@ -482,7 +482,7 @@ export function useComposerController(): ComposerController {
 
   /** Called by textarea onSubmit (keybinding: bare return → submit action). */
   const handleSubmitFromTextarea = () => {
-    if (sc.promptSearchOpen() === true || effectiveMode() === "interaction") return
+    if (sc.promptSearch.isOpen() || effectiveMode() === "interaction") return
     if (Option.isSome(autocompleteOption())) return
     submitMode = "queue"
     handleSubmit()
@@ -505,7 +505,7 @@ export function useComposerController(): ComposerController {
     const isEnterKey = event.name === "return" || event.name === "linefeed"
     if (!isEnterKey) return
 
-    if (sc.promptSearchOpen() === true || effectiveMode() === "interaction") {
+    if (sc.promptSearch.isOpen() || effectiveMode() === "interaction") {
       event.preventDefault()
       return
     }
@@ -553,7 +553,7 @@ export function useComposerController(): ComposerController {
     mode: effectiveMode,
     inputFocused: () =>
       !command.paletteOpen() &&
-      sc.promptSearchOpen() !== true &&
+      !sc.promptSearch.isOpen() &&
       effectiveMode() !== "interaction" &&
       sc.uiState().overlay._tag === "none",
     attachTextarea: (renderable) => {

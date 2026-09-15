@@ -11,7 +11,6 @@ import { ComposerState } from "../src/components/composer-state"
 import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
 import { SessionUiState } from "../src/routes/session-ui-state"
 import { PromptSearchState } from "../src/components/prompt-search-state"
-import { useClient } from "../src/client"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 function TestComposer(props: {
   readonly suspended?: boolean
@@ -19,9 +18,7 @@ function TestComposer(props: {
   readonly children?: JSX.Element
 }) {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
-  const client = useClient()
   const mockController = {
-    client,
     items: () => [],
     messages: () => [],
     forkMessages: () => [],
@@ -30,10 +27,14 @@ function TestComposer(props: {
     saveDraft: () => {},
     uiState: SessionUiState.initial,
     composerState: () => ComposerState.idle(),
-    promptEntries: () => [],
-    promptSearchState: PromptSearchState.closed,
-    promptSearchOpen: () => props.suspended ?? false,
-    disclosure: () => "collapsed",
+    promptSearch: {
+      state: PromptSearchState.closed,
+      entries: () => [],
+      isOpen: () => props.suspended === true,
+      open: () => {},
+      onEvent: () => {},
+      handleKey: () => false,
+    },
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",
     elapsed: () => 0,
@@ -42,7 +43,6 @@ function TestComposer(props: {
       setInteractionState((current) => transitionComposerInteraction(current, event)),
     onSubmit: props.onSubmit,
     onSlashCommand: (_cmd: string, _args: string) => Effect.void,
-    clearMessages: () => {},
     onRestoreQueue: () => {},
     dispatchComposer: () => {},
     resolveAuthGate: () => {},
@@ -50,7 +50,6 @@ function TestComposer(props: {
     onForkSelect: () => {},
     onModelSelect: () => {},
     onReasoningSelect: () => {},
-    onPromptSearchEvent: () => {},
     currentSessionName: () => "Test Session",
     onBranchPickerDismiss: () => {},
     onBranchPickerSelect: () => {},

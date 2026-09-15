@@ -34,7 +34,7 @@ import {
   type ComposerEffect,
   ComposerState,
 } from "../components/composer-state"
-import { useClient, SteerCommandInput, type ClientContextValue } from "../client/index"
+import { useClient, SteerCommandInput } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
 import { useRuntime } from "../hooks/use-runtime"
@@ -46,14 +46,16 @@ import { useExtensionUI } from "../extensions/context"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import {
-  type DisclosureLevel,
   getPromptSearchState,
   SessionUiEvent,
   SessionUiState,
   transitionSessionUi,
   type SessionUiEffect,
 } from "./session-ui-state"
-import { createPromptSearchController } from "./prompt-search-controller"
+import {
+  createPromptSearchController,
+  type PromptSearchController,
+} from "./prompt-search-controller"
 import {
   beginAuthCheck,
   clearQueue,
@@ -73,7 +75,6 @@ import { createSessionCommandRegistry } from "./session-command-registry"
 import { useComposerDrafts, type ComposerDraft } from "../components/composer-drafts"
 
 export interface SessionController {
-  client: ClientContextValue
   items: () => SessionItem[]
   messages: () => Message[]
   forkMessages: () => readonly DurableMessage[]
@@ -82,10 +83,8 @@ export interface SessionController {
   interactionState: () => ComposerInteractionState
   saveDraft: (draft: ComposerDraft) => void
   uiState: () => ReturnType<typeof SessionUiState.initial>
-  promptEntries: () => readonly string[]
-  promptSearchState: () => ReturnType<typeof getPromptSearchState>
-  promptSearchOpen: () => boolean
-  disclosure: () => DisclosureLevel
+  /** The `ctrl+r` palette: its state, its entries, and its key handling. */
+  promptSearch: PromptSearchController
   activity: () =>
     | { phase: "idle"; turn: number }
     | { phase: "thinking"; turn: number }
@@ -93,7 +92,6 @@ export interface SessionController {
   phaseLabel: () => string
   elapsed: () => number
   getChildren: ReturnType<typeof useChildSessions>["getChildren"]
-  clearMessages: () => void
   onComposerInteraction: (event: ComposerInteractionEvent) => void
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
@@ -110,7 +108,6 @@ export interface SessionController {
   onModelSelect: (modelId: ModelId) => void
   /** `None` clears the session override so config/agent defaults apply. */
   onReasoningSelect: (level: Option.Option<ReasoningEffort>) => void
-  onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
 }
 
 export function createSessionController(props: {
@@ -728,7 +725,6 @@ export function createSessionController(props: {
   })
 
   return {
-    client,
     items,
     messages: feed.messages,
     forkMessages: () => {
@@ -741,15 +737,11 @@ export function createSessionController(props: {
     interactionState,
     saveDraft: (draft) => drafts.set(draftBranchId, draft),
     uiState,
-    promptEntries: history.entries,
-    promptSearchState: () => getPromptSearchState(uiState()),
-    promptSearchOpen: promptSearch.isOpen,
-    disclosure: () => uiState().disclosure,
+    promptSearch,
     activity,
     phaseLabel,
     elapsed,
     getChildren,
-    clearMessages,
     onComposerInteraction,
     onSubmit,
     onSlashCommand,
@@ -760,7 +752,6 @@ export function createSessionController(props: {
     onForkSelect,
     onModelSelect,
     onReasoningSelect,
-    onPromptSearchEvent: (event) => promptSearch.onEvent(event),
     currentSessionName,
     onBranchPickerDismiss,
     onBranchPickerSelect,
