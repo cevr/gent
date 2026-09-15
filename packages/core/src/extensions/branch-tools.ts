@@ -96,6 +96,7 @@ export {
   ModelContextCompactor,
 } from "../runtime/model-context-compactor.js"
 export {
+  estimateTextTokens,
   ModelContextBudget,
   type ModelContextError,
   ModelContextProjection,

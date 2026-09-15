@@ -15,7 +15,11 @@ import {
   ModelCompactionError,
   ModelContextCompactor,
 } from "@gent/core-internal/runtime/model-context-compactor.js"
-import { ModelContextBudget } from "@gent/core-internal/runtime/model-context.js"
+import {
+  estimateTextTokens,
+  estimateTokens,
+  ModelContextBudget,
+} from "@gent/core-internal/runtime/model-context.js"
 import {
   compactModelContext,
   MODEL_COMPACTION_OUTPUT_TOKENS,
@@ -288,6 +292,29 @@ describe("context handoff", () => {
       )
     }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds")),
   )
+
+  it.scopedLive("the summary bound uses the projection's token estimate", () => {
+    // The projection budgets the kept window with `estimateTokens`; the
+    // compaction bound must land on the same boundary, or a summary the
+    // projection counts as in-budget is refused as oversize.
+    const attempt = (layer: Layer.Layer<LanguageModel.LanguageModel>) =>
+      Effect.exit(compact()).pipe(Effect.provide(layer), Effect.map(failureOf))
+    return Effect.gen(function* () {
+      const atBound = "x".repeat(MODEL_COMPACTION_OUTPUT_TOKENS * 4)
+      const overBound = `${atBound}x`
+      const projected = (text: string) =>
+        estimateTokens([textMessage("summary", "assistant", text, 1)])
+      expect(projected(atBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS)
+      expect(estimateTextTokens(atBound)).toBe(projected(atBound))
+      expect(projected(overBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS + 1)
+      expect(estimateTextTokens(overBound)).toBe(projected(overBound))
+
+      const accepted = yield* attempt(summaryProvider(atBound))
+      expect(Option.isNone(accepted)).toBe(true)
+      const refused = yield* attempt(summaryProvider(overBound))
+      expect(Option.map(refused, (error) => error.reason)).toEqual(Option.some("SummaryOversize"))
+    }).pipe(Effect.timeout("10 seconds"))
+  })
 
   it.scopedLive("an empty, oversized, or failed summary is a compaction error", () => {
     const attempt = (layer: Layer.Layer<LanguageModel.LanguageModel>) =>
