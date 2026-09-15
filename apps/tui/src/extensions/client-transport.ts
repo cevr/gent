@@ -28,8 +28,16 @@
 
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { CapabilityRef } from "@gent/core/extensions/api"
-import type { BranchId, EventEnvelope, Message, Session, SessionId } from "@gent/core/protocol"
+import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
+import type {
+  AgentName,
+  BranchId,
+  DriverListResult,
+  EventEnvelope,
+  Message,
+  Session,
+  SessionId,
+} from "@gent/core/protocol"
 
 type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
@@ -89,6 +97,17 @@ export interface ClientTransportDefinition {
   readonly listMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, ClientTransportRequestError>
+  /** Every registered driver plus the per-agent override map. */
+  readonly driverList: Effect.Effect<DriverListResult, ClientTransportRequestError>
+  /** Route one agent to a driver; the server rejects unknown driver ids. */
+  readonly driverSet: (input: {
+    readonly agentName: AgentName
+    readonly driver: DriverRef
+  }) => Effect.Effect<void, ClientTransportRequestError>
+  /** Remove one agent's driver override. */
+  readonly driverClear: (input: {
+    readonly agentName: AgentName
+  }) => Effect.Effect<void, ClientTransportRequestError>
 }
 
 export interface ClientShellTransportDefinition {
@@ -133,6 +152,13 @@ export const makeClientTransportLayer = (
     listSessions: shellRead(payload, "session.list", (client) => client.session.list()),
     listMessages: (branchId) =>
       shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
+    driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),
+    driverSet: (input) =>
+      shellRead(payload, "driver.set", (client) => client.driver.set(input)).pipe(Effect.asVoid),
+    driverClear: (input) =>
+      shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(
+        Effect.asVoid,
+      ),
   }
   return Layer.succeed(ClientTransport, transport)
 }

@@ -13,7 +13,7 @@
 
 import { createEffect, createRoot, createSignal } from "solid-js"
 import { Context, Effect, Layer, Option, Scope } from "effect"
-import type { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/extensions/api"
+import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import type { OverlayId } from "./client-facets.js"
 import type { ClientTransportDefinition } from "./client-transport"
 
@@ -65,29 +65,6 @@ export class ClientShell extends Context.Service<ClientShell, ClientShellDefinit
 
 export const makeClientShellLayer = (payload: ClientShellDefinition): Layer.Layer<ClientShell> =>
   Layer.succeed(ClientShell, payload)
-
-// ── ClientDriver ─────────────────────────────────────────────────────────
-
-export interface ClientDriverDefinition {
-  readonly list: Effect.Effect<
-    {
-      readonly drivers: ReadonlyArray<{ readonly _tag: "model" | "external"; readonly id: string }>
-    },
-    Error
-  >
-  readonly set: (input: {
-    readonly agentName: AgentName
-    readonly driver: DriverRef
-  }) => Effect.Effect<void, Error>
-  readonly clear: (input: { readonly agentName: AgentName }) => Effect.Effect<void, Error>
-}
-
-export class ClientDriver extends Context.Service<ClientDriver, ClientDriverDefinition>()(
-  "@gent/tui/src/extensions/client-services/ClientDriver",
-) {}
-
-export const makeClientDriverLayer = (payload: ClientDriverDefinition): Layer.Layer<ClientDriver> =>
-  Layer.succeed(ClientDriver, payload)
 
 // ── ClientLifecycle ──────────────────────────────────────────────────────
 

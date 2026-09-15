@@ -3,7 +3,7 @@ import { Deferred, Effect, Layer, ManagedRuntime, Option } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import {
-  makeClientDriverLayer,
+  type ClientShellDefinition,
   makeClientLifecycleLayer,
   makeClientShellLayer,
   makeClientWorkspaceLayer,
@@ -26,6 +26,8 @@ export type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
 
 export interface ClientExtensionHarnessOptions {
   readonly transport?: ClientShellTransportDefinition
+  /** Shell callbacks a test wants to observe; the rest stay no-ops. */
+  readonly shell?: Partial<ClientShellDefinition>
   // eslint-disable-next-line effect/noNullish -- Test harness mirrors ClientTransport's optional callback.
   readonly currentSession?: () => ActiveClientSession | undefined
   readonly activeSession?: ActiveClientSessionRef
@@ -88,11 +90,7 @@ export const makeClientExtensionRuntime = (
         cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
           Effect.runFork(effect)
         },
-      }),
-      makeClientDriverLayer({
-        list: Effect.succeed({ drivers: [], overrides: {} }),
-        set: () => Effect.void,
-        clear: () => Effect.void,
+        ...Option.getOrElse(Option.fromUndefinedOr(opts.shell), () => ({})),
       }),
       makeClientTransportLayer(opts.transport ?? makeClientTestTransport(opts)),
       makeClientLifecycleLayer({ addCleanup: () => {} }),

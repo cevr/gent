@@ -15,7 +15,6 @@ import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
 import {
-  makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
   makeClientWorkspaceLayer,
@@ -66,11 +65,6 @@ const testRuntime = ManagedRuntime.make(
       switchSession: () => {},
       run: runTestShellEffect,
       cast: castTestShellEffect,
-    }),
-    makeClientDriverLayer({
-      list: Effect.succeed({ drivers: [], overrides: {} }),
-      set: () => Effect.void,
-      clear: () => Effect.void,
     }),
     makeClientTransportLayer({
       client: stubClient,

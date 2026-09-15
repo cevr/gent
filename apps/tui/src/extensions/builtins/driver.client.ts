@@ -18,14 +18,15 @@
 import { Effect, Option } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/protocol"
-import { ClientDriver, ClientShell } from "../client-services"
+import { ClientShell } from "../client-services"
+import { ClientTransport } from "../client-transport"
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"
 
 export default defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
-    const driverClient = yield* ClientDriver
+    const transport = yield* ClientTransport
     return clientCommandContribution({
       id: "driver.route",
       title: "Driver routing",
@@ -55,7 +56,7 @@ export default defineClientExtension("@gent/driver-ui", {
         const agentName = AgentName.make(rawAgentName.value)
         if (driverArg.value === "default" || driverArg.value === "clear") {
           void shell
-            .run(driverClient.clear({ agentName }))
+            .run(transport.driverClear({ agentName }))
             .then(() => {
               shell.sendMessage(`Cleared driver override for "${agentName}".`)
             })
@@ -67,7 +68,7 @@ export default defineClientExtension("@gent/driver-ui", {
         void shell
           .run(
             Effect.gen(function* () {
-              const { drivers } = yield* driverClient.list
+              const { drivers } = yield* transport.driverList
               const matches = drivers.filter((driver) => driver.id === driverArg.value)
               if (matches.length === 0) {
                 shell.sendMessage(`Unknown driver "${driverArg.value}".`)
@@ -85,7 +86,7 @@ export default defineClientExtension("@gent/driver-ui", {
                 }
                 return ModelDriverRef.make({ id: match.value.id })
               })()
-              yield* driverClient.set({ agentName, driver })
+              yield* transport.driverSet({ agentName, driver })
               return true
             }),
           )

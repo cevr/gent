@@ -32,7 +32,7 @@ import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 import type { ClientActivity } from "./client-activity"
 import type { ClientTransport } from "./client-transport"
-import type { ClientDriver, ClientLifecycle, ClientShell, ClientWorkspace } from "./client-services"
+import type { ClientLifecycle, ClientShell, ClientWorkspace } from "./client-services"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -58,7 +58,6 @@ export type ClientRuntimeServices =
   | ClientTransport
   | ClientWorkspace
   | ClientShell
-  | ClientDriver
   | ClientLifecycle
   | ClientActivity
 

@@ -40,7 +40,6 @@ import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,
   makeClientShellLayer,
-  makeClientDriverLayer,
   makeClientLifecycleLayer,
 } from "./client-services"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
@@ -89,12 +88,6 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   interactionRenderers: new Map(),
   borderLabels: [],
   autocompleteItems: [],
-}
-
-const toError = (cause: unknown): Error => {
-  if (cause instanceof Error) return cause
-  // eslint-disable-next-line effect/noNewError -- the client service boundary requires an Error value.
-  return new Error(String(cause))
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -181,11 +174,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         switchSession: (input) => switchSessionDispatch()(input),
         run: client.runtime.run,
         cast: client.runtime.cast,
-      }),
-      makeClientDriverLayer({
-        list: client.client.driver.list().pipe(Effect.mapError(toError)),
-        set: (input) => client.client.driver.set(input).pipe(Effect.mapError(toError)),
-        clear: (input) => client.client.driver.clear(input).pipe(Effect.mapError(toError)),
       }),
       makeClientLifecycleLayer({ addCleanup }),
     ),

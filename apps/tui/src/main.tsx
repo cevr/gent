@@ -71,7 +71,6 @@ import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientTransportLayer } from "./extensions/client-transport"
 import {
-  makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
   makeClientWorkspaceLayer,
@@ -92,12 +91,6 @@ clearClientLog()
 
 const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
-
-const toError = (cause: unknown): Error => {
-  if (cause instanceof Error) return cause
-  // eslint-disable-next-line effect/noNewError -- the client service boundary requires an Error value.
-  return new Error(String(cause))
-}
 
 const waitForRendererDestroy = (renderer: CliRenderer) =>
   Effect.callback<void>((resume) => {
@@ -196,11 +189,6 @@ const runHeadlessTurn = (
         switchSession: () => {},
         run: bundle.runtime.run,
         cast: bundle.runtime.cast,
-      }),
-      makeClientDriverLayer({
-        list: bundle.client.driver.list().pipe(Effect.mapError(toError)),
-        set: (input) => bundle.client.driver.set(input).pipe(Effect.mapError(toError)),
-        clear: (input) => bundle.client.driver.clear(input).pipe(Effect.mapError(toError)),
       }),
       makeClientLifecycleLayer({ addCleanup: () => {} }),
     ),
