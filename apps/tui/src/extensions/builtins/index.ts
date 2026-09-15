@@ -19,7 +19,7 @@ import {
   interactionRendererContribution,
   widgetContribution,
 } from "../client-facets.js"
-import { requestExtension } from "../client-transport"
+import { ClientTransport } from "../client-transport"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils/truncate"
@@ -48,7 +48,8 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
       title: "Skills",
       items: (filter: string) =>
         Effect.gen(function* () {
-          const skills = yield* requestExtension(ref(SkillsRpc.ListSkills), {})
+          const transport = yield* ClientTransport
+          const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
           const lowerFilter = filter.toLowerCase()
           return skills
             .filter((s) => s.name.toLowerCase().includes(lowerFilter))

@@ -7,7 +7,7 @@
  *  deleted the paired-package snapshot cache. Widgets that need
  * server-side state subscribe to `ClientTransport.onSessionEvent` or
  * `ClientTransport.onExtensionStateChanged` and call
- * `requestExtension(...)` directly — see e.g.
+ * `ClientTransport.request(...)` directly — see e.g.
  * `builtins/tool-renderers.client.tsx`.
  */
 

@@ -14,7 +14,8 @@
  *   export default defineClientExtension("@gent/x", {
  *     id: "@gent/x",
  *     setup: Effect.gen(function* () {
- *       const result = yield* requestExtension(ref(MyRpc.List), {})
+ *       const transport = yield* ClientTransport
+ *       const result = yield* transport.request(ref(MyRpc.List), {})
  *       return [...]
  *     }),
  *   })
@@ -315,37 +316,3 @@ const agentDetailAt = (
       ),
     })),
   )
-
-export function requestExtension<Input, Output>(
-  ref: CapabilityRef<Input, Output>,
-  input: Input,
-): Effect.Effect<
-  Output,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  ClientTransport
->
-export function requestExtension<Input, Output>(
-  ref: CapabilityRef<Input, Output>,
-  input: Input,
-  transport: ClientTransportDefinition,
-  activeSession?: ActiveExtensionSession,
-): Effect.Effect<
-  Output,
-  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  never
->
-export function requestExtension<Input, Output>(
-  ref: CapabilityRef<Input, Output>,
-  input: Input,
-  transport?: ClientTransportDefinition,
-  activeSession?: ActiveExtensionSession,
-) {
-  const transportOption = Option.fromNullishOr(transport)
-  if (Option.isSome(transportOption)) {
-    return transportOption.value.request(ref, input, activeSession)
-  }
-  return Effect.gen(function* () {
-    const service = yield* ClientTransport
-    return yield* service.request(ref, input)
-  })
-}

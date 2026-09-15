@@ -18,7 +18,6 @@ import {
   type ClientShellTransportDefinition,
   type ClientTransportDefinition,
   NoActiveSessionError,
-  requestExtension,
 } from "../src/extensions/client-transport"
 import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
@@ -69,6 +68,11 @@ const makeFakeTransport = (
   })
 const makeTestRuntime = (transport: ClientShellTransportDefinition) =>
   makeClientExtensionRuntime({ transport })
+/** The extension-side call: yield the transport, request against the active session. */
+const listThings = Effect.gen(function* () {
+  const transport = yield* ClientTransport
+  return yield* transport.request(ref(ListThingsRpc), {})
+})
 describe("autocomplete Effect items() through ClientTransport", () => {
   it.live("Effect items yielding ClientTransport resolves via runtime.runPromise", () =>
     Effect.gen(function* () {
@@ -95,13 +99,11 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("requestExtension fails with NoActiveSessionError when no session active", () =>
+  it.live("transport.request fails with NoActiveSessionError when no session active", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({ currentSession: () => absent })
       const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.promise(() =>
-        runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
-      )
+      const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         // The cause should carry the typed NoActiveSessionError.
@@ -111,7 +113,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("popup adapter pattern: requestExtension failure normalizes to []", () =>
+  it.live("popup adapter pattern: transport.request failure normalizes to []", () =>
     Effect.gen(function* () {
       // The popup wraps `runAutocompleteItems(...).catch(() => [])` per
       // `autocomplete-popup.tsx:70`. Prove that pattern still produces an empty
@@ -123,7 +125,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         title: "Test",
         items: (_filter: string) =>
           Effect.gen(function* () {
-            const reply = yield* requestExtension(ref(ListThingsRpc), {})
+            const reply = yield* listThings
             return reply.map((label) => ({ id: label, label }))
           }),
       }
@@ -134,34 +136,12 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("requestExtension dispatches extension.request through the transport runtime", () =>
+  it.live("transport.request dispatches extension.request through the transport runtime", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
       const runtime = makeTestRuntime(transport)
-      const result = yield* Effect.promise(() =>
-        runRuntimeEffectBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
-      )
+      const result = yield* Effect.promise(() => runRuntimeEffectBoundary(runtime, listThings))
       expect(result).toEqual(["effect-v4", "react"])
-      yield* Effect.promise(() => runtime.dispose())
-    }),
-  )
-  it.live("popup adapter pattern: requestExtension failure normalizes to []", () =>
-    Effect.gen(function* () {
-      const transport = makeFakeTransport({ currentSession: () => absent })
-      const runtime = makeTestRuntime(transport)
-      const contribution: AutocompleteContribution = {
-        prefix: "$",
-        title: "Test",
-        items: (_filter: string) =>
-          Effect.gen(function* () {
-            const reply = yield* requestExtension(ref(ListThingsRpc), {})
-            return reply.map((label) => ({ id: label, label }))
-          }),
-      }
-      const result = yield* Effect.tryPromise(() =>
-        runAutocompleteItems(contribution, "filter", runtime),
-      ).pipe(Effect.catchEager(() => Effect.succeed(emptyItems)))
-      expect(result).toEqual([])
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -169,15 +149,13 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     const err = new NoActiveSessionError()
     expect(err._tag).toBe("NoActiveSessionError")
   })
-  it.live("requestExtension seals transport failures to ClientTransportRequestError", () =>
+  it.live("transport.request seals transport failures to ClientTransportRequestError", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({
         requestEffect: () => Effect.fail(new AutocompleteTestError({ message: "transport boom" })),
       })
       const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.promise(() =>
-        runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
-      )
+      const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const causeStr = String(exit.cause)
@@ -187,13 +165,11 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("requestExtension seals decode failures to ClientTransportReplyDecodeError", () =>
+  it.live("transport.request seals decode failures to ClientTransportReplyDecodeError", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport({ requestReply: { nope: true } })
       const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.promise(() =>
-        runRuntimeExitBoundary(runtime, requestExtension(ref(ListThingsRpc), {})),
-      )
+      const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const causeStr = String(exit.cause)
