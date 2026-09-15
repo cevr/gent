@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Schema,
   Scope,
@@ -18,13 +19,14 @@ import {
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
+  AgentRunError,
   ExtensionContext,
   headTailChars,
   maximumModelToolResultChars,
   tool,
   type ExtensionContextService,
   type SessionId,
-  ToolCallId,
+  type ToolCallId,
 } from "@gent/core/extensions/api"
 import {
   BackgroundBashStorage,
@@ -324,7 +326,7 @@ export interface BackgroundBashSupervisorService {
     job: BackgroundBashJob,
   ) => Effect.Effect<
     void,
-    BackgroundBashStorageError,
+    BackgroundBashStorageError | AgentRunError,
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | ExtensionContext
   >
 }
@@ -342,8 +344,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
   BackgroundBashSupervisor,
   Effect.gen(function* () {
     const storage = yield* BackgroundBashStorage
-    const scope = yield* Scope.make()
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void).pipe(Effect.asVoid))
+    const scope = yield* Effect.scope
     const gate = yield* Semaphore.make(1)
     const state = yield* Ref.make<BackgroundBashState>({
       active: new Map(),
@@ -396,10 +397,15 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     const start = (job: BackgroundBashJob) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
+        if (Predicate.isUndefined(ctx.toolCallId)) {
+          return yield* new AgentRunError({
+            message: "Background bash requires a host-owned tool call",
+          })
+        }
         const target: BackgroundBashTarget = {
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
-          toolCallId: ctx.toolCallId ?? ToolCallId.make("unknown"),
+          toolCallId: ctx.toolCallId,
           Session: ctx.Session,
         }
         const key = backgroundJobKey(target)

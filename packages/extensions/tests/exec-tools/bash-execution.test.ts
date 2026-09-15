@@ -402,6 +402,24 @@ describe("BashTool execution", () => {
   )
 
   it.live(
+    "background bash without a host-owned tool call fails closed",
+    () =>
+      Effect.gen(function* () {
+        const { toolCallId: _dropped, ...withoutToolCall } = stubCtx
+        const outcome = yield* Effect.exit(
+          runToolWithCtx(
+            BashTool,
+            { command: "printf never-runs", run_in_background: true },
+            withoutToolCall,
+          ).pipe(provideBun),
+        )
+
+        expect(Exit.isFailure(outcome)).toBe(true)
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
     "background process is cancelled with the supervisor scope",
     () =>
       Effect.gen(function* () {
