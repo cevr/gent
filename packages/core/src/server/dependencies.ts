@@ -39,7 +39,7 @@ import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { ProcessRunnerLive } from "../runtime/run-process.js"
-import { CurrentWorkspaceId, WorkspaceId } from "./workspace-rpc.js"
+import { CurrentWorkspaceId, workspaceIdForCwd } from "./workspace-rpc.js"
 
 interface DependencyOverrides {
   readonly authLayer?: Layer.Layer<Auth>
@@ -197,10 +197,9 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.unwrap(
       Effect.gen(function* () {
         const cache = yield* SessionProfileCache
-        const path = yield* Path.Path
-        const platform = yield* GentPlatform
-        const launchCwd = path.resolve(config.cwd)
-        const launchWorkspaceId = WorkspaceId.make(platform.hash("sha256", launchCwd))
+        // Same derivation the client used for its `x-gent-workspace-id`
+        // header; a second one here would split the workspace silently.
+        const launchWorkspaceId = workspaceIdForCwd(config.cwd)
         const profile = yield* cache
           .resolve(config.cwd)
           .pipe(Effect.provideService(CurrentWorkspaceId, launchWorkspaceId))

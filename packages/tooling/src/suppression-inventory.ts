@@ -22,24 +22,6 @@ interface ApprovedSuppressionEntry {
 
 const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
-    file: "apps/server/src/main.ts",
-    line: 154,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line globalConsoleInEffect:off",
-  },
-  {
-    file: "apps/server/src/main.ts",
-    line: 157,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line globalConsoleInEffect:off",
-  },
-  {
-    file: "apps/server/src/main.ts",
-    line: 205,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
-  },
-  {
     file: "apps/tui/src/main.tsx",
     line: 105,
     kind: "effect-diagnostics",
@@ -106,16 +88,16 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
   },
   {
-    file: "packages/sdk/src/transport-headers.ts",
-    line: 1,
+    file: "packages/core/src/server/workspace-rpc.ts",
+    line: 4,
     kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — SDK transport computes stable local workspace ids.",
+    text: "// @effect-diagnostics nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd",
   },
   {
-    file: "packages/sdk/src/transport-headers.ts",
-    line: 3,
+    file: "packages/core/src/server/workspace-rpc.ts",
+    line: 6,
     kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — SDK transport canonicalizes caller cwd before hashing.",
+    text: "// @effect-diagnostics nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing",
   },
   {
     file: "packages/sdk/src/server.ts",
@@ -158,12 +140,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     line: 6,
     kind: "effect-diagnostics",
     text: "// @effect-diagnostics nodeBuiltinImport:off",
-  },
-  {
-    file: "packages/core/tests/server/interaction-commands.test.ts",
-    line: 3,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off -- mirrors SDK workspace hashing in a restart fixture.",
   },
   {
     file: "packages/core/tests/server/interaction-commands.test.ts",

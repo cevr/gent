@@ -1,6 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Fiber, Layer, Schema, Stream } from "effect"
-import { createHash } from "node:crypto"
 import { LoadedArtifactIdentity, type LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, InteractionRequestId } from "../../src/domain/ids"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
@@ -14,7 +13,7 @@ import { InteractionStorage } from "../../src/storage/interaction-storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc.js"
+import { CurrentWorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc.js"
 import { encodeInteractionDecision } from "../../src/domain/interaction-request.js"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
@@ -47,8 +46,9 @@ const InteractionProbeExtension: LoadedExtension = {
   },
 }
 
-const currentTestWorkspaceId = () =>
-  WorkspaceId.make(createHash("sha256").update(process.cwd()).digest("hex"))
+// The same derivation the server and its clients use; a third copy here
+// would be a third thing to keep in step.
+const currentTestWorkspaceId = () => workspaceIdForCwd(process.cwd())
 
 describe("interaction.respondInteraction", () => {
   it.scopedLive(

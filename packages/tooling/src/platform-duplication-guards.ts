@@ -256,6 +256,12 @@ const protectedHostFactFile = (file: string): boolean =>
   !file.includes("/test-utils/") &&
   file !== "packages/core/src/runtime/gent-platform-bun.ts" &&
   file !== "packages/core/src/runtime/gent-platform.ts" &&
+  // The workspace id is a wire constant, not a host fact. A client and its
+  // server derive it in separate processes and must agree byte for byte, so
+  // it is pinned to node:crypto sha256 rather than routed through
+  // GentPlatform.hash, which a future adapter could implement differently.
+  // This is the sole owner of that derivation; see its JSDoc.
+  file !== "packages/core/src/server/workspace-rpc.ts" &&
   // The cell worker entry is a process entrypoint; it reads its own working directory once.
   file !== "packages/extensions/src/cell/main.ts"
 
