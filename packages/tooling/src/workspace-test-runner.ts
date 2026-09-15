@@ -1,18 +1,6 @@
-import { BunRuntime } from "@effect/platform-bun"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Clock, Console, Effect, Option } from "effect"
-
-interface WorkspacePackage {
-  readonly name: string
-  readonly cwd: string
-}
-
-const packages: ReadonlyArray<WorkspacePackage> = [
-  { name: "@gent/core", cwd: "packages/core" },
-  { name: "@gent/extensions", cwd: "packages/extensions" },
-  { name: "@gent/tooling", cwd: "packages/tooling" },
-  { name: "@gent/sdk", cwd: "packages/sdk" },
-  { name: "@gent/tui", cwd: "apps/tui" },
-]
+import { discoverTestPackages, type WorkspacePackage } from "./workspace-test-packages"
 
 const prefixStream = Effect.fn("Tooling.prefixStream")(function* (
   stream: ReadableStream<Uint8Array>,
@@ -57,12 +45,13 @@ const runPackage = Effect.fn("Tooling.runPackage")(function* ({ name, cwd }: Wor
 
 const program = Effect.gen(function* () {
   const started = yield* Clock.currentTimeMillis
+  const packages = yield* discoverTestPackages(process.cwd())
   const results = yield* Effect.all(packages.map(runPackage), { concurrency: packages.length })
   const elapsedMs = (yield* Clock.currentTimeMillis) - started
   yield* Console.log(`  Time:    ${(elapsedMs / 1_000).toFixed(3)}s `)
 
   const failedExitCode = Option.fromNullishOr(results.find((code) => code !== 0))
   if (Option.isSome(failedExitCode)) return yield* Effect.fail(failedExitCode.value)
-})
+}).pipe(Effect.provide(BunServices.layer))
 
 BunRuntime.runMain(program)
