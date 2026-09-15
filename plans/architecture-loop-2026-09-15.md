@@ -273,12 +273,12 @@ src 27,571 LOC after the C17 split. `turn-source.ts`, `turn-window.ts`, `turn-pe
 
 | #   | Finding                                                                                                                                                                             | Verdict         | Status |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------ |
-| C18 | `findPersistedEvent` / `findPersistedToolResults` in `turn-persistence.ts` scan the whole branch log for a point lookup; `EventStorage.getLatestEvent` already answers it           | Strong          | open   |
-| C19 | `AuthGuard.requiredProviders`, `missingRequiredProviders` and `AuthGuard.Test` have no production caller; only `listProviders` is read                                              | Strong          | open   |
-| C20 | `getSessionSnapshot` reads the branch log twice — its own `listEvents` plus actor `GetMetrics`; the handler can fold metrics over the events it already holds and drop `GetMetrics` | Worth exploring | open   |
-| C21 | `persistDurableMessage` (`turn-source.ts:317`) re-implements `persistMessageReceived`; delegate instead                                                                             | Worth exploring | open   |
-| C22 | `AgentRunSucceeded` is assembled at two sites (`agent-runner.ts:508`, `child-completion.ts:145`); one shared `childRunSucceeded` recipe                                             | Worth exploring | open   |
-| C23 | `SessionRuntime.Live` is a composition root only tests run; production composes `Client` + `AgentLoopLiveActor` itself                                                              | Worth exploring | open   |
+| C18 | `findPersistedEvent` / `findPersistedToolResults` in `turn-persistence.ts` scan the whole branch log for a point lookup; `EventStorage.getLatestEvent` already answers it           | Strong          | rejected (`getLatestEvent` cannot answer it: `MessageReceived` nests its id at `$.message.id` but the filter reads `$.messageId`, and both callers need the envelope id that a bare `AgentEvent` drops) |
+| C19 | `AuthGuard.requiredProviders`, `missingRequiredProviders` and `AuthGuard.Test` have no production caller; only `listProviders` is read                                              | Strong          | done (96e5bd8f)   |
+| C20 | `getSessionSnapshot` reads the branch log twice — its own `listEvents` plus actor `GetMetrics`; the handler can fold metrics over the events it already holds and drop `GetMetrics` | Worth exploring | done (610e07a2)   |
+| C21 | `persistDurableMessage` (`turn-source.ts:317`) re-implements `persistMessageReceived`; delegate instead                                                                             | Worth exploring | done (f43f095f)   |
+| C22 | `AgentRunSucceeded` is assembled at two sites (`agent-runner.ts:508`, `child-completion.ts:145`); one shared `childRunSucceeded` recipe                                             | Worth exploring | done (dcad4ebc)   |
+| C23 | `SessionRuntime.Live` is a composition root only tests run; production composes `Client` + `AgentLoopLiveActor` itself                                                              | Worth exploring | rejected (four test callers each pass the same config; inlining would duplicate `AgentLoopLiveActor` wiring across four files and pull an internal actor layer into each) |
 
 ## sdk / server / tooling / e2e — pass 5 (2026-09-15, after `3639ef82`)
 
