@@ -38,7 +38,7 @@ import {
 } from "../../domain/agent.js"
 import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import type { Message, MessageMetadata } from "../../domain/message.js"
+import { isRuntimeUserMessage, type Message, type MessageMetadata } from "../../domain/message.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
@@ -499,13 +499,14 @@ export const makeAgentLoopBehavior = (
           return []
         }),
       )
-      // Continuation prompts belong to the turn that persisted them; they
-      // never complete on their own and must not start a turn of their own.
+      // Continuation prompts, handoff markers, and model-change notices are
+      // the runtime's own user-role lines; none completes on its own and none
+      // must start a turn of its own.
       const incomplete = envelopes.flatMap(({ event }) => {
         if (
           event._tag === "MessageReceived" &&
           event.message.role === "user" &&
-          event.message.metadata?.customType !== "continuation" &&
+          !isRuntimeUserMessage(event.message) &&
           !completed.has(event.message.id)
         ) {
           return [event.message]

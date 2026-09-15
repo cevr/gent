@@ -40,6 +40,20 @@ export type MessagePart = Prompt.Part
 export const MessageRole = Schema.Literals(["user", "assistant", "system", "tool"])
 export type MessageRole = typeof MessageRole.Type
 
+/**
+ * Custom types of the user-role messages the runtime writes for the model:
+ * a continuation prompt inside a turn, a context-window handoff marker, and
+ * the model-change notice. None of them is a turn a person asked for, so
+ * recovery never answers one on its own.
+ */
+export const RuntimeUserMessageType = Schema.Literals([
+  "continuation",
+  "context-window",
+  "model-change",
+])
+export type RuntimeUserMessageType = typeof RuntimeUserMessageType.Type
+const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
+
 // Message Metadata — extension-authored envelope for hidden/custom messages
 
 export const MessageMetadata = Schema.Struct({
@@ -194,3 +208,9 @@ export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded>
 
 export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:assistant:${step}`)
+
+/** A user-role message the runtime wrote for the model, not a turn to answer. */
+export const isRuntimeUserMessage = (message: {
+  readonly role: MessageRole
+  readonly metadata?: MessageMetadata
+}): boolean => message.role === "user" && isRuntimeUserMessageType(message.metadata?.customType)

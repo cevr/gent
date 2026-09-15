@@ -15,7 +15,13 @@ import {
 } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { BranchId, MessageId, type RequestId, SessionId } from "../domain/ids.js"
-import { Branch, Message, Session, copyMessageToBranch } from "../domain/message.js"
+import {
+  Branch,
+  Message,
+  type RuntimeUserMessageType,
+  Session,
+  copyMessageToBranch,
+} from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
@@ -144,7 +150,7 @@ const makeSessionMutationsService: Effect.Effect<
       return committed.result
     })
 
-  const MODEL_CHANGE_MESSAGE_TYPE = "model-change"
+  const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
 
   /**
    * A durable user-role line the model reads on its next turn when the

@@ -2,11 +2,11 @@ import { Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId } from "../domain/ids.js"
-import { Message } from "../domain/message.js"
+import { Message, type RuntimeUserMessageType } from "../domain/message.js"
 import { ModelId } from "../domain/model.js"
 
 /** Custom type of the durable marker that starts a context window. */
-export const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
+export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-window"
 
 /** The history a handoff marker summarizes; every message in it stays durable and readable by id. */
 const ContextHandoffSummary = Schema.Struct({

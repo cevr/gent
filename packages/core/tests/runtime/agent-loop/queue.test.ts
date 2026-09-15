@@ -15,6 +15,7 @@ import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { EventStorage } from "../../../src/storage/event-storage"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
+import { windowMarkerMessage } from "../../../src/runtime/model-context-window"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
@@ -446,6 +447,99 @@ describe("queue drain regression", () => {
             const eventStorage = yield* EventStorage
             yield* eventStorage.appendEvent(MessageReceived.make({ message }))
             yield* eventStorage.appendEvent(MessageReceived.make({ message: continuation }))
+            yield* eventStorage.appendEvent(
+              TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const state = yield* agentLoop.getState({ sessionId, branchId })
+            expect(state._tag).toBe("Idle")
+            const called = yield* Deferred.await(providerCalled).pipe(
+              Effect.timeout("500 millis"),
+              Effect.option,
+            )
+            expect(Option.isNone(called)).toBe(true)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "startup does not answer a context handoff marker as a user turn",
+    () =>
+      Effect.gen(function* () {
+        // A handoff marker is a user-role message the loop persists mid-turn.
+        // Seen on the gamut at a 20k window: reopening a finished child took
+        // the marker for an unanswered turn and the provider rejected the
+        // transcript, which ended with the assistant reply.
+        const sessionId = SessionId.make("session-loop-marker-replay")
+        const branchId = BranchId.make("branch-loop-marker-replay")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("replayed"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry(),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          ApprovalService.Test(),
+          BunServices.layer,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+        const messageId = MessageId.make("msg-marker-replay")
+        const message = Message.cases.regular.make({
+          id: messageId,
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: "answer me" })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+        const reply = Message.cases.regular.make({
+          id: MessageId.make("msg-marker-reply"),
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [Prompt.textPart({ text: "answered" })],
+          createdAt: dateFromMillis(1_767_225_600_001),
+        })
+        const marker = windowMarkerMessage({
+          sessionId,
+          branchId,
+          keepFromMessageId: reply.id,
+          notice: "Context handoff.",
+          createdAt: dateFromMillis(1_767_225_600_002),
+        })
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: reply }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: marker }))
             yield* eventStorage.appendEvent(
               TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
             )
