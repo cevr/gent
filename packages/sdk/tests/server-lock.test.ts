@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
+import { Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
@@ -174,6 +174,41 @@ describe("Server Lock", () => {
         })
         expect(server._tag).toBe("attached")
         expect(server.url).toBe(entryWithEndpoint.rpcUrl)
+      }),
+    ),
+  )
+
+  it.scopedLive("a second sqlite Gent.server on the same dbPath attaches to the live owner", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const dbPath = `${home}/data.db`
+        const options = {
+          cwd: home,
+          state: Gent.state.sqlite({ home, dbPath }),
+          provider: Gent.provider.mock(),
+        }
+
+        const owner = yield* Gent.server(options)
+        expect(owner._tag).toBe("owned")
+        const ownerStatus = yield* (yield* Gent.client(owner)).client.runtime.status()
+
+        const attached = yield* Gent.server(options)
+        expect(attached._tag).toBe("attached")
+        expect(attached.url).toBe(owner.url)
+
+        const response = yield* Effect.promise(() =>
+          Bun.fetch(`${attached.url.replace("/rpc", "")}/_gent/identity`),
+        )
+        const identity = yield* Effect.promise(() => response.json()).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Struct({ serverId: Schema.String, pid: Schema.Finite }),
+            ),
+          ),
+        )
+        expect(identity.serverId).toBe(ownerStatus.serverId)
+        expect(identity.pid).toBe(ownerStatus.pid)
       }),
     ),
   )

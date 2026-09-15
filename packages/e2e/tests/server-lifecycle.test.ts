@@ -3,10 +3,10 @@
  * Tests identity route, connection tracking, idle shutdown, and reconnects.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Exit, Random, Schema, Scope } from "effect"
-import { extractText, Gent } from "@gent/sdk"
+import { Effect, Exit, Random, Scope } from "effect"
+import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
-import { toTestFailure, waitFor } from "./test-failure-boundary"
+import { toTestFailure } from "./test-failure-boundary"
 import {
   killProcess,
   spawnIdleServer,
@@ -15,10 +15,6 @@ import {
   waitUntil,
 } from "../src/server-process-fixture"
 
-const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
-  /\/$/,
-  "",
-)
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
 describe("server lifecycle", () => {
@@ -95,108 +91,6 @@ describe("server lifecycle", () => {
 
           const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
           expect(exitCode).toBe(0)
-        }),
-      ),
-    15_000,
-  )
-
-  it.live(
-    "two Gent.server calls with same dbPath share one server",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const dbPath = `${dataDir}/data.db`
-
-          const server1 = yield* Gent.server({
-            cwd: repoRoot,
-            state: Gent.state.sqlite({ home: dataDir, dbPath }),
-            provider: Gent.provider.mock(),
-          })
-          const bundle1 = yield* Gent.client(server1)
-
-          const status1 = yield* bundle1.client.runtime
-            .status()
-            .pipe(Effect.mapError(toTestFailure))
-          const pid1 = status1.pid
-
-          const server2 = yield* Gent.server({
-            cwd: repoRoot,
-            state: Gent.state.sqlite({ home: dataDir, dbPath }),
-            provider: Gent.provider.mock(),
-          })
-          expect(server2._tag).toBe("attached")
-
-          const baseUrl = server2.url.replace("/rpc", "")
-          const response = yield* Effect.tryPromise(() =>
-            Bun.fetch(`${baseUrl}/_gent/identity`),
-          ).pipe(Effect.mapError(toTestFailure))
-          const identity = yield* Effect.tryPromise(() => response.json()).pipe(
-            Effect.mapError(toTestFailure),
-            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ pid: Schema.Finite }))),
-            Effect.mapError(toTestFailure),
-          )
-          expect(identity.pid).toBe(pid1)
-        }),
-      ),
-    20_000,
-  )
-
-  it.live(
-    "single owned server isolates persisted session reads by client workspace",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const cwdA = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const cwdB = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const server = yield* Gent.server({
-            cwd: cwdA,
-            state: Gent.state.memory(),
-            provider: Gent.provider.mock(),
-          })
-          const clientA = (yield* Gent.client(server, { cwd: cwdA })).client
-          const clientB = (yield* Gent.client(server, { cwd: cwdB })).client
-
-          const created = yield* clientA.session
-            .create({ name: "Workspace A", cwd: cwdA })
-            .pipe(Effect.mapError(toTestFailure))
-          yield* clientA.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "workspace-a-message",
-            })
-            .pipe(Effect.mapError(toTestFailure))
-
-          yield* waitFor(
-            clientA.message
-              .list({ branchId: created.branchId })
-              .pipe(Effect.mapError(toTestFailure)),
-            (messages) =>
-              messages.some((message) => extractText(message.parts) === "workspace-a-message"),
-          )
-
-          const sessionsB = yield* clientB.session.list().pipe(Effect.mapError(toTestFailure))
-          const sessionB = yield* clientB.session
-            .get({ sessionId: created.sessionId })
-            .pipe(Effect.mapError(toTestFailure))
-          const branchesB = yield* clientB.branch
-            .list({ sessionId: created.sessionId })
-            .pipe(Effect.mapError(toTestFailure))
-          const messagesB = yield* clientB.message
-            .list({ branchId: created.branchId })
-            .pipe(Effect.mapError(toTestFailure))
-          const snapshotB = yield* Effect.result(
-            clientB.session
-              .getSnapshot({ sessionId: created.sessionId, branchId: created.branchId })
-              .pipe(Effect.mapError(toTestFailure)),
-          )
-
-          expect(sessionsB.map((session) => session.id)).not.toContain(created.sessionId)
-          expect(sessionB).toBeNull()
-          expect(branchesB).toEqual([])
-          expect(messagesB).toEqual([])
-          expect(snapshotB._tag).toBe("Failure")
         }),
       ),
     15_000,

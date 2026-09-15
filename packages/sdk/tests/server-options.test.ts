@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Schema, Scope } from "effect"
-import { Gent } from "../src/client"
-import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
+import { extractText, Gent } from "../src/client"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
 
 const ServerIdentity = Schema.Struct({
   serverId: Schema.String,
@@ -119,6 +119,55 @@ describe("Gent.server idle shutdown counts in-process clients", () => {
           yield* Scope.close(clientScope, Exit.void)
           yield* Gent.awaitShutdown(server).pipe(Effect.timeout("15 seconds"))
         }),
+      ),
+    30_000,
+  )
+})
+
+describe("Gent.server workspace isolation", () => {
+  it.live(
+    "a single owned server isolates persisted session reads by client workspace",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwdA = yield* makeTempDirectoryScoped("gent-server-options-")
+          const cwdB = yield* makeTempDirectoryScoped("gent-server-options-")
+          const server = yield* Gent.server({
+            cwd: cwdA,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const clientA = (yield* Gent.client(server, { cwd: cwdA })).client
+          const clientB = (yield* Gent.client(server, { cwd: cwdB })).client
+
+          const created = yield* clientA.session.create({ name: "Workspace A", cwd: cwdA })
+          yield* clientA.message.send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "workspace-a-message",
+          })
+
+          yield* waitFor(clientA.message.list({ branchId: created.branchId }), (messages) =>
+            messages.some((message) => extractText(message.parts) === "workspace-a-message"),
+          )
+
+          const sessionsB = yield* clientB.session.list()
+          const sessionB = yield* clientB.session.get({ sessionId: created.sessionId })
+          const branchesB = yield* clientB.branch.list({ sessionId: created.sessionId })
+          const messagesB = yield* clientB.message.list({ branchId: created.branchId })
+          const snapshotB = yield* Effect.result(
+            clientB.session.getSnapshot({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          )
+
+          expect(sessionsB.map((session) => session.id)).not.toContain(created.sessionId)
+          expect(sessionB).toBeNull()
+          expect(branchesB).toEqual([])
+          expect(messagesB).toEqual([])
+          expect(snapshotB._tag).toBe("Failure")
+        }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,
   )

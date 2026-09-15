@@ -6,7 +6,6 @@
  * assertions readable without widening each test's error type.
  */
 import { Schema } from "effect"
-export { waitFor } from "@gent/core-internal/test-utils/fixtures"
 
 export class TestFailure extends Schema.TaggedError<TestFailure>()("@gent/e2e/tests/TestFailure", {
   message: Schema.String,

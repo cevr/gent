@@ -11,6 +11,7 @@ import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
 import { declaredExports, findDeadExports, identifiersIn } from "./dead-exports"
+import { findE2eFixtureImportFindings } from "./e2e-fixture-imports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
@@ -96,6 +97,7 @@ const program = Effect.gen(function* () {
         ...findRetiredReconcilerFindings(file, text),
         ...findCoreVendorModelPins(file, text),
         ...findAliasTestLayers(file, text),
+        ...findE2eFixtureImportFindings(file, text),
       ]) {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }
