@@ -103,7 +103,11 @@ export interface GentServerOptions {
   readonly serverId?: string
   /** Login shell for extension process launches. */
   readonly shell?: string
-  /** Stop the owned server after this much client-free time. */
+  /**
+   * Stop the owned server after this much client-free time. Both kinds of
+   * client count: a WebSocket connection, and an in-process `Gent.client`
+   * for as long as its scope is open.
+   */
   readonly idleShutdown?: IdleShutdownSpec
 }
 
@@ -133,6 +137,13 @@ interface OwnedServerInternal {
    * so awaiting it keeps a launcher process alive.
    */
   readonly awaitShutdown: Effect.Effect<void>
+  /**
+   * Counts an in-process client for as long as its scope is open. Idle
+   * shutdown watches the connection count, and an in-process client opens no
+   * transport connection, so without this a server could stop itself while a
+   * `Gent.client(server)` was still holding it.
+   */
+  readonly trackInProcessClient: Effect.Effect<void, never, Scope.Scope>
 }
 
 /** WeakMap keyed by GentServer object identity — keeps handler context private */
@@ -396,12 +407,18 @@ const buildOwnedServer = (
         url,
         workspaceId: workspaceIdForCwd(options.cwd),
       })
+      // An in-process client opens no socket, so it registers here instead.
+      // The count drops again when the client's own scope closes.
+      const tracker = serverRoot.connectionTracker
+      const trackInProcessClient = Effect.acquireRelease(tracker.increment, () => tracker.decrement)
+
       ownedInternals.set(server, {
         handlerContext: serverRoot.rpcHandlersContext,
         port,
         serverId,
         headers: workspaceHeaders,
         awaitShutdown,
+        trackInProcessClient,
       })
 
       return server

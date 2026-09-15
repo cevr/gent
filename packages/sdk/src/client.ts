@@ -317,6 +317,10 @@ export const Gent = {
                   () => new GentConnectionError({ message: "owned server internal state missing" }),
                 ),
               )
+              // Idle shutdown counts clients, and an in-process one opens no
+              // socket for the transport tracker to see. Registering here keeps
+              // the server alive for as long as this client's scope is open.
+              yield* internal.trackInProcessClient
               const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
                 // oxlint-disable-next-line effect/noInlineProvide -- the owned client uses its server-owned handler context
                 Effect.provide(internal.handlerContext),
