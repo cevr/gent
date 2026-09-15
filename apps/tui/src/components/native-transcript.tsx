@@ -12,9 +12,9 @@ import {
   untrack,
   type JSX,
 } from "solid-js"
-import { RendererContext, useRenderer, writeSolidToScrollback } from "@opentui/solid"
-import type { ScrollBoxRenderable } from "@opentui/core"
-import { Effect, Option, Schema } from "effect"
+import { insert, RendererContext, useRenderer } from "@opentui/solid"
+import type { ScrollbackSurface, ScrollBoxRenderable } from "@opentui/core"
+import { Effect, Fiber, Option, Schema } from "effect"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useScopedKeyboard } from "../keyboard/context"
 import type { SessionItem } from "./message-list"
@@ -34,6 +34,11 @@ interface NativeTranscriptProps {
 }
 
 const fingerprint = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/** The surface did not settle before its timeout; the rows still commit as rendered. */
+class NativeSettleError extends Schema.TaggedError<NativeSettleError>()("NativeSettleError", {
+  message: Schema.String,
+}) {}
 
 /** Owns native history snapshots. The session feed remains the source of truth. */
 export function NativeTranscript(props: NativeTranscriptProps) {
@@ -91,36 +96,74 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     { when: () => props.expanded && !props.overlayOpen },
   )
 
-  const write = (items: SessionItem[]) => {
-    // Native history takes complete transcript items. Reserve only the composer while committing it.
-    const previousFooterHeight = renderer.footerHeight
-    Effect.runSync(
-      Effect.sync(() => {
-        renderer.footerHeight = props.footerHeight
-        writeSolidToScrollback(renderer, () => {
-          const snapshotRenderer = useRenderer()
-          let disposeSnapshot = () => {}
-          onCleanup(() => disposeSnapshot())
-          return runWithOwner(owner, () =>
-            createRoot((dispose) => {
-              disposeSnapshot = dispose
-              return (
-                <RendererContext.Provider value={snapshotRenderer}>
-                  {props.renderItems(items, false)}
-                </RendererContext.Provider>
-              )
-            }),
-          )
-        })
+  // Native history commits are serialized: markdown highlights arrive from the
+  // tree-sitter worker asynchronously, and scrollback is immutable once written,
+  // so each item renders on a surface, settles, and only then commits its rows.
+  let disposed = false
+  let nativeTail: Fiber.Fiber<void> = Effect.runFork(Effect.void)
+  const enqueueNative = (task: Effect.Effect<void>) => {
+    const previous = nativeTail
+    nativeTail = Effect.runFork(
+      Fiber.await(previous).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (disposed || renderer.isDestroyed) return Effect.void
+            return task
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("transcript.native-commit-failed").pipe(
+            Effect.annotateLogs({ cause: String(cause) }),
+          ),
+        ),
+      ),
+    )
+  }
+
+  const commitItems = (items: SessionItem[], footerHeight: number): Effect.Effect<void> =>
+    Effect.suspend(() => {
+      // Native history takes complete transcript items. Reserve only the composer while committing it.
+      const previousFooterHeight = renderer.footerHeight
+      renderer.footerHeight = footerHeight
+      const surface: ScrollbackSurface = renderer.createScrollbackSurface()
+      const surfaceRenderer = Object.create(surface.renderContext)
+      Object.defineProperties(surfaceRenderer, {
+        root: { get: () => surface.root, enumerable: true },
+        width: { get: () => surface.width, enumerable: true },
+        height: { get: () => surface.height, enumerable: true },
+      })
+      const disposeSnapshot = Option.fromNullishOr(
+        runWithOwner(owner, () =>
+          createRoot((dispose) => {
+            insert(surface.root, () => (
+              <RendererContext.Provider value={surfaceRenderer}>
+                {props.renderItems(items, false)}
+              </RendererContext.Provider>
+            ))
+            return dispose
+          }),
+        ),
+      )
+      return Effect.tryPromise({
+        try: () => surface.settle(2000),
+        catch: (error) => new NativeSettleError({ message: String(error) }),
       }).pipe(
+        // A highlight that never lands still commits; the row text is complete.
+        Effect.catch(() => Effect.sync(() => surface.render())),
+        Effect.andThen(Effect.sync(() => surface.commitRows(0, surface.height))),
         Effect.ensuring(
           Effect.sync(() => {
+            if (Option.isSome(disposeSnapshot)) disposeSnapshot.value()
+            surface.destroy()
             // Restoring the surface also flushes the queued snapshot before it grows.
             renderer.footerHeight = previousFooterHeight
           }),
         ),
-      ),
-    )
+      )
+    })
+
+  const write = (items: SessionItem[]) => {
+    enqueueNative(commitItems(items, props.footerHeight))
   }
 
   onMount(() => {
@@ -135,6 +178,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   })
 
   onCleanup(() => {
+    disposed = true
     renderer.off("frame", finishNativeReturn)
     if (renderer.isDestroyed) return
     renderer.externalOutputMode = "passthrough"
@@ -179,8 +223,13 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       renderer.once("frame", finishNativeReturn)
       // Layout and content changes invalidate saved snapshots.
       // Clear before the layout frame; replay only after its measurements arrive.
-      renderer.resetSplitFooterForReplay({ clearSavedLines: replayPending() })
-      renderer.requestRender()
+      const clearSavedLines = replayPending()
+      enqueueNative(
+        Effect.sync(() => {
+          renderer.resetSplitFooterForReplay({ clearSavedLines })
+          renderer.requestRender()
+        }),
+      )
     }
     if (!settlingNative) setNativeOutputReady(true)
   })
