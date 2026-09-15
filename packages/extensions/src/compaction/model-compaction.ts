@@ -52,6 +52,23 @@ const formatConversation = (messages: ReadonlyArray<Message>): string =>
     )
     .join("\n\n")
 
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * A long branch retains many cell names; the ones worth a line in the summary
+ * are those the kept window still uses, since their definitions just left it.
+ */
+export const referencedBindings = (
+  bindings: ReadonlyArray<string>,
+  kept: ReadonlyArray<Message>,
+): ReadonlyArray<string> => {
+  if (bindings.length === 0 || kept.length === 0) return []
+  const text = kept.map((message) => message.parts.map(partToText).join("\n")).join("\n")
+  return bindings.filter((name) =>
+    new RegExp(`(?<![\\w$])${escapeRegExp(name)}(?![\\w$])`).test(text),
+  )
+}
+
 /** A stateful tool keeps names across turns; the summary must say what they hold. */
 const bindingsNote = (bindings: ReadonlyArray<string>): string => {
   if (bindings.length === 0) return ""
@@ -183,7 +200,7 @@ export const handoffNotice = (params: {
 
 /** Summarize the history leaving the window into the notice the handoff marker carries. */
 export const compactModelContext = Effect.fn("ModelCompaction.compactModelContext")(function* (
-  params: Omit<CompactionRequest, "summaryModel"> & {
+  params: Omit<CompactionRequest, "summaryModel" | "kept"> & {
     readonly retainedBindings: ReadonlyArray<string>
     readonly summaryModel: Effect.Effect<
       LanguageModel.Service,
@@ -244,10 +261,10 @@ export const ModelContextCompactorLive = Layer.succeed(
             .list({ sessionId: request.sessionId, branchId: request.branchId })
             .pipe(Effect.catchTag("StorageError", () => Effect.succeed<ReadonlyArray<string>>([]))),
       })
-      const { summaryModel, ...rest } = request
+      const { summaryModel, kept, ...rest } = request
       return yield* compactModelContext({
         ...rest,
-        retainedBindings,
+        retainedBindings: referencedBindings(retainedBindings, kept),
         summaryModel: summaryModel(MODEL_COMPACTION_OUTPUT_TOKENS),
       })
     }),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Exit, type Layer, Option, Predicate, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -11,13 +11,19 @@ import {
   LanguageModelLayers,
   textDeltaPart,
 } from "@gent/core-internal/test-utils/language-model.js"
-import { ModelCompactionError } from "@gent/core-internal/runtime/model-context-compactor.js"
+import {
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "@gent/core-internal/runtime/model-context-compactor.js"
 import { ModelContextBudget } from "@gent/core-internal/runtime/model-context.js"
 import {
   compactModelContext,
   MODEL_COMPACTION_OUTPUT_TOKENS,
+  ModelContextCompactorLive,
+  referencedBindings,
   selectSummarySource,
 } from "../../src/compaction/model-compaction.js"
+import { RetainedBindings } from "../../src/compaction/tool-contracts.js"
 
 const sessionId = SessionId.make("compaction-session")
 const branchId = BranchId.make("compaction-branch")
@@ -150,6 +156,62 @@ describe("context handoff", () => {
       Effect.timeout("10 seconds"),
     )
   })
+
+  it.effect("only names the kept window still uses reach the bindings note", () =>
+    Effect.sync(() => {
+      const kept = [
+        textMessage("new-1", "user", "now join rows with the $index and print total", 5),
+        textMessage("new-2", "assistant", "rows.length is 40; indexed = rows.map(r => r.id)", 6),
+      ]
+      const retained = ["rows", "index", "$index", "total", "r", "indexed", "a.b"]
+      expect(referencedBindings(retained, kept)).toEqual([
+        "rows",
+        "$index",
+        "total",
+        "r",
+        "indexed",
+      ])
+      expect(referencedBindings(retained, [])).toEqual([])
+      expect(referencedBindings([], kept)).toEqual([])
+    }),
+  )
+
+  it.scopedLive(
+    "the compactor lists retained names, then keeps the ones the window references",
+    () => {
+      let user = ""
+      const retained = Layer.succeed(
+        RetainedBindings,
+        RetainedBindings.of({ list: () => Effect.succeed(["rows", "index", "scratch"]) }),
+      )
+      return Effect.gen(function* () {
+        const model = yield* LanguageModel.LanguageModel
+        const compactor = yield* ModelContextCompactor
+        const result = yield* compactor.compact({
+          modelId,
+          sessionId,
+          branchId,
+          history: history(),
+          kept: [textMessage("new-1", "user", "count rows and print index", 5)],
+          budget: budget(),
+          summaryModel: () => Effect.succeed(model),
+        })
+        expect(user).toContain("Names retained on this branch: rows, index.")
+        expect(user).not.toContain("scratch")
+        expect(result.notice).toContain("Names still bound on this branch: rows, index.")
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.provideMerge(ModelContextCompactorLive, retained),
+            summaryProvider("focused", (prompt) => {
+              user = promptText(prompt)
+            }),
+          ),
+        ),
+        Effect.timeout("10 seconds"),
+      )
+    },
+  )
 
   it.effect("the summary input is the newest run that fits; what falls before is named", () =>
     Effect.sync(() => {

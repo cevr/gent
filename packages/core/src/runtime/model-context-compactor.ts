@@ -44,6 +44,8 @@ export interface CompactionRequest {
   readonly branchId: BranchId
   /** The history leaving the window, oldest first, an earlier handoff marker included. */
   readonly history: ReadonlyArray<Message>
+  /** The messages that stay in the window after the handoff, oldest first. */
+  readonly kept: ReadonlyArray<Message>
   readonly budget: ModelContextBudget
   /** What the model asked the summary to focus on, when it asked. */
   readonly instructions?: string

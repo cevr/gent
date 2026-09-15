@@ -207,13 +207,12 @@ const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(funct
   const anchor = plan.anchor.pipe(
     Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
   )
-  const history = window.slice(
+  const anchorIndex = Math.max(
     0,
-    Math.max(
-      0,
-      window.findIndex((m) => Option.contains(anchor, m)),
-    ),
+    window.findIndex((m) => Option.contains(anchor, m)),
   )
+  const history = window.slice(0, anchorIndex)
+  const kept = window.slice(anchorIndex)
   const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
   const overflowing = plan.overflowing
   // Summarising is an extension's job. With no compactor installed the
@@ -228,6 +227,7 @@ const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(funct
       sessionId: params.sessionId,
       branchId: params.branchId,
       history,
+      kept,
       budget: params.budget,
       instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
       summaryModel: params.summaryModel,
