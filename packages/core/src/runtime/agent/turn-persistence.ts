@@ -188,9 +188,12 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
     if (params.parts.length === 0) return
     const eventStorage = yield* EventStorage
     const eventPublisher = yield* EventPublisher
-    const events = yield* eventStorage.listEvents({
+    // Only this step's own results are reconciled, so the anchored window
+    // holds every terminal event that could already have closed one.
+    const events = yield* eventStorage.listToolResultWindow({
       sessionId: params.sessionId,
       branchId: params.branchId,
+      assistantMessageId: params.assistantMessageId,
     })
     const closed = new Set(
       events.flatMap((envelope) => {
