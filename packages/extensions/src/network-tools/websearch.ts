@@ -129,10 +129,6 @@ export const WebSearchTool = tool({
               })
             }
 
-            const contentType = Option.getOrElse(
-              Option.fromNullishOr(response.headers["content-type"]),
-              () => "",
-            )
             const responseText = yield* response.text
 
             const parseMcpJson = (raw: string) =>
@@ -147,8 +143,15 @@ export const WebSearchTool = tool({
                 ),
               )
 
-            // Handle JSON response
-            if (contentType.includes("application/json")) {
+            // The endpoint answers either as one JSON object or as an SSE
+            // stream of `data:` frames. Scan for frames first; a body with
+            // none is the whole-object form.
+            const frames = responseText
+              .split("\n")
+              .filter((line) => line.startsWith("data: "))
+              .map((line) => line.substring(6))
+
+            if (frames.length === 0) {
               const data = yield* parseMcpJson(responseText)
               const text = extractResult(data)
               if (Option.isSome(text)) return text.value
@@ -162,13 +165,10 @@ export const WebSearchTool = tool({
               })
             }
 
-            // Handle SSE response
-            for (const line of responseText.split("\n")) {
-              if (line.startsWith("data: ")) {
-                const data = yield* parseMcpJson(line.substring(6))
-                const text = extractResult(data)
-                if (Option.isSome(text)) return text.value
-              }
+            for (const frame of frames) {
+              const data = yield* parseMcpJson(frame)
+              const text = extractResult(data)
+              if (Option.isSome(text)) return text.value
             }
 
             return "No search results found. Try a different query."
