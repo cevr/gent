@@ -19,14 +19,6 @@
       "dark": "purple",
       "light": "purple"
     },
-    "secondary": {
-      "dark": "pink",
-      "light": "pink"
-    },
-    "accent": {
-      "dark": "cyan",
-      "light": "cyan"
-    },
     "error": {
       "dark": "red",
       "light": "red"
@@ -55,10 +47,6 @@
       "dark": "#282a36",
       "light": "#f8f8f2"
     },
-    "backgroundPanel": {
-      "dark": "#21222c",
-      "light": "#e8e8e2"
-    },
     "backgroundElement": {
       "dark": "currentLine",
       "light": "#d8d8d2"
@@ -66,10 +54,6 @@
     "border": {
       "dark": "currentLine",
       "light": "#c8c8c2"
-    },
-    "borderActive": {
-      "dark": "purple",
-      "light": "purple"
     },
     "borderSubtle": {
       "dark": "#191a21",
@@ -80,22 +64,6 @@
       "light": "green"
     },
     "diffRemoved": {
-      "dark": "red",
-      "light": "red"
-    },
-    "diffContext": {
-      "dark": "comment",
-      "light": "#6272a4"
-    },
-    "diffHunkHeader": {
-      "dark": "comment",
-      "light": "#6272a4"
-    },
-    "diffHighlightAdded": {
-      "dark": "green",
-      "light": "green"
-    },
-    "diffHighlightRemoved": {
       "dark": "red",
       "light": "red"
     },
@@ -111,10 +79,6 @@
       "dark": "#21222c",
       "light": "#e8e8e2"
     },
-    "diffLineNumber": {
-      "dark": "currentLine",
-      "light": "#c8c8c2"
-    },
     "diffAddedLineNumberBg": {
       "dark": "#1a3a1a",
       "light": "#e0ffe0"
@@ -122,10 +86,6 @@
     "diffRemovedLineNumberBg": {
       "dark": "#3a1a1a",
       "light": "#ffe0e0"
-    },
-    "markdownText": {
-      "dark": "foreground",
-      "light": "#282a36"
     },
     "markdownHeading": {
       "dark": "purple",
@@ -155,29 +115,9 @@
       "dark": "orange",
       "light": "orange"
     },
-    "markdownHorizontalRule": {
-      "dark": "comment",
-      "light": "#6272a4"
-    },
     "markdownListItem": {
       "dark": "purple",
       "light": "purple"
-    },
-    "markdownListEnumeration": {
-      "dark": "cyan",
-      "light": "cyan"
-    },
-    "markdownImage": {
-      "dark": "cyan",
-      "light": "cyan"
-    },
-    "markdownImageText": {
-      "dark": "pink",
-      "light": "pink"
-    },
-    "markdownCodeBlock": {
-      "dark": "foreground",
-      "light": "#282a36"
     },
     "syntaxComment": {
       "dark": "comment",

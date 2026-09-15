@@ -45,14 +45,6 @@
       "dark": "darkStep9",
       "light": "lightStep9"
     },
-    "secondary": {
-      "dark": "darkSecondary",
-      "light": "lightSecondary"
-    },
-    "accent": {
-      "dark": "darkAccent",
-      "light": "lightAccent"
-    },
     "error": {
       "dark": "darkRed",
       "light": "lightRed"
@@ -81,10 +73,6 @@
       "dark": "darkStep1",
       "light": "lightStep1"
     },
-    "backgroundPanel": {
-      "dark": "darkStep2",
-      "light": "lightStep2"
-    },
     "backgroundElement": {
       "dark": "darkStep3",
       "light": "lightStep3"
@@ -92,10 +80,6 @@
     "border": {
       "dark": "darkStep7",
       "light": "lightStep7"
-    },
-    "borderActive": {
-      "dark": "darkStep8",
-      "light": "lightStep8"
     },
     "borderSubtle": {
       "dark": "darkStep6",
@@ -109,22 +93,6 @@
       "dark": "#c53b53",
       "light": "#c53b53"
     },
-    "diffContext": {
-      "dark": "#828bb8",
-      "light": "#7086b5"
-    },
-    "diffHunkHeader": {
-      "dark": "#828bb8",
-      "light": "#7086b5"
-    },
-    "diffHighlightAdded": {
-      "dark": "#b8db87",
-      "light": "#4db380"
-    },
-    "diffHighlightRemoved": {
-      "dark": "#e26a75",
-      "light": "#f52a65"
-    },
     "diffAddedBg": {
       "dark": "#20303b",
       "light": "#d5e5d5"
@@ -137,10 +105,6 @@
       "dark": "darkStep2",
       "light": "lightStep2"
     },
-    "diffLineNumber": {
-      "dark": "darkStep3",
-      "light": "lightStep3"
-    },
     "diffAddedLineNumberBg": {
       "dark": "#1b2b34",
       "light": "#c5d5c5"
@@ -148,10 +112,6 @@
     "diffRemovedLineNumberBg": {
       "dark": "#2d1f26",
       "light": "#e7c8cb"
-    },
-    "markdownText": {
-      "dark": "darkStep12",
-      "light": "lightStep12"
     },
     "markdownHeading": {
       "dark": "darkAccent",
@@ -181,29 +141,9 @@
       "dark": "darkOrange",
       "light": "lightOrange"
     },
-    "markdownHorizontalRule": {
-      "dark": "darkStep11",
-      "light": "lightStep11"
-    },
     "markdownListItem": {
       "dark": "darkStep9",
       "light": "lightStep9"
-    },
-    "markdownListEnumeration": {
-      "dark": "darkCyan",
-      "light": "lightCyan"
-    },
-    "markdownImage": {
-      "dark": "darkStep9",
-      "light": "lightStep9"
-    },
-    "markdownImageText": {
-      "dark": "darkCyan",
-      "light": "lightCyan"
-    },
-    "markdownCodeBlock": {
-      "dark": "darkStep12",
-      "light": "lightStep12"
     },
     "syntaxComment": {
       "dark": "darkStep11",

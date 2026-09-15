@@ -23,14 +23,6 @@
       "dark": "nord8",
       "light": "nord10"
     },
-    "secondary": {
-      "dark": "nord9",
-      "light": "nord9"
-    },
-    "accent": {
-      "dark": "nord7",
-      "light": "nord7"
-    },
     "error": {
       "dark": "nord11",
       "light": "nord11"
@@ -59,10 +51,6 @@
       "dark": "nord0",
       "light": "nord6"
     },
-    "backgroundPanel": {
-      "dark": "nord1",
-      "light": "nord5"
-    },
     "backgroundElement": {
       "dark": "nord2",
       "light": "nord4"
@@ -70,10 +58,6 @@
     "border": {
       "dark": "nord2",
       "light": "nord3"
-    },
-    "borderActive": {
-      "dark": "nord3",
-      "light": "nord2"
     },
     "borderSubtle": {
       "dark": "nord2",
@@ -84,22 +68,6 @@
       "light": "nord14"
     },
     "diffRemoved": {
-      "dark": "nord11",
-      "light": "nord11"
-    },
-    "diffContext": {
-      "dark": "#8B95A7",
-      "light": "nord3"
-    },
-    "diffHunkHeader": {
-      "dark": "#8B95A7",
-      "light": "nord3"
-    },
-    "diffHighlightAdded": {
-      "dark": "nord14",
-      "light": "nord14"
-    },
-    "diffHighlightRemoved": {
       "dark": "nord11",
       "light": "nord11"
     },
@@ -115,10 +83,6 @@
       "dark": "nord1",
       "light": "nord5"
     },
-    "diffLineNumber": {
-      "dark": "nord2",
-      "light": "nord4"
-    },
     "diffAddedLineNumberBg": {
       "dark": "#3B4252",
       "light": "#E5E9F0"
@@ -126,10 +90,6 @@
     "diffRemovedLineNumberBg": {
       "dark": "#3B4252",
       "light": "#E5E9F0"
-    },
-    "markdownText": {
-      "dark": "nord4",
-      "light": "nord0"
     },
     "markdownHeading": {
       "dark": "nord8",
@@ -159,29 +119,9 @@
       "dark": "nord13",
       "light": "nord13"
     },
-    "markdownHorizontalRule": {
-      "dark": "#8B95A7",
-      "light": "nord3"
-    },
     "markdownListItem": {
       "dark": "nord8",
       "light": "nord10"
-    },
-    "markdownListEnumeration": {
-      "dark": "nord7",
-      "light": "nord7"
-    },
-    "markdownImage": {
-      "dark": "nord9",
-      "light": "nord9"
-    },
-    "markdownImageText": {
-      "dark": "nord7",
-      "light": "nord7"
-    },
-    "markdownCodeBlock": {
-      "dark": "nord4",
-      "light": "nord0"
     },
     "syntaxComment": {
       "dark": "#8B95A7",

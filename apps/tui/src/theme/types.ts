@@ -3,8 +3,6 @@ import type { RGBA } from "@opentui/core"
 // Core color palette for the application theme
 export interface ThemeColors {
   primary: RGBA
-  secondary: RGBA
-  accent: RGBA
   error: RGBA
   warning: RGBA
   success: RGBA
@@ -13,25 +11,17 @@ export interface ThemeColors {
   textMuted: RGBA
   selectedListItemText: RGBA
   background: RGBA
-  backgroundPanel: RGBA
   backgroundElement: RGBA
   backgroundMenu: RGBA
   border: RGBA
-  borderActive: RGBA
   borderSubtle: RGBA
   diffAdded: RGBA
   diffRemoved: RGBA
-  diffContext: RGBA
-  diffHunkHeader: RGBA
-  diffHighlightAdded: RGBA
-  diffHighlightRemoved: RGBA
   diffAddedBg: RGBA
   diffRemovedBg: RGBA
   diffContextBg: RGBA
-  diffLineNumber: RGBA
   diffAddedLineNumberBg: RGBA
   diffRemovedLineNumberBg: RGBA
-  markdownText: RGBA
   markdownHeading: RGBA
   markdownLink: RGBA
   markdownLinkText: RGBA
@@ -39,12 +29,7 @@ export interface ThemeColors {
   markdownBlockQuote: RGBA
   markdownEmph: RGBA
   markdownStrong: RGBA
-  markdownHorizontalRule: RGBA
   markdownListItem: RGBA
-  markdownListEnumeration: RGBA
-  markdownImage: RGBA
-  markdownImageText: RGBA
-  markdownCodeBlock: RGBA
   syntaxComment: RGBA
   syntaxKeyword: RGBA
   syntaxFunction: RGBA
