@@ -26,7 +26,7 @@ type NamespaceMethods<NS extends string, T> = {
  * Restructure a flat dotted-key client into nested namespaces.
  * { "session.create": fn, "branch.list": fn } → { session: { create: fn }, branch: { list: fn } }
  */
-export type NamespacedClient<T> = {
+type NamespacedClient<T> = {
   readonly [NS in Namespaces<Extract<keyof T, string>>]: Readonly<NamespaceMethods<NS, T>>
 }
 

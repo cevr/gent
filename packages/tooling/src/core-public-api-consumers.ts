@@ -6,7 +6,7 @@
  * detail they can skip -- it is surface they must read past to find what they
  * actually need, and surface every refactor has to carry.
  *
- * `core-dead-exports` deliberately exempts this directory: re-export lines
+ * `dead-exports` deliberately exempts this directory: re-export lines
  * (`export { X } from "..."`) are an entry point's business, not a module's.
  * That exemption is what let ten unused names accumulate here, so this guard
  * covers exactly the case that one skips.

@@ -10,7 +10,7 @@ import { findCoreFeatureIndependenceFindings } from "./core-feature-independence
 import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
-import { declaredCoreExports, findCoreDeadExports, identifiersIn } from "./core-dead-exports"
+import { declaredExports, findDeadExports, identifiersIn } from "./dead-exports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
@@ -45,9 +45,9 @@ const program = Effect.gen(function* () {
     if (!failures.includes(message)) failures.push(message)
   }
 
-  // Dead-export scan needs the whole tree: collect every declared core export,
-  // then count which names any other file mentions.
-  const coreDeclarations: Array<{ file: string; name: string; line: number }> = []
+  // Dead-export scan needs the whole tree: collect every declared export in
+  // the scanned packages, then count which names any other file mentions.
+  const declarations: Array<{ file: string; name: string; line: number }> = []
   const identifiersByFile = new Map<string, ReadonlySet<string>>()
   // Seam scan needs the whole tree too: the declarations live in core, the
   // adapters that fill them live in the shipped extensions and the apps.
@@ -63,8 +63,8 @@ const program = Effect.gen(function* () {
    * whether an export is dead, and whether a seam has an adapter.
    */
   const collectWholeTreeFacts = (file: string, text: string): void => {
-    for (const declaration of declaredCoreExports(file, text)) {
-      coreDeclarations.push({ file, ...declaration })
+    for (const declaration of declaredExports(file, text)) {
+      declarations.push({ file, ...declaration })
     }
     identifiersByFile.set(file, identifiersIn(text))
     sourceTexts.set(file, text)
@@ -104,7 +104,7 @@ const program = Effect.gen(function* () {
     }
   }
 
-  for (const finding of findCoreDeadExports(coreDeclarations, identifiersByFile)) {
+  for (const finding of findDeadExports(declarations, identifiersByFile)) {
     pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 
