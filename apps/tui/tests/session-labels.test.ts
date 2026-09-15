@@ -55,7 +55,7 @@ describe("buildTopRightLabels", () => {
       },
     })
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted · compacted")
+    expect(labels[0]!.text).toBe("ctx 42% · 3 omitted")
     expect(labels[0]!.color).toBe(theme.textMuted)
   })
 
