@@ -167,3 +167,5 @@ C7 policy scope note from the pass: the three caps live in `domain/agent.ts:188-
 ## extensions — dead names after S13 (2026-09-15)
 
 Landed `742a80c4`: 16 names deleted from `acp-agents/schema.ts` and `handoff-tool.ts` (the nine the scan flagged plus seven the deletions exposed); extensions row `enforced: true`, probe exits 1 on a planted export. Scan blind spot noted: `testsCount: true` counts names inside fixture strings in `packages/tooling/tests/export-consumers.test.ts`, which hid `SessionUpdate` and `HandoffError`. Fix candidate: exclude `packages/tooling/tests` from consumer scans.
+
+Gamut run 19 at `b91cce78` (sonnet-sonnet): 19 tests green, 2m22s, $0.98, 16 steps, 5 children, turn_records max step 16.
