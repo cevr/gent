@@ -50,3 +50,57 @@ describe("settings picker overlay", () => {
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 })
+
+describe("prompt search overlay", () => {
+  test("opening docks the palette over the draft", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "PromptSearch",
+      event: { _tag: "Open", draftBeforeOpen: "draft" },
+      entries: [],
+    })
+    expect(opened.state.overlay).toEqual({
+      _tag: "prompt-search",
+      draftBeforeOpen: "draft",
+      query: "",
+      selectedIndex: 0,
+      hasInteracted: false,
+    })
+    expect(opened.effects).toEqual([])
+  })
+
+  test("accepting an entry restores it to the composer and closes the palette", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "PromptSearch",
+      event: { _tag: "Open", draftBeforeOpen: "draft" },
+      entries: [],
+    })
+    const moved = transitionSessionUi(opened.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "MoveDown" },
+      entries: ["first", "second"],
+    })
+    expect(moved.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
+    const accepted = transitionSessionUi(moved.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "Accept" },
+      entries: ["first", "second"],
+    })
+    expect(accepted.state.overlay).toEqual({ _tag: "none" })
+    expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
+  })
+
+  test("cancelling restores the draft the palette opened over", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "PromptSearch",
+      event: { _tag: "Open", draftBeforeOpen: "draft" },
+      entries: ["first"],
+    })
+    const cancelled = transitionSessionUi(opened.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "Cancel" },
+      entries: ["first"],
+    })
+    expect(cancelled.state.overlay).toEqual({ _tag: "none" })
+    expect(cancelled.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
+  })
+})

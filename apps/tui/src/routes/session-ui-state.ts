@@ -4,8 +4,8 @@ import type { PromptSearchState } from "../components/prompt-search-state"
 import {
   PromptSearchEvent as PromptSearchEventSchema,
   PromptSearchState as PromptSearchStateFactory,
+  transitionPromptSearch,
 } from "../components/prompt-search-state"
-import { transitionPromptSearchRoute } from "./prompt-search-flow"
 
 interface PromptSearchOverlayState {
   readonly _tag: "prompt-search"
@@ -94,9 +94,6 @@ export const getPromptSearchState = (state: SessionUiState): PromptSearchState =
   return PromptSearchStateFactory.closed()
 }
 
-export const promptSearchOpen = (state: SessionUiState): boolean =>
-  getPromptSearchState(state)._tag === "open"
-
 export function transitionSessionUi(
   state: SessionUiState,
   event: SessionUiEvent,
@@ -170,7 +167,11 @@ export function transitionSessionUi(
       }),
       PromptSearch: (event): SessionUiTransitionResult => {
         const promptState = getPromptSearchState(state)
-        const result = transitionPromptSearchRoute(promptState, event.event, event.entries)
+        const result = transitionPromptSearch(promptState, event.event, event.entries)
+        // Only a preview reaches the composer; the palette closes through the overlay.
+        const effects = result.effects
+          .filter((effect) => effect._tag === "Preview")
+          .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
         let nextOverlay: SessionOverlayState = { _tag: "none" }
         if (result.state._tag === "open") {
           nextOverlay = {
@@ -186,7 +187,7 @@ export function transitionSessionUi(
             ...state,
             overlay: nextOverlay,
           },
-          effects: result.effects,
+          effects,
         }
       },
     }),
