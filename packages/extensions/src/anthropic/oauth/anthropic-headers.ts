@@ -1,8 +1,6 @@
 import { Option, Schema } from "effect"
-import { getModelBetas as deriveModelBetas, MODEL_CONFIG, getCcVersion } from "../model-config.js"
+import { getModelBetas, MODEL_CONFIG, getCcVersion } from "../model-config.js"
 import type { AnthropicKeychainEnv } from "../platform-adapter.js"
-
-export const LONG_CONTEXT_BETAS: ReadonlyArray<string> = MODEL_CONFIG.longContextBetas
 
 export const isLongContextError = (responseBody: string): boolean =>
   responseBody.includes("Extra usage is required for long context requests") ||
@@ -24,17 +22,11 @@ export const isLongContextError = (responseBody: string): boolean =>
  */
 export const getLongContextBetasForWith = (
   modelId: string,
-  currentBetaFlags: Parameters<typeof deriveModelBetas>[1],
+  currentBetaFlags: Parameters<typeof getModelBetas>[1],
 ): ReadonlyArray<string> => {
-  const modelBetas = new Set(deriveModelBetas(modelId, currentBetaFlags))
-  return LONG_CONTEXT_BETAS.filter((beta) => modelBetas.has(beta))
+  const modelBetas = new Set(getModelBetas(modelId, currentBetaFlags))
+  return MODEL_CONFIG.longContextBetas.filter((beta) => modelBetas.has(beta))
 }
-
-export const getModelBetas = (
-  modelId: string,
-  betaFlags: Parameters<typeof deriveModelBetas>[1],
-  excluded: Option.Option<ReadonlySet<string>> = Option.none(),
-): ReadonlyArray<string> => deriveModelBetas(modelId, betaFlags, excluded)
 
 export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 

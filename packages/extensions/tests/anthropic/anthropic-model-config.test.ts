@@ -148,4 +148,34 @@ describe("getModelBetas", () => {
     const occurrences = betas.filter((b) => b === "effort-2025-11-24").length
     expect(occurrences).toBe(1)
   })
+  test("excludes context-1m for pre-4.6 models", () => {
+    const sonnet45 = getModelBetas("claude-sonnet-4-5-20250514", Option.none())
+    expect(sonnet45).not.toContain("context-1m-2025-08-07")
+    expect(sonnet45).toContain("claude-code-20250219")
+
+    const opus45 = getModelBetas("claude-opus-4-5-20250514", Option.none())
+    expect(opus45).not.toContain("context-1m-2025-08-07")
+  })
+
+  test("excludes context-1m for date-suffixed models without minor version", () => {
+    expect(getModelBetas("claude-opus-4-20250514", Option.none())).not.toContain(
+      "context-1m-2025-08-07",
+    )
+    expect(getModelBetas("claude-sonnet-4-20250514", Option.none())).not.toContain(
+      "context-1m-2025-08-07",
+    )
+  })
+
+  test("excludes context-1m for unversioned aliases", () => {
+    expect(getModelBetas("sonnet", Option.none())).not.toContain("context-1m-2025-08-07")
+    expect(getModelBetas("opus", Option.none())).not.toContain("context-1m-2025-08-07")
+  })
+
+  test("filters multiple excluded betas", () => {
+    const excluded = new Set(["interleaved-thinking-2025-05-14", "context-1m-2025-08-07"])
+    const betas = getModelBetas("claude-sonnet-4-6", Option.none(), Option.some(excluded))
+    expect(betas).not.toContain("interleaved-thinking-2025-05-14")
+    expect(betas).not.toContain("context-1m-2025-08-07")
+    expect(betas).toContain("claude-code-20250219")
+  })
 })
