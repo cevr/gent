@@ -19,7 +19,16 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue>()
 
-const toThemeCatalog = (themes: Record<string, ThemeJson>): Record<string, ThemeJson> => themes
+/**
+ * The provider's own state. `themes` stays an open dictionary because the
+ * terminal-derived `system` theme is added at runtime, alongside the shipped
+ * catalogue.
+ */
+interface ThemeStore {
+  themes: Record<string, ThemeJson>
+  mode: "dark" | "light"
+  active: string
+}
 
 export function useTheme(): ThemeContextValue {
   return useRequiredContext(ThemeContext, "useTheme must be used within ThemeProvider")
@@ -56,9 +65,8 @@ export function ThemeProvider(props: ThemeProviderProps) {
     return "dark"
   }
 
-  const initialThemes = toThemeCatalog({ ...DEFAULT_THEMES })
-  const [store, setStore] = createStore({
-    themes: initialThemes,
+  const [store, setStore] = createStore<ThemeStore>({
+    themes: { ...DEFAULT_THEMES },
     mode: initialMode(),
     active: "fx",
   })
