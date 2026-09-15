@@ -15,7 +15,10 @@ import {
 } from "./export-consumers"
 import { findE2eFixtureImportFindings } from "./e2e-fixture-imports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
-import { findSuppressionInventoryFindings } from "./suppression-inventory"
+import {
+  findSuppressionInventoryFindings,
+  findUnusedSuppressionApprovals,
+} from "./suppression-inventory"
 import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
 
 const trackedFileNames = Effect.promise(() =>
@@ -98,6 +101,12 @@ const program = Effect.gen(function* () {
 
       collectWholeTreeFacts(file, text)
     }
+  }
+
+  for (const finding of findUnusedSuppressionApprovals(sourceTexts)) {
+    pushFailure(
+      `${finding.file}: approved suppression has no matching comment; drop it from packages/tooling/src/suppression-inventory.ts: ${finding.comment}`,
+    )
   }
 
   const reportOnly: string[] = []
