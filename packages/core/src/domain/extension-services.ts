@@ -221,8 +221,6 @@ export interface ExtensionFilesService {
     path: string,
     options?: { readonly recursive?: boolean; readonly mode?: number },
   ) => Effect.Effect<void, ExtensionServiceError>
-  /** Atomic replace on one file system: write a sibling, then rename over the target. */
-  readonly rename: (from: string, to: string) => Effect.Effect<void, ExtensionServiceError>
   readonly resolve: (...paths: ReadonlyArray<string>) => string
   readonly join: (...paths: ReadonlyArray<string>) => string
   readonly dirname: (path: string) => string

@@ -123,7 +123,6 @@ export const testExtensionFiles = (): ExtensionFilesService => ({
     ),
   makeDirectory: (path, options) =>
     onFileSystem("makeDirectory", (fs) => fs.makeDirectory(path, options)),
-  rename: (from, to) => onFileSystem("rename", (fs) => fs.rename(from, to)),
   resolve: (...paths) => testPath.resolve(...paths),
   join: (...paths) => testPath.join(...paths),
   dirname: (path) => testPath.dirname(path),

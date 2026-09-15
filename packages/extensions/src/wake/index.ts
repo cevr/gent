@@ -39,6 +39,7 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
+import { makeBranchStateStore } from "../branch-state-store.js"
 import {
   WAKE_EXTENSION_ID,
   WAKE_MESSAGE_TYPE,
@@ -114,56 +115,19 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
 
 // ── Durable half: one file per branch ──
 
-const codec = Schema.fromJsonString(Schema.Array(WakeEntry))
-const decode = Schema.decodeUnknownEffect(codec)
-const encode = Schema.encodeSync(codec)
-
-const wakePath = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  return {
-    directory: ctx.Files.join(ctx.home, ".gent", "wakes"),
-    file: ctx.Files.join(ctx.home, ".gent", "wakes", `${ctx.branchId}.json`),
-  }
+const store = makeBranchStateStore({
+  name: "WakeStore",
+  directory: "wakes",
+  codec: Schema.fromJsonString(Schema.Array(WakeEntry)),
+  empty: [],
+  invalid: (file, cause) =>
+    new WakeError({ message: `Wake file ${file} is invalid: ${cause.message}` }),
 })
 
 /** The entries still pending on this branch; a missing file is an empty list. */
-export const readWakeEntries = Effect.fn("WakeStore.read")(function* () {
-  const ctx = yield* ExtensionContext
-  const { file } = yield* wakePath
-  if (!(yield* ctx.Files.exists(file))) return []
-  const text = yield* ctx.Files.read(file)
-  return yield* decode(text).pipe(
-    Effect.mapError(
-      (cause) => new WakeError({ message: `Wake file ${file} is invalid: ${cause.message}` }),
-    ),
-  )
-})
+const readWakeEntries = store.read
 
-const writeWakeEntries = Effect.fn("WakeStore.write")(function* (
-  entries: ReadonlyArray<WakeEntry>,
-) {
-  const ctx = yield* ExtensionContext
-  const { directory, file } = yield* wakePath
-  yield* ctx.Files.makeDirectory(directory, { recursive: true })
-  const staging = `${file}.${yield* ctx.Process.randomId}.tmp`
-  yield* ctx.Files.write(staging, encode(entries))
-  yield* ctx.Files.rename(staging, file)
-})
-
-const modifyWakeEntries = (
-  update: (entries: ReadonlyArray<WakeEntry>) => ReadonlyArray<WakeEntry>,
-) =>
-  Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const { file } = yield* wakePath
-    yield* ctx.FileLock.withLock(
-      file,
-      Effect.gen(function* () {
-        const current = yield* readWakeEntries()
-        yield* writeWakeEntries(update(current))
-      }),
-    )
-  })
+const modifyWakeEntries = store.update
 
 // ── Firing ──
 

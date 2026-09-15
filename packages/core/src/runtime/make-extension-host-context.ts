@@ -228,12 +228,6 @@ export const makeExtensionHostContextProvider = (
           "makeDirectory",
           fs((s) => s.makeDirectory(path, options)),
         ),
-      rename: (from, to) =>
-        mapExtensionServiceError(
-          "ExtensionFiles",
-          "rename",
-          fs((s) => s.rename(from, to)),
-        ),
       resolve: (...paths) => onPath((p) => p.resolve(...paths)),
       join: (...paths) => onPath((p) => p.join(...paths)),
       dirname: (path) => onPath((p) => p.dirname(path)),
