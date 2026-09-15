@@ -76,6 +76,15 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     enforced: true,
   },
   {
+    prefix: "packages/core/src/extensions/branch-tools.ts",
+    exempt: [],
+    outsideOf: ["packages/core/src/", "packages/core-internal/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/core/extensions/branch-tools"),
+    enforced: true,
+  },
+  {
     prefix: "packages/core/src/",
     exempt: [
       "packages/core/src/extensions/",

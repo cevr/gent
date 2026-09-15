@@ -95,16 +95,9 @@ export {
   ModelCompactionError,
   ModelContextCompactor,
 } from "../runtime/model-context-compactor.js"
-export {
-  estimateTextTokens,
-  ModelContextBudget,
-  type ModelContextError,
-  ModelContextProjection,
-  ModelContextProjectionError,
-  projectModelContext,
-} from "../runtime/model-context.js"
+export { estimateTextTokens, ModelContextBudget } from "../runtime/model-context.js"
 export { Message } from "../domain/message.js"
-export { type Usage, UsageSchema } from "../domain/event.js"
+export { type Usage } from "../domain/event.js"
 export { type ProviderAuthError } from "../domain/driver.js"
 export { type ProviderError } from "../domain/provider-error.js"
 export { responseUsage } from "../domain/response-to-prompt.js"

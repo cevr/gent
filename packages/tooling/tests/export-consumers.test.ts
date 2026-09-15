@@ -13,6 +13,8 @@ const SDK_FILE = "packages/sdk/src/log-paths.ts"
 const SDK_CONSUMER = "packages/sdk/src/logger.ts"
 const API_FILE = "packages/core/src/extensions/api.ts"
 const API_CONSUMER = "packages/extensions/src/notes/index.ts"
+const BRANCH_TOOLS_FILE = "packages/core/src/extensions/branch-tools.ts"
+const BRANCH_TOOLS_CONSUMER = "packages/extensions/src/cell/cell-tool-host.ts"
 const EXTENSION_FILE = "packages/extensions/src/fs-tools/edit.ts"
 
 interface SourceEntry {
@@ -74,9 +76,53 @@ export type LogPaths = { readonly dir: string }
   test("core's exempt entry points declare nothing as a module", () => {
     const source = `export const tool = 1\n`
     expect(declaredNames(API_FILE, source)).toEqual([])
-    expect(declaredNames("packages/core/src/extensions/branch-tools.ts", source)).toEqual([])
     expect(declaredNames("packages/core/src/protocol.ts", source)).toEqual([])
     expect(declaredNames("packages/core/src/test-utils/fixtures.ts", source)).toEqual([])
+  })
+
+  test("a branch-tool name an extension imports through the specifier is live", () => {
+    // The row exists to ask this question at all: before it, no surface
+    // scanned this entry point and every name here looked consumed.
+    expect(
+      findingsFor([
+        {
+          file: BRANCH_TOOLS_FILE,
+          text: `export { ToolRunner } from "../runtime/agent/tool-runner.js"\n`,
+        },
+        {
+          file: BRANCH_TOOLS_CONSUMER,
+          text: `import { ToolRunner } from "@gent/core/extensions/branch-tools"`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a branch-tool name only core reaches by relative path is reported", () => {
+    const findings = findingsFor([
+      {
+        file: BRANCH_TOOLS_FILE,
+        text: `export { projectModelContext } from "../runtime/model-context.js"\n`,
+      },
+      {
+        file: "packages/core/src/runtime/agent/turn-source.ts",
+        text: `import { projectModelContext } from "../model-context.js"`,
+      },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([1])
+    expect(findings[0]?.enforced).toBe(true)
+    expect(findings[0]?.message).toContain("@gent/core/extensions/branch-tools")
+  })
+
+  test("the branch-tool entry point declares its re-exported names, not its module exports", () => {
+    // A second scanned entry point: `export { X } from "..."` is the shape it
+    // exposes, so a module-style `export const` on it declares nothing.
+    expect(declaredNames(BRANCH_TOOLS_FILE, `export const tool = 1\n`)).toEqual([])
+    expect(
+      declaredNames(
+        BRANCH_TOOLS_FILE,
+        `export { ToolRunner, type BranchToolWork } from "../x.js"\n`,
+      ),
+    ).toEqual(["ToolRunner", "BranchToolWork"])
   })
 })
 
