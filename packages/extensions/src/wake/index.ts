@@ -17,7 +17,6 @@ import {
   DateTime,
   Duration,
   Effect,
-  Exit,
   Fiber,
   Layer,
   Match,
@@ -25,7 +24,6 @@ import {
   Predicate,
   Ref,
   Schema,
-  Scope,
 } from "effect"
 import {
   defineExtension,
@@ -80,8 +78,7 @@ export class WakeAlarms extends Context.Service<WakeAlarms, WakeAlarmsService>()
 export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
   WakeAlarms,
   Effect.gen(function* () {
-    const scope = yield* Scope.make()
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void).pipe(Effect.asVoid))
+    const scope = yield* Effect.scope
     const running = yield* Ref.make<ReadonlyMap<string, Fiber.Fiber<void>>>(new Map())
     const forget = (wakeId: string) =>
       Ref.update(running, (current) => {

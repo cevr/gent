@@ -8,7 +8,7 @@
  * resource so it never holds the branch's request permit; the client reads
  * streamed text and the final answer through `btw.progress` on state pulses.
  */
-import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema, Scope } from "effect"
+import { Cause, Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import {
   defineExtension,
   defineRequests,
@@ -64,8 +64,7 @@ export class SideQuestionRuns extends Context.Service<SideQuestionRuns, SideQues
 export const SideQuestionRunsLive: Layer.Layer<SideQuestionRuns> = Layer.effect(
   SideQuestionRuns,
   Effect.gen(function* () {
-    const scope = yield* Scope.make()
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void).pipe(Effect.asVoid))
+    const scope = yield* Effect.scope
     const runs = yield* Ref.make<ReadonlyMap<string, SideQuestionRun>>(new Map())
     return SideQuestionRuns.of({
       get: (branchId) =>
