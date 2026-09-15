@@ -8,10 +8,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { createSignal } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { AgentsPane } from "../../src/extensions/builtins/agents-view.client"
+import { AgentsPane, makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-transport"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
@@ -260,6 +260,76 @@ describe("Agents pane delete", () => {
       yield* Effect.promise(() => setup.renderOnce())
       expect(deleted).toEqual(["doomed"])
       expect(renderFrame(setup)).not.toContain("^x again")
+    }),
+  )
+})
+
+describe("Agents pane reopen", () => {
+  it.live("a live row asked about before closing is asked about again on reopen", () =>
+    Effect.gen(function* () {
+      // The pane unmounts its list on close, so the list never observes
+      // `open=false`. Without a cursor reset from cleanup, the controller keeps
+      // the pending token for the row it last fetched and the duplicate check
+      // swallows the fresh detail the reader reopened the pane to see.
+      const live: AgentRowEntry = { ...row("reopened", "Alpha", 0), section: "idle", live: true }
+      const asked: Array<string> = []
+      const [open, setOpen] = createSignal(true)
+      const [turns, setTurns] = createSignal(1)
+
+      // The pane runs detail fetches as fibers. Forking with the test's own
+      // services keeps those children inside this Effect rather than starting a
+      // second runtime beside it.
+      const runFork = Effect.runForkWith(yield* Effect.context<never>())
+
+      const controller = createRoot(() =>
+        makeAgentsController(
+          () => Effect.succeed([live]),
+          (key) => {
+            asked.push(key.sessionId)
+            return Effect.succeed({
+              status: Option.none(),
+              model: Option.none(),
+              turns: turns(),
+              costUsd: 0,
+              durationMs: 0,
+              omittedMessages: 0,
+            })
+          },
+          (effect) => {
+            runFork(effect)
+          },
+          () => Option.none(),
+        ),
+      )
+
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <AgentsPane
+            open={open()}
+            controller={controller}
+            onSelect={() => {}}
+            onToggle={() => {}}
+            onDelete={() => {}}
+            onClose={() => setOpen(false)}
+          />
+        )),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(asked).toEqual(["reopened"])
+
+      // The pane closes and its list unmounts.
+      setOpen(false)
+      yield* Effect.promise(() => waitForRenderedFrame(setup, () => !open(), "agents pane closed"))
+
+      // The loop keeps working while the pane is shut.
+      setTurns(9)
+
+      // Reopening must ask again, not reuse the token from before the close.
+      setOpen(true)
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(asked).toEqual(["reopened", "reopened"])
+      expect(Option.map(controller.detail(), (value) => value.turns)).toEqual(Option.some(9))
     }),
   )
 })

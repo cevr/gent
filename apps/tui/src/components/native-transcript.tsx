@@ -14,7 +14,7 @@ import {
 } from "solid-js"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 import type { ScrollbackSurface, ScrollBoxRenderable } from "@opentui/core"
-import { Effect, Fiber, Option, Schema } from "effect"
+import { Effect, Fiber, Option, Predicate, Schema } from "effect"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useScopedKeyboard } from "../keyboard/context"
 import type { SessionItem } from "./message-list"
@@ -52,6 +52,24 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const [measurementVersion, setMeasurementVersion] = createSignal(0)
   const itemHeights = new Map<SessionItem, number>()
   let committed: string[] = []
+  /**
+   * How far the queue has been offered items. It runs ahead of `committed`
+   * while commits are in flight, so a re-render cannot enqueue the same item
+   * twice; a commit that does not land rewinds it to `committed.length`.
+   */
+  let queued = 0
+  /**
+   * Bumped when a queued commit hands its item back. The rewind of `queued`
+   * runs on the queue fiber, so the pass that offers items needs a reactive
+   * nudge to run again and retry the item that came back.
+   */
+  const [retryVersion, setRetryVersion] = createSignal(0)
+  /**
+   * Which display a commit belongs to. A `/clear` bumps it, so a commit queued
+   * before the clear finds a stale stamp when its surface finally settles and
+   * drops its rows instead of writing history the reader already dismissed.
+   */
+  let displayGeneration = 0
   let displayRevision = 0
   const [displayBoundary, setDisplayBoundary] = createSignal(captureTranscriptDisplay([]))
   const displayedItems = createMemo(() => projectTranscriptDisplay(props.items, displayBoundary()))
@@ -76,6 +94,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       setNativeOutputReady(false)
       setReplayPending(true)
       committed = []
+      queued = 0
       setCommittedCount(0)
     })
   }
@@ -120,8 +139,22 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     )
   }
 
-  const commitItems = (items: SessionItem[], footerHeight: number): Effect.Effect<void> =>
+  /** Scrollback accepts a commit only while the split footer owns the screen. */
+  const canCommitNatively = () =>
+    renderer.screenMode === "split-footer" && renderer.externalOutputMode === "capture-stdout"
+
+  /**
+   * Renders one item onto a scrollback surface, settles it, and commits its
+   * rows. Reports whether the rows reached scrollback: an overlay that opens
+   * while the surface settles takes the screen back, and scrollback rejects a
+   * commit from the alternate screen. An item that did not commit stays in the
+   * live view, so closing the overlay still shows it.
+   */
+  const commitItems = (items: SessionItem[], footerHeight: number): Effect.Effect<boolean> =>
     Effect.suspend(() => {
+      const generation = displayGeneration
+      const stillCurrent = () => displayGeneration === generation && canCommitNatively()
+      if (!stillCurrent()) return Effect.succeed(false)
       // Native history takes complete transcript items. Reserve only the composer while committing it.
       const previousFooterHeight = renderer.footerHeight
       renderer.footerHeight = footerHeight
@@ -149,12 +182,29 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         catch: (error) => new NativeSettleError({ message: String(error) }),
       }).pipe(
         // A highlight that never lands still commits; the row text is complete.
-        Effect.catch(() => Effect.sync(() => surface.render())),
-        Effect.andThen(Effect.sync(() => surface.commitRows(0, surface.height))),
+        // A surface the renderer already tore down has nothing left to draw.
+        Effect.catch(() =>
+          Effect.suspend(() => {
+            if (surface.isDestroyed) return Effect.void
+            return Effect.sync(() => surface.render())
+          }),
+        ),
+        // Settling is asynchronous. The screen may have changed hands and the
+        // reader may have cleared the display while it ran, so both are
+        // checked again before the rows are handed over.
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (surface.isDestroyed || !stillCurrent()) return Effect.succeed(false)
+            return Effect.sync(() => {
+              surface.commitRows(0, surface.height)
+              return true
+            })
+          }),
+        ),
         Effect.ensuring(
           Effect.sync(() => {
             if (Option.isSome(disposeSnapshot)) disposeSnapshot.value()
-            surface.destroy()
+            if (!surface.isDestroyed) surface.destroy()
             // Restoring the surface also flushes the queued snapshot before it grows.
             renderer.footerHeight = previousFooterHeight
           }),
@@ -162,8 +212,30 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       )
     })
 
-  const write = (items: SessionItem[]) => {
-    enqueueNative(commitItems(items, props.footerHeight))
+  /** The screen changed hands: give the item back to the live view. */
+  const rewind = () => {
+    queued = committed.length
+    setRetryVersion((version) => version + 1)
+  }
+
+  /**
+   * Hands one item to native history and, only once its rows land, drops it
+   * from the live view. A commit that could not happen leaves the counters
+   * untouched, so the item stays visible and a later pass retries it.
+   */
+  const write = (item: SessionItem, fingerprintValue: string) => {
+    enqueueNative(
+      commitItems([item], props.footerHeight).pipe(
+        Effect.andThen((landed) =>
+          Effect.sync(() => {
+            if (!landed) return rewind()
+            committed = [...committed, fingerprintValue]
+            setCommittedCount(committed.length)
+          }),
+        ),
+        Effect.onError(() => Effect.sync(rewind)),
+      ),
+    )
   }
 
   onMount(() => {
@@ -239,11 +311,23 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const nextDisplayRevision = props.displayRevision
     if (displayRevision === nextDisplayRevision) return
     untrack(() => {
-      renderer.resetSplitFooterForReplay()
       displayRevision = nextDisplayRevision
-      setDisplayBoundary(captureTranscriptDisplay(props.items))
-      committed = []
-      setCommittedCount(0)
+      const cleared = props.items
+      // Bumped before the queue sees the reset: a commit already settling now
+      // finds a stale stamp and drops its rows rather than writing history the
+      // reader just dismissed.
+      displayGeneration += 1
+      // The boundary moves at once, so no later pass can offer a pre-clear
+      // item again while the queue is still draining.
+      batch(() => {
+        setDisplayBoundary(captureTranscriptDisplay(cleared))
+        committed = []
+        queued = 0
+        setCommittedCount(0)
+      })
+      // The renderer reset joins the commit queue rather than jumping it, so
+      // the queue stays the single writer of scrollback.
+      enqueueNative(Effect.sync(() => renderer.resetSplitFooterForReplay()))
     })
   })
 
@@ -252,6 +336,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const items = displayedItems()
     const next = items.map((item) => fingerprint(item))
     measurementVersion()
+    retryVersion()
     const available = Math.max(0, dimensions().height - props.footerHeight)
     untrack(() => {
       const prefixMatches = committed.every((value, index) => next[index] === value)
@@ -260,22 +345,22 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         return
       }
       let remainingHeight = 0
-      for (const item of items.slice(committed.length)) {
+      for (const item of items.slice(queued)) {
         remainingHeight += itemHeights.get(item) ?? 0
       }
-      let nextCount = committed.length
-      while (nextCount < items.length && remainingHeight > available) {
-        const item = items[nextCount]
+      while (queued < items.length && remainingHeight > available) {
+        const item = items[queued]
         if (!item) break
         const height = Option.fromNullishOr(itemHeights.get(item))
         if (Option.isNone(height)) break
-        // A completed item has one owner: native history or the live view.
-        write([item])
+        const value = next[queued]
+        if (!Predicate.isString(value)) break
+        // A completed item has one owner: native history or the live view. The
+        // live view keeps it until the queued commit reports that it landed.
+        write(item, value)
         remainingHeight -= height.value
-        nextCount++
+        queued++
       }
-      committed = next.slice(0, nextCount)
-      setCommittedCount(nextCount)
       const currentItems = new Set(items)
       for (const item of itemHeights.keys()) {
         if (!currentItems.has(item)) itemHeights.delete(item)

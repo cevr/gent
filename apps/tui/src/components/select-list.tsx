@@ -22,7 +22,7 @@
  */
 
 import { Match, Option, Schema } from "effect"
-import { createEffect, createSignal, For, on, Show, type JSX } from "solid-js"
+import { createEffect, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
@@ -216,6 +216,8 @@ export function SelectList<A>(props: SelectListProps<A>) {
     )
 
   // Opening resets the pane: the query goes, and the sticky rule picks the row.
+  // The reset reaches the filter owner too. A pane that keeps the query itself
+  // would otherwise reopen showing an empty input over a still-filtered list.
   createEffect(
     on(
       () => props.open,
@@ -223,9 +225,18 @@ export function SelectList<A>(props: SelectListProps<A>) {
         if (!open) return
         const index = Option.getOrElse(anchor(values()), () => 0)
         setState(SelectListState.initial(index))
+        if (props.filter) props.filter.onQueryChange("")
       },
     ),
   )
+
+  // A pane that unmounts its list on close never sees `open` go false, so the
+  // reset runs from cleanup as well: the filter owner is told the query is gone
+  // whichever way the list leaves the screen.
+  onCleanup(() => {
+    if (props.filter) props.filter.onQueryChange("")
+    if (props.onCursor) props.onCursor(Option.none())
+  })
 
   // A pane whose fetch resolves after it opens re-anchors when the rows land.
   // Typing ends that: once the reader has a query, the rows change because they
@@ -261,7 +272,8 @@ export function SelectList<A>(props: SelectListProps<A>) {
   })
 
   // Report the cursor, closed panes included: a pane that fetches for the
-  // selected row has to be told to stop when it closes.
+  // selected row has to be told to stop when it closes. A pane that unmounts
+  // instead of closing is covered by the cleanup above.
   createEffect(
     on([() => props.open, selected], ([open, value]) => {
       if (!props.onCursor) return

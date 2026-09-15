@@ -238,7 +238,9 @@ describe("select list filter", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => !renderFrame(setup).includes("Cherry"), "narrowed"),
       )
-      expect(seen).toEqual(["a", "an"])
+      // Opening reports an empty query first: a pane that owns the filter has
+      // to be told the list starts unfiltered.
+      expect(seen).toEqual(["", "a", "an"])
       expect(renderFrame(setup)).toContain("› an")
       expect(renderFrame(setup)).toContain("> Banana")
       expect(renderFrame(setup)).not.toContain("Apple")
@@ -247,7 +249,7 @@ describe("select list filter", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => renderFrame(setup).includes("Apple"), "widened"),
       )
-      expect(seen).toEqual(["a", "an", "a"])
+      expect(seen).toEqual(["", "a", "an", "a"])
     }),
   )
 
@@ -269,7 +271,8 @@ describe("select list filter", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressTab()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(seen).toEqual([])
+      // Only the open reset; tab contributed nothing.
+      expect(seen).toEqual([""])
     }),
   )
 

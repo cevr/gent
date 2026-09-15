@@ -131,6 +131,7 @@ export {
 } from "../domain/extension-services.js"
 export { isRecord, isRecordArray, omitUndefined } from "../domain/guards.js"
 export { headTailChars } from "../domain/head-tail.js"
+export { maximumModelToolResultChars } from "../providers/ai-transcript.js"
 // ── Public API ──
 
 export { ExtensionHost, type ExtensionHostService } from "../domain/extension-host.js"

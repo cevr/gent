@@ -226,11 +226,14 @@ export function useComposerController(): ComposerController {
   const submitShellCommand = (text: string) => {
     cast(
       executeShell(text, workspace.cwd).pipe(
-        Effect.map(({ output, truncated }) => {
+        Effect.map(({ output, truncated, savedPath }) => {
           let userMessage = `$ ${text}\n\n${output}`
-          if (truncated) {
-            userMessage += `\n\n[output truncated]`
-          }
+          if (!truncated) return userMessage
+          // The notice names the spill file, so the rest stays reachable.
+          userMessage += Option.match(savedPath, {
+            onNone: () => `\n\n[output truncated]`,
+            onSome: (path) => `\n\n[output truncated; full output saved to ${path}]`,
+          })
           return userMessage
         }),
         Effect.tap((userMessage) =>

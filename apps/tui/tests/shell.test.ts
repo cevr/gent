@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { executeShell } from "../src/utils/shell"
-import { Effect, FileSystem, Layer } from "effect"
+import { executeShell, shellOutputDirectory } from "../src/utils/shell"
+import { Effect, FileSystem, Layer, Option } from "effect"
 import { BunServices, BunFileSystem } from "@effect/platform-bun"
 
 const testLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
@@ -107,6 +107,41 @@ describe("executeShell", () => {
 
       // Output should be under 50KB
       expect(result.output.length).toBeLessThanOrEqual(50 * 1024)
+    }),
+  )
+
+  shellTest("a command inside the cap spills nothing", () =>
+    Effect.gen(function* () {
+      const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+      const result = yield* executeShell("echo small", testDir)
+      expect(result.truncated).toBe(false)
+      expect(Option.isNone(result.savedPath)).toBe(true)
+    }),
+  )
+
+  shellTest("truncated output is written whole under the gent data directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* fs.makeTempDirectoryScoped()
+      const lineCount = 2500
+      const result = yield* executeShell(`seq 1 ${lineCount} | sed 's/^/line /'`, testDir)
+      expect(result.truncated).toBe(true)
+
+      // The reader is handed a path, not just a stump of the output.
+      const savedPath = yield* Effect.fromOption(result.savedPath)
+      // The spill lives under the gent data directory, not under /tmp/gent.
+      expect(savedPath.startsWith(shellOutputDirectory())).toBe(true)
+      expect(savedPath).not.toContain("/tmp/gent")
+
+      const saved = yield* fs.readFileString(savedPath)
+      // The whole output survives: the head the cap kept and the tail it cut.
+      expect(saved).toContain("line 1\n")
+      expect(saved).toContain(`line ${lineCount}`)
+      expect(result.output).not.toContain(`line ${lineCount}`)
+      // The header names the command that produced it.
+      expect(saved).toContain(`# Command: seq 1 ${lineCount}`)
+
+      yield* fs.remove(savedPath)
     }),
   )
 })

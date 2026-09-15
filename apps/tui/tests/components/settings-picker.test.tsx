@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
+import { createSignal } from "solid-js"
 import { Model, ModelId, ProviderId } from "@gent/core/protocol"
 import {
   DEFAULT_ROW_ID,
@@ -129,6 +130,50 @@ describe("Settings picker", () => {
       setup.mockInput.pressArrow("up")
       setup.mockInput.pressEnter()
       expect(selected).toEqual([DEFAULT_ROW_ID])
+    }),
+  )
+
+  it.live("reopening after a filter shows every row again", () =>
+    Effect.gen(function* () {
+      // The pane holds the query and unmounts the list on close, so closing has
+      // to tell the pane the query is gone. Otherwise `/model` reopens with an
+      // empty input over rows the last filter is still hiding.
+      const [open, setOpen] = createSignal(true)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SettingsPicker
+            open={open()}
+            title="Model"
+            rows={modelRows(catalogue)}
+            current={Option.some("anthropic/claude-opus-5")}
+            onSelect={() => {}}
+            onClose={() => setOpen(false)}
+          />
+        )),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker"),
+      )
+
+      setup.mockInput.pressKey("l")
+      setup.mockInput.pressKey("u")
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 1"), "filtered"),
+      )
+
+      setup.mockInput.pressEscape()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => !renderFrame(setup).includes("Model ·"), "closed"),
+      )
+
+      setOpen(true)
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model ·"), "reopened"),
+      )
+      // Every row is back, so the empty input matches the list under it.
+      expect(renderFrame(setup)).toContain("Model · 3")
+      expect(renderFrame(setup)).toContain("Claude Opus 5")
+      expect(renderFrame(setup)).toContain("GPT-5.6 Luna")
     }),
   )
 })
