@@ -22,19 +22,11 @@ const live = (overrides: {
   branch: string
   agent?: string
   status?: string
-  model?: string
-  turns?: number
-  costUsd?: number
-  durationMs?: number
 }): LiveAgentRow => ({
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
   agent: overrides.agent ?? "main",
   status: Option.some(overrides.status ?? "Running"),
-  model: Option.fromUndefinedOr(overrides.model),
-  turns: Option.fromUndefinedOr(overrides.turns),
-  costUsd: Option.fromUndefinedOr(overrides.costUsd),
-  durationMs: Option.fromUndefinedOr(overrides.durationMs),
 })
 
 const durable = (overrides: {
@@ -154,14 +146,13 @@ describe("agents view projection", () => {
       expect(rows).toHaveLength(2)
     })
 
-    test("carries live metrics through", () => {
+    test("carries durable name and cwd through", () => {
       const rows = reconcileAgentRows({
-        live: [live({ session: "s1", branch: "b1", model: "sonnet", turns: 4, costUsd: 0.5 })],
-        durable: [],
+        live: [live({ session: "s1", branch: "b1" })],
+        durable: [durable({ session: "s1", branch: "b1", name: "Fix the parser", cwd: "/repo" })],
       })
-      expect(rows[0]?.model).toEqual(Option.some("sonnet"))
-      expect(rows[0]?.turns).toEqual(Option.some(4))
-      expect(rows[0]?.costUsd).toEqual(Option.some(0.5))
+      expect(rows[0]?.name).toEqual(Option.some("Fix the parser"))
+      expect(rows[0]?.cwd).toEqual(Option.some("/repo"))
     })
   })
 
@@ -327,7 +318,7 @@ describe("agents view projection", () => {
   describe("search", () => {
     const rows = buildRowTree(
       reconcileAgentRows({
-        live: [live({ session: "s1", branch: "b1", agent: "main", model: "sonnet" })],
+        live: [live({ session: "s1", branch: "b1", agent: "main" })],
         durable: [durable({ session: "s1", branch: "b1", name: "Fix the parser", cwd: "/repo" })],
       }),
     )
@@ -341,10 +332,10 @@ describe("agents view projection", () => {
       expect(filterRows(rows, "PARSER")).toHaveLength(1)
     })
 
-    test("matches on cwd, agent, and model", () => {
+    test("matches on cwd, agent, and ids", () => {
       expect(filterRows(rows, "/repo")).toHaveLength(1)
       expect(filterRows(rows, "main")).toHaveLength(1)
-      expect(filterRows(rows, "sonnet")).toHaveLength(1)
+      expect(filterRows(rows, "s1")).toHaveLength(1)
     })
 
     test("returns nothing for a miss", () => {

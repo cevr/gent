@@ -44,10 +44,6 @@ export interface LiveAgentRow {
    * loop counts as idle rather than running.
    */
   readonly status: Option.Option<string>
-  readonly model: Option.Option<string>
-  readonly turns: Option.Option<number>
-  readonly costUsd: Option.Option<number>
-  readonly durationMs: Option.Option<number>
 }
 
 /** A stored session branch, from session storage. Survives restarts. */
@@ -69,10 +65,6 @@ export interface AgentRow {
   readonly status: Option.Option<string>
   readonly name: Option.Option<string>
   readonly cwd: Option.Option<string>
-  readonly model: Option.Option<string>
-  readonly turns: Option.Option<number>
-  readonly costUsd: Option.Option<number>
-  readonly durationMs: Option.Option<number>
   readonly updatedAt: Option.Option<number>
   readonly parent: Option.Option<AgentRowKey>
   /** True when the loop is materialized right now. */
@@ -149,10 +141,6 @@ export const reconcileAgentRows = (params: {
       status: Option.flatMap(live, (row) => row.status),
       name: Option.flatMap(durable, (row) => row.name),
       cwd: Option.flatMap(durable, (row) => row.cwd),
-      model: Option.flatMap(live, (row) => row.model),
-      turns: Option.flatMap(live, (row) => row.turns),
-      costUsd: Option.flatMap(live, (row) => row.costUsd),
-      durationMs: Option.flatMap(live, (row) => row.durationMs),
       updatedAt: Option.map(durable, (row) => row.updatedAt),
       parent: Option.flatMap(durable, (row) => row.parent),
       live: Option.isSome(live),
@@ -245,7 +233,6 @@ export const filterRows = (
       Option.getOrElse(row.name, () => ""),
       Option.getOrElse(row.agent, () => ""),
       Option.getOrElse(row.cwd, () => ""),
-      Option.getOrElse(row.model, () => ""),
       row.sessionId,
       row.branchId,
     ]

@@ -35,10 +35,6 @@ export const AgentRowEntry = Schema.Struct({
   status: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
-  turns: Schema.optional(Schema.Finite),
-  costUsd: Schema.optional(Schema.Finite),
-  durationMs: Schema.optional(Schema.Finite),
   updatedAt: Schema.optional(Schema.Finite),
   live: Schema.Boolean,
   depth: Schema.Finite,
@@ -48,7 +44,7 @@ export const AgentRowEntry = Schema.Struct({
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
 export const ListAgentsInput = Schema.Struct({
-  /** Case-insensitive substring filter over name, agent, cwd, model, and ids. */
+  /** Case-insensitive substring filter over name, agent, cwd, and ids. */
   query: Schema.optional(Schema.String),
 })
 
@@ -71,16 +67,13 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
   const sessions = yield* ctx.Session.listSessions.pipe(Effect.orDie)
 
   // The live half. Status comes with the enumeration; metrics need a heavier
-  // per-loop read, which the client makes for one selected row at a time.
+  // per-loop read (the client transport's `agentDetail`), which it makes for one
+  // selected row at a time.
   const live: ReadonlyArray<LiveAgentRow> = activeLoops.map((loop) => ({
     sessionId: loop.sessionId,
     branchId: loop.branchId,
     agent: "main",
     status: loop.status,
-    model: Option.none(),
-    turns: Option.none(),
-    costUsd: Option.none(),
-    durationMs: Option.none(),
   }))
 
   // The durable half. One row per session, keyed to its active branch — a
@@ -126,10 +119,6 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           status: Option.getOrUndefined(row.status),
           name: Option.getOrUndefined(row.name),
           cwd: Option.getOrUndefined(row.cwd),
-          model: Option.getOrUndefined(row.model),
-          turns: Option.getOrUndefined(row.turns),
-          costUsd: Option.getOrUndefined(row.costUsd),
-          durationMs: Option.getOrUndefined(row.durationMs),
           updatedAt: Option.getOrUndefined(row.updatedAt),
           live: row.live,
           depth: row.depth,
