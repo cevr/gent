@@ -33,7 +33,6 @@ function TestComposer(props: {
       isOpen: () => props.suspended === true,
       open: () => {},
       onEvent: () => {},
-      handleKey: () => false,
     },
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",

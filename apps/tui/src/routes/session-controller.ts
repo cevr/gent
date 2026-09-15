@@ -416,13 +416,7 @@ export function createSessionController(props: {
     state: () => getPromptSearchState(uiState()),
     entries: history.entries,
     draft: () => interactionState().draft,
-    dispatch: (event, entries) =>
-      dispatchSessionUi(
-        SessionUiEvent.cases.PromptSearch.make({
-          event,
-          entries,
-        }),
-      ),
+    dispatch: (event) => dispatchSessionUi(SessionUiEvent.cases.PromptSearch.make({ event })),
   })
 
   const activity = (): ReturnType<SessionController["activity"]> => {
@@ -645,10 +639,6 @@ export function createSessionController(props: {
   }
 
   useScopedKeyboard((event) => {
-    if (promptSearch.handleKey(event)) {
-      return true
-    }
-
     if (command.handleKeybind(event)) return true
     if (event.ctrl === true && event.name === "c") {
       handleInterrupt()

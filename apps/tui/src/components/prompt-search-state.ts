@@ -1,14 +1,26 @@
-import { Option, Schema } from "effect"
+import { Match, Option, Schema } from "effect"
 import { matchSorter } from "match-sorter"
 
+/**
+ * Prompt search — the state behind the `ctrl+r` palette over prompt history.
+ *
+ * The palette's list owns the query and the cursor. This owns what the list
+ * cannot see: the draft the palette opened over, and the entry under the
+ * cursor once the reader has moved it. The composer previews that entry as
+ * the cursor moves, keeps it on accept, and gets the draft back on cancel.
+ */
 export type PromptSearchState =
   | { readonly _tag: "closed" }
   | {
       readonly _tag: "open"
       readonly draftBeforeOpen: string
-      readonly query: string
-      readonly selectedIndex: number
-      readonly hasInteracted: boolean
+      /**
+       * The entry under the cursor. `None` until the reader moves or types —
+       * the list sits on the first entry when it opens, but the composer
+       * keeps the draft until they choose — and `None` again when nothing
+       * matches the query.
+       */
+      readonly highlighted: Option.Option<string>
     }
 
 export const PromptSearchState = {
@@ -16,18 +28,14 @@ export const PromptSearchState = {
   open: (draftBeforeOpen: string): PromptSearchState => ({
     _tag: "open",
     draftBeforeOpen,
-    query: "",
-    selectedIndex: 0,
-    hasInteracted: false,
+    highlighted: Option.none(),
   }),
 }
 
 export const PromptSearchEvent = Schema.TaggedUnion({
   Open: { draftBeforeOpen: Schema.String },
-  TypeChar: { char: Schema.String },
-  Backspace: {},
-  MoveUp: {},
-  MoveDown: {},
+  /** The reader moved the cursor or narrowed the list; `None` when it emptied. */
+  Highlight: { entry: Schema.Option(Schema.String) },
   Accept: {},
   Cancel: {},
 })
@@ -44,143 +52,60 @@ export interface PromptSearchTransitionResult {
   readonly effects: readonly PromptSearchEffect[]
 }
 
-export const getPromptSearchItems = (
-  state: PromptSearchState,
+/** The history entries a query keeps, best match first; all of them for no query. */
+export const filterPromptEntries = (
   entries: readonly string[],
+  query: string,
 ): readonly string[] => {
-  if (state._tag !== "open") return []
-  const currentQuery = state.query.trim()
-  if (currentQuery.length === 0) return entries
-  return matchSorter(entries, currentQuery)
+  const needle = query.trim()
+  if (needle.length === 0) return entries
+  return matchSorter(entries, needle)
 }
 
-const clampSelectedIndex = (selectedIndex: number, itemCount: number): number => {
-  if (itemCount <= 0) return 0
-  return Math.min(selectedIndex, itemCount - 1)
-}
-
-export const getPromptSearchPreview = (
-  state: PromptSearchState,
-  entries: readonly string[],
-): Option.Option<string> => {
+/** What the composer shows for an open palette: the highlighted entry, else the draft. */
+export const getPromptSearchPreview = (state: PromptSearchState): Option.Option<string> => {
   if (state._tag !== "open") return Option.none()
-  if (state.hasInteracted === false) return Option.some(state.draftBeforeOpen)
-
-  const items = getPromptSearchItems(state, entries)
-  if (items.length === 0) return Option.some(state.draftBeforeOpen)
-
-  const index = clampSelectedIndex(state.selectedIndex, items.length)
-  return Option.fromNullishOr(items[index]).pipe(
-    Option.orElse(() => Option.some(state.draftBeforeOpen)),
-  )
+  return Option.some(Option.getOrElse(state.highlighted, () => state.draftBeforeOpen))
 }
+
+const preview = (state: PromptSearchState): PromptSearchEffect =>
+  PromptSearchEffect.cases.Preview.make({
+    text: Option.getOrElse(getPromptSearchPreview(state), () => ""),
+  })
 
 export function transitionPromptSearch(
   state: PromptSearchState,
   event: PromptSearchEvent,
-  entries: readonly string[],
 ): PromptSearchTransitionResult {
-  if (event._tag === "Open") {
-    return {
-      state: PromptSearchState.open(event.draftBeforeOpen),
-      effects: [],
-    }
-  }
-
-  if (event._tag === "Accept") {
-    if (state._tag !== "open") return { state, effects: [] }
-    return {
-      state: PromptSearchState.closed(),
-      effects: [
-        PromptSearchEffect.cases.Preview.make({
-          text: Option.getOrElse(
-            getPromptSearchPreview(state, entries),
-            () => state.draftBeforeOpen,
-          ),
-        }),
-        PromptSearchEffect.cases.Close.make({}),
-      ],
-    }
-  }
-
-  if (event._tag === "Cancel") {
-    if (state._tag !== "open") return { state, effects: [] }
-    return {
-      state: PromptSearchState.closed(),
-      effects: [
-        PromptSearchEffect.cases.Preview.make({ text: state.draftBeforeOpen }),
-        PromptSearchEffect.cases.Close.make({}),
-      ],
-    }
-  }
-
-  if (state._tag !== "open") {
-    return { state, effects: [] }
-  }
-
-  const moveSelection = (selectedIndex: number, itemCount: number, direction: -1 | 1) => {
-    if (itemCount <= 0) return 0
-    if (direction === -1) {
-      if (selectedIndex > 0) return selectedIndex - 1
-      return itemCount - 1
-    }
-    if (selectedIndex < itemCount - 1) return selectedIndex + 1
-    return 0
-  }
-
-  let nextState = state
-
-  switch (event._tag) {
-    case "TypeChar":
-      nextState = {
-        ...state,
-        query: state.query + event.char,
-        selectedIndex: 0,
-        hasInteracted: true,
-      }
-      break
-    case "Backspace":
-      nextState = {
-        ...state,
-        query: state.query.slice(0, -1),
-        selectedIndex: 0,
-        hasInteracted: true,
-      }
-      break
-    case "MoveUp": {
-      const items = getPromptSearchItems(state, entries)
-      nextState = {
-        ...state,
-        selectedIndex: moveSelection(
-          clampSelectedIndex(state.selectedIndex, items.length),
-          items.length,
-          -1,
-        ),
-        hasInteracted: true,
-      }
-      break
-    }
-    case "MoveDown": {
-      const items = getPromptSearchItems(state, entries)
-      nextState = {
-        ...state,
-        selectedIndex: moveSelection(
-          clampSelectedIndex(state.selectedIndex, items.length),
-          items.length,
-          1,
-        ),
-        hasInteracted: true,
-      }
-      break
-    }
-  }
-
-  return {
-    state: nextState,
-    effects: [
-      PromptSearchEffect.cases.Preview.make({
-        text: Option.getOrElse(getPromptSearchPreview(nextState, entries), () => ""),
+  const unchanged: PromptSearchTransitionResult = { state, effects: [] }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      Open: (event): PromptSearchTransitionResult => ({
+        state: PromptSearchState.open(event.draftBeforeOpen),
+        effects: [],
       }),
-    ],
-  }
+      Highlight: (event): PromptSearchTransitionResult => {
+        if (state._tag !== "open") return unchanged
+        const next: PromptSearchState = { ...state, highlighted: event.entry }
+        return { state: next, effects: [preview(next)] }
+      },
+      Accept: (): PromptSearchTransitionResult => {
+        if (state._tag !== "open") return unchanged
+        return {
+          state: PromptSearchState.closed(),
+          effects: [preview(state), PromptSearchEffect.cases.Close.make({})],
+        }
+      },
+      Cancel: (): PromptSearchTransitionResult => {
+        if (state._tag !== "open") return unchanged
+        return {
+          state: PromptSearchState.closed(),
+          effects: [
+            PromptSearchEffect.cases.Preview.make({ text: state.draftBeforeOpen }),
+            PromptSearchEffect.cases.Close.make({}),
+          ],
+        }
+      },
+    }),
+  )
 }

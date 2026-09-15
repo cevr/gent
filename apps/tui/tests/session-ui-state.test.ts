@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
 import { nextDisclosure, SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 
 describe("transcript disclosure", () => {
@@ -56,49 +57,59 @@ describe("prompt search overlay", () => {
     const opened = transitionSessionUi(SessionUiState.initial(), {
       _tag: "PromptSearch",
       event: { _tag: "Open", draftBeforeOpen: "draft" },
-      entries: [],
     })
     expect(opened.state.overlay).toEqual({
       _tag: "prompt-search",
       draftBeforeOpen: "draft",
-      query: "",
-      selectedIndex: 0,
-      hasInteracted: false,
+      highlighted: Option.none(),
     })
     expect(opened.effects).toEqual([])
   })
 
-  test("accepting an entry restores it to the composer and closes the palette", () => {
+  test("accepting a highlighted entry restores it to the composer and closes the palette", () => {
     const opened = transitionSessionUi(SessionUiState.initial(), {
       _tag: "PromptSearch",
       event: { _tag: "Open", draftBeforeOpen: "draft" },
-      entries: [],
     })
     const moved = transitionSessionUi(opened.state, {
       _tag: "PromptSearch",
-      event: { _tag: "MoveDown" },
-      entries: ["first", "second"],
+      event: { _tag: "Highlight", entry: Option.some("second") },
     })
     expect(moved.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
     const accepted = transitionSessionUi(moved.state, {
       _tag: "PromptSearch",
       event: { _tag: "Accept" },
-      entries: ["first", "second"],
     })
     expect(accepted.state.overlay).toEqual({ _tag: "none" })
     expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
+  })
+
+  test("a list that emptied previews the draft, and accepting before a move keeps it", () => {
+    const opened = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "PromptSearch",
+      event: { _tag: "Open", draftBeforeOpen: "draft" },
+    })
+    const emptied = transitionSessionUi(opened.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "Highlight", entry: Option.none() },
+    })
+    expect(emptied.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
+    const accepted = transitionSessionUi(opened.state, {
+      _tag: "PromptSearch",
+      event: { _tag: "Accept" },
+    })
+    expect(accepted.state.overlay).toEqual({ _tag: "none" })
+    expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
   })
 
   test("cancelling restores the draft the palette opened over", () => {
     const opened = transitionSessionUi(SessionUiState.initial(), {
       _tag: "PromptSearch",
       event: { _tag: "Open", draftBeforeOpen: "draft" },
-      entries: ["first"],
     })
     const cancelled = transitionSessionUi(opened.state, {
       _tag: "PromptSearch",
       event: { _tag: "Cancel" },
-      entries: ["first"],
     })
     expect(cancelled.state.overlay).toEqual({ _tag: "none" })
     expect(cancelled.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])

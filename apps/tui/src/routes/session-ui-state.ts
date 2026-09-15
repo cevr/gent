@@ -1,4 +1,4 @@
-import { Match, Schema } from "effect"
+import { Match, Schema, type Option } from "effect"
 import { Branch, Message } from "@gent/core/protocol"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {
@@ -10,9 +10,7 @@ import {
 interface PromptSearchOverlayState {
   readonly _tag: "prompt-search"
   readonly draftBeforeOpen: string
-  readonly query: string
-  readonly selectedIndex: number
-  readonly hasInteracted: boolean
+  readonly highlighted: Option.Option<string>
 }
 
 export type SessionOverlayState =
@@ -67,10 +65,7 @@ export const SessionUiEvent = Schema.TaggedUnion({
   OpenExtensionOverlay: { overlayId: Schema.String },
   OpenBranches: { branches: Schema.Array(Branch) },
   CloseOverlay: {},
-  PromptSearch: {
-    event: PromptSearchEventSchema,
-    entries: Schema.Array(Schema.String),
-  },
+  PromptSearch: { event: PromptSearchEventSchema },
 })
 export type SessionUiEvent = Schema.Schema.Type<typeof SessionUiEvent>
 
@@ -86,9 +81,7 @@ export const getPromptSearchState = (state: SessionUiState): PromptSearchState =
     return {
       _tag: "open",
       draftBeforeOpen: state.overlay.draftBeforeOpen,
-      query: state.overlay.query,
-      selectedIndex: state.overlay.selectedIndex,
-      hasInteracted: state.overlay.hasInteracted,
+      highlighted: state.overlay.highlighted,
     }
   }
   return PromptSearchStateFactory.closed()
@@ -167,7 +160,7 @@ export function transitionSessionUi(
       }),
       PromptSearch: (event): SessionUiTransitionResult => {
         const promptState = getPromptSearchState(state)
-        const result = transitionPromptSearch(promptState, event.event, event.entries)
+        const result = transitionPromptSearch(promptState, event.event)
         // Only a preview reaches the composer; the palette closes through the overlay.
         const effects = result.effects
           .filter((effect) => effect._tag === "Preview")
@@ -177,9 +170,7 @@ export function transitionSessionUi(
           nextOverlay = {
             _tag: "prompt-search",
             draftBeforeOpen: result.state.draftBeforeOpen,
-            query: result.state.query,
-            selectedIndex: result.state.selectedIndex,
-            hasInteracted: result.state.hasInteracted,
+            highlighted: result.state.highlighted,
           }
         }
         return {
