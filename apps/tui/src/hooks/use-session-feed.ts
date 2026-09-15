@@ -8,7 +8,7 @@
 
 import { batch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
-import { Clock, Effect, Equal, Fiber, Option, Predicate, Schedule, Stream } from "effect"
+import { Clock, Effect, Equal, Fiber, Match, Option, Predicate, Schedule, Stream } from "effect"
 import {
   assistantMessageIdForTurn,
   projectMessage,
@@ -22,18 +22,14 @@ import {
   extractText,
   extractReasoning,
   extractImages,
+  type MessageSegment,
   type QueueSnapshot,
   type ProjectedMessage,
   type ToolInteraction,
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
 import type { ToolCall } from "../components/tool-renderers"
-import {
-  addStep,
-  emptyTurnSteps,
-  type SessionEvent,
-  type TurnSteps,
-} from "../components/session-event-label"
+import { addStep, emptyTurnSteps, type SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { randomId } from "../utils/random-id"
 import { formatConnectionIssue } from "../utils/format-error"
@@ -123,37 +119,30 @@ const isMessage = Predicate.or(
 
 // ── Build messages from raw ──
 
+/** Widen the projected segments with the live tool payloads they name. */
 const buildSegments = (
-  parts: ProjectedMessage["parts"],
+  projected: ReadonlyArray<MessageSegment>,
   toolInteractions: ReadonlyArray<ToolInteraction>,
 ): AssistantSegment[] => {
-  const segments: AssistantSegment[] = []
   const interactionsById = new Map(
     toolInteractions.map((interaction) => [String(interaction.id), interaction]),
   )
-  for (const part of parts) {
-    switch (part.type) {
-      case "text":
-        segments.push({ _tag: "text", content: part.text })
-        break
-      case "reasoning":
-        segments.push({ _tag: "reasoning", content: part.text })
-        break
-      case "file":
-        if (part.mediaType.startsWith("image/")) {
-          segments.push({ _tag: "image", image: { mediaType: part.mediaType } })
-        }
-        break
-      case "tool-call": {
-        const toolCall = Option.fromNullishOr(interactionsById.get(part.id))
-        if (Option.isSome(toolCall)) segments.push({ _tag: "tool-call", toolCall: toolCall.value })
-        break
-      }
-      default:
-        break
-    }
-  }
-  return segments
+  return projected.flatMap((segment) =>
+    Match.value(segment).pipe(
+      Match.tagsExhaustive({
+        text: (value): AssistantSegment[] => [{ _tag: "text", content: value.content }],
+        reasoning: (value): AssistantSegment[] => [{ _tag: "reasoning", content: value.content }],
+        image: (value): AssistantSegment[] => [
+          { _tag: "image", image: { mediaType: value.mediaType } },
+        ],
+        "tool-call": (value): AssistantSegment[] => {
+          const toolCall = Option.fromNullishOr(interactionsById.get(String(value.toolCallId)))
+          if (Option.isNone(toolCall)) return []
+          return [{ _tag: "tool-call", toolCall: toolCall.value }]
+        },
+      }),
+    ),
+  )
 }
 
 const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
@@ -164,7 +153,8 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
     let toolCallsOption = Option.none<typeof toolCalls>()
     if (toolCalls.length > 0) toolCallsOption = Option.some(toolCalls)
     let segments = Option.none<AssistantSegment[]>()
-    if (m.role === "assistant") segments = Option.some(buildSegments(m.parts, m.toolInteractions))
+    if (m.role === "assistant")
+      segments = Option.some(buildSegments(m.segments, m.toolInteractions))
     const message = {
       id: m.id,
       role: m.role,
@@ -213,41 +203,6 @@ const createAssistantMessage = (content: string, id: string, createdAt: number):
   toolCalls: Option.getOrUndefined(Option.none<ToolCall[]>()),
 })
 
-const createInterruptionEvent = (createdAt: number, seq: number): SessionEvent => ({
-  _tag: "interruption",
-  createdAt,
-  seq,
-})
-
-const createTurnEndedEvent = (
-  durationSeconds: number,
-  steps: TurnSteps,
-  createdAt: number,
-  seq: number,
-): SessionEvent => ({
-  _tag: "turn-ended",
-  durationSeconds,
-  steps,
-  createdAt,
-  seq,
-})
-
-const createRetryingEvent = (
-  attempt: number,
-  maxAttempts: number,
-  delayMs: number,
-  createdAt: number,
-  seq: number,
-): SessionEvent => ({
-  _tag: "retrying",
-  attempt,
-  maxAttempts,
-  delayMs,
-  resolved: false,
-  createdAt,
-  seq,
-})
-
 const resolveRetryingEvents = (setStore: SetStoreFunction<SessionFeedStore>) => {
   setStore(
     produce((draft) => {
@@ -257,13 +212,6 @@ const resolveRetryingEvents = (setStore: SetStoreFunction<SessionFeedStore>) => 
     }),
   )
 }
-
-const createErrorEvent = (error: string, createdAt: number, seq: number): SessionEvent => ({
-  _tag: "error",
-  error,
-  createdAt,
-  seq,
-})
 
 type MessageWithMetadata = {
   readonly metadata?: {
@@ -350,6 +298,15 @@ const locateToolCall = (
   return Option.none()
 }
 
+/** The tool calls a message shows inline, in segment order. */
+const segmentToolCalls = (message: Message): Option.Option<ReadonlyArray<ToolCall>> =>
+  Option.map(Option.fromNullishOr(message.segments), (segments) =>
+    segments.flatMap((segment) => {
+      if (segment._tag === "tool-call") return [segment.toolCall]
+      return []
+    }),
+  )
+
 /** Attach a cell-admitted call under its parent instead of the transcript top level. */
 const attachOperation = (
   calls: Option.Option<ReadonlyArray<ToolCall>>,
@@ -402,15 +359,9 @@ const handleToolCallResult = (
         toolEvent,
         completedAt,
       )
-      // Also update the segment's toolCall
-      const segments = Option.fromNullishOr(message.segments)
-      if (Option.isNone(segments)) return
-      const segmentCalls = segments.value.flatMap((segment) => {
-        if (segment._tag === "tool-call") return [segment.toolCall]
-        return []
-      })
+      // The same call also renders inline as a segment.
       applyToolCallResult(
-        locateToolCall(Option.some(segmentCalls), toolEvent.toolCallId),
+        locateToolCall(segmentToolCalls(message), toolEvent.toolCallId),
         status,
         toolEvent,
         completedAt,
@@ -426,10 +377,79 @@ const toActiveInteraction = (event: AgentEvent): Option.Option<ActiveInteraction
   return Option.none()
 }
 
+/**
+ * Events whose effect the session snapshot already carries. Replay skips them
+ * so a reload does not re-count turns or re-append settled tool payloads.
+ */
+const isSnapshotHeldEvent = Predicate.or(
+  Predicate.isTagged("StreamChunk"),
+  Predicate.or(
+    Predicate.isTagged("ToolCallStarted"),
+    Predicate.or(Predicate.isTagged("ToolCallSucceeded"), Predicate.isTagged("ToolCallFailed")),
+  ),
+)
+
 const isToolResultEvent = Predicate.or(
   Predicate.isTagged("ToolCallSucceeded"),
   Predicate.isTagged("ToolCallFailed"),
 )
+
+type ToolStartedEvent = Extract<AgentEvent, { _tag: "ToolCallStarted" }>
+
+/** The status-line label for a running tool: its name plus a short input. */
+const activeToolLabel = (event: ToolStartedEvent): string => {
+  const inputSummary = formatToolInput(event.toolName, event.input)
+  if (inputSummary.length === 0) return event.toolName
+  return `${event.toolName}(${inputSummary})`
+}
+
+/** Put a new call on its owning message, or under the cell that admitted it. */
+const startToolCall = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  event: ToolStartedEvent,
+  startedAt: number,
+) => {
+  const toolCall = {
+    id: event.toolCallId,
+    toolName: event.toolName,
+    status: "running",
+    input: event.input,
+    summary: Option.getOrUndefined(Option.none<string>()),
+    output: Option.getOrUndefined(Option.none<string>()),
+    startedAt,
+  } satisfies ToolCall
+  const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)
+  updateToolMessage(
+    setStore,
+    (message) => {
+      if (Option.isSome(parentToolCallId)) {
+        attachOperation(Option.fromNullishOr(message.toolCalls), parentToolCallId.value, toolCall)
+        attachOperation(segmentToolCalls(message), parentToolCallId.value, { ...toolCall })
+        return
+      }
+      const existing = Option.fromNullishOr(message.toolCalls)
+      // Cold interaction resume starts the same call again, not a new call.
+      if (Option.isSome(existing) && existing.value.some((call) => call.id === event.toolCallId))
+        return
+      if (Option.isNone(existing)) message.toolCalls = []
+      message.toolCalls?.push(toolCall)
+      // Also push to segments for interleaved rendering.
+      if (Option.isNone(Option.fromNullishOr(message.segments))) message.segments = []
+      message.segments?.push({ _tag: "tool-call", toolCall })
+    },
+    (message) => {
+      if (Option.isSome(parentToolCallId)) {
+        return Option.isSome(
+          locateToolCall(Option.fromNullishOr(message.toolCalls), parentToolCallId.value),
+        )
+      }
+      // A late receipt names the message it belongs to; it must not land on a newer one.
+      if (Predicate.isNotUndefined(event.assistantMessageId))
+        return message.id === event.assistantMessageId
+      return true
+    },
+  )
+}
 
 // ── Hook ──
 
@@ -457,6 +477,131 @@ export function useSessionFeed(
     const steps = turnSteps
     turnSteps = emptyTurnSteps
     return steps
+  }
+  /**
+   * Every event that needs no streaming state: a message, a turn boundary, a
+   * tool start, or a transcript notice.
+   */
+  const applySettledEvent = (
+    event: AgentEvent,
+    receivedAt: number,
+    stampedAt: number,
+    live: boolean,
+  ) => {
+    switch (event._tag) {
+      case "MessageReceived":
+        // A replayed message is already in the snapshot unless it is standalone.
+        if (isStandaloneMessage(event.message) || (live && event.message.role === "user")) {
+          upsertReceivedMessage(setStore, projectMessage(event.message, []))
+        }
+        return
+
+      case "StreamEnded":
+        streamMessageId = Option.none()
+        turnSteps = addStep(turnSteps, event)
+        return
+
+      case "TurnCompleted":
+        streamMessageId = Option.none()
+        resolveRetryingEvents(setStore)
+        appendTurnEndRow(event, stampedAt)
+        return
+
+      case "ToolCallStarted":
+        setActiveTool(Option.some(activeToolLabel(event)))
+        startToolCall(setStore, event, receivedAt)
+        return
+
+      case "ProviderRetrying":
+        if (live) resolveRetryingEvents(setStore)
+        appendSessionEvent(setStore, {
+          _tag: "retrying",
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+          resolved: false,
+          createdAt: stampedAt,
+          seq: eventSeq++,
+        })
+        return
+
+      case "ErrorOccurred":
+        resolveRetryingEvents(setStore)
+        if (live) client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
+        appendSessionEvent(setStore, {
+          _tag: "error",
+          error: event.error,
+          createdAt: stampedAt,
+          seq: eventSeq++,
+        })
+        return
+
+      default:
+        return
+    }
+  }
+
+  /** Hand an interaction event to the composer. Reports whether it consumed the event. */
+  const routeInteraction = (event: AgentEvent): boolean => {
+    if (event._tag === "InteractionResolved") {
+      callbacks.onInteractionDismissed(event.requestId)
+      return true
+    }
+    const interaction = toActiveInteraction(event)
+    if (Option.isNone(interaction)) return false
+    callbacks.onInteraction(interaction.value)
+    return true
+  }
+
+  /**
+   * Start the message this turn's answer belongs to. The durable input id and
+   * step name it, so a later chunk or receipt finds the same owner.
+   */
+  const openStreamedAnswer = (
+    event: Extract<AgentEvent, { _tag: "StreamStarted" }>,
+    stampedAt: number,
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const id = yield* Option.fromUndefinedOr(event.messageId).pipe(
+        Option.match({
+          onNone: () => randomId,
+          onSome: (inputId) => Effect.succeed(assistantMessageIdForTurn(inputId, event.step)),
+        }),
+      )
+      streamMessageId = Option.some(id)
+      ensureAssistantMessage(setStore, "", id, stampedAt)
+    })
+
+  /** A chunk extends the open answer. A history stream without one gets a local id. */
+  const appendStreamedChunk = (chunk: string, stampedAt: number): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const id = yield* streamMessageId.pipe(
+        Option.match({ onNone: () => randomId, onSome: Effect.succeed }),
+      )
+      streamMessageId = Option.some(id)
+      ensureAssistantMessage(setStore, chunk, id, stampedAt)
+    })
+
+  /** The transcript row that closes a turn: an interruption or a duration. */
+  const appendTurnEndRow = (
+    event: Extract<AgentEvent, { _tag: "TurnCompleted" }>,
+    stampedAt: number,
+  ) => {
+    const steps = takeTurnSteps()
+    if (event.interrupted === true) {
+      appendSessionEvent(setStore, { _tag: "interruption", createdAt: stampedAt, seq: eventSeq++ })
+      return
+    }
+    const durationSeconds = Math.round(event.durationMs / 1000)
+    // A turn shorter than a second gets no row.
+    if (durationSeconds <= 0) return
+    appendSessionEvent(setStore, {
+      _tag: "turn-ended",
+      durationSeconds,
+      steps,
+      createdAt: stampedAt,
+      seq: eventSeq++,
+    })
   }
   const lastSeenEventIdByKey = new Map<string, number>()
   let processedEnvelopeIds = new Set<EventEnvelope["id"]>()
@@ -707,7 +852,7 @@ export function useSessionFeed(
         // Historical navigation must not replace the branch selected for this snapshot.
         if (envelope.event._tag === "BranchSwitched") return
         client.applyBufferedSessionEvent(envelope)
-        processBufferedEvent(envelope, key)
+        yield* processEvent(envelope, key, "replay")
         return
       }
       const event = envelope.event
@@ -723,98 +868,37 @@ export function useSessionFeed(
         return
       }
       client.applySessionEvent(envelope)
-      yield* processEvent(envelope, branch, key)
+      yield* processEvent(envelope, key, "live")
     })
 
-  const processBufferedEvent = (envelope: EventEnvelope, key: string) => {
-    if (Option.isNone(currentKey) || currentKey.value !== key) return
-    const event = envelope.event
-
-    if (event._tag === "MessageReceived") {
-      if (isStandaloneMessage(event.message)) {
-        upsertReceivedMessage(setStore, projectMessage(event.message, []))
-      }
-      return
-    }
-
-    if (event._tag === "ProviderRetrying") {
-      appendSessionEvent(
-        setStore,
-        createRetryingEvent(
-          event.attempt,
-          event.maxAttempts,
-          event.delayMs,
-          envelope.createdAt,
-          eventSeq++,
-        ),
-      )
-      return
-    }
-
-    if (event._tag === "StreamStarted") {
-      resolveRetryingEvents(setStore)
-      return
-    }
-
-    if (event._tag === "StreamEnded") {
-      turnSteps = addStep(turnSteps, event)
-      return
-    }
-
-    if (event._tag === "TurnCompleted") {
-      resolveRetryingEvents(setStore)
-      const durationSeconds = Math.round(event.durationMs / 1000)
-      const steps = takeTurnSteps()
-      if (event.interrupted === true) {
-        appendSessionEvent(setStore, createInterruptionEvent(envelope.createdAt, eventSeq++))
-      } else if (durationSeconds > 0) {
-        appendSessionEvent(
-          setStore,
-          createTurnEndedEvent(durationSeconds, steps, envelope.createdAt, eventSeq++),
-        )
-      }
-      return
-    }
-
-    if (event._tag === "ErrorOccurred") {
-      resolveRetryingEvents(setStore)
-      appendSessionEvent(setStore, createErrorEvent(event.error, envelope.createdAt, eventSeq++))
-      return
-    }
-
-    // Snapshot data already contains message, lifecycle, and metrics state.
-    // Buffered replay only hydrates event-only UI state that is absent from the
-    // snapshot, such as pending interactions.
-
-    if (event._tag === "InteractionResolved") {
-      callbacks.onInteractionDismissed(event.requestId)
-      return
-    }
-
-    const interaction = toActiveInteraction(event)
-    if (Option.isSome(interaction)) callbacks.onInteraction(interaction.value)
-  }
-
+  /**
+   * One event handler for both passes.
+   *
+   * `replay` covers envelopes at or before the snapshot cursor: the snapshot
+   * already holds their message, tool, and metric state, so replay only
+   * rebuilds the event-only UI rows and stamps them with the recorded time.
+   * `live` covers everything after it and stamps rows with the current time so
+   * they sort after the snapshot's own rows.
+   */
   const processEvent = (
     envelope: EventEnvelope,
-    branch: BranchId,
     key: string,
+    pass: "replay" | "live",
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const event = envelope.event
       if (Option.isNone(currentKey) || currentKey.value !== key) return
-      client.log.debug("feed.event", { key, tag: event._tag })
+      const live = pass === "live"
+      if (live) client.log.debug("feed.event", { key, tag: event._tag })
+      // A replayed row keeps the time it happened; a live row takes the clock.
+      let stampedAt = envelope.createdAt
+      if (live) stampedAt = yield* Clock.currentTimeMillis
 
-      if (event._tag === "InteractionResolved") {
-        callbacks.onInteractionDismissed(event.requestId)
-        return
-      }
+      // Interactions belong to the composer, not the transcript.
+      if (routeInteraction(event)) return
 
-      const interaction = toActiveInteraction(event)
-      if (Option.isSome(interaction)) {
-        callbacks.onInteraction(interaction.value)
-        return
-      }
+      // The snapshot carries every settled message, tool result, and metric.
+      if (!live && isSnapshotHeldEvent(event)) return
 
       if (isToolResultEvent(event)) {
         handleToolCallResult(setStore, setActiveTool, event, envelope.createdAt)
@@ -822,149 +906,20 @@ export function useSessionFeed(
       }
 
       switch (event._tag) {
-        case "MessageReceived":
-          if (event.message.role === "user" || isStandaloneMessage(event.message)) {
-            upsertReceivedMessage(setStore, projectMessage(event.message, []))
-          }
-          break
-
-        case "StreamStarted": {
+        case "StreamStarted":
           resolveRetryingEvents(setStore)
+          if (!live) break
           setTurnCount((n) => n + 1)
           setActiveTool(Option.none())
-          const id = yield* Option.fromUndefinedOr(event.messageId).pipe(
-            Option.match({
-              onNone: () => randomId,
-              onSome: (inputId) => Effect.succeed(assistantMessageIdForTurn(inputId, event.step)),
-            }),
-          )
-          streamMessageId = Option.some(id)
-          ensureAssistantMessage(setStore, "", id, yield* Clock.currentTimeMillis)
-          break
-        }
-
-        case "StreamChunk": {
-          const id = yield* streamMessageId.pipe(
-            Option.match({ onNone: () => randomId, onSome: Effect.succeed }),
-          )
-          streamMessageId = Option.some(id)
-          ensureAssistantMessage(setStore, event.chunk, id, yield* Clock.currentTimeMillis)
-          break
-        }
-
-        case "StreamEnded":
-          streamMessageId = Option.none()
-          turnSteps = addStep(turnSteps, event)
+          yield* openStreamedAnswer(event, stampedAt)
           break
 
-        case "TurnCompleted": {
-          streamMessageId = Option.none()
-          resolveRetryingEvents(setStore)
-          const durationSeconds = Math.round(event.durationMs / 1000)
-          const createdAt = yield* Clock.currentTimeMillis
-          const steps = takeTurnSteps()
-          if (event.interrupted === true) {
-            appendSessionEvent(setStore, createInterruptionEvent(createdAt, eventSeq++))
-          } else if (durationSeconds > 0) {
-            appendSessionEvent(
-              setStore,
-              createTurnEndedEvent(durationSeconds, steps, createdAt, eventSeq++),
-            )
-          }
-          break
-        }
-
-        case "ToolCallStarted": {
-          const inputSummary = formatToolInput(event.toolName, event.input)
-          let activeToolLabel = event.toolName
-          if (inputSummary.length > 0) activeToolLabel = `${event.toolName}(${inputSummary})`
-          setActiveTool(Option.some(activeToolLabel))
-          const toolCall = {
-            id: event.toolCallId,
-            toolName: event.toolName,
-            status: "running",
-            input: event.input,
-            summary: Option.getOrUndefined(Option.none<string>()),
-            output: Option.getOrUndefined(Option.none<string>()),
-            startedAt: envelope.createdAt,
-          } satisfies ToolCall
-          const parentToolCallId = Option.fromUndefinedOr(event.parentToolCallId)
-          updateToolMessage(
-            setStore,
-            (message) => {
-              if (Option.isSome(parentToolCallId)) {
-                attachOperation(
-                  Option.fromNullishOr(message.toolCalls),
-                  parentToolCallId.value,
-                  toolCall,
-                )
-                const segmentCalls = Option.fromNullishOr(message.segments).pipe(
-                  Option.map((segments) =>
-                    segments.flatMap((segment) => {
-                      if (segment._tag === "tool-call") return [segment.toolCall]
-                      return []
-                    }),
-                  ),
-                )
-                attachOperation(segmentCalls, parentToolCallId.value, { ...toolCall })
-                return
-              }
-              let toolCalls = Option.fromNullishOr(message.toolCalls)
-              // Cold interaction resume starts the same call again, not a new call.
-              if (
-                Option.isSome(toolCalls) &&
-                toolCalls.value.some((call) => call.id === event.toolCallId)
-              ) {
-                return
-              }
-              if (Option.isNone(toolCalls)) {
-                message.toolCalls = []
-                toolCalls = Option.fromNullishOr(message.toolCalls)
-              }
-              if (Option.isSome(toolCalls)) toolCalls.value.push(toolCall)
-              // Also push to segments for interleaved rendering
-              let segments = Option.fromNullishOr(message.segments)
-              if (Option.isNone(segments)) {
-                message.segments = []
-                segments = Option.fromNullishOr(message.segments)
-              }
-              if (Option.isSome(segments)) segments.value.push({ _tag: "tool-call", toolCall })
-            },
-            (message) => {
-              if (Option.isSome(parentToolCallId)) {
-                return Option.isSome(
-                  locateToolCall(Option.fromNullishOr(message.toolCalls), parentToolCallId.value),
-                )
-              }
-              if (Predicate.isNotUndefined(event.assistantMessageId))
-                return message.id === event.assistantMessageId
-              return true
-            },
-          )
-          break
-        }
-
-        case "ProviderRetrying":
-          resolveRetryingEvents(setStore)
-          appendSessionEvent(
-            setStore,
-            createRetryingEvent(
-              event.attempt,
-              event.maxAttempts,
-              event.delayMs,
-              yield* Clock.currentTimeMillis,
-              eventSeq++,
-            ),
-          )
+        case "StreamChunk":
+          yield* appendStreamedChunk(event.chunk, stampedAt)
           break
 
-        case "ErrorOccurred":
-          resolveRetryingEvents(setStore)
-          client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
-          appendSessionEvent(
-            setStore,
-            createErrorEvent(event.error, yield* Clock.currentTimeMillis, eventSeq++),
-          )
+        default:
+          applySettledEvent(event, envelope.createdAt, stampedAt, live)
           break
       }
     })
