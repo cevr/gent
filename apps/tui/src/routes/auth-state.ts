@@ -1,353 +1,208 @@
-import { Match, Schema } from "effect"
-import {
-  AuthAuthorization,
-  AuthMethod,
-  AuthProviderInfo as AuthProviderInfoSchema,
-} from "@gent/core/protocol"
+/**
+ * `auth-state` — the auth pane's screen, and nothing else.
+ *
+ * The pane shows one of four screens. Which screen it shows, which
+ * provider it is about, and what the reader has typed into it is the
+ * whole of this state; everything else the pane needs it reads from the
+ * catalog it was loaded with.
+ *
+ * Three things this reducer used to carry are gone, because nothing read
+ * them: a `Loading` screen the render treated exactly like an empty
+ * `List`, and the `deleting` / `authorizing` / `submitting` in-flight
+ * flags, which no render path and no key handler ever consulted. An RPC
+ * that is in flight is already visible as the screen not having changed
+ * yet, and the route's version counter is what actually decides whether
+ * its reply still counts.
+ *
+ * Cursor movement is gone too: `SelectList` owns the selected row for
+ * both the provider list and the method list, so a screen below the list
+ * records only the provider it was opened *for*, and an OAuth flow only
+ * the method index it was started with.
+ *
+ * @module
+ */
 
-type AuthProviderInfo = AuthProviderInfoSchema
+import { Match, Option, Schema } from "effect"
+import { AuthAuthorization, AuthMethod, AuthProviderInfo } from "@gent/core/protocol"
 
-type AuthCatalog = {
-  readonly providers: readonly AuthProviderInfo[]
+/**
+ * What the server said, held between screens.
+ *
+ * The pane re-reads this rather than copying pieces of it into each
+ * screen: a provider's `hasKey` changes under a screen that is already
+ * open, and the screen should not show a stale copy.
+ */
+export interface AuthCatalog {
+  readonly providers: ReadonlyArray<AuthProviderInfo>
   readonly methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>
-  readonly providerIndex: number
-  readonly error?: string
 }
 
-type AuthMethodCatalog = AuthCatalog & {
-  readonly methodIndex: number
+export const emptyCatalog: AuthCatalog = { providers: [], methods: {} }
+
+/**
+ * The four screens.
+ *
+ * `List` is the pane at rest — the provider picker, and the screen every
+ * failure and every completed action returns to. `Method` names the
+ * provider a reader chose. `Key` and `OAuth` are the two ways a provider
+ * is authorised, and each holds the text the reader types into it.
+ */
+export const AuthScreen = Schema.TaggedUnion({
+  List: {},
+  Method: { provider: Schema.String },
+  Key: { provider: Schema.String, value: Schema.String },
+  OAuth: {
+    provider: Schema.String,
+    methodIndex: Schema.Finite,
+    method: AuthMethod,
+    authorization: AuthAuthorization,
+    code: Schema.String,
+    /** `waiting` means the browser is expected to finish it without a code. */
+    waiting: Schema.Boolean,
+  },
+})
+export type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
+
+export interface AuthState {
+  /**
+   * Absent until the server answers.
+   *
+   * This is not the same as "the server answered with nothing", and the
+   * pane must not confuse them: enforced auth closes itself the moment
+   * no required provider is missing, and an empty catalog satisfies that
+   * vacuously. An `Option` says which of the two it is; a plain empty
+   * catalog would close the pane before its first load returned.
+   */
+  readonly catalog: Option.Option<AuthCatalog>
+  readonly screen: AuthScreen
+  readonly error: Option.Option<string>
 }
 
-export type AuthState =
-  | ({
-      readonly _tag: "Loading"
-    } & AuthCatalog)
-  | ({
-      readonly _tag: "List"
-      readonly deleting: boolean
-    } & AuthCatalog)
-  | ({
-      readonly _tag: "Method"
-      readonly authorizing: boolean
-    } & AuthMethodCatalog)
-  | ({
-      readonly _tag: "Key"
-      readonly value: string
-      readonly submitting: boolean
-    } & AuthCatalog)
-  | ({
-      readonly _tag: "OAuth"
-      readonly methodIndex: number
-      readonly method: AuthMethod
-      readonly authorization: AuthAuthorization
-      readonly code: string
-      readonly phase: "waiting" | "idle"
-      readonly submitting: boolean
-    } & AuthCatalog)
+export const AuthState = {
+  initial: (): AuthState => ({
+    catalog: Option.none(),
+    screen: AuthScreen.cases.List.make({}),
+    error: Option.none(),
+  }),
+}
+
+/** What the pane draws with: the loaded catalog, or nothing yet. */
+export const catalogOf = (state: AuthState): AuthCatalog =>
+  Option.getOrElse(state.catalog, () => emptyCatalog)
 
 export const AuthEvent = Schema.TaggedUnion({
-  LoadStarted: {},
+  /** The server answered `listProviders` + `listMethods`. */
   Loaded: {
-    providers: Schema.Array(AuthProviderInfoSchema),
+    providers: Schema.Array(AuthProviderInfo),
     methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
   },
-  LoadFailed: { error: Schema.String },
-  SelectProvider: { index: Schema.Finite },
-  SelectMethod: { index: Schema.Finite },
-  OpenMethod: {},
-  StartKey: {},
-  StartOAuthAuthorization: {},
-  StartOAuth: {
-    authorization: AuthAuthorization,
-    method: AuthMethod,
-    providerIndex: Schema.Finite,
+  /** A load or an action failed; the pane falls back to the list and says why. */
+  Failed: { error: Schema.String },
+  /** A provider was chosen from the list. */
+  OpenMethod: { provider: Schema.String },
+  /** An `api` method was chosen: type a key. */
+  OpenKey: { provider: Schema.String },
+  /** An `oauth` method returned an authorization to complete. */
+  OpenOAuth: {
+    provider: Schema.String,
     methodIndex: Schema.Finite,
+    method: AuthMethod,
+    authorization: AuthAuthorization,
   },
-  TypeKey: { char: Schema.String },
-  BackspaceKey: {},
-  PasteKey: { text: Schema.String },
-  SubmitKeyStarted: {},
-  TypeCode: { char: Schema.String },
-  BackspaceCode: {},
-  PasteCode: { text: Schema.String },
-  SubmitOAuthStarted: {},
-  DeleteStarted: {},
-  Cancel: {},
-  ActionSucceeded: {},
-  ActionFailed: { error: Schema.String },
+  /** Text typed or pasted into whichever of `Key` / `OAuth` is open. */
+  Type: { text: Schema.String },
+  Backspace: {},
+  /** The browser leg of an `auto` flow failed; fall back to pasting a code. */
   OAuthAutoFailed: { error: Schema.String },
+  /** Escape, or an action that finished: back to the list, error cleared. */
+  Close: {},
 })
 export type AuthEvent = Schema.Schema.Type<typeof AuthEvent>
 
-const catalogOf = (state: AuthState): AuthCatalog => ({
-  providers: state.providers,
-  methods: state.methods,
-  providerIndex: state.providerIndex,
-  error: state.error,
+const list = (state: AuthState, error: Option.Option<string>): AuthState => ({
+  catalog: state.catalog,
+  screen: AuthScreen.cases.List.make({}),
+  error,
 })
 
-const clampProviderIndex = (providers: readonly AuthProviderInfo[], index: number) =>
-  Math.min(index, Math.max(0, providers.length - 1))
-
-const loading = (catalog?: Partial<AuthCatalog>): AuthState => ({
-  _tag: "Loading",
-  providers: catalog?.providers ?? [],
-  methods: catalog?.methods ?? {},
-  providerIndex: catalog?.providerIndex ?? 0,
-  error: catalog?.error,
-})
-
-const list = (
-  catalog?: Partial<AuthCatalog> & {
-    readonly deleting?: boolean
-  },
-): AuthState => ({
-  _tag: "List",
-  providers: catalog?.providers ?? [],
-  methods: catalog?.methods ?? {},
-  providerIndex: catalog?.providerIndex ?? 0,
-  deleting: catalog?.deleting ?? false,
-  error: catalog?.error,
-})
-
-const method = (
-  catalog: AuthMethodCatalog & {
-    readonly authorizing?: boolean
-  },
-): AuthState => ({
-  _tag: "Method",
-  ...catalog,
-  authorizing: catalog.authorizing ?? false,
-})
-
-const key = (
-  catalog: AuthCatalog & {
-    readonly value: string
-    readonly submitting?: boolean
-  },
-): AuthState => ({
-  _tag: "Key",
-  ...catalog,
-  submitting: catalog.submitting ?? false,
-})
-
-const oauth = (
-  catalog: AuthCatalog & {
-    readonly methodIndex: number
-    readonly method: AuthMethod
-    readonly authorization: AuthAuthorization
-    readonly code: string
-    readonly phase: "waiting" | "idle"
-    readonly submitting?: boolean
-  },
-): AuthState => ({
-  _tag: "OAuth",
-  ...catalog,
-  submitting: catalog.submitting ?? false,
-})
-
-export const AuthState = {
-  initial: (): AuthState => loading(),
-}
-
-const onLoadStarted = (state: AuthState): AuthState => loading(catalogOf(state))
-
-const onLoaded = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "Loaded" }>,
-): AuthState =>
-  list({
-    providers: event.providers,
-    methods: event.methods,
-    providerIndex: clampProviderIndex(event.providers, state.providerIndex),
-  })
-
-const onLoadFailed = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "LoadFailed" }>,
-): AuthState => list({ ...catalogOf(state), error: event.error })
-
-const onSelectProvider = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "SelectProvider" }>,
-): AuthState => {
-  if (state._tag === "List") return list({ ...catalogOf(state), providerIndex: event.index })
-  return state
-}
-
-const onSelectMethod = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "SelectMethod" }>,
-): AuthState => {
-  if (state._tag === "Method") return method({ ...state, methodIndex: event.index })
-  return state
-}
-
-const onOpenMethod = (state: AuthState): AuthState => {
-  if (state._tag !== "List") return state
-  return method({
-    ...catalogOf(state),
-    providerIndex: state.providerIndex,
-    methodIndex: 0,
-  })
-}
-
-const onStartKey = (state: AuthState): AuthState => {
-  if (state._tag === "Method") {
-    return key({ ...catalogOf(state), providerIndex: state.providerIndex, value: "" })
-  }
-  return state
-}
-
-const onStartOAuthAuthorization = (state: AuthState): AuthState => {
-  if (state._tag === "Method") return method({ ...state, authorizing: true })
-  return state
-}
-
-const oauthPhase = (authorization: AuthAuthorization): "waiting" | "idle" => {
-  if (authorization.method === "auto") return "waiting"
-  return "idle"
-}
-
-const onStartOAuth = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "StartOAuth" }>,
-): AuthState =>
-  oauth({
-    ...catalogOf(state),
-    providerIndex: event.providerIndex,
-    methodIndex: event.methodIndex,
-    method: event.method,
-    authorization: event.authorization,
-    code: "",
-    phase: oauthPhase(event.authorization),
-  })
-
-const onTypeKey = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "TypeKey" }>,
-): AuthState => {
-  if (state._tag !== "Key") return state
-  return key({
-    ...catalogOf(state),
-    providerIndex: state.providerIndex,
-    value: state.value + event.char,
-  })
-}
-
-const onBackspaceKey = (state: AuthState): AuthState => {
-  if (state._tag !== "Key") return state
-  return key({
-    ...catalogOf(state),
-    providerIndex: state.providerIndex,
-    value: state.value.slice(0, -1),
-  })
-}
-
-const onPasteKey = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "PasteKey" }>,
-): AuthState => {
-  if (state._tag !== "Key") return state
-  return key({
-    ...catalogOf(state),
-    providerIndex: state.providerIndex,
-    value: state.value + event.text,
-  })
-}
-
-const onSubmitKeyStarted = (state: AuthState): AuthState => {
-  if (state._tag === "Key") return key({ ...state, submitting: true })
-  return state
-}
-
-const onTypeCode = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "TypeCode" }>,
-): AuthState => {
-  if (state._tag === "OAuth") return oauth({ ...state, code: state.code + event.char })
-  return state
-}
-
-const onBackspaceCode = (state: AuthState): AuthState => {
-  if (state._tag === "OAuth") return oauth({ ...state, code: state.code.slice(0, -1) })
-  return state
-}
-
-const onPasteCode = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "PasteCode" }>,
-): AuthState => {
-  if (state._tag === "OAuth") return oauth({ ...state, code: state.code + event.text })
-  return state
-}
-
-const onSubmitOAuthStarted = (state: AuthState): AuthState => {
-  if (state._tag === "OAuth") return oauth({ ...state, submitting: true })
-  return state
-}
-
-const onDeleteStarted = (state: AuthState): AuthState => {
-  if (state._tag === "List") return list({ ...state, deleting: true })
-  return state
-}
-
-const onCancel = (state: AuthState): AuthState => list(catalogOf(state))
-
-const onActionSucceeded = (state: AuthState): AuthState => list(catalogOf(state))
-
-const onActionFailed = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "ActionFailed" }>,
-): AuthState => {
-  const transitionState: (state: AuthState) => AuthState = Match.type<AuthState>().pipe(
+/** Typing and backspace apply to whichever screen holds text. */
+const editText = (state: AuthState, edit: (current: string) => string): AuthState =>
+  Match.value(state.screen).pipe(
     Match.tagsExhaustive({
-      List: (state) => list({ ...catalogOf(state), error: event.error }),
-      Method: (state) => method({ ...state, authorizing: false, error: event.error }),
-      Key: (state) => key({ ...state, submitting: false, error: event.error }),
-      OAuth: (state) => oauth({ ...state, submitting: false, error: event.error }),
-      Loading: (state) => list({ ...catalogOf(state), error: event.error }),
+      List: () => state,
+      Method: () => state,
+      Key: (screen) => ({
+        ...state,
+        screen: AuthScreen.cases.Key.make({ ...screen, value: edit(screen.value) }),
+      }),
+      OAuth: (screen) => ({
+        ...state,
+        screen: AuthScreen.cases.OAuth.make({ ...screen, code: edit(screen.code) }),
+      }),
     }),
   )
-  return transitionState(state)
-}
-
-const onOAuthAutoFailed = (
-  state: AuthState,
-  event: Extract<AuthEvent, { readonly _tag: "OAuthAutoFailed" }>,
-): AuthState => {
-  if (state._tag === "OAuth") {
-    return oauth({ ...state, phase: "idle", submitting: false, error: event.error })
-  }
-  return state
-}
 
 export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
-  const transitionEvent: (event: AuthEvent) => AuthState = Match.type<AuthEvent>().pipe(
+  const apply: (event: AuthEvent) => AuthState = Match.type<AuthEvent>().pipe(
     Match.tagsExhaustive({
-      LoadStarted: () => onLoadStarted(state),
-      Loaded: (event) => onLoaded(state, event),
-      LoadFailed: (event) => onLoadFailed(state, event),
-      SelectProvider: (event) => onSelectProvider(state, event),
-      SelectMethod: (event) => onSelectMethod(state, event),
-      OpenMethod: () => onOpenMethod(state),
-      StartKey: () => onStartKey(state),
-      StartOAuthAuthorization: () => onStartOAuthAuthorization(state),
-      StartOAuth: (event) => onStartOAuth(state, event),
-      TypeKey: (event) => onTypeKey(state, event),
-      BackspaceKey: () => onBackspaceKey(state),
-      PasteKey: (event) => onPasteKey(state, event),
-      SubmitKeyStarted: () => onSubmitKeyStarted(state),
-      TypeCode: (event) => onTypeCode(state, event),
-      BackspaceCode: () => onBackspaceCode(state),
-      PasteCode: (event) => onPasteCode(state, event),
-      SubmitOAuthStarted: () => onSubmitOAuthStarted(state),
-      DeleteStarted: () => onDeleteStarted(state),
-      Cancel: () => onCancel(state),
-      ActionSucceeded: () => onActionSucceeded(state),
-      ActionFailed: (event) => onActionFailed(state, event),
-      OAuthAutoFailed: (event) => onOAuthAutoFailed(state, event),
+      Loaded: (event) => ({
+        catalog: Option.some({ providers: event.providers, methods: event.methods }),
+        screen: AuthScreen.cases.List.make({}),
+        error: Option.none(),
+      }),
+      Failed: (event) => list(state, Option.some(event.error)),
+      OpenMethod: (event) => ({
+        ...state,
+        screen: AuthScreen.cases.Method.make({ provider: event.provider }),
+        error: Option.none(),
+      }),
+      OpenKey: (event) => ({
+        ...state,
+        screen: AuthScreen.cases.Key.make({ provider: event.provider, value: "" }),
+        error: Option.none(),
+      }),
+      OpenOAuth: (event) => ({
+        ...state,
+        screen: AuthScreen.cases.OAuth.make({
+          provider: event.provider,
+          methodIndex: event.methodIndex,
+          method: event.method,
+          authorization: event.authorization,
+          code: "",
+          waiting: event.authorization.method === "auto",
+        }),
+        error: Option.none(),
+      }),
+      Type: (event) => editText(state, (current) => current + event.text),
+      Backspace: () => editText(state, (current) => current.slice(0, -1)),
+      OAuthAutoFailed: (event) => {
+        if (state.screen._tag !== "OAuth") return state
+        return {
+          ...state,
+          screen: AuthScreen.cases.OAuth.make({ ...state.screen, waiting: false }),
+          error: Option.some(event.error),
+        }
+      },
+      Close: () => list(state, Option.none()),
     }),
   )
-  return transitionEvent(event)
+  return apply(event)
 }
+
+/** The methods the server offers for a provider, empty when it offers none. */
+export const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthMethod> =>
+  Option.getOrElse(
+    Option.fromNullishOr(catalog.methods[provider]),
+    (): ReadonlyArray<AuthMethod> => [],
+  )
+
+/** The provider a screen is about, looked up in the live catalog. */
+export const providerFor = (
+  catalog: AuthCatalog,
+  provider: string,
+): Option.Option<AuthProviderInfo> =>
+  Option.fromNullishOr(catalog.providers.find((entry) => entry.provider === provider))
+
+/** The required providers that still have no credentials. */
+export const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>
+  catalog.providers.filter((entry) => entry.required && !entry.hasKey)
