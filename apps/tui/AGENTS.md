@@ -28,16 +28,17 @@
 
 - `useRenderer()` - Get renderer for `renderer.destroy()` on exit, `renderer.getPalette()` for terminal colors
 - `useKeyboard(handler)` - Key events, check `e.name === "escape"`
-- `useTheme()` - Returns `{ theme, mode, setMode, all, set }`. Theme colors are RGBA from `@opentui/core`.
+- `useTheme()` - Returns `{ theme, selected, all, mode, setMode, set }`. Theme colors are RGBA from `@opentui/core`.
 
 ## Theme System
 
 Ported from opencode. Key patterns:
 
 - `renderer.getPalette({ size: 16 })` queries terminal's ANSI palette via OSC
-- System theme generated from terminal colors; fallback to "opencode" theme
+- System theme generated from terminal colors; fallback to the `fx` theme
 - JSON themes in `src/theme/themes/*.json` with `defs` + dark/light variants
 - `resolveTheme(themeJson, mode)` resolves refs to RGBA values
+- The palette's "Theme" level enumerates `all()`; "Mode" is the separate Dark/Light toggle. A ported theme may omit `selectedListItemText`/`backgroundMenu`; `resolveTheme` supplies both.
 
 ## Command Palette
 

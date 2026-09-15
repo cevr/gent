@@ -42,10 +42,11 @@ describe("CommandPalette renderer", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
+      // The theme level enumerates the catalog; Dark/Light is the Mode level.
       const frame = renderFrame(setup)
       expect(frame).toContain("System")
-      expect(frame).toContain("Dark")
-      expect(frame).toContain("Light")
+      expect(frame).toContain("fx")
+      expect(frame).toContain("opencode")
     }),
   )
 

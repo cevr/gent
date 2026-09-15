@@ -71,7 +71,7 @@ const buildSessionTree = (list: readonly DomainSession[]): SessionNode[] => {
 
 export function CommandPalette() {
   const command = useCommand()
-  const { theme, selected, set, mode, setMode } = useTheme()
+  const { theme, selected, set, all, mode, setMode } = useTheme()
   const client = useClient()
   const dimensions = useTerminalDimensions()
   const [state, setState] = createSignal(CommandPaletteState.initial())
@@ -93,41 +93,56 @@ export function CommandPalette() {
 
   // ── Level factories ──
 
+  // Theme and mode are orthogonal: `set(name)` picks the catalog entry and
+  // `setMode` picks the variant it resolves in. "System" is a catalog entry
+  // like any other — the one generated from the terminal's palette — so
+  // following the terminal stays a theme choice, not a third mode.
   const themeLevel = (): PaletteLevel => ({
     id: "theme",
     title: "Theme",
     source: (): readonly PaletteItem[] => {
-      const isSystem = selected() === "system"
-      const currentMode = mode()
+      const active = selected()
+      const named = Object.keys(all())
+        .filter((name) => name !== "system")
+        .map((name) => ({
+          id: `theme.${name}`,
+          title: selectedTitle(name, active === name),
+          onSelect: () => {
+            set(name)
+            closePalette()
+          },
+        }))
       return [
         {
           id: "theme.system",
-          title: selectedTitle("System", isSystem),
+          title: selectedTitle("System", active === "system"),
           description: "Follow terminal theme",
           onSelect: () => {
             set("system")
             closePalette()
           },
         },
-        {
-          id: "theme.dark",
-          title: selectedTitle("Dark", !isSystem && currentMode === "dark"),
-          onSelect: () => {
-            set("fx")
-            setMode("dark")
-            closePalette()
-          },
-        },
-        {
-          id: "theme.light",
-          title: selectedTitle("Light", !isSystem && currentMode === "light"),
-          onSelect: () => {
-            set("fx")
-            setMode("light")
-            closePalette()
-          },
-        },
+        ...named,
       ]
+    },
+  })
+
+  // Dark/Light is the variant every theme resolves in, so it is its own level
+  // rather than three entries mixed into the theme list.
+  const modeLevel = (): PaletteLevel => ({
+    id: "mode",
+    title: "Mode",
+    source: (): readonly PaletteItem[] => {
+      const current = mode()
+      const item = (value: "dark" | "light", title: string): PaletteItem => ({
+        id: `mode.${value}`,
+        title: selectedTitle(title, current === value),
+        onSelect: () => {
+          setMode(value)
+          closePalette()
+        },
+      })
+      return [item("dark", "Dark"), item("light", "Light")]
     },
   })
 
@@ -231,6 +246,13 @@ export function CommandPalette() {
         description: "Switch color theme",
         category: "Appearance",
         onSelect: () => pushLevel(themeLevel()),
+      },
+      {
+        id: "mode",
+        title: "Mode",
+        description: "Dark or light variant",
+        category: "Appearance",
+        onSelect: () => pushLevel(modeLevel()),
       },
       {
         id: "new-session",

@@ -1,7 +1,7 @@
 import { createContext, createMemo, onMount, onCleanup, untrack } from "solid-js"
 import { useRequiredContext } from "../utils/solid-context"
 import type { JSX } from "solid-js"
-import { createStore, produce } from "solid-js/store"
+import { createStore } from "solid-js/store"
 import { useRenderer } from "@opentui/solid"
 import { Option } from "effect"
 import type { Theme, ThemeJson, ThemeMode } from "./types"
@@ -15,7 +15,6 @@ interface ThemeContextValue {
   mode: () => "dark" | "light"
   setMode: (mode: "dark" | "light") => void
   set: (theme: string) => void
-  ready: boolean
 }
 
 const ThemeContext = createContext<ThemeContextValue>()
@@ -62,7 +61,6 @@ export function ThemeProvider(props: ThemeProviderProps) {
     themes: initialThemes,
     mode: initialMode(),
     active: "fx",
-    ready: true,
   })
 
   function init() {
@@ -78,40 +76,14 @@ export function ThemeProvider(props: ThemeProviderProps) {
         const firstColor = Option.fromNullishOr(colors.palette[0])
         if (Option.isNone(firstColor)) {
           // Keep the default when the terminal does not report its palette.
-          if (store.active === "system") {
-            setStore(
-              produce((draft) => {
-                draft.active = "fx"
-                draft.ready = true
-              }),
-            )
-          }
+          if (store.active === "system") setStore("active", "fx")
           return
         }
-        setStore(
-          produce((draft) => {
-            draft.themes["system"] = generateSystemTheme(colors, store.mode)
-            if (store.active === "system") {
-              draft.ready = true
-            }
-          }),
-        )
+        setStore("themes", "system", generateSystemTheme(colors, store.mode))
       })
       .catch(() => {
         // Keep the default when palette detection fails.
-        if (store.active === "system") {
-          setStore(
-            produce((draft) => {
-              draft.active = "fx"
-              draft.ready = true
-            }),
-          )
-        }
-      })
-      .finally(() => {
-        if (store.ready === false) {
-          setStore("ready", true)
-        }
+        if (store.active === "system") setStore("active", "fx")
       })
   }
 
@@ -145,9 +117,6 @@ export function ThemeProvider(props: ThemeProviderProps) {
     },
     set: (theme: string) => {
       setStore("active", theme)
-    },
-    get ready() {
-      return store.ready
     },
   }
 
