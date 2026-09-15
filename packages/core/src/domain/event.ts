@@ -399,7 +399,6 @@ export class EventStoreError extends Schema.TaggedError<EventStoreError>()("Even
 
 export interface EventStoreService {
   readonly append: (event: AgentEvent) => Effect.Effect<EventEnvelope, EventStoreError>
-  readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly deliver: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
   readonly subscribe: (params: {
@@ -533,7 +532,6 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
       )
     }),
 
-    broadcast: registry.broadcast,
     deliver,
 
     publish: Effect.fn("EventStore.publish")(function* (event) {

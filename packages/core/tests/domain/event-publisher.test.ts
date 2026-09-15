@@ -66,14 +66,15 @@ const makeEvent = (
 const TAG = TAG_MAP satisfies Record<SyntheticTag, RealTag>
 
 const makeEventStoreLayer = (
-  input: Pick<EventStoreService, "append" | "broadcast">,
+  input: Pick<EventStoreService, "append"> & {
+    readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
+  },
 ): Layer.Layer<EventStore> =>
   Layer.unwrap(
     Effect.gen(function* () {
       const deliver = yield* makeSerializedEventDelivery(input.broadcast)
       const service: EventStoreService = {
         append: input.append,
-        broadcast: input.broadcast,
         deliver,
         publish: Effect.fn("TestEventStore.publish")(function* (event) {
           const envelope = yield* input.append(event)

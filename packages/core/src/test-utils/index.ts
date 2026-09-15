@@ -105,7 +105,6 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         })
         return envelope
       }),
-      broadcast: () => Effect.void,
       deliver: (envelope) =>
         Effect.gen(function* () {
           const sessionId = getEventSessionId(envelope.event)
