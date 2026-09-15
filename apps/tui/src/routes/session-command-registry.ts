@@ -1,9 +1,8 @@
 import { createEffect, onCleanup, type Accessor } from "solid-js"
-import { Effect, Match, Option, Schema } from "effect"
+import { Match, Option, Schema, type Effect } from "effect"
 import type { ClientContextValue } from "../client/index"
 import type { Command } from "../command/types"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
-import { formatError } from "../utils/format-error"
 import { resolveModelQuery, type ModelQueryResult } from "../client/model-query"
 import { ReasoningEffort, type Model, type ModelId } from "@gent/core/protocol"
 
@@ -100,16 +99,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     slash: "branch",
     slashPriority: 0,
     onSelect: () => {
-      props.cast(
-        props.client.createBranch().pipe(
-          Effect.asVoid,
-          Effect.catchEager((error) =>
-            Effect.sync(() => {
-              props.client.setError(formatError(error))
-            }),
-          ),
-        ),
-      )
+      props.cast(props.client.surfaceError(props.client.createBranch()))
     },
   },
   {
@@ -149,13 +139,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
             ...current,
             reasoningLevel: sessionReasoningLevel,
           }))
-          .pipe(
-            Effect.catchEager((error) =>
-              Effect.sync(() => {
-                props.client.setError(formatError(error))
-              }),
-            ),
-          ),
+          .pipe(props.client.surfaceError),
       )
     },
   },
@@ -180,13 +164,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
               ...current,
               modelId: Option.getOrUndefined(modelId),
             }))
-            .pipe(
-              Effect.catchEager((error) =>
-                Effect.sync(() => {
-                  props.client.setError(formatError(error))
-                }),
-              ),
-            ),
+            .pipe(props.client.surfaceError),
         )
       if (query === "default" || query === "off") {
         apply(Option.none())

@@ -12,7 +12,6 @@ import { useScopedKeyboard } from "../keyboard/context"
 import { useWorkspace } from "../workspace/context"
 import { useSessionController } from "../routes/session-controller"
 import { parseSlashCommand } from "../commands/slash-commands"
-import { formatError } from "../utils/format-error"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeShell } from "../utils/shell"
@@ -268,15 +267,7 @@ export function useComposerController(): ComposerController {
     client.log.info("slash-command", { cmd })
     clearInput()
 
-    cast(
-      sc.onSlashCommand(cmd, args).pipe(
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-          }),
-        ),
-      ),
-    )
+    cast(client.surfaceError(sc.onSlashCommand(cmd, args)))
     return true
   }
 

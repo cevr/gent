@@ -29,7 +29,7 @@ import {
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import { omitUndefined } from "@gent/core-internal/domain/guards.js"
 import type { ClientLog } from "../utils/client-logger"
-import { formatConnectionIssue, formatError } from "../utils/format-error"
+import { formatConnectionIssue, formatError, type UiError } from "../utils/format-error"
 import { useRequiredContext } from "../utils/solid-context"
 import { randomId } from "../utils/random-id"
 import { useWorkspace } from "../workspace/context"
@@ -216,6 +216,8 @@ interface ClientAgentValue {
   // Agent state setters (for local errors only)
   // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
   setError: (error: string | null) => void
+  /** Run a fallible call; a failure lands formatted in the error line and stops there. */
+  surfaceError: <A, R>(effect: Effect.Effect<A, UiError, R>) => Effect.Effect<void, never, R>
 }
 
 interface ClientActionValue {
@@ -917,6 +919,11 @@ export function ClientProvider(props: ClientProviderProps) {
       }
       setAgentStore({ status: AgentStatus.cases["idle"].make({}) })
     },
+    surfaceError: (effect) =>
+      effect.pipe(
+        Effect.asVoid,
+        Effect.catchEager((error) => Effect.sync(() => agentValue.setError(formatError(error)))),
+      ),
   }
 
   const actionValue: ClientActionValue = {

@@ -135,6 +135,33 @@ describe("ClientProvider session lifecycle", () => {
       expect(error).toBe("Driver openai: catalog filter failed")
     }),
   )
+  it.live("a failing RPC through surfaceError lands the formatted text in the error line", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const mockClient = createMockClient({
+        branch: {
+          create: () => Effect.fail({ _tag: "NotFoundError", message: "branch gone" }),
+        },
+      })
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client: mockClient,
+          initialSession: {
+            id: SessionId.make("session-surface"),
+            activeBranchId: BranchId.make("branch-surface"),
+            name: "Surface",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      expect(client.error()).toBe(nullValue)
+      yield* client.surfaceError(client.createBranch())
+      expect(client.error()).toBe("Not found: branch gone")
+      expect(client.isError()).toBe(true)
+    }),
+  )
   it.live("switchSession activates the target session immediately and seeds the target agent", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

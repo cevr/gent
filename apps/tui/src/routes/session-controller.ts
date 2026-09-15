@@ -500,7 +500,7 @@ export function createSessionController(props: {
             dispatchSessionUi(SessionUiEvent.cases.OpenFork.make({ messages }))
           }),
         ),
-        Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error)))),
+        client.surfaceError,
       ),
     )
   }
@@ -533,11 +533,7 @@ export function createSessionController(props: {
             updateControllerState(clearQueue)
           }),
         ),
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-          }),
-        ),
+        client.surfaceError,
       ),
     )
   }
@@ -567,7 +563,7 @@ export function createSessionController(props: {
     cast(
       client
         .updateSessionSettings((current) => ({ ...current, modelId }))
-        .pipe(Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error))))),
+        .pipe(client.surfaceError),
     )
   }
 
@@ -579,7 +575,7 @@ export function createSessionController(props: {
           ...current,
           reasoningLevel: Option.getOrUndefined(level),
         }))
-        .pipe(Effect.catchEager((error) => Effect.sync(() => client.setError(formatError(error))))),
+        .pipe(client.surfaceError),
     )
   }
 
@@ -592,11 +588,7 @@ export function createSessionController(props: {
             client.switchBranch(branchId)
           }),
         ),
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-          }),
-        ),
+        client.surfaceError,
       ),
     )
   }
