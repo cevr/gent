@@ -1,7 +1,7 @@
 import { Clock, Effect, Option, Schema } from "effect"
-// eslint-disable-next-line effect/noNodeBuiltinImport -- integration path resolution is a host boundary.
-import * as path from "node:path"
 import { renderFrame, type renderWithProviders } from "../tests/render-harness-boundary"
+import type { Session } from "../src/client"
+import type { BranchId, SessionId } from "@gent/core/protocol"
 
 export { renderFrame }
 
@@ -10,7 +10,7 @@ class IntegrationWaitError extends Schema.TaggedError<IntegrationWaitError>()(
   { message: Schema.String },
 ) {}
 
-export const repoRoot = path.resolve(import.meta.dir, "../../..")
+export const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "")
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
@@ -43,11 +43,9 @@ export const waitForFrame = (
       yield* Effect.sleep("10 millis")
     }
 
-    return yield* Effect.fail(
-      new IntegrationWaitError({
-        message: `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
-      }),
-    )
+    return yield* new IntegrationWaitError({
+      message: `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
+    })
   })
 
 /**
@@ -76,18 +74,17 @@ export const waitForCondition = (
       yield* Effect.sleep("10 millis")
     }
 
-    return yield* Effect.fail(
-      new IntegrationWaitError({ message: `timed out waiting for condition: ${label}` }),
-    )
+    return yield* new IntegrationWaitError({ message: `timed out waiting for condition: ${label}` })
   })
 
 export const makeSessionState = (created: {
-  sessionId: string
-  branchId: string
+  sessionId: SessionId
+  branchId: BranchId
   name: string
-}) => ({
+}): Session => ({
   sessionId: created.sessionId,
   branchId: created.branchId,
   name: created.name,
+  modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
 })

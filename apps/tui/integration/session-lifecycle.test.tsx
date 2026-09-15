@@ -25,137 +25,133 @@ describe("session lifecycle", () => {
   it.live(
     "bootstrap to session renders composer",
     () =>
-      Effect.gen(function* () {
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const { client, runtime } = yield* Gent.test(
-              baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
-            )
-            let ctx = Option.none<{ client: ClientContextValue }>()
-            // Pre-resolve bootstrap (same as main.tsx now does)
-            const { bootstrap } = yield* resolveInteractiveBootstrap({
-              client,
-              cwd: repoRoot,
-              continue_: false,
-              debugMode: false,
-            })
-            const setup = yield* Effect.promise(() =>
-              renderWithProviders(
-                () => (
-                  <>
-                    <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                    <App />
-                  </>
-                ),
-                {
-                  client,
-                  runtime,
-                  initialPrompt: bootstrap.initialPrompt,
-                  initialSession: bootstrap.initialSession,
-                  cwd: repoRoot,
-                  width: 100,
-                  height: 32,
-                },
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, runtime } = yield* Gent.test(
+            baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
+          )
+          let ctx = Option.none<{ client: ClientContextValue }>()
+          // Pre-resolve bootstrap (same as main.tsx now does)
+          const { bootstrap } = yield* resolveInteractiveBootstrap({
+            client,
+            cwd: repoRoot,
+            continue_: false,
+            debugMode: false,
+          })
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <>
+                  <StateProbe onReady={(c) => (ctx = Option.some(c))} />
+                  <App />
+                </>
               ),
-            )
-            yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
-            // Route should already be session
-            expect(Option.isSome(ctx)).toBe(true)
-            if (Option.isNone(ctx)) return
-            // The shell mounts whatever the client says is active; the bootstrap
-            // handed it a session, so that is what shows.
-            expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
-            // waitForFrame polls until the composer renders — no pre-sleep
-            // needed; the visible "ready/idle/❯" marker is the readiness signal.
-            const frame = yield* waitForFrame(
-              setup,
-              (f) => f.includes("ready") || f.includes("idle") || f.includes("❯"),
-              "composer visible",
-              3000,
-            )
-            expect(frame).not.toContain("Loading Gent")
-            expect(frame).not.toContain("Loading session")
-          }),
-        )
-      }),
+              {
+                client,
+                runtime,
+                initialPrompt: bootstrap.initialPrompt,
+                initialSession: bootstrap.initialSession,
+                cwd: repoRoot,
+                width: 100,
+                height: 32,
+              },
+            ),
+          )
+          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
+          // Route should already be session
+          expect(Option.isSome(ctx)).toBe(true)
+          if (Option.isNone(ctx)) return
+          // The shell mounts whatever the client says is active; the bootstrap
+          // handed it a session, so that is what shows.
+          expect(Option.isSome(Option.fromNullishOr(ctx.value.client.session()))).toBe(true)
+          // waitForFrame polls until the composer renders — no pre-sleep
+          // needed; the visible "ready/idle/❯" marker is the readiness signal.
+          const frame = yield* waitForFrame(
+            setup,
+            (f) => f.includes("ready") || f.includes("idle") || f.includes("❯"),
+            "composer visible",
+            3000,
+          )
+          expect(frame).not.toContain("Loading Gent")
+          expect(frame).not.toContain("Loading session")
+        }),
+      ),
     10000,
   )
   it.live(
     "send message and see debug provider response",
     () =>
-      Effect.gen(function* () {
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const { client, runtime } = yield* Gent.test(
-              baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
-            )
-            let ctx = Option.none<{ client: ClientContextValue }>()
-            // Pre-resolve bootstrap
-            const { bootstrap } = yield* resolveInteractiveBootstrap({
-              client,
-              cwd: repoRoot,
-              continue_: false,
-              debugMode: false,
-            })
-            const setup = yield* Effect.promise(() =>
-              renderWithProviders(
-                () => (
-                  <>
-                    <StateProbe onReady={(c) => (ctx = Option.some(c))} />
-                    <App />
-                  </>
-                ),
-                {
-                  client,
-                  runtime,
-                  initialPrompt: bootstrap.initialPrompt,
-                  initialSession: bootstrap.initialSession,
-                  cwd: repoRoot,
-                  width: 100,
-                  height: 32,
-                },
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, runtime } = yield* Gent.test(
+            baseLocalLayerWithProvider(LanguageModelLayers.debug({ retries: false })),
+          )
+          let ctx = Option.none<{ client: ClientContextValue }>()
+          // Pre-resolve bootstrap
+          const { bootstrap } = yield* resolveInteractiveBootstrap({
+            client,
+            cwd: repoRoot,
+            continue_: false,
+            debugMode: false,
+          })
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <>
+                  <StateProbe onReady={(c) => (ctx = Option.some(c))} />
+                  <App />
+                </>
               ),
+              {
+                client,
+                runtime,
+                initialPrompt: bootstrap.initialPrompt,
+                initialSession: bootstrap.initialSession,
+                cwd: repoRoot,
+                width: 100,
+                height: 32,
+              },
+            ),
+          )
+          yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
+          yield* waitForFrame(
+            setup,
+            (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
+            "composer visible before send",
+            3000,
+          )
+          // Send a message through the client (simulates user input).
+          // The downstream waitForFrame polls until the response arrives;
+          // the response itself confirms the feed fiber was subscribed.
+          expect(Option.isSome(ctx)).toBe(true)
+          if (Option.isNone(ctx)) return
+          const session = Option.fromNullishOr(ctx.value.client.session())
+          expect(Option.isSome(session)).toBe(true)
+          if (Option.isNone(session)) return
+          yield* client.message
+            .send({
+              sessionId: session.value.sessionId,
+              branchId: session.value.branchId,
+              content: "hello world",
+            })
+            .pipe(
+              Effect.timeout("2 seconds"),
+              Effect.mapError((error) => `message.send boundary: ${String(error)}`),
             )
-            yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
-            yield* waitForFrame(
-              setup,
-              (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
-              "composer visible before send",
-              3000,
-            )
-            // Send a message through the client (simulates user input).
-            // The downstream waitForFrame polls until the response arrives;
-            // the response itself confirms the feed fiber was subscribed.
-            expect(Option.isSome(ctx)).toBe(true)
-            if (Option.isNone(ctx)) return
-            const session = Option.fromNullishOr(ctx.value.client.session())
-            expect(Option.isSome(session)).toBe(true)
-            if (Option.isNone(session)) return
-            yield* client.message
-              .send({
-                sessionId: session.value.sessionId,
-                branchId: session.value.branchId,
-                content: "hello world",
-              })
-              .pipe(
-                Effect.timeout("2 seconds"),
-                Effect.mapError((error) => `message.send boundary: ${String(error)}`),
-              )
-            // `LanguageModelLayers.debug` responds with a message containing the user's text
-            // Wait for the response to appear in the rendered frame
-            const frame = yield* waitForFrame(
-              setup,
-              (f) => f.includes("debug response") && f.includes("hello world"),
-              "debug provider response",
-              3000,
-            ).pipe(
-              Effect.timeout("4 seconds"),
-              Effect.mapError((error) => `render/frame boundary: ${String(error)}`),
-            )
-            expect(frame).toContain("hello world")
-          }),
-        )
-      }),
+          // `LanguageModelLayers.debug` responds with a message containing the user's text
+          // Wait for the response to appear in the rendered frame
+          const frame = yield* waitForFrame(
+            setup,
+            (f) => f.includes("debug response") && f.includes("hello world"),
+            "debug provider response",
+            3000,
+          ).pipe(
+            Effect.timeout("4 seconds"),
+            Effect.mapError((error) => `render/frame boundary: ${String(error)}`),
+          )
+          expect(frame).toContain("hello world")
+        }),
+      ),
     10000,
   )
 })
