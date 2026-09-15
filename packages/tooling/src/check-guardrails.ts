@@ -1,21 +1,21 @@
 import { BunRuntime } from "@effect/platform-bun"
 import { Console, Effect, Option } from "effect"
 import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "./blanket-eslint-disable"
-import {
-  findCorePublicExportFindings,
-  findExtensionsPublicExportFindings,
-  findSdkPublicExportFindings,
-} from "./core-public-exports"
 import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
 import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
-import { declaredExports, findDeadExports, identifiersIn } from "./dead-exports"
+import {
+  collectExportFacts,
+  findPackageSurfaceFindings,
+  findUnconsumedExports,
+  type ExportFacts,
+  type PackageJson,
+} from "./export-consumers"
 import { findE2eFixtureImportFindings } from "./e2e-fixture-imports"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import { findSuppressionInventoryFindings } from "./suppression-inventory"
 import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
-import { consumedNamesIn, findUnconsumedPublicApi } from "./core-public-api-consumers"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
@@ -46,31 +46,23 @@ const program = Effect.gen(function* () {
     if (!failures.includes(message)) failures.push(message)
   }
 
-  // Dead-export scan needs the whole tree: collect every declared export in
-  // the scanned packages, then count which names any other file mentions.
-  const declarations: Array<{ file: string; name: string; line: number }> = []
-  const identifiersByFile = new Map<string, ReadonlySet<string>>()
+  // Export-consumer scan needs the whole tree: collect every declared export
+  // in the scanned surfaces, then count which names any other file reaches.
+  const exportFacts = new Map<string, ExportFacts>()
   // Seam scan needs the whole tree too: the declarations live in core, the
   // adapters that fill them live in the shipped extensions and the apps.
   const sourceTexts = new Map<string, string>()
   const adaptedSeams = new Set<string>()
-  // Public-API scan needs it as well: the names live in core's entry point,
-  // the consumers live everywhere else.
-  const consumedApiNames = new Set<string>()
 
   /**
    * Facts the cross-file scans need, gathered in the single pass over the
    * tree. Each of these is answerable only once every file has been read:
-   * whether an export is dead, and whether a seam has an adapter.
+   * whether an export is consumed, and whether a seam has an adapter.
    */
   const collectWholeTreeFacts = (file: string, text: string): void => {
-    for (const declaration of declaredExports(file, text)) {
-      declarations.push({ file, ...declaration })
-    }
-    identifiersByFile.set(file, identifiersIn(text))
+    exportFacts.set(file, collectExportFacts(file, text))
     sourceTexts.set(file, text)
     for (const seam of adaptedSeamsIn(file, text)) adaptedSeams.add(seam)
-    for (const name of consumedNamesIn(file, text)) consumedApiNames.add(name)
   }
 
   for (const maybeEntry of textFiles) {
@@ -106,45 +98,38 @@ const program = Effect.gen(function* () {
     }
   }
 
-  for (const finding of findDeadExports(declarations, identifiersByFile)) {
-    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+  const reportOnly: string[] = []
+  for (const finding of findUnconsumedExports(exportFacts)) {
+    const line = `${finding.file}:${finding.line}: ${finding.message}`
+    if (finding.enforced) pushFailure(line)
+    else reportOnly.push(line)
   }
 
   for (const finding of findUnadaptedSeams(sourceTexts, adaptedSeams)) {
     pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 
-  for (const finding of findUnconsumedPublicApi(sourceTexts, consumedApiNames)) {
-    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-  }
-
-  const [
-    packageJson,
-    tsconfigJson,
-    coreInternalPackageJson,
-    extensionsPackageJson,
-    sdkPackageJson,
-  ] = yield* Effect.all(
-    [
-      readJsonFile("packages/core/package.json"),
-      readJsonFile("tsconfig.json"),
-      readJsonFile("packages/core-internal/package.json"),
-      readJsonFile("packages/extensions/package.json"),
-      readJsonFile("packages/sdk/package.json"),
-    ],
+  const packageJsonPaths = [
+    "packages/core/package.json",
+    "packages/core-internal/package.json",
+    "packages/extensions/package.json",
+    "packages/sdk/package.json",
+  ]
+  const [tsconfigJson, ...packageJsons] = yield* Effect.all(
+    [readJsonFile("tsconfig.json"), ...packageJsonPaths.map(readJsonFile)],
     { concurrency: "unbounded" },
   )
+  const packageJsonByPath = new Map<string, PackageJson>(
+    packageJsonPaths.map((path, index) => [path, packageJsons[index]]),
+  )
 
-  for (const finding of [
-    ...findCorePublicExportFindings(
-      packageJson,
-      tsconfigJson,
-      Option.some(coreInternalPackageJson),
-    ),
-    ...findExtensionsPublicExportFindings(extensionsPackageJson, tsconfigJson),
-    ...findSdkPublicExportFindings(sdkPackageJson),
-  ]) {
+  for (const finding of findPackageSurfaceFindings(packageJsonByPath, tsconfigJson)) {
     pushFailure(`${finding.path}: ${finding.message}`)
+  }
+
+  if (reportOnly.length > 0) {
+    yield* Console.warn("Gent guardrails report-only findings:")
+    yield* Effect.forEach(reportOnly, (line) => Console.warn(`  ${line}`), { discard: true })
   }
 
   if (failures.length === 0) return
