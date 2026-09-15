@@ -27,8 +27,10 @@ const prefixStream = Effect.fn("Tooling.prefixStream")(function* (
 
 const runPackage = Effect.fn("Tooling.runPackage")(function* ({ name, cwd }: WorkspacePackage) {
   const prefix = `${name}:test: `
-  const env = { ...Bun.env, NO_COLOR: "1" }
-  delete env.FORCE_COLOR
+  const env = {
+    ...Object.fromEntries(Object.entries(Bun.env).filter(([key]) => key !== "FORCE_COLOR")),
+    NO_COLOR: "1",
+  }
   const proc = Bun.spawn(["bun", "run", "--cwd", cwd, "test"], {
     env,
     stderr: "pipe",
@@ -46,12 +48,13 @@ const runPackage = Effect.fn("Tooling.runPackage")(function* ({ name, cwd }: Wor
 const program = Effect.gen(function* () {
   const started = yield* Clock.currentTimeMillis
   const packages = yield* discoverTestPackages(process.cwd())
-  const results = yield* Effect.all(packages.map(runPackage), { concurrency: packages.length })
+  const results = yield* Effect.forEach(packages, runPackage, { concurrency: packages.length })
   const elapsedMs = (yield* Clock.currentTimeMillis) - started
   yield* Console.log(`  Time:    ${(elapsedMs / 1_000).toFixed(3)}s `)
 
   const failedExitCode = Option.fromNullishOr(results.find((code) => code !== 0))
   if (Option.isSome(failedExitCode)) return yield* Effect.fail(failedExitCode.value)
-}).pipe(Effect.provide(BunServices.layer))
+})
 
-BunRuntime.runMain(program)
+// @effect-diagnostics-next-line strictEffectProvide:off entrypoint layer provision
+BunRuntime.runMain(program.pipe(Effect.provide(BunServices.layer)))

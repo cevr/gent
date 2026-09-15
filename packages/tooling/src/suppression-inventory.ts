@@ -12,331 +12,346 @@ export interface SuppressionInventoryFinding {
   readonly kind: SuppressionFindingKind
 }
 
+/** `next-line` suppresses the following line; `file` suppresses the whole module. */
+type SuppressionScope = "next-line" | "file"
+
 interface ApprovedSuppressionEntry {
   readonly file: string
   /** Historical receipt only; matching intentionally ignores line churn. */
   readonly line: number
-  readonly kind: SuppressionFindingKind
+  readonly scope: SuppressionScope
+  /** Everything after the directive: rule flags and the reason. */
   readonly text: string
 }
+
+const directiveMarker = ["@effect", "diagnostics"].join("-")
+
+const directivePrefix = {
+  "next-line": `// ${directiveMarker}-next-line`,
+  file: `// ${directiveMarker}`,
+} satisfies Record<SuppressionScope, string>
+
+const approvedComment = (entry: ApprovedSuppressionEntry): string =>
+  `${directivePrefix[entry.scope]} ${entry.text}`
 
 const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "apps/tui/src/main.tsx",
     line: 105,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
+    scope: "next-line",
+    text: "globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
   },
   {
     file: "apps/tui/src/main.tsx",
     line: 690,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off entrypoint layer provision",
+    scope: "next-line",
+    text: "strictEffectProvide:off entrypoint layer provision",
   },
   {
     file: "apps/tui/src/workspace/context.tsx",
     line: 176,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off solid mount edge — isolated FS effect",
+    scope: "next-line",
+    text: "strictEffectProvide:off solid mount edge — isolated FS effect",
   },
   {
     file: "apps/tui/src/utils/client-logger.ts",
     line: 13,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "apps/tui/src/utils/client-logger.ts",
     line: 32,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line globalDate:off -- shutdown path, no Effect runtime to yield Clock from",
+    scope: "next-line",
+    text: "globalDate:off -- shutdown path, no Effect runtime to yield Clock from",
   },
   {
     file: "apps/tui/tests/extension-effect-setup.test.ts",
     line: 7,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "apps/tui/tests/extension-effect-setup.test.ts",
     line: 9,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "apps/tui/tests/extension-integration.test.ts",
     line: 10,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "apps/tui/tests/extension-integration.test.ts",
     line: 12,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "apps/tui/tests/headless-cli-exit.test.ts",
     line: 3,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "apps/tui/tests/headless-cli-exit.test.ts",
     line: 6,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "packages/core/src/server/workspace-rpc.ts",
     line: 4,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd",
+    scope: "file",
+    text: "nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd",
   },
   {
     file: "packages/core/src/server/workspace-rpc.ts",
     line: 6,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing",
+    scope: "file",
+    text: "nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing",
   },
   {
     file: "packages/sdk/src/server.ts",
     line: 14,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution",
+    scope: "file",
+    text: "nodeBuiltinImport:off — server primitive owns filesystem path resolution",
   },
   {
     file: "packages/sdk/src/server.ts",
     line: 170,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
+    scope: "next-line",
+    text: "strictEffectProvide:off",
   },
   {
     file: "packages/sdk/src/server.ts",
     line: 199,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
+    scope: "next-line",
+    text: "strictEffectProvide:off",
   },
   {
     file: "packages/sdk/src/server.ts",
     line: 244,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
+    scope: "next-line",
+    text: "strictEffectProvide:off",
   },
   {
     file: "packages/sdk/src/server.ts",
     line: 289,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off self-contained probe, no scope lifetime",
+    scope: "next-line",
+    text: "strictEffectProvide:off self-contained probe, no scope lifetime",
   },
   {
     file: "packages/sdk/src/server.ts",
     line: 307,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
+    scope: "next-line",
+    text: "strictEffectProvide:off",
   },
   {
     file: "packages/sdk/tests/server-lock.test.ts",
     line: 6,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off",
+    scope: "file",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "packages/core/tests/server/interaction-commands.test.ts",
     line: 5,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off -- file-backed restart fixture uses a temp SQLite path.",
+    scope: "file",
+    text: "nodeBuiltinImport:off -- file-backed restart fixture uses a temp SQLite path.",
   },
   {
     file: "packages/core/src/domain/extension-load-boundary.ts",
     line: 24,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/test-utils/e2e-layer.ts",
     line: 97,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/test-utils/e2e-layer.ts",
     line: 101,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/test-utils/extension-harness.ts",
     line: 152,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/test-utils/fixtures.ts",
     line: 6,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test",
+    scope: "file",
+    text: "nodeBuiltinImport:off — test fixture lifecycle comes from bun:test",
   },
   {
     file: "packages/core/src/test-utils/fake-fetch.ts",
     line: 150,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off test entry point",
+    scope: "next-line",
+    text: "strictEffectProvide:off test entry point",
   },
   {
     file: "packages/sdk/src/log-paths.ts",
     line: 13,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line nodeBuiltinImport:off",
+    scope: "next-line",
+    text: "nodeBuiltinImport:off",
   },
   {
     file: "packages/core/src/runtime/session-runtime.ts",
     line: 1102,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off — Effect cluster's Entity.toLayer exposes erased RPC middleware requirements; the exported layer narrows the Gent-owned services at this boundary.",
   },
   {
     file: "packages/core/src/runtime/agent/tool-runner.ts",
     line: 280,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/registry.ts",
     line: 250,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
     line: 24,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
     line: 29,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
     line: 40,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
     line: 42,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
     line: 57,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-hooks.ts",
     line: 95,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-hooks.ts",
     line: 144,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-hooks.ts",
     line: 246,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-hooks.ts",
     line: 297,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot",
   },
   {
     file: "packages/core/src/runtime/extensions/extension-hooks.ts",
     line: 330,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off",
   },
   {
     file: "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
     line: 49,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
   },
   {
     file: "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
     line: 70,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
   },
   {
     file: "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
     line: 87,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
+    scope: "next-line",
+    text: "anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
     line: 287,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary",
+    scope: "next-line",
+    text: "strictEffectProvide:off OAuth token endpoint at extension boundary",
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
     line: 327,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary",
+    scope: "next-line",
+    text: "strictEffectProvide:off OAuth token endpoint at extension boundary",
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
     line: 526,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary",
+    scope: "next-line",
+    text: "strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary",
   },
   {
     file: "packages/extensions/src/openai/oauth.ts",
     line: 742,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off device endpoints at extension boundary",
+    scope: "next-line",
+    text: "strictEffectProvide:off device endpoints at extension boundary",
   },
   {
     file: "packages/extensions/src/anthropic/index.ts",
     line: 246,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
+    scope: "next-line",
+    text: "strictEffectProvide:off",
   },
   {
     file: "packages/extensions/src/anthropic/oauth/refresh.ts",
     line: 69,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics-next-line strictEffectProvide:off",
+    scope: "next-line",
+    text: "strictEffectProvide:off",
   },
   {
     file: "packages/core/src/test-utils/extension-harness.ts",
     line: 3,
-    kind: "effect-diagnostics",
-    text: "// @effect-diagnostics nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction",
+    scope: "file",
+    text: "nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction",
+  },
+  {
+    file: "packages/tooling/src/workspace-test-runner.ts",
+    line: 59,
+    scope: "next-line",
+    text: "strictEffectProvide:off entrypoint layer provision",
   },
 ]
 
-const approvedSuppression = (
-  file: string,
-  _line: number,
-  kind: SuppressionFindingKind,
-  text: string,
-): boolean =>
+const approvedSuppression = (file: string, _line: number, text: string): boolean =>
   approvedSuppressionEntries.some(
-    (entry) => entry.file === file && entry.kind === kind && entry.text === text.trim(),
+    (entry) => entry.file === file && approvedComment(entry) === text.trim(),
   )
 
 export const findSuppressionInventoryFindings = (
@@ -346,13 +361,8 @@ export const findSuppressionInventoryFindings = (
   const findings: SuppressionInventoryFinding[] = []
   if (file === "packages/tooling/src/suppression-inventory.ts") return findings
 
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index] ?? ""
-    if (
-      line.includes(["@effect", "diagnostics"].join("-")) &&
-      !approvedSuppression(file, index + 1, "effect-diagnostics", line)
-    ) {
+  for (const [index, line] of text.split("\n").entries()) {
+    if (line.includes(directiveMarker) && !approvedSuppression(file, index + 1, line)) {
       findings.push({ file, line: index + 1, kind: "effect-diagnostics" })
     }
   }

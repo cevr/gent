@@ -44,7 +44,7 @@ export const discoverTestPackages = Effect.fn("Tooling.discoverTestPackages")(fu
   for (const workspaceDirectory of WORKSPACE_DIRECTORIES) {
     const entries = yield* fs
       .readDirectory(path.join(root, workspaceDirectory))
-      .pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<string>>([])))
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
     for (const entry of [...entries].sort()) {
       const cwd = `${workspaceDirectory}/${entry}`
       const manifestPath = path.join(root, cwd, "package.json")

@@ -34,11 +34,11 @@ const readJsonFile = Effect.fn("Tooling.readJsonFile")(function* (path: string) 
 
 const program = Effect.gen(function* () {
   const trackedFiles = yield* trackedFileNames
-  const textFiles = yield* Effect.all(
+  const textFiles = yield* Effect.forEach(
     trackedFiles
       .filter((file) => /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file))
-      .filter((file) => !file.includes("/dist/"))
-      .map(readTrackedFile),
+      .filter((file) => !file.includes("/dist/")),
+    readTrackedFile,
     { concurrency: 32 },
   )
 

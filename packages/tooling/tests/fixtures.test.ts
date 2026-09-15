@@ -17,10 +17,9 @@
  */
 
 import { expect } from "bun:test"
-import { Effect, Option, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
-import { readFile } from "node:fs/promises"
-import { resolve as pathResolve } from "node:path"
 import {
   runOxlint,
   type Diagnostic,
@@ -45,10 +44,11 @@ const countViolations = (diagnostics: ReadonlyArray<Diagnostic>, ruleId: string)
   }).length
 }
 
-const REPO_ROOT = pathResolve(import.meta.dir, "..", "..", "..")
-
-const readTextFile = (relativePath: string): Effect.Effect<string> =>
-  Effect.promise(() => readFile(pathResolve(REPO_ROOT, relativePath), "utf8"))
+const readTextFile = Effect.fn("Tooling.readTextFile")(function* (relativePath: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  return yield* fs.readFileString(path.resolve(import.meta.dir, "..", "..", "..", relativePath))
+})
 
 const TypeScriptConfig = Schema.Struct({
   compilerOptions: Schema.Struct({
@@ -216,22 +216,21 @@ effectDescribe("custom lint rules", () => {
   // adding a CASES entry adds 2× per-test runs and pushes the suite
   // toward the test budget. `Effect.cached` produces a `Effect<Effect<...>>`
   // — yield once at module init, then reuse the inner effect across tests.
+  type Runs = Effect.Effect<readonly [OxlintRun, OxlintRun], Schema.SchemaError>
   interface LoadRunsRef {
-    current: Option.Option<Effect.Effect<readonly [OxlintRun, OxlintRun]>>
+    current: Option.Option<Runs>
   }
   const loadRunsRef: LoadRunsRef = { current: Option.none() }
-  const loadRuns = Effect.gen(function* () {
-    if (Option.isNone(loadRunsRef.current)) {
-      loadRunsRef.current = Option.some(
-        yield* Effect.cached(
-          Effect.all(
-            [runOxlint(CASES.map((c) => c.invalid)), runOxlint(CASES.map((c) => c.valid))],
-            { concurrency: "unbounded" },
-          ),
-        ),
-      )
-    }
-    return yield* loadRunsRef.current.value
+  const loadRuns: Runs = Effect.gen(function* () {
+    const cached = loadRunsRef.current
+    if (Option.isSome(cached)) return yield* cached.value
+    const created = yield* Effect.cached(
+      Effect.all([runOxlint(CASES.map((c) => c.invalid)), runOxlint(CASES.map((c) => c.valid))], {
+        concurrency: "unbounded",
+      }),
+    )
+    loadRunsRef.current = Option.some(created)
+    return yield* created
   })
 
   for (const c of CASES) {
@@ -316,6 +315,6 @@ effectDescribe("custom lint rules", () => {
       expect(Option.getOrElse(extendsNativeError, () => "missing")).toBe("error")
 
       expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })

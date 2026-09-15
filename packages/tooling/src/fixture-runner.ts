@@ -1,4 +1,3 @@
-import { resolve as pathResolve } from "node:path"
 import { Effect, Schema } from "effect"
 
 const DiagnosticSchema = Schema.Struct({
@@ -11,7 +10,7 @@ export type Diagnostic = typeof DiagnosticSchema.Type
 
 const OxlintReportSchema = Schema.Struct({
   diagnostics: Schema.Array(DiagnosticSchema),
-  number_of_files: Schema.Number,
+  number_of_files: Schema.Int,
 })
 export type OxlintReport = typeof OxlintReportSchema.Type
 
@@ -21,8 +20,8 @@ export interface OxlintRun {
   readonly stderr: string
 }
 
-const FIXTURES_DIR = pathResolve(import.meta.dir, "..", "fixtures")
-const FIXTURES_CONFIG = pathResolve(FIXTURES_DIR, ".oxlintrc.json")
+const FIXTURES_DIR = Bun.fileURLToPath(new URL("../fixtures", import.meta.url))
+const FIXTURES_CONFIG = Bun.fileURLToPath(new URL("../fixtures/.oxlintrc.json", import.meta.url))
 
 const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(OxlintReportSchema))
 

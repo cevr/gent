@@ -553,8 +553,8 @@ const packageFindings = (
     })
   }
   const allowed = allowedKeys(surface)
-  const exportsMap = Option.getOrElse(Option.fromNullishOr(packageJson.exports), () => ({}))
-  for (const key of Object.keys(exportsMap)) {
+  const exportsMap = Option.fromNullishOr(packageJson.exports)
+  for (const key of Object.keys(Option.getOrElse(exportsMap, () => ({})))) {
     if (allowed.has(key)) continue
     findings.push({
       path: `${surface.packageJson} exports["${key}"]`,
@@ -562,7 +562,7 @@ const packageFindings = (
     })
   }
   for (const [key, target] of Object.entries(surface.requiredExports)) {
-    if (exportsMap[key] === target) continue
+    if (Option.exists(exportsMap, (map) => map[key] === target)) continue
     findings.push({
       path: `${surface.packageJson} exports["${key}"]`,
       message: `${surface.alias} must map "${key}" to "${target}"`,

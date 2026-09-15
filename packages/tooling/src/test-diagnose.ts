@@ -45,9 +45,11 @@ const program = Effect.gen(function* () {
   }
 
   const started = yield* Clock.currentTimeMillis
-  const env = { ...Bun.env, NO_COLOR: "1" }
-  delete env.FORCE_COLOR
-  const proc = Bun.spawn(command, { env, stderr: "pipe", stdout: "pipe" })
+  const env = {
+    ...Object.fromEntries(Object.entries(Bun.env).filter(([key]) => key !== "FORCE_COLOR")),
+    NO_COLOR: "1",
+  }
+  const proc = Bun.spawn([...command], { env, stderr: "pipe", stdout: "pipe" })
 
   const [exitCode, stdout, stderr] = yield* Effect.all(
     [
@@ -60,17 +62,18 @@ const program = Effect.gen(function* () {
   const elapsedMs = (yield* Clock.currentTimeMillis) - started
   const testOutput = `${stdout}\n${stderr}`
 
-  const bunRuns = Arr.filterMap(
-    [...testOutput.matchAll(/^(?:(@[^:]+):test:\s*)?Ran .* \[([^\]]+)\]$/gm)],
-    (match) => {
+  const bunRuns = [...testOutput.matchAll(/^(?:(@[^:]+):test:\s*)?Ran .* \[([^\]]+)\]$/gm)]
+    .flatMap((match) => {
       const raw = Option.getOrElse(Option.fromNullishOr(match[2]), () => "")
-      return Option.map(durationMs(raw), (ms) => ({
-        label: Option.getOrElse(Option.fromNullishOr(match[1]), () => "test"),
-        ms,
-        raw,
-      }))
-    },
-  ).sort((a, b) => b.ms - a.ms)
+      return Option.toArray(
+        Option.map(durationMs(raw), (ms) => ({
+          label: Option.getOrElse(Option.fromNullishOr(match[1]), () => "test"),
+          ms,
+          raw,
+        })),
+      )
+    })
+    .sort((a, b) => b.ms - a.ms)
 
   if (exitCode !== 0) {
     process.stdout.write(stdout)
@@ -79,8 +82,8 @@ const program = Effect.gen(function* () {
     return yield* Effect.fail(exitCode)
   }
 
-  const packageTimes = Arr.filterMap([...stdout.matchAll(/^\s*Time:\s+(.+)$/gm)], (match) =>
-    Option.fromNullishOr(match[1]),
+  const packageTimes = [...stdout.matchAll(/^\s*Time:\s+(.+)$/gm)].flatMap((match) =>
+    Option.toArray(Option.fromNullishOr(match[1])),
   )
   const lastPackageTime = Arr.last(packageTimes)
   if (Option.isSome(lastPackageTime)) {
