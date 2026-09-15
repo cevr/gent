@@ -2012,3 +2012,20 @@ Run 38 (opus-luna, 20k window, at `c04e28be`): 6 sessions, 2 handoffs,
 17 tests green in 5m17s, $1.21; the two markers carry 12 and 4 names
 (2.4k and 2.9k chars), so the note now names only what the kept window
 uses.
+
+## Wake reduction pass, `wake.cancel`, omitted count to the thread pane (2026-09-15, `74b1b5d5`)
+
+`/improve-codebase-architecture` on `packages/extensions/src/wake/`: the
+extension is one tagged entry type, one file store, one branch resource,
+three tools and one request; the deletion test kept every piece. Two
+reductions landed: `WakeDetails.kind` went (the outcome names the kind),
+and the forked work gets its `ExtensionContext` once around the whole
+pipeline instead of twice. The resource now keeps fibers by id, which is
+what `wake.cancel` needs: it drops the entries from the file and interrupts
+the timers (one id, or every pending one). The store test proves the timer
+count does not drop when the interrupt is skipped. Terminal check: two
+alarms set, the 5-minute one cancelled, tray shows `◷ alarm in 2m 51s`.
+
+Status bar is `ctx N%` only; the omitted count rides on `agentDetail`
+(already a snapshot read) into the live window's row in `/thread`:
+`window 3 · 12 messages · 7 summarized · 2 omitted · <preview>`.
