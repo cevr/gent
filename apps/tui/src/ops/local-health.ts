@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
-import { DateTime, Effect, FileSystem, Match, Option, Schema } from "effect"
-import type { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/sdk"
+import { DateTime, Effect, FileSystem, Match, Option } from "effect"
+import type { ExtensionHealthIssue, ExtensionHealthSnapshot, ServerLockEntry } from "@gent/sdk"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 const LOG_DIR = "/tmp/gent/logs"
@@ -165,35 +165,24 @@ export const inspectLogs: Effect.Effect<LogHealth, never, FileSystem.FileSystem>
   },
 )
 
-const ServerLockEntry = Schema.Struct({
-  pid: Schema.Finite,
-  serverId: Schema.optionalKey(Schema.String),
-  rpcUrl: Schema.optionalKey(Schema.String),
-})
-const decodeServerLockEntry = Schema.decodeUnknownOption(ServerLockEntry)
-type ServerLockEntryInput = Parameters<typeof decodeServerLockEntry>[0]
-
+/** The entry is the SDK's decoded lock record; `readServerLock` already rejected malformed files. */
 export const inspectServer = (
-  entry: ServerLockEntryInput,
+  entry: Option.Option<ServerLockEntry>,
 ): Effect.Effect<ServerHealth, never, GentPlatform> =>
   Effect.gen(function* () {
-    if (Option.isNone(Option.fromNullishOr(entry))) {
+    if (Option.isNone(entry)) {
       return { status: "none", summary: "No shared server." }
     }
-    const decoded = decodeServerLockEntry(entry)
-    if (Option.isNone(decoded)) return { status: "dead", summary: "Invalid server lock." }
-    const { pid } = decoded.value
+    const { pid, serverId, rpcUrl } = entry.value
     const platform = yield* GentPlatform
     const alive = yield* platform.signal(pid, 0).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     )
-    const id = Option.getOrElse(Option.fromNullishOr(decoded.value.serverId), () => "unknown")
-    const url = Option.getOrElse(Option.fromNullishOr(decoded.value.rpcUrl), () => "unknown")
     if (alive) {
-      return { status: "alive", summary: `Shared server alive: pid ${pid}, ${id}, ${url}` }
+      return { status: "alive", summary: `Shared server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
     }
-    return { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${id}` }
+    return { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${serverId}` }
   })
 
 export const extensionHealthUnavailable = (summary: string): ExtensionDoctorHealth => ({
@@ -229,7 +218,7 @@ export const extensionHealthFromSnapshot = (
 
 export const makeDoctorReport = (
   home: string,
-  serverEntry: ServerLockEntryInput,
+  serverEntry: Option.Option<ServerLockEntry>,
   extensions?: ExtensionDoctorHealth,
 ): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {

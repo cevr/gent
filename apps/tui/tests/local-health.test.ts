@@ -2,19 +2,43 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect, FileSystem, Layer, Option, Path } from "effect"
+import { ServerLockEntry } from "@gent/sdk"
 import { SqlClient } from "effect/unstable/sql"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
+import { GentPlatform, SignalError } from "@gent/core-internal/runtime/gent-platform"
 import { ExtensionHealth, ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 import {
   extensionHealthFromSnapshot,
   formatDoctorReport,
+  inspectServer,
   inspectStorage,
   makeDoctorReport,
   resetStorage,
   storagePaths,
 } from "../src/ops/local-health"
 
-const absentServerEntry = Option.getOrUndefined(Option.none())
+const absentServerEntry = Option.none<ServerLockEntry>()
+
+const lockEntry = new ServerLockEntry({
+  serverId: "server-1",
+  pid: 4242,
+  hostname: "test-host",
+  rpcUrl: "http://127.0.0.1:1/rpc",
+  dbPath: "/tmp/data.db",
+  buildFingerprint: "fp",
+  startedAt: 0,
+})
+
+/** The test platform with a liveness probe that reports the pid gone. */
+const deadPidPlatform = Layer.effect(
+  GentPlatform,
+  Effect.map(GentPlatform, (platform) =>
+    GentPlatform.of({
+      ...platform,
+      signal: (pid, signal) =>
+        Effect.fail(new SignalError({ pid, signal, code: "ESRCH", reason: "no such process" })),
+    }),
+  ),
+).pipe(Layer.provide(GentPlatform.Test()))
 
 const createDb = (dbPath: string, ...statements: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -23,6 +47,22 @@ const createDb = (dbPath: string, ...statements: ReadonlyArray<string>) =>
   }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
 describe("local health", () => {
+  it.live("a live shared server reports its pid, id, and url from the SDK lock record", () =>
+    Effect.gen(function* () {
+      const server = yield* inspectServer(Option.some(lockEntry))
+      expect(server.status).toBe("alive")
+      expect(server.summary).toBe("Shared server alive: pid 4242, server-1, http://127.0.0.1:1/rpc")
+    }).pipe(Effect.provide(GentPlatform.Test())),
+  )
+
+  it.live("a lock whose pid is gone reports a stale server", () =>
+    Effect.gen(function* () {
+      const server = yield* inspectServer(Option.some(lockEntry))
+      expect(server.status).toBe("dead")
+      expect(server.summary).toBe("Shared server lock is stale: pid 4242, server-1")
+    }).pipe(Effect.provide(deadPidPlatform)),
+  )
+
   it.scopedLive("reports incompatible storage tables without migration records", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

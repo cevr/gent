@@ -634,7 +634,7 @@ const doctor = Command.make("doctor", {}, () =>
       onNone: () => Effect.succeed(extensionHealthUnavailable("No shared server.")),
       onSome: readDoctorExtensionHealth,
     })
-    const report = yield* makeDoctorReport(home, Option.getOrUndefined(entry), extensions)
+    const report = yield* makeDoctorReport(home, entry, extensions)
     yield* Console.log(formatDoctorReport(report))
   }),
 )
