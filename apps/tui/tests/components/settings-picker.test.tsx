@@ -27,6 +27,44 @@ const catalogue = [
 ]
 
 describe("Settings picker", () => {
+  it.live("keeps typing from snapping the cursor back to the current row", () =>
+    Effect.gen(function* () {
+      // The pane preselects the row the next turn would use. That anchor has to
+      // let go once the reader types: re-applying it on every narrowing drags
+      // the cursor off whatever they were filtering for.
+      const selected: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SettingsPicker
+            open={true}
+            title="Model"
+            rows={modelRows([
+              model("a/one", "Alpha One"),
+              model("a/two", "Alpha Two"),
+              model("a/three", "Alpha Three"),
+            ])}
+            current={Option.some("a/three")}
+            onSelect={(id) => {
+              selected.push(id)
+            }}
+            onClose={() => {}}
+          />
+        )),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker"),
+      )
+      // Every row matches "a", so the list does not narrow; the cursor still
+      // has to move to the top, the way a fresh query always does.
+      setup.mockInput.pressKey("a")
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("› a"), "typed"),
+      )
+      setup.mockInput.pressEnter()
+      expect(selected).toEqual(["a/one"])
+    }),
+  )
+
   it.live("marks the current model, filters on typing, and selects with enter", () =>
     Effect.gen(function* () {
       const selected: Array<string> = []
