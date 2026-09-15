@@ -1,7 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import {
-  formatThinkTime,
   truncatePath,
   getSpinnerFrames,
   formatToolInput,
@@ -11,7 +10,6 @@ import {
   formatPreviewFooter,
   formatRowCounts,
   formatAge,
-  formatDuration,
   formatGroupDuration,
   workingIconFrame,
   previewOutput,
@@ -21,27 +19,6 @@ import {
 
 const absent = Option.getOrUndefined(Option.none())
 const nullValue = Option.getOrNull(Option.none())
-
-describe("formatThinkTime", () => {
-  test("formats seconds under 60", () => {
-    expect(formatThinkTime(0)).toBe("0s")
-    expect(formatThinkTime(1)).toBe("1s")
-    expect(formatThinkTime(30)).toBe("30s")
-    expect(formatThinkTime(59)).toBe("59s")
-  })
-
-  test("formats minutes and seconds", () => {
-    expect(formatThinkTime(60)).toBe("1m 0s")
-    expect(formatThinkTime(61)).toBe("1m 1s")
-    expect(formatThinkTime(90)).toBe("1m 30s")
-    expect(formatThinkTime(125)).toBe("2m 5s")
-  })
-
-  test("handles larger values", () => {
-    expect(formatThinkTime(3600)).toBe("60m 0s")
-    expect(formatThinkTime(3661)).toBe("61m 1s")
-  })
-})
 
 describe("truncatePath", () => {
   test("returns short paths unchanged", () => {
@@ -223,16 +200,6 @@ const cell = (
   operations: ActivityCall["operations"],
   status: ActivityCall["status"] = "completed",
 ): ActivityCall => ({ toolName: "cell", status, operations, code: "" })
-
-describe("formatDuration", () => {
-  test("milliseconds under a second, tenths under a minute, then minutes and seconds", () => {
-    expect(formatDuration(12)).toBe("12ms")
-    expect(formatDuration(999.6)).toBe("1000ms")
-    expect(formatDuration(1_250)).toBe("1.3s")
-    expect(formatDuration(59_940)).toBe("59.9s")
-    expect(formatDuration(65_000)).toBe("1m 5s")
-  })
-})
 
 describe("formatActivityHeader", () => {
   test("a cell-only turn counts cells, ops, children, and failures instead of tool calls", () => {

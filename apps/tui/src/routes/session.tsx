@@ -32,12 +32,8 @@ import {
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/context"
-import {
-  buildTopRightLabels,
-  formatCwdGit,
-  formatElapsed,
-  type BorderLabelItem,
-} from "../utils/session-labels"
+import { buildTopRightLabels, formatCwdGit, type BorderLabelItem } from "../utils/session-labels"
+import { formatDuration } from "../utils/format-duration"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"
@@ -253,7 +249,7 @@ export function Session(props: SessionProps) {
                   let label = "Generating"
                   if (controller.activity().phase === "tool") label = controller.phaseLabel()
                   if (controller.elapsed() >= 1000)
-                    label += ` (${formatElapsed(controller.elapsed())})`
+                    label += ` (${formatDuration(controller.elapsed(), "compact")})`
                   return truncate(label, Math.max(1, dimensions().width - 2))
                 })()}
               </text>

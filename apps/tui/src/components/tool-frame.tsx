@@ -3,7 +3,7 @@
 import { createContext, Show, useContext, createEffect, createSignal, type JSX } from "solid-js"
 import { Option } from "effect"
 import { useTheme } from "../theme/index"
-import { formatDuration } from "./message-list-utils"
+import { formatDuration } from "../utils/format-duration"
 
 const ToolCallIdentityContext = createContext<Option.Option<string>>(Option.none())
 
@@ -75,7 +75,10 @@ export function ToolFrame(props: ToolFrameProps) {
   }
 
   const footer = () =>
-    Option.fromNullishOr(props.durationMs).pipe(Option.map(formatDuration), Option.getOrUndefined)
+    Option.fromNullishOr(props.durationMs).pipe(
+      Option.map((ms) => formatDuration(ms, "precise")),
+      Option.getOrUndefined,
+    )
 
   const expandIndicator = () => {
     if (localExpanded()) return "▾"

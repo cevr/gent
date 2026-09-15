@@ -15,12 +15,12 @@ import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 import { decodeToolOutputOption, getString } from "../utils/parse-tool-output"
 import { toolArgSummary } from "../utils/format-tool"
+import { formatDuration } from "../utils/format-duration"
 import {
   type ActivityCall,
   type ActivityOperation,
   formatActivityHeader,
   formatCellRowLabel,
-  formatDuration,
   plural,
   formatPreviewFooter,
   formatRowCounts,
@@ -548,7 +548,7 @@ function ToolCallGroup(props: {
                 if (call.status === "error") return " · failed"
                 if (call.status === "running") return " · running"
                 if (Predicate.isNotUndefined(call.durationMs))
-                  return ` · ${formatDuration(call.durationMs)}`
+                  return ` · ${formatDuration(call.durationMs, "precise")}`
                 return ""
               }
               // A cell row names what the cell did; other tools show their leading argument.

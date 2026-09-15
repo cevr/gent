@@ -1,4 +1,5 @@
-import { formatThinkTime, plural } from "./message-list-utils"
+import { plural } from "./message-list-utils"
+import { formatDuration } from "../utils/format-duration"
 import { DateTime } from "effect"
 
 /** What the model steps of one turn added up to, from each `StreamEnded.outcome`. */
@@ -62,7 +63,7 @@ const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
 export const getSessionEventLabel = (event: SessionEvent, now = currentMillis()): string => {
   if (event._tag === "turn-ended") {
     return [
-      `Worked for ${formatThinkTime(event.durationSeconds)}`,
+      `Worked for ${formatDuration(event.durationSeconds * 1000, "compact")}`,
       ...stepSummary(event.steps),
     ].join(" · ")
   }

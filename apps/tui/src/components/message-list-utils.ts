@@ -3,20 +3,11 @@
  */
 
 import { Predicate } from "effect"
+import { formatDuration } from "../utils/format-duration"
 import { toolArgSummary } from "../utils/format-tool.js"
 import { truncate } from "../utils/truncate"
 import { getString } from "../utils/parse-tool-output.js"
 import type { ToolInput } from "../utils/parse-tool-output.js"
-
-/**
- * Format seconds into human readable time string
- */
-export function formatThinkTime(secs: number): string {
-  if (secs < 60) return `${secs}s`
-  const mins = Math.floor(secs / 60)
-  const remainingSecs = secs % 60
-  return `${mins}m ${remainingSecs}s`
-}
 
 /**
  * Truncate path from start, keeping filename visible
@@ -119,18 +110,6 @@ export interface ActivityCall {
   readonly durationMs?: number
 }
 
-// ── Durations ──
-// prime-agent style: milliseconds under a second, tenths under a minute, then m s.
-
-export const formatDuration = (ms: number): string => {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const secs = ms / 1000
-  if (secs < 60) return `${secs.toFixed(1)}s`
-  const mins = Math.floor(secs / 60)
-  const remainingSecs = Math.round(secs % 60)
-  return `${mins}m ${remainingSecs}s`
-}
-
 /** The group's wall time: the sum of its finished calls, absent until one has a duration. */
 export const formatGroupDuration = (calls: ReadonlyArray<ActivityCall>): string => {
   const finished = calls.flatMap((call) => {
@@ -138,7 +117,10 @@ export const formatGroupDuration = (calls: ReadonlyArray<ActivityCall>): string 
     return [call.durationMs]
   })
   if (finished.length === 0) return ""
-  return formatDuration(finished.reduce((total, ms) => total + ms, 0))
+  return formatDuration(
+    finished.reduce((total, ms) => total + ms, 0),
+    "precise",
+  )
 }
 
 // ── Cell intent ──

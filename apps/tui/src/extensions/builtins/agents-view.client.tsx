@@ -29,6 +29,7 @@ import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
 import { truncate } from "../../utils/truncate"
 import { formatAge, workingIconFrame } from "../../components/message-list-utils"
+import { formatDuration } from "../../utils/format-duration"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import {
   clientCommandContribution,
@@ -332,14 +333,6 @@ const currentMarker = (current: boolean): string => {
   return "  "
 }
 
-/** Whole seconds under a minute, then `m:ss` — a detail line has no room for more. */
-const formatDuration = (ms: number): string => {
-  const totalSeconds = Math.floor(ms / 1000)
-  if (totalSeconds < 60) return `${totalSeconds}s`
-  const minutes = Math.floor(totalSeconds / 60)
-  return `${minutes}m${String(totalSeconds % 60).padStart(2, "0")}s`
-}
-
 /** Sub-cent costs still deserve a number, so keep three decimals throughout. */
 const formatCost = (usd: number): string => `$${usd.toFixed(3)}`
 
@@ -381,7 +374,7 @@ const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
         }),
         formatTurns(value.turns),
         formatCost(value.costUsd),
-        formatDuration(value.durationMs),
+        formatDuration(value.durationMs, "padded"),
       ]
       return parts.join("  ·  ")
     },
