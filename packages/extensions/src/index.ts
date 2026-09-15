@@ -25,6 +25,7 @@ import { AcpAgentsExtension } from "./acp-agents/index.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
 import { GoalExtension } from "./goal/index.js"
+import { WakeExtension } from "./wake/index.js"
 import { BtwExtension } from "./btw/index.js"
 import { ReadTool } from "./fs-tools/read.js"
 import { WriteTool } from "./fs-tools/write.js"
@@ -125,6 +126,7 @@ export {
   WorkflowsExtension,
   HandoffExtension,
   GoalExtension,
+  WakeExtension,
   BtwExtension,
   AgentsViewExtension,
 }
@@ -143,6 +145,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner 
     CompactionExtension,
     HandoffExtension,
     GoalExtension,
+    WakeExtension,
     BtwExtension,
     FsToolsExtension,
     ExecToolsExtension,
