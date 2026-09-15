@@ -60,6 +60,13 @@ import {
 import type { ResolvedToolCapability } from "./tool-runner.js"
 import { executeToolCalls, ToolInteractionPending } from "./turn-tool-execution.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
+import {
+  emptyTurnRecord,
+  TurnRecordStorage,
+  turnRecordAtStep,
+  type PendingToolCall,
+  type TurnRecord,
+} from "../../storage/turn-record-storage.js"
 import { ToolBindingReplayError } from "./tool-binding-replay.js"
 import {
   processLocalReplayBindingKey,
@@ -184,6 +191,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const configServiceForRun = yield* ConfigService
     const platform = yield* GentPlatform
     const toolBindingStorage = yield* ToolCallBindingStorage
+    const turnRecordStorage = yield* TurnRecordStorage
     const processLocalReplay = yield* ProcessLocalToolReplay
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
@@ -223,6 +231,80 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       },
     )
 
+    /**
+     * The turn's durable position.
+     *
+     * One row per turn, keyed by the user message that opened it. The row is
+     * written at each step boundary in the same transaction as that step's
+     * messages, so a resumed turn reads one row instead of probing derived
+     * message ids.
+     */
+    const turnRecordKey = (messageId: RunningState["message"]["id"]) => ({
+      sessionId: scope.sessionId,
+      branchId: scope.branchId,
+      messageId,
+    })
+
+    const readTurnRecord = (messageId: RunningState["message"]["id"]) =>
+      turnRecordStorage.get(turnRecordKey(messageId)).pipe(
+        // A read failure must not end a turn that can still run: the probe
+        // fallback in `resumeTurn` re-derives the position from the messages.
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.record-read-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(emptyTurnRecord),
+          ),
+        ),
+      )
+
+    const writeTurnRecord = (messageId: RunningState["message"]["id"], record: TurnRecord) =>
+      turnRecordStorage
+        .put(turnRecordKey(messageId), record)
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("turn.record-write-failed").pipe(
+              Effect.annotateLogs({ error: String(cause) }),
+            ),
+          ),
+        )
+
+    /** The step opened: its assistant message committed, its calls are pending. */
+    const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
+      readonly messageId: RunningState["message"]["id"]
+      readonly step: number
+      readonly toolCalls: ReadonlyArray<Prompt.ToolCallPart>
+    }) {
+      const pendingToolCalls: ReadonlyArray<PendingToolCall> = params.toolCalls.map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.name,
+      }))
+      const current = yield* readTurnRecord(params.messageId)
+      yield* writeTurnRecord(
+        params.messageId,
+        turnRecordAtStep({
+          step: params.step - 1,
+          continuations: current.continuations,
+          pendingToolCalls,
+        }),
+      )
+    })
+
+    /** The step closed: every message it owns has committed. */
+    const closeTurnStep = Effect.fn("AgentLoop.closeTurnStep")(function* (params: {
+      readonly messageId: RunningState["message"]["id"]
+      readonly step: number
+    }) {
+      const current = yield* readTurnRecord(params.messageId)
+      yield* writeTurnRecord(
+        params.messageId,
+        turnRecordAtStep({
+          step: Math.max(current.step, params.step),
+          continuations: current.continuations,
+          pendingToolCalls: [],
+        }),
+      )
+    })
+
     const executeTools = Effect.fn("AgentLoop.executeTools")(function* (params: {
       messageId: RunningState["message"]["id"]
       step: number
@@ -244,6 +326,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const existing = yield* messageStorage.getMessage(toolResultMessageId)
       if (!Predicate.isUndefined(existing)) {
         yield* processLocalReplay.removeResults(resultKey)
+        yield* closeTurnStep({ messageId: params.messageId, step: params.step })
         return
       }
 
@@ -317,6 +400,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         parts: toolResults,
       })
       yield* processLocalReplay.removeResults(resultKey)
+      yield* closeTurnStep({ messageId: params.messageId, step: params.step })
     })
 
     const collectTurnStream = Effect.fn("AgentLoop.collectTurnStream")(function* (params: {
@@ -546,7 +630,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }
         })
         yield* persistAssistantPartsWithBindingsAt(responseStep, assistantParts)
+        const stepToolCalls = assistantParts.filter(
+          (part): part is Prompt.ToolCallPart => part.type === "tool-call",
+        )
+        yield* openTurnStep({
+          messageId: params.messageId,
+          step: responseStep,
+          toolCalls: stepToolCalls,
+        })
         yield* persistToolPartsLocal(responseStep, toolParts)
+        // A step the model answered owns no unsettled call; a tool step is
+        // closed by `executeTools` once its results commit.
+        if (stepToolCalls.length === 0) {
+          yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
+        }
       })
 
       yield* Match.type<StepOutcome>().pipe(
@@ -570,6 +667,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             Effect.gen(function* () {
               yield* persistAssistantPartsLocal(responseStep, assistantParts)
               yield* persistToolPartsLocal(responseStep, toolParts)
+              yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
             }),
           External: () => settleStep,
           ToolCalls: () => settleStep,
@@ -736,6 +834,82 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       },
     )
 
+    /**
+     * Where a turn stands.
+     *
+     * The record answers it in one read. A turn written before the record
+     * existed has no row; for those the message probe re-derives the same
+     * answer and writes the record, so the scan happens at most once per turn.
+     */
+    const resolveTurnPosition = Effect.fn("AgentLoop.resolveTurnPosition")(function* (
+      messageId: RunningState["message"]["id"],
+    ) {
+      const record = yield* readTurnRecord(messageId)
+      const hasRecord =
+        record.step > 0 || record.continuations > 0 || record.pendingToolCalls.length > 0
+      if (hasRecord) {
+        if (record.pendingToolCalls.length === 0) {
+          const settled: ReadonlyArray<Prompt.ToolCallPart> = []
+          return {
+            step: record.step,
+            pendingAssistant: Option.none<Message>(),
+            pendingToolCalls: settled,
+          }
+        }
+        const pendingStep = record.step + 1
+        const assistant = yield* messageStorage.getMessage(
+          assistantMessageIdForTurn(messageId, pendingStep),
+        )
+        // The record names a pending step whose assistant message is gone:
+        // trust the messages, not the row.
+        if (Predicate.isNotUndefined(assistant)) {
+          return {
+            step: record.step,
+            pendingAssistant: Option.some(assistant),
+            pendingToolCalls: toolCallsFromMessage(assistant),
+          }
+        }
+      }
+
+      let lastCompletedStep = 0
+      let pendingAssistant = Option.none<Message>()
+      let pendingToolCalls: ReadonlyArray<Prompt.ToolCallPart> = []
+      for (let step = 1; step <= MAX_TURN_STEPS; step++) {
+        const existingAssistant = yield* messageStorage.getMessage(
+          assistantMessageIdForTurn(messageId, step),
+        )
+        if (Predicate.isUndefined(existingAssistant)) break
+        const toolCalls = toolCallsFromMessage(existingAssistant)
+        if (toolCalls.length === 0) {
+          lastCompletedStep = step
+          continue
+        }
+        const existingResults = yield* messageStorage.getMessage(
+          toolResultMessageIdForTurn(messageId, step),
+        )
+        if (Predicate.isUndefined(existingResults)) {
+          pendingAssistant = Option.some(existingAssistant)
+          pendingToolCalls = toolCalls
+          break
+        }
+        lastCompletedStep = step
+      }
+      // Adopt the derived position so the next resume reads the row.
+      const derivedPending: ReadonlyArray<PendingToolCall> = pendingToolCalls.map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.name,
+      }))
+      yield* writeTurnRecord(
+        messageId,
+        turnRecordAtStep({
+          step: lastCompletedStep,
+          continuations: record.continuations,
+          pendingToolCalls: derivedPending,
+        }),
+      )
+      return { step: lastCompletedStep, pendingAssistant, pendingToolCalls }
+    })
+
     const resumeTurn = Effect.fn("AgentLoop.resumeTurn")(function* (params: {
       readonly state: RunningState
       readonly messageId: RunningState["message"]["id"]
@@ -747,34 +921,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         return { step: 0, interaction: Option.none() }
       }
 
-      let lastCompletedStep = 0
-      let pendingAssistant = Option.none<Message>()
-      let pendingToolCalls: ReadonlyArray<Prompt.ToolCallPart> = []
-      let pendingStep = 0
-      for (let step = 1; step <= MAX_TURN_STEPS; step++) {
-        const existingAssistant = yield* messageStorage.getMessage(
-          assistantMessageIdForTurn(params.messageId, step),
-        )
-        if (Predicate.isUndefined(existingAssistant)) break
-        const toolCalls = toolCallsFromMessage(existingAssistant)
-        if (toolCalls.length === 0) {
-          lastCompletedStep = step
-          continue
-        }
-        const existingResults = yield* messageStorage.getMessage(
-          toolResultMessageIdForTurn(params.messageId, step),
-        )
-        if (Predicate.isUndefined(existingResults)) {
-          pendingAssistant = Option.some(existingAssistant)
-          pendingToolCalls = toolCalls
-          pendingStep = step
-          break
-        }
-        lastCompletedStep = step
-      }
-      if (Option.isNone(pendingAssistant)) {
+      const position = yield* resolveTurnPosition(params.messageId)
+      const lastCompletedStep = position.step
+      const pendingStep = position.step + 1
+      if (Option.isNone(position.pendingAssistant)) {
         return { step: lastCompletedStep, interaction: Option.none() }
       }
+      const pendingAssistant = position.pendingAssistant
+      const pendingToolCalls = position.pendingToolCalls
 
       yield* Effect.logInfo("turn.resume-tools")
       const recoveredResults: Array<Prompt.ToolResultPart> = []
@@ -905,13 +1059,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly step: number
       readonly instruction: string
     }) {
-      let used = 0
-      for (let step = 1; step < params.step; step++) {
-        const existing = yield* messageStorage.getMessage(
-          continuationMessageIdForTurn(params.messageId, step),
-        )
-        if (Predicate.isNotUndefined(existing)) used += 1
-      }
+      const record = yield* readTurnRecord(params.messageId)
+      const used = record.continuations
       if (used >= MAX_CONTINUATIONS_PER_TURN) return false
       yield* persistMessageReceived({
         message: Message.cases.regular.make({
@@ -924,6 +1073,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           metadata: { customType: "continuation", details: { step: params.step } },
         }),
       })
+      yield* writeTurnRecord(
+        params.messageId,
+        turnRecordAtStep({
+          step: record.step,
+          continuations: used + 1,
+          pendingToolCalls: record.pendingToolCalls,
+        }),
+      )
       yield* Effect.logInfo("turn.continue-within-turn").pipe(
         Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
       )

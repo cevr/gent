@@ -459,6 +459,31 @@ const sessionModelMigration = Effect.gen(function* () {
     .pipe(ignoreAlreadyAppliedSqliteError("017_session_model", "ADD COLUMN model_id"))
 })
 
+const turnRecordsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  // One row per turn: the step whose messages committed, the continuations
+  // the turn has spent, and the tool calls the current step has not settled.
+  // The row is written with the step's messages, so a resumed turn reads its
+  // position instead of probing derived message ids.
+  yield* sql
+    .unsafe(`
+    CREATE TABLE turn_records (
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      step INTEGER NOT NULL,
+      continuations INTEGER NOT NULL,
+      pending_tool_calls_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id, message_id),
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+    .pipe(ignoreAlreadyAppliedSqliteError("018_turn_records", "CREATE TABLE turn_records"))
+})
+
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite migrations expose unknown failure causes.
 const wrapMigrationError = (error: unknown): StorageError =>
   new StorageError({ message: "Storage migration failed", cause: error })
@@ -510,6 +535,7 @@ const makeStorageMigratorLive = (
       "015_drop_resource_graph_state": dropResourceGraphStateMigration,
       "016_drop_write_only_storage": dropWriteOnlyStorageMigration,
       "017_session_model": sessionModelMigration,
+      "018_turn_records": turnRecordsMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",
