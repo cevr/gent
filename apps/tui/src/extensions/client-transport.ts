@@ -27,9 +27,9 @@
  */
 
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
+import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { CapabilityRef } from "@gent/core/extensions/api"
-import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
+import type { BranchId, EventEnvelope, Message, Session, SessionId } from "@gent/core/protocol"
 
 type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
@@ -81,6 +81,12 @@ export interface ClientTransportDefinition {
   ) => Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError>
   /** Delete a session and its descendants; their loops stop and their rows go. */
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ClientTransportRequestError>
+  /** Every stored session, with its parent links. */
+  readonly listSessions: Effect.Effect<ReadonlyArray<Session>, ClientTransportRequestError>
+  /** Every durable message on one branch, in order. */
+  readonly listMessages: (
+    branchId: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Message>, ClientTransportRequestError>
 }
 
 export interface ClientShellTransportDefinition {
@@ -122,6 +128,9 @@ export const makeClientTransportLayer = (
     onSessionEvent: payload.onSessionEvent,
     agentDetail: (key) => agentDetailAt(payload, key),
     deleteSession: (sessionId) => deleteSessionAt(payload, sessionId),
+    listSessions: shellRead(payload, "session.list", (client) => client.session.list()),
+    listMessages: (branchId) =>
+      shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
   }
   return Layer.succeed(ClientTransport, transport)
 }
@@ -228,6 +237,23 @@ const deleteSessionAt = (
         cause,
       }),
   }).pipe(Effect.asVoid)
+
+/** One shell RPC read, with its failure named by the RPC it came from. */
+const shellRead = <A>(
+  transport: ClientShellTransportDefinition,
+  tag: string,
+  read: (client: GentNamespacedClient) => Effect.Effect<A, GentClientRpcError>,
+): Effect.Effect<A, ClientTransportRequestError> =>
+  Effect.tryPromise({
+    try: () => transport.runtime.run(read(transport.client)),
+    catch: (cause) =>
+      new ClientTransportRequestError({
+        extensionId: "@gent/tui/client-transport",
+        tag,
+        message: `${tag} failed: ${String(cause)}`,
+        cause,
+      }),
+  })
 
 const agentDetailAt = (
   transport: ClientShellTransportDefinition,

@@ -9,6 +9,7 @@ import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
 import builtinHerdr from "./herdr.client"
 import builtinGoal from "./goal.client"
+import builtinThreadView from "./thread-view.client"
 import { builtinInteractions, builtinTools } from "./tool-renderers.client"
 import {
   defineClientExtension,
@@ -78,5 +79,6 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinHerdr,
   builtinInteractions,
   builtinSkills,
+  builtinThreadView,
   builtinTools,
 ]

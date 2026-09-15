@@ -1,0 +1,575 @@
+/** @jsxImportSource @opentui/solid */
+/**
+ * Thread view — one docked pane over the chain of sessions and the context
+ * windows inside each.
+ *
+ * A thread is a view, not a record. `Session.parentSessionId` links a session
+ * to the one it continued from, and every `context-window` marker on a branch
+ * opens a new window whose notice summarizes what left the model view. The
+ * pane walks the chain up from the shell's session and lists the windows per
+ * session, oldest first, so a reader sees the whole thread while the model
+ * sees one window.
+ *
+ * Client-first: `session.list` and `message.list` are the only reads.
+ *
+ * @module
+ */
+
+import { DateTime, Effect, Option, Predicate, Schema } from "effect"
+import { createEffect, createSignal, For, on, Show } from "solid-js"
+import type { ScrollBoxRenderable } from "@opentui/core"
+import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
+import { ChromePanel } from "../../components/chrome-panel"
+import {
+  FilterListEvent,
+  FilterListState,
+  transitionFilterList,
+} from "../../components/filter-list-state"
+import { formatAge, plural } from "../../components/message-list-utils"
+import { useScrollSync } from "../../hooks/use-scroll-sync"
+import { useScopedKeyboard } from "../../keyboard/context"
+import { useTerminalDimensions } from "../../terminal-dimensions"
+import { useTheme } from "../../theme"
+import { truncate } from "../../utils/format-tool"
+import {
+  clientCommandContribution,
+  clientContributions,
+  defineClientExtension,
+  widgetContribution,
+  type OverlayProps,
+} from "../client-facets"
+import { ClientLifecycle, ClientShell } from "../client-services"
+import { ClientTransport } from "../client-transport"
+
+export const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
+
+const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
+
+/** The marker details the pane reads; the loop owns the full schema. */
+const WindowDetails = Schema.Struct({
+  keepFromMessageId: Schema.String,
+  summarized: Schema.optional(Schema.Struct({ count: Schema.Natural })),
+})
+type WindowDetails = typeof WindowDetails.Type
+const decodeWindowDetails = Schema.decodeUnknownOption(WindowDetails)
+
+const windowDetailsOf = (message: Message): Option.Option<WindowDetails> => {
+  if (message.metadata?.customType !== CONTEXT_WINDOW_MESSAGE_TYPE) return Option.none()
+  return decodeWindowDetails(message.metadata.details)
+}
+
+/** One context window on one branch: what the model saw between two handoffs. */
+export interface ThreadWindow {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly sessionName: string
+  /** 1-based position within its session. */
+  readonly index: number
+  readonly firstMessageId: string
+  readonly lastMessageId: string
+  readonly count: number
+  /** The summary that opened the window; none for a session's first window. */
+  readonly summary: Option.Option<string>
+  /** Messages the opening handoff replaced. */
+  readonly summarizedCount: number
+  /** First line of the first user message in the window. */
+  readonly preview: string
+  readonly updatedAt: number
+}
+
+const messageText = (message: Message): string =>
+  message.parts
+    .flatMap((part) => {
+      if (part.type === "text") return [part.text]
+      return []
+    })
+    .join("\n")
+
+const firstLine = (text: string): string => {
+  const line = text.split("\n").find((candidate) => candidate.trim().length > 0)
+  return Option.getOrElse(Option.fromUndefinedOr(line), () => "").trim()
+}
+
+/** The notice carries a preamble the reader does not need; keep the summary after it. */
+export const summaryBody = (notice: string): string => {
+  const at = notice.indexOf("\n\nSummary:\n")
+  if (at < 0) return notice
+  return notice.slice(at + "\n\nSummary:\n".length)
+}
+
+export const sessionLabel = (session: Session): string =>
+  Option.fromUndefinedOr(session.name).pipe(
+    Option.orElse(() => Option.fromUndefinedOr(session.cwd)),
+    Option.getOrElse(() => session.id),
+  )
+
+/**
+ * The sessions a thread runs through, root first. Each session names the one
+ * it continued from, so the chain is the parent walk from the shell's
+ * session; a session that is not listed ends it.
+ */
+export const threadChain = (
+  sessions: ReadonlyArray<Session>,
+  sessionId: SessionId,
+): ReadonlyArray<Session> => {
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const chain: Array<Session> = []
+  const seen = new Set<string>()
+  let cursor = Option.fromNullishOr(byId.get(sessionId))
+  while (Option.isSome(cursor) && !seen.has(cursor.value.id)) {
+    seen.add(cursor.value.id)
+    chain.unshift(cursor.value)
+    cursor = Option.fromUndefinedOr(cursor.value.parentSessionId).pipe(
+      Option.flatMap((id) => Option.fromNullishOr(byId.get(id))),
+    )
+  }
+  return chain
+}
+
+interface Cut {
+  readonly at: number
+  readonly marker: Message
+  readonly details: WindowDetails
+}
+
+/** Where each marker cuts the branch: the index of its anchor among the non-marker messages. */
+const cutsOf = (
+  body: ReadonlyArray<Message>,
+  markers: ReadonlyArray<Message>,
+): ReadonlyArray<Cut> =>
+  markers
+    .flatMap((marker) =>
+      Option.match(windowDetailsOf(marker), {
+        onNone: () => [],
+        onSome: (details) => {
+          const at = body.findIndex((message) => message.id === details.keepFromMessageId)
+          // A marker whose anchor is gone opens nothing, as in the loop's own view.
+          if (at < 0) return []
+          return [{ at, marker, details }]
+        },
+      }),
+    )
+    .sort((left, right) => left.at - right.at)
+
+const windowOf = (
+  session: Session,
+  branchId: BranchId,
+  index: number,
+  segment: ReadonlyArray<Message>,
+  opener: Option.Option<Cut>,
+): Option.Option<ThreadWindow> =>
+  Option.all([Option.fromUndefinedOr(segment[0]), Option.fromUndefinedOr(segment.at(-1))]).pipe(
+    Option.map(([first, last]) => {
+      const firstUser = segment.find((message) => message.role === "user")
+      return {
+        sessionId: session.id,
+        branchId,
+        sessionName: sessionLabel(session),
+        index,
+        firstMessageId: first.id,
+        lastMessageId: last.id,
+        count: segment.length,
+        summary: Option.map(opener, (cut) => summaryBody(messageText(cut.marker))),
+        summarizedCount: Option.match(opener, {
+          onNone: () => 0,
+          onSome: (cut) =>
+            Option.match(Option.fromUndefinedOr(cut.details.summarized), {
+              onNone: () => 0,
+              onSome: (summarized) => summarized.count,
+            }),
+        }),
+        preview: firstLine(
+          messageText(Option.getOrElse(Option.fromUndefinedOr(firstUser), () => first)),
+        ),
+        updatedAt: last.createdAt.getTime(),
+      }
+    }),
+  )
+
+/**
+ * The windows on one branch, oldest first. Every marker splits the branch at
+ * its anchor; the segment after a marker is the window that marker opened.
+ */
+export const windowsOf = (
+  session: Session,
+  branchId: BranchId,
+  messages: ReadonlyArray<Message>,
+): ReadonlyArray<ThreadWindow> => {
+  const markers = messages.filter((message) => Option.isSome(windowDetailsOf(message)))
+  const body = messages.filter((message) => Option.isNone(windowDetailsOf(message)))
+  const cuts = cutsOf(body, markers)
+  const windows: Array<ThreadWindow> = []
+  let start = 0
+  let opener = Option.none<Cut>()
+  for (const cut of cuts) {
+    const window = windowOf(
+      session,
+      branchId,
+      windows.length + 1,
+      body.slice(start, cut.at),
+      opener,
+    )
+    if (Option.isSome(window)) windows.push(window.value)
+    start = cut.at
+    opener = Option.some(cut)
+  }
+  const last = windowOf(session, branchId, windows.length + 1, body.slice(start), opener)
+  if (Option.isSome(last)) windows.push(last.value)
+  return windows
+}
+
+/**
+ * Windows plus the load state, held in the setup closure so they survive the
+ * pane closing. See `agents-view.client.tsx` for the same split.
+ */
+export interface ThreadController {
+  readonly windows: () => ReadonlyArray<ThreadWindow>
+  readonly sessions: () => number
+  readonly current: () => Option.Option<{ sessionId: string; branchId: string }>
+  readonly error: () => Option.Option<string>
+  readonly loading: () => boolean
+  readonly refresh: () => void
+  readonly open: () => boolean
+  readonly setOpen: (open: boolean) => void
+}
+
+export const makeThreadController = (
+  fetchSessions: Effect.Effect<ReadonlyArray<Session>, { readonly message: string }>,
+  fetchMessages: (
+    branchId: BranchId,
+  ) => Effect.Effect<ReadonlyArray<Message>, { readonly message: string }>,
+  cast: (effect: Effect.Effect<void>) => void,
+  current: () => Option.Option<{ sessionId: SessionId; branchId: BranchId }>,
+): ThreadController => {
+  const [windows, setWindows] = createSignal<ReadonlyArray<ThreadWindow>>([])
+  const [sessions, setSessions] = createSignal(0)
+  const [error, setError] = createSignal<Option.Option<string>>(Option.none())
+  const [loading, setLoading] = createSignal(false)
+  const [open, setOpen] = createSignal(false)
+
+  /** The branch a session contributes: the shell's branch for its own session, else the active one. */
+  const branchFor = (
+    session: Session,
+    active: { sessionId: SessionId; branchId: BranchId },
+  ): Option.Option<BranchId> => {
+    if (session.id === active.sessionId) return Option.some(active.branchId)
+    return Option.fromUndefinedOr(session.activeBranchId)
+  }
+
+  const load = (active: { sessionId: SessionId; branchId: BranchId }) =>
+    Effect.gen(function* () {
+      const chain = threadChain(yield* fetchSessions, active.sessionId)
+      const perSession = yield* Effect.forEach(chain, (session) =>
+        Option.match(branchFor(session, active), {
+          onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
+          onSome: (branchId) =>
+            Effect.map(fetchMessages(branchId), (messages) =>
+              windowsOf(session, branchId, messages),
+            ),
+        }),
+      )
+      return { sessions: chain.length, windows: perSession.flat() }
+    })
+
+  const refresh = () => {
+    const active = current()
+    if (Option.isNone(active)) return
+    setLoading(true)
+    cast(
+      load(active.value).pipe(
+        Effect.match({
+          onFailure: (failure) => {
+            setError(Option.some(failure.message))
+            setLoading(false)
+          },
+          onSuccess: (next) => {
+            setWindows(next.windows)
+            setSessions(next.sessions)
+            setError(Option.none())
+            setLoading(false)
+          },
+        }),
+      ),
+    )
+  }
+
+  return { windows, sessions, current, error, loading, refresh, open, setOpen }
+}
+
+/** The list as drawn: a heading opens each session, windows keep their index for selection. */
+export type ThreadItem =
+  | { readonly kind: "heading"; readonly sessionName: string; readonly count: number }
+  | { readonly kind: "window"; readonly window: ThreadWindow; readonly index: number }
+
+export const threadItems = (windows: ReadonlyArray<ThreadWindow>): ReadonlyArray<ThreadItem> => {
+  const items: Array<ThreadItem> = []
+  windows.forEach((window, index) => {
+    const previous = Option.fromUndefinedOr(windows[index - 1])
+    if (Option.isNone(previous) || previous.value.sessionId !== window.sessionId) {
+      const count = windows.filter((entry) => entry.sessionId === window.sessionId).length
+      items.push({ kind: "heading", sessionName: window.sessionName, count })
+    }
+    items.push({ kind: "window", window, index })
+  })
+  return items
+}
+
+/** `window 3 · 12 messages · 7 summarized · <preview>` */
+export const windowLabel = (window: ThreadWindow): string => {
+  const parts = [`window ${window.index}`, plural(window.count, "message")]
+  if (window.summarizedCount > 0) parts.push(`${window.summarizedCount} summarized`)
+  if (window.preview.length > 0) parts.push(window.preview)
+  return parts.join(" · ")
+}
+
+/** What the selected window opened with; the first window of a session has no summary. */
+export const detailFor = (window: Option.Option<ThreadWindow>): string =>
+  Option.match(window, {
+    onNone: () => "",
+    onSome: (value) =>
+      Option.match(value.summary, {
+        onNone: () => `${value.firstMessageId} … ${value.lastMessageId}`,
+        onSome: (summary) => firstLine(summary),
+      }),
+  })
+
+const emptyLabel = (loading: boolean): string => {
+  if (loading) return "loading…"
+  return "no windows"
+}
+
+export function ThreadPane(
+  props: OverlayProps & {
+    controller: ThreadController
+    onSelect: (window: ThreadWindow) => void
+  },
+) {
+  const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const [state, setState] = createSignal(FilterListState.initial())
+  let scrollRef: Option.Option<ScrollBoxRenderable> = Option.none()
+
+  const windows = () => props.controller.windows()
+  const isCurrent = (window: ThreadWindow): boolean =>
+    Option.match(props.controller.current(), {
+      onNone: () => false,
+      onSome: (active) =>
+        active.sessionId === window.sessionId && active.branchId === window.branchId,
+    })
+
+  // Open on the live window: the last one on the shell's own branch.
+  createEffect(
+    on([() => props.open, windows], ([open, rows]) => {
+      if (!open) return
+      let index = rows.length - 1
+      for (let cursor = rows.length - 1; cursor >= 0; cursor -= 1) {
+        const row = rows[cursor]
+        if (Predicate.isNotUndefined(row) && isCurrent(row)) {
+          index = cursor
+          break
+        }
+      }
+      setState(FilterListState.initial(Math.max(0, index)))
+    }),
+  )
+
+  useScrollSync(() => `thread-row-${state().selectedIndex}`, {
+    getRef: () => Option.getOrUndefined(scrollRef),
+  })
+
+  useScopedKeyboard(
+    (event) => {
+      if (event.name === "escape") {
+        props.onClose()
+        return true
+      }
+      const rows = windows()
+      if (event.name === "return") {
+        const selected = Option.fromNullishOr(rows[state().selectedIndex])
+        if (Option.isSome(selected)) props.onSelect(selected.value)
+        return true
+      }
+      if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
+        setState((current) =>
+          transitionFilterList(
+            current,
+            FilterListEvent.cases.MoveUp.make({ itemCount: rows.length }),
+          ),
+        )
+        return true
+      }
+      if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
+        setState((current) =>
+          transitionFilterList(
+            current,
+            FilterListEvent.cases.MoveDown.make({ itemCount: rows.length }),
+          ),
+        )
+        return true
+      }
+      return false
+    },
+    { when: () => props.open },
+  )
+
+  const panelWidth = () => Math.max(0, dimensions().width - 2)
+  const rowWidth = () => Math.max(0, panelWidth() - 5)
+  const sectionWidth = () => Math.max(0, panelWidth() - 4)
+  const BODY_ROWS = 10
+  const CHROME_ROWS = 5
+  const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
+
+  const items = () => threadItems(windows())
+  const selectedWindow = () => Option.fromNullishOr(windows()[state().selectedIndex])
+
+  const marker = (window: ThreadWindow): string => {
+    if (isCurrent(window) && window.index === windows().filter(isCurrent).length) return "› "
+    return "  "
+  }
+
+  const rowLine = (window: ThreadWindow): string => {
+    const age = formatAge(DateTime.toEpochMillis(DateTime.nowUnsafe()) - window.updatedAt)
+    const width = Math.max(0, rowWidth() - age.length - 2)
+    const left = `${marker(window)}  ${windowLabel(window)}`
+    return `${truncate(left, width).padEnd(width)}  ${age}`
+  }
+
+  const title = () =>
+    `Thread · ${plural(props.controller.sessions(), "session")} · ${plural(windows().length, "window")}`
+
+  return (
+    <Show when={props.open}>
+      <box
+        height={paneHeight()}
+        alignSelf="stretch"
+        marginLeft={1}
+        marginRight={1}
+        backgroundColor={theme.backgroundMenu}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
+        flexDirection="column"
+        title={title()}
+      >
+        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
+          <Show
+            when={windows().length > 0}
+            fallback={
+              <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
+            }
+          >
+            <For each={items()}>
+              {(item) => {
+                if (item.kind === "heading") {
+                  return (
+                    <box paddingLeft={1}>
+                      <text style={{ fg: theme.textMuted }}>
+                        {`${item.sessionName} (${plural(item.count, "window")})`}
+                      </text>
+                    </box>
+                  )
+                }
+                const selected = () => state().selectedIndex === item.index
+                const background = () => {
+                  if (selected()) return theme.primary
+                  return "transparent"
+                }
+                const color = () => {
+                  if (selected()) return theme.selectedListItemText
+                  if (isCurrent(item.window)) return theme.text
+                  return theme.textMuted
+                }
+                return (
+                  <box
+                    id={`thread-row-${item.index}`}
+                    backgroundColor={background()}
+                    paddingLeft={1}
+                  >
+                    <text style={{ fg: color() }}>{rowLine(item.window)}</text>
+                  </box>
+                )
+              }}
+            </For>
+          </Show>
+        </ChromePanel.Body>
+
+        <Show when={windows().length > 0}>
+          <ChromePanel.Section>
+            <text style={{ fg: theme.textMuted }}>
+              {truncate(detailFor(selectedWindow()), sectionWidth())}
+            </text>
+          </ChromePanel.Section>
+        </Show>
+
+        <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
+        <ChromePanel.Footer>{"↑↓ move   ↵ open session   esc close"}</ChromePanel.Footer>
+      </box>
+    </Show>
+  )
+}
+
+export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
+  setup: Effect.gen(function* () {
+    const transport = yield* ClientTransport
+    const shell = yield* ClientShell
+    const lifecycle = yield* ClientLifecycle
+
+    const controller = makeThreadController(
+      transport.listSessions.pipe(Effect.mapError((error) => ({ message: error.message }))),
+      (branchId) =>
+        transport
+          .listMessages(branchId)
+          .pipe(Effect.mapError((error) => ({ message: error.message }))),
+      shell.cast,
+      () =>
+        Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({
+          sessionId: active.sessionId,
+          branchId: active.branchId,
+        })),
+    )
+
+    // A handoff on the shell's branch opens a new window; re-read while showing.
+    lifecycle.addCleanup(
+      transport.onSessionEvent((envelope) => {
+        const event = envelope.event
+        if (event._tag !== "ModelContextProjected" || !event.compacted) return
+        if (controller.open()) controller.refresh()
+      }),
+    )
+
+    return clientContributions(
+      clientCommandContribution({
+        id: "thread.view",
+        title: "Thread",
+        description: "Show the sessions and context windows this session runs through",
+        category: "Session",
+        slash: "thread",
+        onSelect: () => {
+          controller.setOpen(true)
+          controller.refresh()
+        },
+      }),
+      widgetContribution({
+        id: "thread.pane",
+        slot: "below-input",
+        component: () => (
+          <ThreadPane
+            open={controller.open()}
+            controller={controller}
+            onClose={() => controller.setOpen(false)}
+            onSelect={(window) => {
+              controller.setOpen(false)
+              const active = controller.current()
+              if (Option.isSome(active) && active.value.sessionId === window.sessionId) return
+              shell.switchSession({
+                sessionId: window.sessionId,
+                branchId: window.branchId,
+                name: window.sessionName,
+              })
+            }}
+          />
+        ),
+      }),
+    )
+  }),
+})
