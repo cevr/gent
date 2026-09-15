@@ -86,6 +86,14 @@ Read-only agent run after 7746f9d0; E9 verified by hand against
 | E14 | `OutputBuffer.getFullText()` dead and self-documented as broken                                                               | confirmed (one hit: the definition)                              | landed `716bd7ae`                                            |
 | E15 | `dispatching-tool-storage.ts` is a 17-line alias with one consumer                                                            | Speculative; the consumer is the core-feature-independence guard | rejected, the guard needs it                                 |
 
+## storage — found while verifying T5 (2026-09-15)
+
+Four `BranchSummarized` rows from a removed feature made session
+`01a0836b` unloadable ("Failed to load session events" on every reconnect).
+Landed `4e8b2334`: `listEvents` skips rows whose tag left the `AgentEvent`
+union and logs `event.retired-tag-skipped`; a known tag with a bad payload
+still fails as corruption. Verified in pane `wZ:p18` on the same session.
+
 ## tui — markdown history (user request, 2026-09-15)
 
 `NativeTranscript` committed items with the synchronous
