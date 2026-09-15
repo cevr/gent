@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Console, Context, Effect, Layer } from "effect"
-import { MinimumLogLevel } from "effect/References"
-import { GentLoggerPretty } from "../src/logger"
+import { BunFileSystem } from "@effect/platform-bun"
+import { Effect, FileSystem, Layer, Random, Schema } from "effect"
+import { GentObservability } from "../src/logger"
 import { buildLogPaths, LOG_DIR } from "../src/log-paths"
 
 describe("buildLogPaths", () => {
@@ -24,28 +24,38 @@ describe("buildLogPaths", () => {
   )
 })
 
-describe("prettyLogger", () => {
-  it.effect("routes Effect.logInfo output through the injected Console.error", () =>
+const LogEntry = Schema.fromJsonString(
+  Schema.Struct({
+    ts: Schema.String,
+    level: Schema.String,
+    msg: Schema.String,
+    sessionId: Schema.String,
+  }),
+)
+const decodeLogEntry = Schema.decodeUnknownSync(LogEntry)
+
+describe("GentObservability", () => {
+  it.scopedLive("writes one JSON line per log entry to the cwd's server log", () =>
     Effect.gen(function* () {
-      const lines: string[] = []
-      const captureConsole = {
-        ...globalThis.console,
-        error: (...args: ReadonlyArray<unknown>) => {
-          lines.push(args.map(String).join(" "))
-        },
-      } satisfies Console.Console
-
-      const minLevel = Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, "Info")))
-
-      yield* Effect.logInfo("hello-from-test").pipe(
-        Effect.provideService(Console.Console, captureConsole),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(Layer.mergeAll(GentLoggerPretty, minLevel)),
+      const cwd = `/logger-test/${yield* Random.nextInt}`
+      const logPath = buildLogPaths(cwd).log
+      const fs = yield* FileSystem.FileSystem
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(GentObservability(cwd))
+          yield* Effect.logInfo("hello-from-test").pipe(
+            Effect.annotateLogs({ sessionId: "s-1" }),
+            Effect.provideContext(context),
+          )
+        }),
       )
-
+      const lines = (yield* fs.readFileString(logPath)).trim().split("\n")
+      yield* Effect.ignore(fs.remove(logPath))
       expect(lines.length).toBe(1)
-      expect(lines[0]).toContain("hello-from-test")
-      expect(lines[0]).toContain("INFO")
-    }),
+      const entry = decodeLogEntry(lines[0])
+      expect(entry.msg).toBe("hello-from-test")
+      expect(entry.level).toBe("Info")
+      expect(entry.sessionId).toBe("s-1")
+    }).pipe(Effect.provide(BunFileSystem.layer)),
   )
 })

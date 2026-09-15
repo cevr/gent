@@ -1,8 +1,7 @@
 /**
- * Custom Effect Logger — pretty (stderr) + JSON (file) modes.
+ * Custom Effect Logger — one JSON line per entry, appended to a file.
  *
- * Based on loggingsucks.com principles: structured key-value data,
- * pretty for dev, JSON for prod.
+ * Based on loggingsucks.com principles: structured key-value data.
  *
  * Uses Effect.annotateLogs for context (sessionId, branchId, agent, model).
  * Uses Effect.withLogSpan for timing data.
@@ -27,56 +26,6 @@ import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/
 // =============================================================================
 // Helpers
 // =============================================================================
-
-const formatTime = (date: Date): string => {
-  const h = date.getHours().toString().padStart(2, "0")
-  const m = date.getMinutes().toString().padStart(2, "0")
-  const s = date.getSeconds().toString().padStart(2, "0")
-  const ms = date.getMilliseconds().toString().padStart(3, "0")
-  return `${h}:${m}:${s}.${ms}`
-}
-
-const levelLabel = (level: LogLevel): string => {
-  switch (level) {
-    case "Trace":
-      return "TRACE"
-    case "Debug":
-      return "DEBUG"
-    case "Info":
-      return "INFO "
-    case "Warn":
-      return "WARN "
-    case "Error":
-      return "ERROR"
-    case "Fatal":
-      return "FATAL"
-    default:
-      return "     "
-  }
-}
-
-const levelColor = (level: LogLevel): string => {
-  switch (level) {
-    case "Trace":
-      return "\x1b[90m" // gray
-    case "Debug":
-      return "\x1b[34m" // blue
-    case "Info":
-      return "\x1b[32m" // green
-    case "Warn":
-      return "\x1b[33m" // yellow
-    case "Error":
-      return "\x1b[31m" // red
-    case "Fatal":
-      return "\x1b[41m\x1b[30m" // red bg, black text
-    default:
-      return ""
-  }
-}
-
-const RESET = "\x1b[0m"
-const DIM = "\x1b[90m"
-const BOLD = "\x1b[1m"
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Effect logger messages are an external logger boundary.
 const extractMessage = (message: unknown): string => {
@@ -108,57 +57,6 @@ const collectAnnotations = (annotations: LogAnnotations) =>
 
 const collectSpans = (spans: ReadonlyArray<[label: string, timestamp: number]>, now: number) =>
   Object.fromEntries(spans.map(([label, startTime]) => [label, now - startTime]))
-
-// =============================================================================
-// Pretty Logger (stderr)
-// =============================================================================
-
-const formatPretty: Logger.Logger<unknown, string> = Logger.make(
-  ({ logLevel, message, fiber, date, cause }) => {
-    const msg = extractMessage(message)
-    const annotations = fiber.getRef(CurrentLogAnnotations)
-    const spans = fiber.getRef(CurrentLogSpans)
-    const annots = collectAnnotations(annotations)
-    const entries = Object.entries(annots)
-    const color = levelColor(logLevel)
-    const label = levelLabel(logLevel)
-
-    let tracePrefix = ""
-    if (!Predicate.isUndefined(fiber.currentSpan)) {
-      tracePrefix = `${DIM}[${fiber.currentSpan.traceId.slice(0, 8)}]${RESET} `
-    }
-    let output = `${DIM}[${formatTime(date)}]${RESET} ${tracePrefix}${color}${label}${RESET}  ${BOLD}${msg}${RESET}`
-
-    if (cause.reasons.length > 0) {
-      output += `\n  ${"\x1b[31m"}${Cause.pretty(cause).split("\n")[0] ?? "unknown error"}${RESET}`
-    }
-
-    if (entries.length > 0) {
-      for (const [i, [key, value]] of entries.entries()) {
-        const isLast = i === entries.length - 1
-        let prefix = "\u251C\u2500"
-        if (isLast) prefix = "\u2514\u2500"
-        const formatted = encodeJson(value)
-        output += `\n  ${DIM}${prefix}${RESET} ${key}: ${formatted}`
-      }
-    }
-
-    const now = date.getTime()
-    const spanEntries = Object.entries(collectSpans(spans, now))
-    if (spanEntries.length > 0 && entries.length === 0) {
-      for (const [i, [key, ms]] of spanEntries.entries()) {
-        const isLast = i === spanEntries.length - 1
-        let prefix = "\u251C\u2500"
-        if (isLast) prefix = "\u2514\u2500"
-        output += `\n  ${DIM}${prefix}${RESET} ${key}: ${ms}ms`
-      }
-    }
-
-    return output
-  },
-)
-
-const prettyLogger: Logger.Logger<unknown, void> = Logger.withConsoleError(formatPretty)
 
 // =============================================================================
 // JSON File Logger
@@ -232,7 +130,7 @@ const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileS
 // =============================================================================
 
 /**
- * JSON (file) logger by default. Set GENT_LOG_FORMAT=pretty|both for stderr output.
+ * JSON file logger under the cwd's server log path.
  *
  * Cwd is threaded explicitly from the dependency graph so the server log
  * path matches the launcher's resolved cwd. Falling back to ambient env
@@ -241,40 +139,14 @@ const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileS
 const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
   Layer.unwrap(
     Effect.gen(function* () {
-      const defaultLogFile = buildLogPaths(cwd).log
-      const formatOpt = yield* Config.option(Config.string("GENT_LOG_FORMAT"))
-      const format = Option.getOrElse(formatOpt, () => "json")
-      const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
-      const logFile = Option.getOrElse(logFileOpt, () => defaultLogFile)
+      const logFile = buildLogPaths(cwd).log
       // Don't truncate when running as subprocess — parent is writing to same file
       const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
-
-      if (format === "pretty") {
-        return Logger.layer([prettyLogger])
-      }
-
-      if (format === "both") {
-        if (!isSubprocess) yield* clearLogFile(logFile)
-        const jsonLogger = yield* makeJsonFileLogger(logFile)
-        return Logger.layer([prettyLogger, jsonLogger])
-      }
-
-      // json (default)
       if (!isSubprocess) yield* clearLogFile(logFile)
       const jsonLogger = yield* makeJsonFileLogger(logFile)
       return Logger.layer([jsonLogger])
-    }).pipe(
-      Effect.catchEager(() =>
-        makeJsonFileLogger(buildLogPaths(cwd).log).pipe(
-          Effect.map((jsonLogger) => Logger.layer([jsonLogger])),
-          Effect.orElseSucceed(() => Logger.layer([prettyLogger])),
-        ),
-      ),
-    ),
+    }).pipe(Effect.orElseSucceed(() => Layer.empty)),
   )
-
-/** Pretty-only logger layer (for testing/debugging). */
-export const GentLoggerPretty: Layer.Layer<never> = Logger.layer([prettyLogger])
 
 /** Minimum log level — filters out Trace/Debug in non-dev. */
 const GentLogLevel: Layer.Layer<never> = Layer.unwrap(

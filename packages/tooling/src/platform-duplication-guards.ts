@@ -1,3 +1,5 @@
+import { Option } from "effect"
+
 export interface PlatformDuplicationFinding {
   readonly file: string
   readonly line: number
@@ -449,4 +451,3 @@ export const findPlatformDuplicationViolations = (
 
   return findings
 }
-import { Option } from "effect"
