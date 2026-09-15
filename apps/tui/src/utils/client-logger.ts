@@ -5,23 +5,22 @@
  *   All logs flow through the Effect logger layer and land in the same file.
  *
  * `shutdownLog` — synchronous file write, survives process.exit(). Use for
- *   shutdown paths only (after Effect runtime is torn down).
+ *   shutdown paths only (after Effect runtime is torn down). It appends to a
+ *   directory `clientTraceLogger` creates in scope at startup.
  */
 
 import { DateTime, Effect, Exit, Option, Schema } from "effect"
 import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
+import { appendFileSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
 
-import { LOG_DIR, buildLogPaths } from "@gent/sdk"
+import { buildLogPaths } from "@gent/sdk"
 
 // Client log path derives from `process.cwd()` — same source the launcher
 // threads into `GentObservability(cwd)` for the server. Both ends hash the same
 // cwd, so a single gent instance writes client + server logs under one
 // filename prefix.
 export const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
-
-Effect.runSync(Effect.ignore(Effect.try(() => mkdirSync(LOG_DIR, { recursive: true }))))
 
 // Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
 // cannot yield `Clock.currentTimeMillis` here. `Date.now()` is the standard

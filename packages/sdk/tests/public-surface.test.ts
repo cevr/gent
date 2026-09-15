@@ -16,6 +16,7 @@ describe("SDK public surface", () => {
       "SessionSnapshot",
       "buildLogPaths",
       "emptyQueueSnapshot",
+      "ensureLogDir",
       "extractImages",
       "extractReasoning",
       "extractText",

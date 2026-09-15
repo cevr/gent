@@ -40,7 +40,7 @@ export {
   validateServerLockEntry,
 } from "./server-lock.js"
 // The log paths a client shares with its server, and the JSON line format both write
-export { buildLogPaths, LOG_DIR } from "./log-paths.js"
+export { buildLogPaths, ensureLogDir, LOG_DIR } from "./log-paths.js"
 export { makeJsonFileLogger } from "./logger.js"
 
 // Part types (re-exported from @gent/core)

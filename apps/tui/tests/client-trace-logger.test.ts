@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { Effect, FileSystem, Logger, Option, Random, Schema } from "effect"
 import { MinimumLogLevel } from "effect/References"
-import { makeJsonFileLogger } from "@gent/sdk"
+import { LOG_DIR, makeJsonFileLogger } from "@gent/sdk"
 import { CLIENT_LOG_PATH } from "../src/utils/client-logger"
 import { clientTraceLogger } from "../src/utils/client-trace-logger"
 
@@ -45,6 +45,21 @@ const findLineByMarker = (path: string, marker: string) =>
   })
 
 describe("client trace logger", () => {
+  it.scopedLive("creates the log directory it writes into", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      // No module import creates this directory any more: the scoped logger
+      // makes it before opening the file. Removing it and building the logger
+      // is the whole protection.
+      yield* Effect.ignore(fs.remove(LOG_DIR, { recursive: true }))
+      expect(yield* fs.exists(LOG_DIR)).toBe(false)
+
+      yield* Effect.scoped(Effect.asVoid(clientTraceLogger))
+
+      expect(yield* fs.exists(LOG_DIR)).toBe(true)
+    }).pipe(Effect.provide(BunFileSystem.layer)),
+  )
+
   it.scopedLive("writes the SDK JSON line format at the client log path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
