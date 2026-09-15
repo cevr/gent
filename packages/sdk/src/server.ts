@@ -59,11 +59,8 @@ export type StateSpec = Schema.Schema.Type<typeof StateSpec>
 export const ProviderSpec = Schema.Union([
   Schema.TaggedStruct("live", {}),
   Schema.TaggedStruct("mock", {
-    delayMs: Schema.optional(Schema.Finite),
-    failing: Schema.optional(Schema.Boolean),
     /** Finish every step having produced nothing — drives the unanswered turn. */
     empty: Schema.optional(Schema.Boolean),
-    retries: Schema.optional(Schema.Boolean),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
@@ -89,7 +86,6 @@ export interface GentServerOptions {
   readonly branchTools?: BranchToolFeature<never>
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
-  readonly env?: Readonly<Record<string, string>>
   readonly authDirectory?: string
   /** Seed storage with a debug session on startup. */
   readonly debug?: boolean
@@ -174,12 +170,8 @@ export const state = {
 
 export const provider = {
   live: (): ProviderSpec => ProviderSpec.cases["live"].make({}),
-  mock: (options?: {
-    readonly delayMs?: number
-    readonly failing?: boolean
-    readonly empty?: boolean
-    readonly retries?: boolean
-  }): ProviderSpec => ProviderSpec.cases["mock"].make(options ?? {}),
+  mock: (options?: { readonly empty?: boolean }): ProviderSpec =>
+    ProviderSpec.cases["mock"].make(options ?? {}),
 }
 
 // ── Language model layer from spec ──
@@ -193,14 +185,8 @@ const resolveLanguageModelLayer = (
     Match.tagsExhaustive({
       live: () => Option.none(),
       mock: (mockSpec) => {
-        if (mockSpec.failing === true) return Option.some(LanguageModelLayers.failing)
         if (mockSpec.empty === true) return Option.some(LanguageModelLayers.empty)
-        return Option.some(
-          LanguageModelLayers.debug({
-            delayMs: mockSpec.delayMs,
-            retries: mockSpec.retries,
-          }),
-        )
+        return Option.some(LanguageModelLayers.debug())
       },
     }),
   )
@@ -219,17 +205,12 @@ const LocalPlatformLayer = Layer.merge(
 
 // ── Helpers ──
 
-const resolveHome = (
-  options: GentServerOptions,
-  stateSpec: StateSpec,
-  homeDirectory: string,
-): string =>
+const resolveHome = (stateSpec: StateSpec, homeDirectory: string): string =>
   Match.value(stateSpec).pipe(
     Match.tagsExhaustive({
       memory: () => Option.none<string>(),
       sqlite: (sqliteSpec) => Option.fromNullishOr(sqliteSpec.home),
     }),
-    Option.orElse(() => Option.fromNullishOr(options.env?.["HOME"])),
     Option.getOrElse(() => homeDirectory),
   )
 
@@ -321,7 +302,7 @@ const buildOwnedServer = (
       }
       const url = `http://127.0.0.1:${port}/rpc`
       const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
-      const home = resolveHome(options, stateSpec, homeDirectory)
+      const home = resolveHome(stateSpec, homeDirectory)
       const serverId = yield* Option.match(Option.fromNullishOr(options.serverId), {
         onNone: () => platform.randomId,
         onSome: Effect.succeed,
@@ -496,7 +477,7 @@ const resolveServerInternal = (
 
     // SQLite state: shared-server aware
     const platform = yield* GentPlatform
-    const home = resolveHome(options, stateSpec, yield* platform.homeDirectory)
+    const home = resolveHome(stateSpec, yield* platform.homeDirectory)
     const dbPath = resolveDbPath(home, stateSpec)
     const fingerprint = yield* (yield* BuildFingerprint).local
     const osInfo = yield* platform.osInfo
