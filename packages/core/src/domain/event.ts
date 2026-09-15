@@ -356,7 +356,34 @@ export const AgentRunSucceeded = AgentEvent.cases.AgentRunSucceeded
 export type AgentRunSucceeded = typeof AgentEvent.cases.AgentRunSucceeded.Type
 /** Bounded child reply carried on `AgentRunSucceeded.preview`. Every producer clips through here. */
 const agentRunPreviewChars = 200
-export const clipPreview = (text: string): string => clipChars(text, agentRunPreviewChars)
+const clipPreview = (text: string): string => clipChars(text, agentRunPreviewChars)
+/**
+ * The one receipt a finished child run publishes. Both producers — the
+ * in-process runner and child-completion delivery — build it here, so the
+ * preview clip and the usage shape cannot drift apart.
+ */
+export const childRunSucceeded = (params: {
+  readonly parentSessionId: SessionId
+  readonly childSessionId: SessionId
+  readonly agentName: AgentName
+  readonly toolCallId?: ToolCallId
+  readonly branchId?: BranchId
+  readonly usage?: { readonly input: number; readonly output: number; readonly cost?: number }
+  readonly text: string
+}) => {
+  const fields = {
+    parentSessionId: params.parentSessionId,
+    childSessionId: params.childSessionId,
+    agentName: params.agentName,
+    preview: clipPreview(params.text),
+  }
+  if (Predicate.isNotUndefined(params.toolCallId)) {
+    Object.assign(fields, { toolCallId: params.toolCallId })
+  }
+  if (Predicate.isNotUndefined(params.branchId)) Object.assign(fields, { branchId: params.branchId })
+  if (Predicate.isNotUndefined(params.usage)) Object.assign(fields, { usage: params.usage })
+  return AgentRunSucceeded.make(fields)
+}
 export const AgentRunFailed = AgentEvent.cases.AgentRunFailed
 export type AgentRunFailed = typeof AgentEvent.cases.AgentRunFailed.Type
 export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged

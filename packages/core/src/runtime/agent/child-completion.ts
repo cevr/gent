@@ -2,8 +2,7 @@ import { Cause, Context, Effect, Layer, Option, Predicate, Semaphore, Stream } f
 import { agentRunUsage, type AgentName } from "../../domain/agent.js"
 import {
   type AgentEvent,
-  AgentRunSucceeded,
-  clipPreview,
+  childRunSucceeded,
   EventStore,
   type TurnCompleted,
 } from "../../domain/event.js"
@@ -142,7 +141,7 @@ export class ChildCompletionDelivery extends Context.Service<
         })
         // The transcript event follows the durable message so a replayed client never sees it alone.
         yield* eventPublisher.publish(
-          AgentRunSucceeded.make({
+          childRunSucceeded({
             parentSessionId: parent.sessionId,
             childSessionId: child.sessionId,
             agentName: child.input.agentName,
@@ -151,7 +150,7 @@ export class ChildCompletionDelivery extends Context.Service<
             usage: Option.getOrUndefined(
               Option.map(Option.fromUndefinedOr(completion.usage), agentRunUsage),
             ),
-            preview: clipPreview(text),
+            text,
           }),
         )
       })

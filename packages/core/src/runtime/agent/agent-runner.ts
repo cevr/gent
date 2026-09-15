@@ -16,8 +16,7 @@ import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-bounda
 import {
   AgentRunFailed,
   AgentRunSpawned,
-  AgentRunSucceeded,
-  clipPreview,
+  childRunSucceeded,
   EventStore,
   type EventEnvelope,
   type TurnCompleted,
@@ -505,11 +504,7 @@ export const InProcessRunner: Layer.Layer<
           })
           if (!isPrivate) {
             yield* eventPublisher.publish(
-              AgentRunSucceeded.make({
-                ...receipt,
-                usage: success.usage,
-                preview: clipPreview(success.text),
-              }),
+              childRunSucceeded({ ...receipt, usage: success.usage, text: success.text }),
             )
           }
           yield* WideEvent.set({
