@@ -4,7 +4,7 @@ import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { EventId, EventStore, InteractionResolved } from "../domain/event.js"
-import { SessionId, type BranchId, type ExtensionId, type RequestId } from "../domain/ids.js"
+import { SessionId, type BranchId, type RequestId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
@@ -291,19 +291,6 @@ const rpc = <A, E, R>(
     Effect.tap((result) => WideEvent.set(fields(result))),
     withWideEvent(WideEventBoundary.rpc(method, { requestId })),
   )
-
-const extensionRequestError = (params: {
-  readonly extensionId: ExtensionId
-  readonly capabilityId: string
-  readonly phase?: "command" | "request"
-  readonly message: string
-}) =>
-  new ExtensionProtocolError({
-    extensionId: params.extensionId,
-    tag: params.capabilityId,
-    phase: params.phase ?? "request",
-    message: params.message,
-  })
 
 // ============================================================================
 // RPC Handlers Layer
@@ -647,12 +634,13 @@ const RpcHandlers = GentRpcs.toLayer(
               input,
             })
             .pipe(
-              Effect.mapError((error) =>
-                extensionRequestError({
-                  extensionId,
-                  capabilityId,
-                  message: error.message,
-                }),
+              Effect.mapError(
+                (error) =>
+                  new ExtensionProtocolError({
+                    extensionId,
+                    tag: capabilityId,
+                    message: error.message,
+                  }),
               ),
             )
         }).pipe(withWideEvent(WideEventBoundary.rpc("extension.request"))),
