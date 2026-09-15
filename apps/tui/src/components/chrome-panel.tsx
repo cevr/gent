@@ -1,6 +1,11 @@
 /**
  * ChromePanel — compound component for overlay panels with rounded chrome borders.
  *
+ * Two roots: `Root` floats at a position and size the caller gives it;
+ * `Dock` stretches under the composer and derives its height from the chrome
+ * rows mounted inside it. `useDockGeometry` gives a docked pane the column
+ * budgets its rows and sections may use.
+ *
  * Usage:
  *   <ChromePanel.Root title="Commands" width={50} height={14} left={10} top={5}>
  *     <ChromePanel.Body>
@@ -16,7 +21,8 @@
  * Footer is a flexShrink text row at the bottom.
  */
 
-import { Show, type JSX } from "solid-js"
+import { Option } from "effect"
+import { createContext, createSignal, onCleanup, Show, useContext, type JSX } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
@@ -70,6 +76,121 @@ function ChromePanelRoot(props: ChromePanelRootProps) {
   )
 }
 
+// ── Dock ──────────────────────────────────────────────────────────
+
+interface DockRegistry {
+  readonly claimRow: () => void
+}
+
+const DockContext = createContext<Option.Option<DockRegistry>>(Option.none())
+
+/**
+ * A chrome row inside a Dock counts itself toward the pane height for as long
+ * as it is mounted. Inside a floating `Root` there is no Dock and nothing to
+ * count.
+ */
+const claimDockRow = (): void => {
+  Option.match(useContext(DockContext), {
+    onNone: () => {},
+    onSome: (dock) => dock.claimRow(),
+  })
+}
+
+/** Rows of list body a Dock keeps above its chrome. */
+export const DOCK_BODY_ROWS = 10
+
+/** The Dock's top and bottom border. */
+const DOCK_BORDER_ROWS = 2
+
+export interface DockGeometry {
+  /** Terminal width minus the margin column each side. */
+  readonly panelWidth: () => number
+  /**
+   * Columns a row may actually use: the pane border takes 2, the list body
+   * pads 1 each side, and the row itself pads 1 more on the left. Budgeting
+   * less than that wraps the line and breaks the one-row-per-item alignment.
+   */
+  readonly rowWidth: () => number
+  /**
+   * A `Section` pads 1 each side inside the 2 border columns and, unlike a
+   * row, carries no extra left pad — one more column than {@link rowWidth}.
+   */
+  readonly sectionWidth: () => number
+}
+
+/**
+ * The columns a docked pane can budget. The pane stretches to the width of
+ * the container it is docked in and never sets one; truncation still needs a
+ * number, and the terminal width minus the surrounding margin is what that
+ * container actually gets.
+ */
+function useDockGeometry(): DockGeometry {
+  const dimensions = useTerminalDimensions()
+  const panelWidth = () => Math.max(0, dimensions().width - 2)
+  return {
+    panelWidth,
+    rowWidth: () => Math.max(0, panelWidth() - 5),
+    sectionWidth: () => Math.max(0, panelWidth() - 4),
+  }
+}
+
+export interface ChromePanelDockProps {
+  title: string
+  /** Rows of list body above the chrome. Defaults to {@link DOCK_BODY_ROWS}. */
+  bodyRows?: number
+  children: JSX.Element
+}
+
+/**
+ * A pane docked under the composer rather than floating. It stretches to the
+ * docked container's width instead of shrinking to the longest row: a pane
+ * that hugs its content reads as a floating box again.
+ *
+ * Its height is a fixed body plus the chrome rows actually mounted inside it
+ * (`Section`, `Footer`, `Error`, `Success`, and the `SelectList` query row),
+ * so a pane cannot budget one count while rendering another. The body is
+ * fixed rather than a fraction of the terminal: the pane shares the screen
+ * with the transcript, and a fraction of a short terminal collapses the list
+ * to a line or two. The body scrolls within this, which is what gives the
+ * pane its own scroll buffer.
+ */
+function ChromePanelDock(props: ChromePanelDockProps) {
+  const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const [chromeRows, setChromeRows] = createSignal(0)
+  const registry: DockRegistry = {
+    claimRow: () => {
+      setChromeRows((rows) => rows + 1)
+      onCleanup(() => setChromeRows((rows) => rows - 1))
+    },
+  }
+  const bodyRows = () =>
+    Option.getOrElse(Option.fromNullishOr(props.bodyRows), () => DOCK_BODY_ROWS)
+  const height = () => {
+    const chrome = DOCK_BORDER_ROWS + chromeRows()
+    return Math.max(chrome + 1, Math.min(bodyRows() + chrome, dimensions().height - 4))
+  }
+
+  return (
+    <DockContext.Provider value={Option.some(registry)}>
+      <box
+        height={height()}
+        alignSelf="stretch"
+        marginLeft={1}
+        marginRight={1}
+        backgroundColor={theme.backgroundMenu}
+        border
+        borderStyle="rounded"
+        borderColor={theme.borderSubtle}
+        flexDirection="column"
+        title={props.title}
+      >
+        {props.children}
+      </box>
+    </DockContext.Provider>
+  )
+}
+
 // ── Body ──────────────────────────────────────────────────────────
 
 export interface ChromePanelBodyProps {
@@ -102,6 +223,7 @@ export interface ChromePanelFooterProps {
 
 function ChromePanelFooter(props: ChromePanelFooterProps) {
   const { theme } = useTheme()
+  claimDockRow()
 
   return (
     <box flexShrink={0} paddingLeft={1}>
@@ -117,6 +239,7 @@ export interface ChromePanelSectionProps {
 }
 
 function ChromePanelSection(props: ChromePanelSectionProps) {
+  claimDockRow()
   return (
     <box paddingLeft={1} paddingRight={1} flexShrink={0}>
       {props.children}
@@ -133,11 +256,18 @@ export interface ChromePanelErrorProps {
 function ChromePanelError(props: ChromePanelErrorProps) {
   const { theme } = useTheme()
 
+  // The row only exists while an error shows, so it claims its Dock row from
+  // inside the branch and gives it back when the error clears.
   return (
     <Show when={props.error}>
-      <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-        <text style={{ fg: theme.error }}>{props.error}</text>
-      </box>
+      {(error) => {
+        claimDockRow()
+        return (
+          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+            <text style={{ fg: theme.error }}>{error()}</text>
+          </box>
+        )
+      }}
     </Show>
   )
 }
@@ -153,9 +283,14 @@ function ChromePanelSuccess(props: ChromePanelSuccessProps) {
 
   return (
     <Show when={props.message}>
-      <box paddingLeft={1} paddingRight={1} flexShrink={0}>
-        <text style={{ fg: theme.primary }}>✓ {props.message}</text>
-      </box>
+      {(message) => {
+        claimDockRow()
+        return (
+          <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+            <text style={{ fg: theme.primary }}>✓ {message()}</text>
+          </box>
+        )
+      }}
     </Show>
   )
 }
@@ -164,6 +299,8 @@ function ChromePanelSuccess(props: ChromePanelSuccessProps) {
 
 export const ChromePanel = {
   Root: ChromePanelRoot,
+  Dock: ChromePanelDock,
+  useDockGeometry,
   Body: ChromePanelBody,
   Section: ChromePanelSection,
   Footer: ChromePanelFooter,

@@ -1,7 +1,6 @@
 import { createSignal, Show } from "solid-js"
 import { Option } from "effect"
 import { ReasoningEffort, type Model } from "@gent/core/protocol"
-import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { truncate } from "../utils/truncate"
@@ -57,17 +56,11 @@ export interface SettingsPickerProps {
  */
 export function SettingsPicker(props: SettingsPickerProps) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
   const [query, setQuery] = createSignal("")
 
   const visible = () => filterRows(props.rows, query())
 
-  const panelWidth = () => Math.max(0, dimensions().width - 2)
-  // Border 2, body padding 2, row padding 1.
-  const rowWidth = () => Math.max(0, panelWidth() - 5)
-  const BODY_ROWS = 10
-  const CHROME_ROWS = 5
-  const paneHeight = () => Math.max(5, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
+  const { rowWidth } = ChromePanel.useDockGeometry()
 
   const rows = (): ReadonlyArray<SelectListRow<PickerRow>> =>
     visible().map((row) =>
@@ -106,18 +99,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
 
   return (
     <Show when={props.open}>
-      <box
-        height={paneHeight()}
-        alignSelf="stretch"
-        marginLeft={1}
-        marginRight={1}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={`${props.title} · ${visible().length}`}
-      >
+      <ChromePanel.Dock title={`${props.title} · ${visible().length}`}>
         <SelectList
           id="settings-picker"
           open={props.open}
@@ -130,7 +112,7 @@ export function SettingsPicker(props: SettingsPickerProps) {
         />
 
         <ChromePanel.Footer>type to filter · ↑↓ move · ↵ select · esc close</ChromePanel.Footer>
-      </box>
+      </ChromePanel.Dock>
     </Show>
   )
 }

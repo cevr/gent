@@ -26,7 +26,6 @@ import {
   selectable,
   type SelectListRow,
 } from "../../components/select-list"
-import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
 import { truncate } from "../../utils/truncate"
 import {
@@ -370,7 +369,6 @@ export function ThreadPane(
   },
 ) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
   const [cursor, setCursor] = createSignal(Option.none<ThreadWindow>())
 
   const windows = () => props.controller.windows()
@@ -381,12 +379,7 @@ export function ThreadPane(
         active.sessionId === window.sessionId && active.branchId === window.branchId,
     })
 
-  const panelWidth = () => Math.max(0, dimensions().width - 2)
-  const rowWidth = () => Math.max(0, panelWidth() - 5)
-  const sectionWidth = () => Math.max(0, panelWidth() - 4)
-  const BODY_ROWS = 10
-  const CHROME_ROWS = 5
-  const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
+  const { rowWidth, sectionWidth } = ChromePanel.useDockGeometry()
 
   const marker = (window: ThreadWindow): string => {
     if (isCurrent(window) && window.index === windows().filter(isCurrent).length) return "› "
@@ -441,18 +434,7 @@ export function ThreadPane(
 
   return (
     <Show when={props.open}>
-      <box
-        height={paneHeight()}
-        alignSelf="stretch"
-        marginLeft={1}
-        marginRight={1}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={title()}
-      >
+      <ChromePanel.Dock title={title()}>
         <SelectList
           id="thread"
           open={props.open}
@@ -478,7 +460,7 @@ export function ThreadPane(
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
         <ChromePanel.Footer>{"↑↓ move   ↵ open session   esc close"}</ChromePanel.Footer>
-      </box>
+      </ChromePanel.Dock>
     </Show>
   )
 }

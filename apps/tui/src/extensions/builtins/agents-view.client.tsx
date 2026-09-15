@@ -404,7 +404,6 @@ export function AgentsPane(
   },
 ) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())
 
@@ -427,33 +426,9 @@ export function AgentsPane(
     return true
   })
 
-  // Docked under the composer rather than floating. The pane fills the width of
-  // the container it is docked in, so it never sets one; the truncation budget
-  // still needs a number, and the terminal width minus the surrounding margin
-  // is what that container actually gets.
-  const panelWidth = () => Math.max(0, dimensions().width - 2)
-  /**
-   * Columns a row may actually use: the pane border takes 2, the list body
-   * pads 1 each side, and the row itself pads 1 more on the left. Budgeting
-   * less than that wraps the line and breaks the one-row-per-agent alignment.
-   */
-  const rowWidth = () => Math.max(0, panelWidth() - 5)
-  /**
-   * A `ChromePanel.Section` pads 1 each side inside the 2 border columns, and
-   * unlike a row it carries no extra left pad — so it gets one more column
-   * than {@link rowWidth}. Reusing the row budget here truncates a column early.
-   */
-  const sectionWidth = () => Math.max(0, panelWidth() - 4)
-  /**
-   * Rows of list body, on top of the pane's own chrome (border, query, detail,
-   * footer). Fixed rather than a fraction of the terminal: the pane shares the
-   * screen with the transcript, and a fraction of a short terminal collapses
-   * the list to a line or two. The body scrolls within this, which is what
-   * gives the pane its own scroll buffer.
-   */
-  const BODY_ROWS = 10
-  const CHROME_ROWS = 6
-  const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
+  // Docked under the composer rather than floating: the Dock owns the box,
+  // the height, and the column budgets.
+  const { rowWidth, sectionWidth } = ChromePanel.useDockGeometry()
 
   const tick = useSpinnerClock()
   // The running pulse animates; idle and inactive share a dot and differ by colour.
@@ -543,21 +518,7 @@ export function AgentsPane(
 
   return (
     <Show when={props.open}>
-      <box
-        height={paneHeight()}
-        // Stretch to the docked container's width instead of shrinking to the
-        // longest row: this is a pane, and a pane that hugs its content reads
-        // as a floating box again.
-        alignSelf="stretch"
-        marginLeft={1}
-        marginRight={1}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
-        title={`Agents · ${countsLabel(visible())}`}
-      >
+      <ChromePanel.Dock title={`Agents · ${countsLabel(visible())}`}>
         <SelectList
           id="agents"
           open={props.open}
@@ -595,7 +556,7 @@ export function AgentsPane(
         <ChromePanel.Footer>
           {"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
         </ChromePanel.Footer>
-      </box>
+      </ChromePanel.Dock>
     </Show>
   )
 }
