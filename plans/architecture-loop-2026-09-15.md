@@ -223,6 +223,19 @@ src 16,029 LOC, 98 files. cell, providers, acp-agents, fs/exec/network/session/i
 | E17 | goal-store.ts and wake/index.ts hand-roll staging + `Files.rename`; `Files.write(..., { atomic: true })` already does it scoped; the copies leak `.tmp` on failure; `rename` has no other consumer | Strong; use the flag, drop `rename` from the facet; then share the branch-state store | done `0c03fb9d` (atomic flag, `rename` dropped, shared store; `.tmp` leak probe) |
 | E18 | six `new CapabilityError({ extensionId, capabilityId })` sites re-state ids `request(...)`/`defineRequests` already hold                                                                           | Worth exploring; `request` wraps the error channel (core edit)                        | done `f2a86f12` (`request` wraps handler errors; one new suppression)            |
 
+## extensions — pass 4 (2026-09-15, after `643b68c2`)
+
+src read in full; E16-E18 closed. Below the bar (not proposed): `read-session.ts` `Option.fromNullishOr` on a non-nullable, goal snapshot ↔ Option triple conversion, openai pending-callback raw Map, test-only layer seams (`FallbackFileIndexLive`, `AnthropicBetaCache.layer`, `layerFromIO`), `openCellProcess` binary/worker split.
+
+| #   | Finding                                                                                                                                                                                                           | Verdict                                  | Status                       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------- |
+| E19 | agents-view wire row declares `model`/`turns`/`costUsd`/`durationMs`; producer always writes `Option.none()`, TUI never reads them, `filterRows` matches an always-empty `model`                                  | Strong                                   | in flight (rift `ext-pass4`) |
+| E20 | wake, btw, background-bash resources do `Scope.make()`+finalizer+`forkIn` inside `Layer.effect`; `yield* Effect.scope` is the pattern used by cell-execution and core                                             | Worth exploring                          | in flight (rift `ext-pass4`) |
+| E21 | background bash keys jobs on `ToolCallId.make("unknown")` when `ctx.toolCallId` is absent; delegate fails closed with `AgentRunError` for the same case                                                           | Worth exploring; fail closed in bash too | in flight (rift `ext-pass4`) |
+| E22 | `listClaudeCodeKeychainServices` + `ClaudeAccount` exported for a picker that does not exist; zero consumers in packages/, apps/, tests                                                                           | Strong                                   | in flight (rift `ext-pass4`) |
+| E23 | keychain-transform and codex-transform duplicate `withHeaders`, `Unauthorized401Error`, auth-error→`TransportError` mapping, and the 401 retry block; lift to `provider-http.ts` beside `provider-credentials.ts` | Worth exploring                          | in flight (rift `ext-pass4`) |
+| E24 | `anthropic/oauth.ts` re-export barrel; `anthropic-headers.ts` identity `getModelBetas` and `LONG_CONTEXT_BETAS` alias over `model-config.ts`; same function tested via two paths                                  | Worth exploring                          | in flight (rift `ext-pass4`) |
+
 ## core — pass 4 (2026-09-15, after `c6d81c3d`)
 
 src 28,134 LOC. behavior, actor, session-runtime, rpc-handlers, session-mutations-live, sqlite rows, capability factories, api.ts, event/schema tables checked; nothing else above Speculative.
