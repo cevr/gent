@@ -31,6 +31,8 @@ export const formatError = (error: UiError): string => {
       return `Not found: ${error.message}`
     case "InvalidStateError":
       return `Invalid: ${error.message}`
+    case "SessionDepthLimitError":
+      return `Depth: ${error.message}`
     case "ProviderAuthError":
       return `Auth: ${error.message}`
     case "DriverError":

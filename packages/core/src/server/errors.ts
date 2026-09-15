@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { SessionDepthLimitError } from "../domain/agent.js"
 import { InvalidStateError, NotFoundError } from "../domain/business-errors.js"
 import { EventStoreError } from "../domain/event.js"
 import { ExtensionId } from "../domain/ids.js"
@@ -38,6 +39,7 @@ export const GentRpcError = Schema.Union([
   InteractionRequestMismatchError,
   NotFoundError,
   InvalidStateError,
+  SessionDepthLimitError,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 
 export type GentRpcError = typeof GentRpcError.Type

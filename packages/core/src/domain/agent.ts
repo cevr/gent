@@ -218,11 +218,25 @@ export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input
 // Agent run depth
 
 /**
- * Maximum session nesting depth for agent-run spawns. Derived from the persisted
- * parent chain (includes both subagent spawns and handoff sessions). Root depth
- * is 0. A session at depth 3 cannot create another child.
+ * Maximum session nesting depth. Derived from the persisted parent chain; root
+ * depth is 0, and a parent at depth 3 cannot get another child. Enforced in one
+ * place, `admitChildSessionDepth` (`runtime/session-depth.ts`), which both
+ * child writers call: `admitChildSession` (delegate/btw/read-session spawns)
+ * and `SessionMutations.createSession` (`session.create` with a
+ * `parentSessionId`, the compaction handoff).
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
+
+/** A parent at the nesting cap asked for one more child. */
+export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(
+  "SessionDepthLimitError",
+  {
+    message: Schema.String,
+    parentSessionId: SessionId,
+    depth: Schema.Int,
+    max: Schema.Int,
+  },
+) {}
 /** Maximum unfinished durable start receipts owned by one parent branch. */
 export const DEFAULT_MAX_PENDING_AGENT_STARTS = 4
 /** Durable native-model resolution attempts per admitted child session. */

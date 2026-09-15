@@ -27,7 +27,6 @@ import {
   AgentRunError,
   AgentRunnerService,
   AgentRunResult,
-  DEFAULT_MAX_AGENT_RUN_DEPTH,
   DEFAULT_MAX_PENDING_AGENT_STARTS,
   agentRunUsage,
   makeRunSpec,
@@ -54,8 +53,9 @@ import {
 } from "../../storage/session-operation-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
-import { RelationshipStorage } from "../../storage/relationship-storage.js"
+import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+import { admitChildSessionDepth } from "../session-depth.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ChildCompletionDelivery } from "./child-completion.js"
 
@@ -74,33 +74,6 @@ const canonicalStartInput = (input: typeof StoredAgentStartInput.Type) =>
     Effect.map(canonicalJsonString),
     Effect.mapError((cause) => new AgentRunError({ message: "Invalid agent-start input", cause })),
   )
-
-/** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
-export const getSessionDepth = Effect.fn("AgentRunner.getSessionDepth")(function* (
-  sessionId: SessionId,
-) {
-  const relationshipStorage = yield* RelationshipStorage
-  const ancestors = yield* relationshipStorage.getSessionAncestors(sessionId).pipe(
-    // Fail closed: if we can't read ancestry, refuse to spawn rather than allow unbounded recursion
-    Effect.mapError(
-      () =>
-        new AgentRunError({
-          message: `Cannot determine session depth for "${sessionId}" — refusing to start agent run.`,
-        }),
-    ),
-  )
-  const root = ancestors.at(-1)
-  if (
-    ancestors[0]?.id !== sessionId ||
-    Predicate.isUndefined(root) ||
-    Predicate.isNotUndefined(root.parentSessionId)
-  ) {
-    return yield* new AgentRunError({
-      message: `Cannot determine session depth for "${sessionId}" — ancestry is missing or incomplete.`,
-    })
-  }
-  return ancestors.length - 1
-})
 
 interface ChildAdmission {
   agent: { name: AgentName }
@@ -136,12 +109,7 @@ export const admitChildSession = Effect.fn("AgentRunner.admitChildSession")(func
       message: "Child admission must commit outside a caller transaction",
     })
   }
-  const parentDepth = yield* getSessionDepth(params.parentSessionId)
-  if (parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH) {
-    return yield* new AgentRunError({
-      message: `Agent run depth limit reached (max ${DEFAULT_MAX_AGENT_RUN_DEPTH}). Cannot spawn "${params.agent.name}" — parent session is already at depth ${parentDepth}.`,
-    })
-  }
+  yield* admitChildSessionDepth(params.parentSessionId)
 
   const sessionId = SessionId.make(yield* platform.randomId)
   const branchId = BranchId.make(yield* platform.randomId)

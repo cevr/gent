@@ -26,6 +26,7 @@ import { SessionMutations, type SessionMutationsService } from "../domain/sessio
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
+import { admitChildSessionDepth } from "../runtime/session-depth.js"
 import {
   SessionRuntime,
   type SendUserMessagePayload,
@@ -297,6 +298,9 @@ const makeSessionMutationsService: Effect.Effect<
               message: `Parent session not found: ${input.parentSessionId}`,
             })
           }
+          yield* admitChildSessionDepth(input.parentSessionId).pipe(
+            Effect.provideService(RelationshipStorage, relationshipStorage),
+          )
         }
         if (
           !Predicate.isUndefined(input.parentBranchId) &&

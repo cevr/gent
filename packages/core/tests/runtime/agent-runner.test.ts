@@ -21,11 +21,8 @@ import { ModelResolver } from "../../src/providers/model-resolver"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import {
-  InProcessRunner,
-  admitChildSession,
-  getSessionDepth,
-} from "../../src/runtime/agent/agent-runner"
+import { InProcessRunner, admitChildSession } from "../../src/runtime/agent/agent-runner"
+import { getSessionDepth } from "../../src/runtime/session-depth"
 import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { messageSingleText } from "../../src/domain/message-part-display"
@@ -1799,9 +1796,9 @@ describe("session depth guard", () => {
     ),
   )
   it.live("missing ancestry cannot grant root-level child admission", () =>
-    run(
+    runAdmission(
       Effect.gen(function* () {
-        const error = yield* getSessionDepth(SessionId.make("nonexistent")).pipe(Effect.flip)
+        const error = yield* admitUnder("nonexistent").pipe(Effect.flip)
         expect(error._tag).toBe("AgentRunError")
         expect(error.message).toContain("ancestry is missing or incomplete")
       }),

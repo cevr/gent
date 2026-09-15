@@ -1,4 +1,5 @@
 import { Context, type Effect } from "effect"
+import type { SessionDepthLimitError } from "./agent.js"
 import type { EventStoreError } from "./event.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
@@ -13,7 +14,12 @@ import type {
   UpdateSessionSettingsInput,
 } from "../server/transport-contract.js"
 
-type SessionMutationError = StorageError | EventStoreError | InvalidStateError | NotFoundError
+type SessionMutationError =
+  | StorageError
+  | EventStoreError
+  | InvalidStateError
+  | NotFoundError
+  | SessionDepthLimitError
 
 export interface SessionMutationsService {
   readonly createSession: (

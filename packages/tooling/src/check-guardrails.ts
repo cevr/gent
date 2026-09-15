@@ -5,6 +5,7 @@ import { findCoreFeatureIndependenceFindings } from "./core-feature-independence
 import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
+import { findUnadmittedChildSessionWriters } from "./core-child-session-depth"
 import {
   collectExportFacts,
   findPackageSurfaceFindings,
@@ -90,6 +91,7 @@ const program = Effect.gen(function* () {
         ...findCoreVendorModelPins(file, text),
         ...findAliasTestLayers(file, text),
         ...findE2eFixtureImportFindings(file, text),
+        ...findUnadmittedChildSessionWriters(file, text),
       ]) {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }
