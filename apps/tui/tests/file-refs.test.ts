@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { parseFileRefs, expandFileRefs, fileUrl, isAbsPath } from "../src/utils/file-refs"
 import { Effect, FileSystem } from "effect"
-import { BunFileSystem } from "@effect/platform-bun"
+import { BunServices } from "@effect/platform-bun"
 
 describe("parseFileRefs", () => {
   test("parses simple file reference", () => {
@@ -106,7 +106,7 @@ describe("isAbsPath", () => {
 })
 
 describe("expandFileRefs", () => {
-  const fileRefsTest = it.scopedLive.layer(BunFileSystem.layer)
+  const fileRefsTest = it.scopedLive.layer(BunServices.layer)
   const makeFixture = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const testDir = yield* fs.makeTempDirectoryScoped()

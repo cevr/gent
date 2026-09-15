@@ -8,17 +8,16 @@
  */
 
 import { runProcess } from "@gent/core-internal/runtime/run-process"
-import { DateTime, Effect, FileSystem, Option, Schema } from "effect"
+import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"
-import { joinPath } from "../platform/path-runtime"
 
 const MAX_LINES = 2000
 const MAX_BYTES = 50 * 1024 // 50KB
 
 /** Spill files live beside the rest of the gent data, not in a temp directory. */
 export const shellOutputDirectory = (home: string = homedir()): string =>
-  joinPath(home, ".gent", "shell-output")
+  `${home}/.gent/shell-output`
 
 export class ShellCommandError extends Schema.TaggedError<ShellCommandError>(
   "@gent/tui/src/utils/shell/ShellCommandError",
@@ -69,14 +68,15 @@ export const executeShell = (command: string, cwd: string) =>
 const saveFullOutput = (
   command: string,
   output: string,
-): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
+): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     const directory = shellOutputDirectory()
     yield* fs.makeDirectory(directory, { recursive: true })
     const now = yield* DateTime.nowAsDate
     const stamp = now.toISOString().replaceAll(":", "-").replaceAll(".", "-")
-    const filePath = joinPath(directory, `shell_${stamp}.txt`)
+    const filePath = path.join(directory, `shell_${stamp}.txt`)
     const header = `# Command: ${command}\n# Timestamp: ${now.toISOString()}\n\n`
     yield* fs.writeFileString(filePath, header + output)
     return Option.some(filePath)

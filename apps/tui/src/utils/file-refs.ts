@@ -3,8 +3,7 @@
  * Supports @path/to/file.ts#10-20 syntax.
  */
 
-import { FileSystem, Effect, Option } from "effect"
-import { relativePath, resolvePath } from "../platform/path-runtime"
+import { FileSystem, Effect, Option, Path } from "effect"
 
 export interface FileRef {
   path: string
@@ -75,12 +74,13 @@ const readFileContent = (
   })
 
 const expandSingleRef = (ref: FileRef, cwd: string) => {
-  const absolutePath = resolvePath(cwd, ref.path)
-  const relativePathValue = relativePath(cwd, absolutePath)
   const startLine = Option.fromNullishOr(ref.startLine)
   const endLine = Option.fromNullishOr(ref.endLine)
 
   return Effect.gen(function* () {
+    const path = yield* Path.Path
+    const absolutePath = path.resolve(cwd, ref.path)
+    const relativePathValue = path.relative(cwd, absolutePath)
     const content = yield* readFileContent(absolutePath, startLine, endLine)
 
     // Build the original match string

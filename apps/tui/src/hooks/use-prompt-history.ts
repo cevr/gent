@@ -3,25 +3,49 @@
  *
  * Plain text entries, persisted to ~/.cache/gent/prompt-history.json.
  * Max 100 entries. Deduplicates against the last entry on add.
+ *
+ * File access runs on the client runtime, which already carries
+ * `FileSystem` and `Path`. The cache paths come from the workspace home the
+ * shell mounted with, computed inside the hook rather than at module load.
  */
 
 import { createSignal } from "solid-js"
-import { Option, Schema } from "effect"
-import { homedir } from "os"
-import {
-  makeDirectory,
-  readFileStringOption,
-  writeFileString,
-} from "../platform/fs-runtime-boundary"
-import { joinPath } from "../platform/path-runtime"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { useWorkspace } from "../workspace/context"
+import { useRuntime } from "./use-runtime"
 
 const MAX_ENTRIES = 100
-const CACHE_DIR = joinPath(homedir(), ".cache", "gent")
-const HISTORY_PATH = joinPath(CACHE_DIR, "prompt-history.json")
 
 const HistoryStore = Schema.Struct({ entries: Schema.Array(Schema.String) })
 const decodeHistoryStore = Schema.decodeUnknownOption(Schema.fromJsonString(HistoryStore))
 const encodeHistoryStore = Schema.encodeSync(Schema.fromJsonString(HistoryStore))
+
+const historyPaths = (home: string) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const directory = path.join(home, ".cache", "gent")
+    return { directory, file: path.join(directory, "prompt-history.json") }
+  })
+
+/** Absent for no file, unreadable content, or bad JSON — history starts fresh. */
+export const readEntries = (home: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const paths = yield* historyPaths(home)
+    const exists = yield* fs.exists(paths.file)
+    if (!exists) return Option.none<ReadonlyArray<string>>()
+    const text = yield* fs.readFileString(paths.file)
+    if (text.length === 0) return Option.none<ReadonlyArray<string>>()
+    return Option.map(decodeHistoryStore(text), (store) => store.entries)
+  }).pipe(Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()))
+
+export const writeEntries = (home: string, items: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const paths = yield* historyPaths(home)
+    yield* fs.makeDirectory(paths.directory, { recursive: true })
+    yield* fs.writeFileString(paths.file, encodeHistoryStore(HistoryStore.make({ entries: items })))
+  }).pipe(Effect.ignoreCause)
 
 function canNavigateAtCursor(
   direction: "up" | "down",
@@ -86,26 +110,26 @@ const getStore = (): PromptHistoryStore => {
 
 export function usePromptHistory(): PromptHistory {
   const store = getStore()
+  const workspace = useWorkspace()
+  const { cast } = useRuntime()
 
   const ensureLoaded = () => {
     if (store.loaded) return
     store.loaded = true
-    void readFileStringOption(HISTORY_PATH)
-      .then((text) => {
-        if (Option.isNone(text) || text.value.length === 0) return
-        const data = decodeHistoryStore(text.value)
-        if (Option.isSome(data)) store.setEntries([...data.value.entries.slice(0, MAX_ENTRIES)])
-      })
-      .catch(() => {
-        // No file or bad JSON — start fresh
-      })
+    cast(
+      readEntries(workspace.home).pipe(
+        Effect.tap((loaded) =>
+          Effect.sync(() => {
+            if (Option.isNone(loaded)) return
+            store.setEntries([...loaded.value.slice(0, MAX_ENTRIES)])
+          }),
+        ),
+      ),
+    )
   }
 
   const persist = (items: string[]) => {
-    const data = HistoryStore.make({ entries: items })
-    void makeDirectory(CACHE_DIR, { recursive: true })
-      .then(() => writeFileString(HISTORY_PATH, encodeHistoryStore(data)))
-      .catch(() => {})
+    cast(writeEntries(workspace.home, items))
   }
 
   ensureLoaded()
