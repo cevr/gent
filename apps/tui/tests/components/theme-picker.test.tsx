@@ -69,19 +69,17 @@ const THEME_KEYS: ReadonlyArray<keyof Theme> = [
 describe("bundled theme catalog", () => {
   it.live("every bundled theme resolves both variants with no missing color", () =>
     Effect.sync(() => {
-      const names = Object.keys(DEFAULT_THEMES)
-      expect(names.length).toBe(7)
-      for (const name of names) {
-        for (const mode of ["dark", "light"] as const) {
-          const resolved = resolveTheme(
-            DEFAULT_THEMES[name as keyof typeof DEFAULT_THEMES],
-            mode,
-          )
+      const entries = Object.entries(DEFAULT_THEMES)
+      expect(entries.length).toBe(7)
+      const modes: ReadonlyArray<"dark" | "light"> = ["dark", "light"]
+      for (const [, json] of entries) {
+        for (const mode of modes) {
+          const resolved = resolveTheme(json, mode)
           // Six of the seven omit `selectedListItemText` and `backgroundMenu`;
           // `resolveTheme` supplies both, so the catalog is uniform downstream.
           expect(Object.keys(resolved).sort()).toEqual([...THEME_KEYS].sort())
           for (const key of THEME_KEYS) {
-            expect(typeof resolved[key].r).toBe("number")
+            expect(Number.isFinite(resolved[key].r)).toBe(true)
           }
         }
       }

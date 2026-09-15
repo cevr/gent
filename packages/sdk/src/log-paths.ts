@@ -54,7 +54,10 @@ interface LogPaths {
 }
 
 /** The suffix each side writes. Owned here so readers never restate the rule. */
-const LOG_SUFFIX = { server: "-server.log", client: "-client.log" } as const
+const LOG_SUFFIX = { server: "-server.log", client: "-client.log" } satisfies Record<
+  "server" | "client",
+  string
+>
 
 /** Which side wrote a log file, by name; `None` for anything else in the directory. */
 export const classifyLogFile = (name: string): Option.Option<"server" | "client"> => {

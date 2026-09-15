@@ -38,7 +38,7 @@ import {
   widgetContribution,
   type OverlayProps,
 } from "../client-facets"
-import { ClientLifecycle, ClientShell } from "../client-services"
+import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-services"
 import { ClientTransport, type ExtensionAgentDetail } from "../client-transport"
 
 export const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
@@ -83,28 +83,17 @@ export const makeAgentsController = (
   cast: (effect: Effect.Effect<void>) => void,
   current: () => Option.Option<{ sessionId: string; branchId: string }>,
 ): AgentsController => {
-  const [rows, setRows] = createSignal<ReadonlyArray<AgentRowEntry>>([])
-  const [error, setError] = createSignal<Option.Option<string>>(Option.none())
-  const [loading, setLoading] = createSignal(false)
-
-  const refresh = (query: string) => {
-    setLoading(true)
-    cast(
-      fetchRows(query).pipe(
-        Effect.match({
-          onFailure: (failure) => {
-            setError(Option.some(failure.message))
-            setLoading(false)
-          },
-          onSuccess: (next) => {
-            setRows(next)
-            setError(Option.none())
-            setLoading(false)
-          },
-        }),
-      ),
-    )
-  }
+  // The pane refetches across session switches — on `current()` changing and on
+  // a 2 s poll — so the keyed query owns the guard that drops a reply for the
+  // session the shell already left.
+  const empty: ReadonlyArray<AgentRowEntry> = []
+  const listing = makeClientSessionQuery({
+    initial: empty,
+    current,
+    cast,
+    fetch: (query: string) => fetchRows(query),
+  })
+  const { value: rows, error, loading, refresh } = listing
 
   const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
   // Arrow keys move faster than a round trip, so replies can land out of order.

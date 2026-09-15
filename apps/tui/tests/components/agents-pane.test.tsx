@@ -298,7 +298,9 @@ describe("Agents pane reopen", () => {
           (effect) => {
             runFork(effect)
           },
-          () => Option.none(),
+          // The shell is on this loop. The listing is keyed on it, so a reply
+          // is kept only while it is still the current session.
+          () => Option.some({ sessionId: live.sessionId, branchId: live.branchId }),
         ),
       )
 

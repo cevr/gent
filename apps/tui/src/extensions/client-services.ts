@@ -111,6 +111,71 @@ export interface ClientSessionResource<A> {
   readonly refetch: () => void
 }
 
+/**
+ * A keyed query the caller refreshes itself, with the load state a docked pane
+ * draws.
+ *
+ * {@link makeClientSessionResource} fetches on its own whenever the session
+ * changes; a pane instead refreshes on its own schedule — a typed query, a
+ * poll, an event — and needs to say whether it is loading and what failed. The
+ * one rule both share is the key guard: the session the fetch was made for is
+ * re-read when the reply lands, and a reply for any other key is dropped, so a
+ * switch mid-flight can never write the previous session's rows.
+ */
+export interface ClientSessionQuery<A, Q> {
+  readonly value: () => A
+  readonly error: () => Option.Option<string>
+  readonly loading: () => boolean
+  readonly refresh: (query: Q) => void
+}
+
+/** The key a query is made for; callers keep their own branded id types. */
+type SessionKey = { readonly sessionId: string; readonly branchId: string }
+
+export const makeClientSessionQuery = <A, Q, K extends SessionKey>(opts: {
+  readonly initial: A
+  readonly current: () => Option.Option<K>
+  readonly cast: (effect: Effect.Effect<void>) => void
+  readonly fetch: (query: Q, session: K) => Effect.Effect<A, { readonly message: string }>
+}): ClientSessionQuery<A, Q> => {
+  const [value, setValue] = createSignal<A>(opts.initial)
+  const [error, setError] = createSignal<Option.Option<string>>(Option.none())
+  const [loading, setLoading] = createSignal(false)
+
+  const refresh = (query: Q): void => {
+    const captured = opts.current()
+    if (Option.isNone(captured)) return
+    setLoading(true)
+    opts.cast(
+      opts.fetch(query, captured.value).pipe(
+        Effect.match({
+          onFailure: (failure) => {
+            if (!isCurrent(captured.value)) return
+            setError(Option.some(failure.message))
+            setLoading(false)
+          },
+          onSuccess: (next) => {
+            // The shell may have moved while this was out; that reply belongs
+            // to a session nobody is looking at any more.
+            if (!isCurrent(captured.value)) return
+            setValue(() => next)
+            setError(Option.none())
+            setLoading(false)
+          },
+        }),
+      ),
+    )
+  }
+
+  const isCurrent = (captured: K): boolean =>
+    Option.match(opts.current(), {
+      onNone: () => false,
+      onSome: (now) => now.sessionId === captured.sessionId && now.branchId === captured.branchId,
+    })
+
+  return { value, error, loading, refresh }
+}
+
 export const makeClientSessionResource = <A>(opts: {
   readonly transport: ClientTransportDefinition
   readonly lifecycle: ClientLifecycleDefinition

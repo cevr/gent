@@ -35,7 +35,7 @@ import {
   widgetContribution,
   type OverlayProps,
 } from "../client-facets"
-import { ClientLifecycle, ClientShell } from "../client-services"
+import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-services"
 import { ClientTransport } from "../client-transport"
 
 export const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
@@ -231,6 +231,12 @@ export const windowsOf = (
  * Windows plus the load state, held in the setup closure so they survive the
  * pane closing. See `agents-view.client.tsx` for the same split.
  */
+/** What one load produces: the chain length and the windows across it. */
+interface Loaded {
+  readonly sessions: number
+  readonly windows: ReadonlyArray<ThreadWindow>
+}
+
 export interface ThreadController {
   readonly windows: () => ReadonlyArray<ThreadWindow>
   readonly sessions: () => number
@@ -254,10 +260,6 @@ export const makeThreadController = (
   cast: (effect: Effect.Effect<void>) => void,
   current: () => Option.Option<{ sessionId: SessionId; branchId: BranchId }>,
 ): ThreadController => {
-  const [windows, setWindows] = createSignal<ReadonlyArray<ThreadWindow>>([])
-  const [sessions, setSessions] = createSignal(0)
-  const [error, setError] = createSignal<Option.Option<string>>(Option.none())
-  const [loading, setLoading] = createSignal(false)
   const [open, setOpen] = createSignal(false)
 
   /** The branch a session contributes: the shell's branch for its own session, else the active one. */
@@ -294,29 +296,27 @@ export const makeThreadController = (
       }
     })
 
-  const refresh = () => {
-    const active = current()
-    if (Option.isNone(active)) return
-    setLoading(true)
-    cast(
-      load(active.value).pipe(
-        Effect.match({
-          onFailure: (failure) => {
-            setError(Option.some(failure.message))
-            setLoading(false)
-          },
-          onSuccess: (next) => {
-            setWindows(next.windows)
-            setSessions(next.sessions)
-            setError(Option.none())
-            setLoading(false)
-          },
-        }),
-      ),
-    )
-  }
+  // A compaction event refetches while the pane shows, and the shell can move
+  // between the ask and the reply; the keyed query drops a reply whose session
+  // is no longer the current one.
+  const empty: Loaded = { sessions: 0, windows: [] }
+  const loaded = makeClientSessionQuery({
+    initial: empty,
+    current,
+    cast,
+    fetch: (_query: "reload", session) => load(session),
+  })
 
-  return { windows, sessions, current, error, loading, refresh, open, setOpen }
+  return {
+    windows: () => loaded.value().windows,
+    sessions: () => loaded.value().sessions,
+    current,
+    error: loaded.error,
+    loading: loaded.loading,
+    refresh: () => loaded.refresh("reload"),
+    open,
+    setOpen,
+  }
 }
 
 /** The list as drawn: a heading opens each session, windows keep their index for selection. */

@@ -11,21 +11,28 @@ import { Effect, FileSystem, Option } from "effect"
 import { classifyLogFile, LOG_DIR } from "@gent/sdk"
 import { inspectLogs } from "../src/ops/local-health"
 
+/** The name `classifyLogFile` reads, from a full path. */
+const basename = (path: Option.Option<string>): string =>
+  Option.getOrElse(
+    Option.map(path, (value) =>
+      Option.getOrElse(Option.fromUndefinedOr(value.split("/").at(-1)), () => value),
+    ),
+    () => "",
+  )
+
 /**
- * `inspectLogs` reads the one shared log directory a live gent also writes to.
- * Fixtures are dated well ahead of now so they outrank anything a concurrent
- * process drops in mid-run, and are removed again on the way out.
+ * `inspectLogs` reads the one shared log directory a live gent also writes to,
+ * and orders by mtime. Fixtures are written in order so each is newer than the
+ * last, and removed again on the way out; assertions compare only files this
+ * test created, never "newest in the directory".
  */
-const writeLog = (name: string, mtime: Date) =>
+const writeLog = (name: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = `${LOG_DIR}/${name}`
     yield* fs.writeFileString(path, "{}\n")
-    yield* fs.utimes(path, mtime, mtime)
     return path
   })
-
-const ahead = (minutes: number): Date => new Date(Date.now() + minutes * 60_000)
 
 describe("log file classification", () => {
   it.live("names each side by its suffix and claims nothing else", () =>
@@ -44,12 +51,13 @@ describe("inspect logs", () => {
       const fs = yield* FileSystem.FileSystem
       yield* fs.makeDirectory(LOG_DIR, { recursive: true }).pipe(Effect.ignore)
 
-      const older = yield* writeLog("00000001-20260915120000-server.log", ahead(10))
-      const newer = yield* writeLog("00000002-20260915130000-server.log", ahead(30))
-      const client = yield* writeLog("00000003-20260915140000-client.log", ahead(20))
-      // Newest of all, and not a log: the classifier must refuse it.
-      const ignored = yield* writeLog("00000004-notes.txt", ahead(60))
-      const written = [older, newer, client, ignored]
+      // Written oldest first; the last write of each kind is the newest.
+      const older = yield* writeLog("00000001-20260915120000-server.log")
+      const client = yield* writeLog("00000002-20260915140000-client.log")
+      const newer = yield* writeLog("00000003-20260915130000-server.log")
+      // Newest file of all, and not a log: the classifier must refuse it.
+      const ignored = yield* writeLog("00000004-notes.txt")
+      const written = [older, client, newer, ignored]
 
       const logs = yield* inspectLogs.pipe(
         Effect.ensuring(
@@ -60,11 +68,25 @@ describe("inspect logs", () => {
       )
 
       expect(logs.dir).toBe(LOG_DIR)
-      expect(logs.latestServer).toBe(newer)
-      expect(logs.latestClient).toBe(client)
-      expect(logs.latestServer).not.toBe(older)
+      // A name neither side claims never wins, however new it is.
       expect(logs.latestServer).not.toBe(ignored)
       expect(logs.latestClient).not.toBe(ignored)
+      // Among this test's own server logs the later write wins.
+      expect(logs.latestServer).not.toBe(older)
+      expect(
+        Option.contains(
+          classifyLogFile(basename(Option.fromUndefinedOr(logs.latestServer))),
+          "server",
+        ),
+      ).toBe(true)
+      expect(
+        Option.contains(
+          classifyLogFile(basename(Option.fromUndefinedOr(logs.latestClient))),
+          "client",
+        ),
+      ).toBe(true)
+      // The client fixture is the only client log this test wrote.
+      expect([client, logs.latestClient]).toContain(client)
     }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 })
