@@ -226,10 +226,10 @@ export function useComposerController(): ComposerController {
   const submitShellCommand = (text: string) => {
     cast(
       executeShell(text, workspace.cwd).pipe(
-        Effect.map(({ output, truncated, savedPath }) => {
+        Effect.map(({ output, truncated }) => {
           let userMessage = `$ ${text}\n\n${output}`
           if (truncated) {
-            userMessage += `\n\n[truncated - full output saved to ${savedPath}]`
+            userMessage += `\n\n[output truncated]`
           }
           return userMessage
         }),

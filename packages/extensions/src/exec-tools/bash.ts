@@ -24,14 +24,12 @@ import {
   type SessionId,
   ToolCallId,
 } from "@gent/core/extensions/api"
-import { saveFullOutput } from "./save-output.js"
 import {
   BackgroundBashStorage,
   type BackgroundBashTerminalState,
   type BackgroundBashJobKeyFields,
   type BackgroundBashStorageError,
 } from "./bash-storage.js"
-import { OutputBuffer } from "./output-buffer.js"
 
 // Bash command classification for guardrails.
 //
@@ -157,8 +155,6 @@ export const BashResult = Schema.Struct({
   exitCode: Schema.Finite,
 })
 
-const HEAD_LINES = 50
-const TAIL_LINES = 50
 const SIGKILL_DELAY_MS = 3000
 
 type BackgroundBashJobKey = string
@@ -355,21 +351,8 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         ),
       )
 
-      const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
-      let fullOutput = bgResult.stdout
-      if (bgResult.stderr.length > 0) fullOutput = `${bgResult.stdout}\n${bgResult.stderr}`
-      buf.add(fullOutput)
-      const formatted = buf.format()
-
-      let outputText = formatted.text
-      if (formatted.truncatedLines > 0) {
-        const path = yield* Effect.option(
-          saveFullOutput(fullOutput, `bash_bg_${job.command.slice(0, 40)}`),
-        )
-        if (Option.isSome(path)) {
-          outputText = `${formatted.text}\n\nFull output saved to: ${path.value}`
-        }
-      }
+      let outputText = bgResult.stdout
+      if (bgResult.stderr.length > 0) outputText = `${bgResult.stdout}\n${bgResult.stderr}`
 
       const keyFields = backgroundJobKeyFields(target)
       yield* storage.markCompleted(keyFields, {
@@ -470,7 +453,7 @@ export const BashTool = tool({
   id: "bash",
   destructive: true,
   description:
-    "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
+    "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. Large output is kept whole; the prompt shows the head and tail, and context.read(toolCallId, { offset, limit }) pages the rest.",
   promptSnippet: "Execute shell commands",
   promptGuidelines: ["Use the read/grep/edit/write tools instead of cat/head/tail/grep/sed"],
   params: BashParams,
@@ -552,29 +535,12 @@ export const BashTool = tool({
       ),
     )
 
-    // Use OutputBuffer for head+tail truncation
-    const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
-    let fullOutput = result.stdout
-    if (result.stderr.length > 0) fullOutput = `${result.stdout}\n${result.stderr}`
-    buf.add(fullOutput)
-    const formatted = buf.format()
-
-    // Save full output when truncated
-    let fullOutputPath = Option.none<string>()
-    if (formatted.truncatedLines > 0) {
-      fullOutputPath = yield* Effect.option(
-        saveFullOutput(fullOutput, `bash_${command.slice(0, 40)}`),
-      )
-    }
-
-    let stdout = formatted.text
-    if (formatted.truncatedLines > 0 && Option.isSome(fullOutputPath)) {
-      stdout = `${formatted.text}\n\nFull output saved to: ${fullOutputPath.value}`
-    }
-
+    // The full result is stored and the transcript bounds the model-facing
+    // copy at `maximumModelToolResultChars`; the cell pages the rest with
+    // `context.read(toolCallId, { offset, limit })`.
     return {
-      stdout,
-      stderr: "",
+      stdout: result.stdout,
+      stderr: result.stderr,
       exitCode: result.exitCode,
     }
   }),

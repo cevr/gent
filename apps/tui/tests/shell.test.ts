@@ -13,7 +13,6 @@ describe("executeShell", () => {
       const result = yield* executeShell("echo hello", testDir)
       expect(result.output).toBe("hello")
       expect(result.truncated).toBe(false)
-      expect(result.savedPath).toBeUndefined()
     }),
   )
 
@@ -89,7 +88,6 @@ describe("executeShell", () => {
       const testDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
       const result = yield* executeShell("seq 1 2500", testDir)
       expect(result.truncated).toBe(true)
-      expect(result.savedPath).toBeDefined()
 
       // Output should be truncated to ~2000 lines
       const lineCount = result.output.split("\n").length
@@ -106,7 +104,6 @@ describe("executeShell", () => {
         testDir,
       )
       expect(result.truncated).toBe(true)
-      expect(result.savedPath).toBeDefined()
 
       // Output should be under 50KB
       expect(result.output.length).toBeLessThanOrEqual(50 * 1024)

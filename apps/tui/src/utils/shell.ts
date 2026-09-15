@@ -1,8 +1,7 @@
 /**
- * Shell execution utility with truncation and output saving
+ * Shell execution utility with an inline output cap.
  */
 
-import { saveFullOutput } from "@gent/extensions"
 import { runProcess } from "@gent/core-internal/runtime/run-process"
 import { Effect, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
@@ -17,8 +16,8 @@ export class ShellCommandError extends Schema.TaggedError<ShellCommandError>(
 }) {}
 
 /**
- * Execute shell command with truncation
- * If output exceeds limits, saves the full output next to tool output under /tmp/gent/outputs
+ * Execute shell command, capped at MAX_LINES lines and MAX_BYTES bytes.
+ * The caller sees `truncated` when the cap drops output.
  */
 export const executeShell = (command: string, cwd: string) =>
   Effect.gen(function* () {
@@ -33,8 +32,6 @@ export const executeShell = (command: string, cwd: string) =>
       return { output: fullOutput.trim(), truncated: false }
     }
 
-    const savedPath = yield* saveFullOutput(fullOutput, `shell_${command.slice(0, 40)}`)
-
     let truncated: string = fullOutput
     if (lines.length > MAX_LINES) {
       truncated = lines.slice(0, MAX_LINES).join("\n")
@@ -46,7 +43,6 @@ export const executeShell = (command: string, cwd: string) =>
     return {
       output: truncated.trim(),
       truncated: true,
-      savedPath,
     }
   })
 

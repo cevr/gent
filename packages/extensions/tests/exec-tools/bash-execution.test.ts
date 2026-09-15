@@ -32,6 +32,11 @@ import {
 } from "@gent/core-internal/test-utils/extension-harness"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import {
+  boundToolResultForModel,
+  maximumModelToolResultChars,
+} from "@gent/core-internal/providers/ai-transcript"
+import * as Prompt from "effect/unstable/ai/Prompt"
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   const base = Layer.mergeAll(
@@ -179,6 +184,14 @@ const withSession = (
 })
 const now = dateFromMillis(0)
 
+const BoundedBashResult = Schema.Struct({
+  truncated: Schema.Boolean,
+  totalChars: Schema.Finite,
+  omittedChars: Schema.Finite,
+  read: Schema.String,
+  text: Schema.String,
+})
+
 describe("BashTool execution", () => {
   it.live(
     "runs a command and returns stdout",
@@ -190,6 +203,48 @@ describe("BashTool execution", () => {
 
         expect(result.stdout.trim()).toBe("hello")
         expect(result.exitCode).toBe(0)
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
+    "keeps a huge command result whole while the model sees a bounded copy with the read locator",
+    () =>
+      Effect.gen(function* () {
+        // One line per iteration, far past the model-facing bound.
+        const lineCount = 4000
+        const result = yield* provideBun(
+          runToolWithCtx(BashTool, { command: `seq 1 ${lineCount} | sed 's/^/line /'` }, stubCtx),
+        )
+
+        // The tool returns the complete output: no head/tail marker, no
+        // spill path, first and last line both present.
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout.length).toBeGreaterThan(maximumModelToolResultChars)
+        expect(result.stdout).toContain("line 1\n")
+        expect(result.stdout).toContain(`line ${lineCount}`)
+        expect(result.stdout).not.toContain("lines truncated")
+        expect(result.stdout).not.toContain("Full output saved to")
+        const storedLines = result.stdout.trimEnd().split("\n")
+        expect(storedLines).toHaveLength(lineCount)
+
+        // Core bounds the model-facing copy and hands over the paging locator.
+        const part = Prompt.toolResultPart({
+          id: stubCtx.toolCallId,
+          name: "bash",
+          isFailure: false,
+          providerExecuted: false,
+          result: { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+        })
+        const bounded = boundToolResultForModel(part)
+        const boundedResult = yield* Schema.decodeUnknownEffect(BoundedBashResult)(bounded.result)
+        expect(boundedResult.truncated).toBe(true)
+        expect(boundedResult.omittedChars).toBeGreaterThan(0)
+        expect(boundedResult.read).toBe(`context.read("${stubCtx.toolCallId}", { offset, limit })`)
+        expect(boundedResult.text.length).toBeLessThan(result.stdout.length)
+        // Head and tail both survive the bound, so the model can page either way.
+        expect(boundedResult.text).toContain("line 1")
+        expect(boundedResult.text).toContain(`line ${lineCount}`)
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )

@@ -2,7 +2,7 @@
  * Bash tool renderer.
  *
  * Collapsed: exit code + head-3/tail-3 of stdout
- * Expanded: full head-50/tail-50 with OutputBuffer
+ * Expanded: head-100/tail-100 of the stored output
  */
 
 import { Option, Schema } from "effect"
