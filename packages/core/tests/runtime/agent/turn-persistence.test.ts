@@ -44,8 +44,7 @@ const recordingPublisher = Effect.map(
             })
           }),
         deliver: () => Ref.update(state, (c) => ({ ...c, delivered: c.delivered + 1 })),
-        publish: (event) =>
-          Ref.update(state, (c) => ({ ...c, appended: [...c.appended, event] })),
+        publish: (event) => Ref.update(state, (c) => ({ ...c, appended: [...c.appended, event] })),
       }),
     ),
   }),
@@ -83,7 +82,10 @@ describe("durable message persistence", () => {
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer for this operation.
         Effect.provide(
-          Layer.mergeAll(SqliteStorage.TestWithSql(() => Layer.empty, {}), publisher.layer),
+          Layer.mergeAll(
+            SqliteStorage.TestWithSql(() => Layer.empty, {}),
+            publisher.layer,
+          ),
         ),
       )
     }),

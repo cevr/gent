@@ -82,112 +82,112 @@ const handoffPlan = (
  * behind one marker that summarizes it and names the ids it replaced. The
  * loop hands off when the window overflows, or when the model asked.
  */
-export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(
-  function* <PersistR = never>(params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly modelId: ModelId
-    readonly messages: ReadonlyArray<Message>
-    readonly budget: ModelContextBudget
-    readonly directive: Option.Option<ContextDirective>
-    readonly project: (
-      messages: ReadonlyArray<Message>,
-    ) => Effect.Effect<ModelContextProjection, ModelContextProjectionError>
-    readonly persist: (
-      message: Message,
-    ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
-    readonly summaryModel: CompactionRequest["summaryModel"]
-  }) {
-    const eventPublisher = yield* EventPublisher
-    const now = yield* DateTime.nowAsDate
-    let durableMessages = params.messages
-    const newWindow = params.directive.pipe(Option.filter((value) => value._tag === "NewWindow"))
-    const newWindowAnchor = Option.all([newWindow, latestUserMessageId(durableMessages)])
-    if (Option.isSome(newWindowAnchor)) {
-      const [directive, anchor] = newWindowAnchor.value
-      const marker = yield* params.persist(
-        windowMarkerMessage({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          keepFromMessageId: anchor,
-          notice: directive.notice,
-          createdAt: now,
-        }),
-      )
-      durableMessages = [...durableMessages, marker]
-    }
-
-    const window = messagesInCurrentWindow(durableMessages)
-    const fit = yield* Effect.result(params.project(window))
-    const plan = yield* Effect.fromResult(handoffPlan(window, params.budget, fit))
-    const anchor = plan.anchor.pipe(
-      Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
-    )
-    const anchorIndex = Math.max(
-      0,
-      window.findIndex((m) => Option.contains(anchor, m)),
-    )
-    const history = window.slice(0, anchorIndex)
-    const kept = window.slice(anchorIndex)
-    const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
-    const overflowing = plan.overflowing
-    // Summarising is an extension's job. With no compactor installed the
-    // transcript is truncated and the omission is reported as usual.
-    const compactor = yield* Effect.serviceOption(ModelContextCompactor)
-    if (!(requested || overflowing) || history.length === 0 || Option.isNone(compactor)) {
-      return { durableMessages, compacted: false } satisfies WindowProjection
-    }
-    const summary = yield* compactor.value
-      .compact({
-        modelId: params.modelId,
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        history,
-        kept,
-        budget: params.budget,
-        instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
-        summaryModel: params.summaryModel,
-      })
-      .pipe(
-        Effect.asSome,
-        Effect.catchTag("ModelCompactionError", (error) =>
-          // A summary that cannot be produced must not cost the turn: the window
-          // is truncated instead, with a visible notice.
-          Effect.gen(function* () {
-            const plain = yield* params.project(window)
-            yield* eventPublisher.publish(
-              ErrorOccurred.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                error: `Context compaction failed (${error.reason}); continuing with ${plain.omittedMessageIds.length} older messages omitted`,
-              }),
-            )
-            return Option.none()
-          }),
-        ),
-      )
-    const handoff = Option.all([summary, anchor]).pipe(
-      Option.flatMap(([value, anchorMessage]) =>
-        summarizedRange(history, value).pipe(
-          Option.map((summarized) => ({ notice: value.notice, summarized, anchorMessage })),
-        ),
-      ),
-    )
-    if (Option.isNone(handoff))
-      return { durableMessages, compacted: false } satisfies WindowProjection
+export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(function* <
+  PersistR = never,
+>(params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly modelId: ModelId
+  readonly messages: ReadonlyArray<Message>
+  readonly budget: ModelContextBudget
+  readonly directive: Option.Option<ContextDirective>
+  readonly project: (
+    messages: ReadonlyArray<Message>,
+  ) => Effect.Effect<ModelContextProjection, ModelContextProjectionError>
+  readonly persist: (
+    message: Message,
+  ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
+  readonly summaryModel: CompactionRequest["summaryModel"]
+}) {
+  const eventPublisher = yield* EventPublisher
+  const now = yield* DateTime.nowAsDate
+  let durableMessages = params.messages
+  const newWindow = params.directive.pipe(Option.filter((value) => value._tag === "NewWindow"))
+  const newWindowAnchor = Option.all([newWindow, latestUserMessageId(durableMessages)])
+  if (Option.isSome(newWindowAnchor)) {
+    const [directive, anchor] = newWindowAnchor.value
     const marker = yield* params.persist(
       windowMarkerMessage({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        keepFromMessageId: handoff.value.anchorMessage.id,
-        notice: handoff.value.notice,
-        summarized: handoff.value.summarized,
+        keepFromMessageId: anchor,
+        notice: directive.notice,
         createdAt: now,
       }),
     )
-    return {
-      durableMessages: [...durableMessages, marker],
-      compacted: true,
-    } satisfies WindowProjection
-  },
-)
+    durableMessages = [...durableMessages, marker]
+  }
+
+  const window = messagesInCurrentWindow(durableMessages)
+  const fit = yield* Effect.result(params.project(window))
+  const plan = yield* Effect.fromResult(handoffPlan(window, params.budget, fit))
+  const anchor = plan.anchor.pipe(
+    Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
+  )
+  const anchorIndex = Math.max(
+    0,
+    window.findIndex((m) => Option.contains(anchor, m)),
+  )
+  const history = window.slice(0, anchorIndex)
+  const kept = window.slice(anchorIndex)
+  const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
+  const overflowing = plan.overflowing
+  // Summarising is an extension's job. With no compactor installed the
+  // transcript is truncated and the omission is reported as usual.
+  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
+  if (!(requested || overflowing) || history.length === 0 || Option.isNone(compactor)) {
+    return { durableMessages, compacted: false } satisfies WindowProjection
+  }
+  const summary = yield* compactor.value
+    .compact({
+      modelId: params.modelId,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      history,
+      kept,
+      budget: params.budget,
+      instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
+      summaryModel: params.summaryModel,
+    })
+    .pipe(
+      Effect.asSome,
+      Effect.catchTag("ModelCompactionError", (error) =>
+        // A summary that cannot be produced must not cost the turn: the window
+        // is truncated instead, with a visible notice.
+        Effect.gen(function* () {
+          const plain = yield* params.project(window)
+          yield* eventPublisher.publish(
+            ErrorOccurred.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              error: `Context compaction failed (${error.reason}); continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+            }),
+          )
+          return Option.none()
+        }),
+      ),
+    )
+  const handoff = Option.all([summary, anchor]).pipe(
+    Option.flatMap(([value, anchorMessage]) =>
+      summarizedRange(history, value).pipe(
+        Option.map((summarized) => ({ notice: value.notice, summarized, anchorMessage })),
+      ),
+    ),
+  )
+  if (Option.isNone(handoff))
+    return { durableMessages, compacted: false } satisfies WindowProjection
+  const marker = yield* params.persist(
+    windowMarkerMessage({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      keepFromMessageId: handoff.value.anchorMessage.id,
+      notice: handoff.value.notice,
+      summarized: handoff.value.summarized,
+      createdAt: now,
+    }),
+  )
+  return {
+    durableMessages: [...durableMessages, marker],
+    compacted: true,
+  } satisfies WindowProjection
+})

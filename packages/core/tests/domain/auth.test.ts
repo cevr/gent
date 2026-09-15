@@ -100,5 +100,4 @@ describe("Auth", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
   })
-
 })

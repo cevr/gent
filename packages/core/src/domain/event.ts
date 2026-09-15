@@ -380,7 +380,8 @@ export const childRunSucceeded = (params: {
   if (Predicate.isNotUndefined(params.toolCallId)) {
     Object.assign(fields, { toolCallId: params.toolCallId })
   }
-  if (Predicate.isNotUndefined(params.branchId)) Object.assign(fields, { branchId: params.branchId })
+  if (Predicate.isNotUndefined(params.branchId))
+    Object.assign(fields, { branchId: params.branchId })
   if (Predicate.isNotUndefined(params.usage)) Object.assign(fields, { usage: params.usage })
   return AgentRunSucceeded.make(fields)
 }

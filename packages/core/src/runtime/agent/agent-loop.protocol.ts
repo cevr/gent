@@ -37,10 +37,7 @@ export const followUpMessageIdForSource = (input: {
   MessageId.make(
     `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
   )
-import {
-  AgentLoopError,
-  SessionRuntimeStateSchema,
-} from "./agent-loop.state.js"
+import { AgentLoopError, SessionRuntimeStateSchema } from "./agent-loop.state.js"
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
