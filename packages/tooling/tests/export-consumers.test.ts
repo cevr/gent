@@ -332,6 +332,31 @@ const x: Api.ToolCapability = Api.tool({})`,
     expect(findings.map((finding) => finding.line)).toEqual([1])
   })
 
+  test("an SDK index name only the SDK's own tests import is reported", () => {
+    const findings = findingsFor([
+      {
+        file: "packages/sdk/src/index.ts",
+        text: `export { GentObservability } from "./logger.js"\n`,
+      },
+      {
+        file: "packages/sdk/tests/logger.test.ts",
+        text: `import { GentObservability } from "@gent/sdk"`,
+      },
+    ])
+    expect(findings.map((finding) => finding.enforced)).toEqual([true])
+    expect(findings[0]?.message).toContain('"GentObservability"')
+    expect(findings[0]?.message).toContain("@gent/sdk")
+  })
+
+  test("a TUI import through @gent/sdk consumes an SDK index name", () => {
+    expect(
+      findingsFor([
+        { file: "packages/sdk/src/index.ts", text: `export { LOG_DIR } from "./log-paths.js"\n` },
+        { file: "apps/tui/src/main.tsx", text: `import { LOG_DIR } from "@gent/sdk"` },
+      ]),
+    ).toEqual([])
+  })
+
   test("a test outside core is a real consumer of the public API", () => {
     expect(
       findingsFor([

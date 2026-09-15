@@ -21,8 +21,8 @@
  *   -- except the declaration's own self-references (`Schema.Class<X>`, the
  *   `_tag` string, a doc comment), which are not consumption.
  *
- * - An entry-point surface (`packages/core/src/extensions/api.ts`) exposes
- *   names with `export { X } from "..."`. Consumption is read from the import
+ * - An entry-point surface (`packages/core/src/extensions/api.ts`,
+ *   `packages/sdk/src/index.ts`) exposes names with `export { X } from "..."`. Consumption is read from the import
  *   itself, through the entry point's specifier, by files outside the
  *   declaring package: a symbol a core test imports over a relative path does
  *   not count, and a name on a `@ts-expect-error` line asserts absence rather
@@ -84,6 +84,15 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
+    enforced: true,
+  },
+  {
+    prefix: "packages/sdk/src/index.ts",
+    exempt: [],
+    outsideOf: ["packages/sdk/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/sdk"),
     enforced: true,
   },
   {
@@ -390,7 +399,7 @@ const messageFor = (file: string, declaration: Declaration): string =>
       return `\`${declaration.name}\` is exported but no file outside ${file} names it; drop the \`export\` keyword, or delete it if nothing uses it at all`
     },
     onSome: (specifier) =>
-      `public extension API name "${declaration.name}" has no consumer outside core through ${specifier}; it is vocabulary every extension author reads past. Drop it from the public API, or ship something that uses it.`,
+      `entry-point name "${declaration.name}" has no consumer outside ${declaration.surface.outsideOf.join(", ")} through ${specifier}; it is vocabulary every caller reads past. Drop it from the entry point, or ship something that uses it.`,
   })
 
 /**
