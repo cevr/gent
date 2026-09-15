@@ -34,14 +34,7 @@ import {
   type ComposerEffect,
   ComposerState,
 } from "../components/composer-state"
-import {
-  useClientActions,
-  useClientAgent,
-  useClientSession,
-  useClientTransport,
-  SteerCommandInput,
-  type ClientContextValue,
-} from "../client/index"
+import { useClient, SteerCommandInput, type ClientContextValue } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
 import { useRuntime } from "../hooks/use-runtime"
@@ -132,16 +125,7 @@ export function createSessionController(props: {
   debugMode?: boolean
   missingAuthProviders?: readonly string[]
 }): SessionController {
-  const transport = useClientTransport()
-  const sessionClient = useClientSession()
-  const agent = useClientAgent()
-  const actions = useClientActions()
-  const client: ClientContextValue = {
-    ...transport,
-    ...sessionClient,
-    ...agent,
-    ...actions,
-  }
+  const client = useClient()
   const command = useCommand()
   const ext = useExtensionUI()
   const shell = useSessionShell()

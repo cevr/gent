@@ -45,12 +45,7 @@ import {
 } from "./client-services"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace/context"
-import {
-  useClientActions,
-  useClientSession,
-  useClientTransport,
-  useClientTransportState,
-} from "../client/context"
+import { useClient } from "../client/context"
 
 import { makeClientActivityLayer, type ClientActivitySnapshot } from "./client-activity"
 
@@ -106,10 +101,7 @@ const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
 export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scope.Scope }) {
   const workspace = useWorkspace()
-  const transport = useClientTransport()
-  const session = useClientSession()
-  const actions = useClientActions()
-  const transportState = useClientTransportState()
+  const client = useClient()
 
   const [activityProvider, setActivityProvider] = createSignal<() => ClientActivitySnapshot>(
     () => ({ state: "unknown" }),
@@ -168,32 +160,32 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       makeClientActivityLayer(() => activityProvider()()),
       BunServices.layer,
       makeClientTransportLayer({
-        client: transport.client,
-        runtime: transport.runtime,
+        client: client.client,
+        runtime: client.runtime,
         currentSession: () => {
-          const current = Option.fromNullishOr(session.session())
+          const current = Option.fromNullishOr(client.session())
           if (Option.isNone(current)) return Option.getOrUndefined(Option.none())
           return { sessionId: current.value.sessionId, branchId: current.value.branchId }
         },
-        onExtensionStateChanged: (cb) => transportState.onExtensionStateChanged(cb),
-        onSessionEvent: (cb) => transportState.onSessionEvent(cb),
+        onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
+        onSessionEvent: (cb) => client.onSessionEvent(cb),
       }),
       makeClientWorkspaceLayer({
         cwd: workspace.cwd,
         home: workspace.home,
       }),
       makeClientShellLayer({
-        sendMessage: (content) => actions.sendMessage(content),
+        sendMessage: (content) => client.sendMessage(content),
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),
         switchSession: (input) => switchSessionDispatch()(input),
-        run: transport.runtime.run,
-        cast: transport.runtime.cast,
+        run: client.runtime.run,
+        cast: client.runtime.cast,
       }),
       makeClientDriverLayer({
-        list: transport.client.driver.list().pipe(Effect.mapError(toError)),
-        set: (input) => transport.client.driver.set(input).pipe(Effect.mapError(toError)),
-        clear: (input) => transport.client.driver.clear(input).pipe(Effect.mapError(toError)),
+        list: client.client.driver.list().pipe(Effect.mapError(toError)),
+        set: (input) => client.client.driver.set(input).pipe(Effect.mapError(toError)),
+        clear: (input) => client.client.driver.clear(input).pipe(Effect.mapError(toError)),
       }),
       makeClientLifecycleLayer({ addCleanup }),
     ),
@@ -233,7 +225,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   })
 
   createEffect(() => {
-    const current = Option.fromNullishOr(session.session())
+    const current = Option.fromNullishOr(client.session())
     if (Option.isNone(current)) {
       setServerCommands([])
       return
@@ -245,20 +237,20 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       active = false
     })
 
-    transport.runtime.cast(
-      transport.client.extension.listSlashCommands({ sessionId: current.value.sessionId }).pipe(
+    client.runtime.cast(
+      client.client.extension.listSlashCommands({ sessionId: current.value.sessionId }).pipe(
         Effect.tap((cmds) =>
           Effect.sync(() => {
             if (!active) return
             setServerCommands(
               cmds.map((c) => {
                 const run = (args: string) => {
-                  const activeSession = Option.fromNullishOr(session.session())
+                  const activeSession = Option.fromNullishOr(client.session())
                   if (Option.isNone(activeSession)) return
                   const sid = activeSession.value.sessionId
                   const bid = activeSession.value.branchId
-                  transport.runtime.cast(
-                    transport.client.extension
+                  client.runtime.cast(
+                    client.client.extension
                       .request({
                         sessionId: sid,
                         extensionId: c.extensionId,
@@ -325,11 +317,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         setActivityProvider: (provider) => setActivityProvider(() => provider),
         sessionId: () =>
           Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(session.session()), (value) => value.sessionId),
+            Option.map(Option.fromNullishOr(client.session()), (value) => value.sessionId),
           ),
         branchId: () =>
           Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(session.session()), (value) => value.branchId),
+            Option.map(Option.fromNullishOr(client.session()), (value) => value.branchId),
           ),
         clientRuntime,
       }}

@@ -19,23 +19,5 @@ export {
 } from "@gent/sdk"
 
 // Local context exports
-export type {
-  Session,
-  SessionState,
-  ClientContextValue,
-  ClientTransportValue,
-  ClientSessionValue,
-  ClientAgentValue,
-  ClientActionValue,
-} from "./context"
-export {
-  ClientProvider,
-  useClient,
-  useClientTransport,
-  useClientSession,
-  useClientAgent,
-  useClientActions,
-  useClientRuntime,
-  useClientTransportState,
-  SteerCommandInput,
-} from "./context"
+export type { Session, SessionState, ClientContextValue } from "./context"
+export { ClientProvider, useClient, SteerCommandInput } from "./context"

@@ -10,7 +10,7 @@
  */
 import { Cause, Context, Effect, Exit, Fiber } from "effect"
 import { onCleanup } from "solid-js"
-import { useClientRuntime } from "../client/index"
+import { useClient } from "../client/index"
 
 export interface UseRuntimeReturn {
   /** Run Effect, interrupting it when the owning component unmounts. */
@@ -23,7 +23,7 @@ export interface UseRuntimeReturn {
  * Hook to run Effects with the host-provided platform context.
  */
 export function useRuntime(): UseRuntimeReturn {
-  const { services, log } = useClientRuntime()
+  const { services, log } = useClient()
 
   const fork = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     // The runtime context is captured at the UI boundary. Its map contains the

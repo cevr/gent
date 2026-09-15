@@ -34,7 +34,7 @@ import { formatToolInput } from "../components/message-list-utils"
 import { randomId } from "../utils/random-id"
 import { formatConnectionIssue } from "../utils/format-error"
 import type { ClientLog } from "../utils/client-logger"
-import type { ClientSessionValue, ClientTransportValue } from "../client/context"
+import type { ClientContextValue } from "../client/context"
 
 interface ReconnectOptions<E> {
   readonly label?: string
@@ -93,19 +93,19 @@ export interface SessionFeed {
   activeTool: () => string | undefined
 }
 
-type SessionFeedClient = Pick<ClientSessionValue, "session"> &
-  Pick<
-    ClientTransportValue,
-    | "client"
-    | "runtime"
-    | "log"
-    | "setConnectionIssue"
-    | "waitForTransportReady"
-    | "applySessionRuntime"
-    | "applySessionSnapshot"
-    | "applySessionEvent"
-    | "applyBufferedSessionEvent"
-  >
+type SessionFeedClient = Pick<
+  ClientContextValue,
+  | "session"
+  | "client"
+  | "runtime"
+  | "log"
+  | "setConnectionIssue"
+  | "waitForTransportReady"
+  | "applySessionRuntime"
+  | "applySessionSnapshot"
+  | "applySessionEvent"
+  | "applyBufferedSessionEvent"
+>
 
 type SessionFeedStore = {
   messages: Message[]

@@ -106,7 +106,7 @@ export { AgentStatus, type AgentState } from "./agent-state"
 // Focused Client Surfaces
 // =============================================================================
 
-export interface ClientTransportValue {
+interface ClientTransportValue {
   /** Namespaced RPC client — returns Effects */
   client: GentNamespacedClient
   /** Runtime for executing Effects */
@@ -150,7 +150,7 @@ export interface ClientTransportValue {
   applyBufferedSessionEvent: (envelope: EventEnvelope) => void
 }
 
-export interface ClientSessionValue {
+interface ClientSessionValue {
   // Session state (union)
   sessionState: () => SessionState
   // eslint-disable-next-line effect/noNullish -- UI session accessors expose null while no session is active.
@@ -188,7 +188,7 @@ export interface ClientSessionValue {
   switchBranch: (branchId: BranchId) => void
 }
 
-export interface ClientAgentValue {
+interface ClientAgentValue {
   // Agent state (derived from events)
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
   agent: () => AgentName | undefined
@@ -218,7 +218,7 @@ export interface ClientAgentValue {
   setError: (error: string | null) => void
 }
 
-export interface ClientActionValue {
+interface ClientActionValue {
   // Session actions (fire-and-forget, update state internally)
   sendMessage: (content: string) => void
   // Steering (fire-and-forget)
@@ -230,96 +230,26 @@ export type ClientContextValue = ClientTransportValue &
   ClientAgentValue &
   ClientActionValue
 
-const ClientTransportContext = createContext<ClientTransportValue>()
-const ClientSessionContext = createContext<ClientSessionValue>()
-const ClientAgentContext = createContext<ClientAgentValue>()
-const ClientActionContext = createContext<ClientActionValue>()
+/**
+ * One context, one value.
+ *
+ * The four interfaces above name the facets of the client — transport,
+ * session, agent, actions — but they are not four seams. They share one
+ * provider, one lifetime, and one set of signals, and every consumer wants
+ * them together. Splitting them into four Solid contexts only forced each
+ * call site to spread them back into a single object, which allocated a new
+ * value per read and let a stale copy outlive the seam it came from.
+ */
+const ClientContext = createContext<ClientContextValue>()
 
 const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   _tag: "healthy",
   extensions: [],
 }
 
-export function useClientTransport(): ClientTransportValue {
-  return useRequiredContext(
-    ClientTransportContext,
-    "ClientTransportContext must be used within ClientProvider",
-  )
-}
-
-export function useClientSession(): ClientSessionValue {
-  return useRequiredContext(
-    ClientSessionContext,
-    "ClientSessionContext must be used within ClientProvider",
-  )
-}
-
-export function useClientAgent(): ClientAgentValue {
-  return useRequiredContext(
-    ClientAgentContext,
-    "ClientAgentContext must be used within ClientProvider",
-  )
-}
-
-export function useClientActions(): ClientActionValue {
-  return useRequiredContext(
-    ClientActionContext,
-    "ClientActionContext must be used within ClientProvider",
-  )
-}
-
+/** The client. One value, provided once, read the same way everywhere. */
 export function useClient(): ClientContextValue {
-  const transport = useClientTransport()
-  const session = useClientSession()
-  const agent = useClientAgent()
-  const actions = useClientActions()
-  return {
-    ...transport,
-    ...session,
-    ...agent,
-    ...actions,
-  }
-}
-
-export function useClientRuntime(): Pick<ClientTransportValue, "runtime" | "services" | "log"> {
-  const { runtime, services, log } = useClientTransport()
-  return { runtime, services, log }
-}
-
-export function useClientTransportState(): Pick<
-  ClientTransportValue,
-  | "connectionState"
-  | "waitForTransportReady"
-  | "isReconnecting"
-  | "connectionGeneration"
-  | "connectionIssue"
-  | "extensionHealth"
-  | "setConnectionIssue"
-  | "onExtensionStateChanged"
-  | "onSessionEvent"
-> {
-  const {
-    connectionState,
-    waitForTransportReady,
-    isReconnecting,
-    connectionGeneration,
-    connectionIssue,
-    extensionHealth,
-    setConnectionIssue,
-    onExtensionStateChanged,
-    onSessionEvent,
-  } = useClientTransport()
-  return {
-    connectionState,
-    waitForTransportReady,
-    isReconnecting,
-    connectionGeneration,
-    connectionIssue,
-    extensionHealth,
-    setConnectionIssue,
-    onExtensionStateChanged,
-    onSessionEvent,
-  }
+  return useRequiredContext(ClientContext, "useClient must be used within ClientProvider")
 }
 
 interface ClientProviderProps extends ParentProps {
@@ -1045,15 +975,15 @@ export function ClientProvider(props: ClientProviderProps) {
     },
   }
 
-  return (
-    <ClientTransportContext.Provider value={transportValue}>
-      <ClientSessionContext.Provider value={sessionValue}>
-        <ClientAgentContext.Provider value={agentValue}>
-          <ClientActionContext.Provider value={actionValue}>
-            {props.children}
-          </ClientActionContext.Provider>
-        </ClientAgentContext.Provider>
-      </ClientSessionContext.Provider>
-    </ClientTransportContext.Provider>
-  )
+  // Built once, for the life of the provider. Every accessor on it reads a
+  // signal, so the object itself never needs to change identity — and a
+  // consumer that holds it can never observe a value from a stale merge.
+  const clientValue: ClientContextValue = {
+    ...transportValue,
+    ...sessionValue,
+    ...agentValue,
+    ...actionValue,
+  }
+
+  return <ClientContext.Provider value={clientValue}>{props.children}</ClientContext.Provider>
 }

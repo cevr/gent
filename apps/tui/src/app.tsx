@@ -5,7 +5,7 @@ import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/context"
 import { Session } from "./routes/session"
-import { useClientSession } from "./client/index"
+import { useClient } from "./client/index"
 import { KeyboardScopeProvider, useScopedKeyboard } from "./keyboard/context"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./env/context"
@@ -34,7 +34,7 @@ function AppContent(props: AppProps) {
   // Which session shows is the client's to say. `switchSession` is the one
   // writer, and every pane that moves the reader between sessions already
   // goes through it, so keying the mount on it is all the router ever did.
-  const sessionClient = useClientSession()
+  const sessionClient = useClient()
   const active = () => Option.getOrUndefined(Option.fromNullishOr(sessionClient.session()))
 
   // The boot picker belongs to the first session this process mounts. A later
