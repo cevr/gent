@@ -72,6 +72,25 @@ describe("wake admission", () => {
     expect(woken.followUp[0]?.wake).toBe(true)
     expect(queueRequestsWake(woken)).toBe(true)
   })
+
+  test("a source-keyed follow-up is never merged into its neighbour; re-admission replaces it", () => {
+    const plain = appendFollowUpQueueState(emptyLoopQueueState(), {
+      message: queuedMessage("user-a", "first"),
+    })
+    const keyed = appendFollowUpQueueState(plain, {
+      message: queuedMessage("follow-up:w:s:b:child-1", "child done"),
+      keyed: true,
+    })
+    expect(keyed.followUp.map((item) => String(item.message.id))).toEqual([
+      "user-a",
+      "follow-up:w:s:b:child-1",
+    ])
+    const again = appendFollowUpQueueState(keyed, {
+      message: queuedMessage("follow-up:w:s:b:child-1", "child done (retry)"),
+      keyed: true,
+    })
+    expect(again.followUp).toHaveLength(2)
+  })
 })
 
 describe("queue drain regression", () => {

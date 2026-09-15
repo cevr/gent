@@ -40,6 +40,12 @@ const QueuedTurnItemSchema = Schema.Struct({
   interactive: Schema.optional(Schema.Boolean),
   /** The admitter asked for a turn even when the branch has no prior history. */
   wake: Schema.optional(Schema.Boolean),
+  /**
+   * The message id is a durable source key (`followUpMessageIdForSource`), so
+   * re-admission replaces this item by id and it is never merged into a
+   * neighbour; merging would lose the identity the key exists for.
+   */
+  keyed: Schema.optional(Schema.Boolean),
 })
 export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
 
@@ -116,9 +122,7 @@ const appendFollowUpItem = (
     })
   }
 
-  if (String(item.message.id).startsWith("follow-up:")) {
-    return [...queue, item]
-  }
+  if (item.keyed === true) return [...queue, item]
 
   const last = queue[queue.length - 1]
   if (Predicate.isUndefined(last) || !canBatchQueuedFollowUp(last, item)) {
