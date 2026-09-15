@@ -39,8 +39,8 @@ describe("wakeTrayLines", () => {
   it.live("lists the alarm before the later monitor and collapses the rest", () =>
     Effect.sync(() => {
       expect(wakeTrayLines(pending, 1_000_000, 80)).toEqual([
-        "⏰ alarm in 1m 35s · check the deploy",
-        "◉ monitor every 1m 00s · 25m 00s left · merge when green",
+        { glyph: "◷", text: "alarm in 1m 35s · check the deploy" },
+        { glyph: "◉", text: "monitor every 1m 00s · 25m 00s left · merge when green" },
       ])
       const many: WakePendingType = {
         now: 0,
@@ -53,8 +53,8 @@ describe("wakeTrayLines", () => {
       }
       const lines = wakeTrayLines(many, 0, 80)
       expect(lines.length).toBe(4)
-      expect(lines[3]).toBe("+2 more pending")
-      expect(wakeTrayLines(pending, 1_000_000, 20)[0]).toBe("⏰ alarm in 1m 35s...")
+      expect(lines[3]?.text).toBe("+2 more pending")
+      expect(wakeTrayLines(pending, 1_000_000, 20)[0]?.text).toBe("alarm in 1m 35s ·...")
     }),
   )
 })
@@ -70,8 +70,8 @@ describe("Wake tray", () => {
         waitForRenderedFrame(setup, () => renderFrame(setup).includes("alarm in"), "tray"),
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("alarm in 1m 35s · check the deploy")
-      expect(frame).toContain("monitor every 1m 00s")
+      expect(frame).toContain("◷ alarm in 1m 35s · check the deploy")
+      expect(frame).toContain("◉ monitor every 1m 00s")
       setValue(Option.some({ now: 1_000_000, entries: [] }))
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => !renderFrame(setup).includes("alarm in"), "tray hidden"),

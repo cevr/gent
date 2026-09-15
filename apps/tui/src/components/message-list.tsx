@@ -198,12 +198,12 @@ const collapsedUserLabel = (
 
 const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
   Option.match(wake, {
-    onNone: () => "⏰ alarm fired",
+    onNone: () => "◷ alarm fired",
     onSome: (value) => `${wakeHead(value)} · ${value.note}`,
   })
 
 const wakeHead = (value: WakeDetails): string => {
-  if (value.kind === "alarm") return "⏰ alarm fired"
+  if (value.kind === "alarm") return "◷ alarm fired"
   if (value.outcome === "timed-out") return "◉ monitor timed out"
   return "◉ monitor matched"
 }

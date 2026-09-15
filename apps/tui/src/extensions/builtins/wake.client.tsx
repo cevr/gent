@@ -42,14 +42,29 @@ export const formatRemaining = (millis: number): string => {
   return `${rest}s`
 }
 
-const entryText = (entry: WakeEntryType, now: number): string =>
+export interface WakeTrayLine {
+  readonly glyph: string
+  readonly text: string
+}
+
+/** fx-style marks: a clock face for an alarm, a fisheye for a monitor, a bare dot for the overflow line. */
+export const ALARM_GLYPH = "◷"
+export const MONITOR_GLYPH = "◉"
+
+const entryLine = (entry: WakeEntryType, now: number, width: number): WakeTrayLine =>
   Match.type<WakeEntryType>().pipe(
     Match.tagsExhaustive({
-      alarm: (alarm) => `⏰ alarm in ${formatRemaining(alarm.dueAt - now)} · ${alarm.note}`,
-      monitor: (monitor) => {
+      alarm: (alarm): WakeTrayLine => ({
+        glyph: ALARM_GLYPH,
+        text: truncate(`alarm in ${formatRemaining(alarm.dueAt - now)} · ${alarm.note}`, width),
+      }),
+      monitor: (monitor): WakeTrayLine => {
         const every = formatRemaining(monitor.everySeconds * 1000)
         const left = formatRemaining(monitor.deadline - now)
-        return `◉ monitor every ${every} · ${left} left · ${monitor.note}`
+        return {
+          glyph: MONITOR_GLYPH,
+          text: truncate(`monitor every ${every} · ${left} left · ${monitor.note}`, width),
+        }
       },
     }),
   )(entry)
@@ -59,16 +74,16 @@ export const wakeTrayLines = (
   pending: WakePendingType,
   now: number,
   width: number,
-): ReadonlyArray<string> => {
+): ReadonlyArray<WakeTrayLine> => {
   const dueOf = (entry: WakeEntryType): number => {
     if (entry._tag === "alarm") return entry.dueAt
     return entry.deadline
   }
   const sorted = [...pending.entries].sort((a, b) => dueOf(a) - dueOf(b))
   const shown = sorted.slice(0, TRAY_MAX_ROWS)
-  const lines = shown.map((entry) => truncate(entryText(entry, now), width))
+  const lines = shown.map((entry) => entryLine(entry, now, width))
   const rest = sorted.length - shown.length
-  if (rest > 0) lines.push(`+${rest} more pending`)
+  if (rest > 0) lines.push({ glyph: " ", text: `+${rest} more pending` })
   return lines
 }
 
@@ -81,7 +96,7 @@ export function WakeTray(props: {
   const textWidth = () => Math.max(8, dimensions().width - 4)
   const lines = () =>
     Option.match(props.pending(), {
-      onNone: (): ReadonlyArray<string> => [],
+      onNone: (): ReadonlyArray<WakeTrayLine> => [],
       onSome: (value) => wakeTrayLines(value, props.now(), textWidth()),
     })
   return (
@@ -90,8 +105,8 @@ export function WakeTray(props: {
         <For each={lines()}>
           {(line) => (
             <text wrapMode="none">
-              <span style={{ fg: theme.info }}>{"  "}</span>
-              <span style={{ fg: theme.textMuted }}>{line}</span>
+              <span style={{ fg: theme.info }}>{`${line.glyph} `}</span>
+              <span style={{ fg: theme.textMuted }}>{line.text}</span>
             </text>
           )}
         </For>
