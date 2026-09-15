@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Schema, type FileSystem, type Path } from "effect"
+import { Effect, Option, Schema, type FileSystem, type Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { updateCredentialBlob, type ClaudeCredentials } from "./credentials.js"
@@ -6,7 +6,6 @@ import { readCredentialsFile, writeCredentialsFile } from "./credentials-file.js
 import {
   ClaudeKeychainNotFoundError,
   getKeychainAccountName,
-  PRIMARY_CLAUDE_SERVICE,
   readFromKeychain,
   shouldFallBackToCredentialsFile,
   spawnSecurity,
@@ -16,8 +15,7 @@ import { AnthropicPlatform } from "../platform-adapter.js"
 
 /**
  * Read Claude Code credentials for `source` (the keychain service name).
- * Use `PRIMARY_CLAUDE_SERVICE` for the default account; pass another
- * service from `listClaudeCodeKeychainServices` for additional ones.
+ * Use `PRIMARY_CLAUDE_SERVICE` for the default account.
  *
  * On non-darwin (no keychain), `source` is ignored and the on-disk
  * `.credentials.json` is read instead — that file holds only one
@@ -53,63 +51,6 @@ export const readClaudeCodeCredentials = (
       }),
     )
   })
-
-/**
- * Enumerate every `Claude Code-credentials*` keychain entry — the CLI
- * stores per-account credentials with the suffix `-<random hex>`. Used
- * to surface multiple Claude accounts in the auth picker. Returns the
- * primary first, then the rest in keychain dump order.
- *
- * On non-darwin (no keychain), or when `dump-keychain` itself fails,
- * returns just the primary so callers fall back to the existing
- * single-credential path.
- */
-export const listClaudeCodeKeychainServices: Effect.Effect<
-  ReadonlyArray<string>,
-  ProviderAuthError,
-  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
-  const platform = yield* AnthropicPlatform
-  if (platform.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE]
-  const result = yield* platform
-    .runProcess("security", ["dump-keychain"], {
-      timeout: Duration.millis(5000),
-    })
-    .pipe(Effect.option)
-  if (Option.isNone(result) || result.value.exitCode !== 0) return [PRIMARY_CLAUDE_SERVICE]
-  const services: string[] = []
-  const seen = new Set<string>()
-  const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
-  while (true) {
-    const match = Option.fromNullishOr(re.exec(result.value.stdout))
-    if (Option.isNone(match)) break
-    const svc = match.value[0].slice(1, -1)
-    if (!seen.has(svc)) {
-      seen.add(svc)
-      services.push(svc)
-    }
-  }
-  const ordered: string[] = []
-  if (seen.has(PRIMARY_CLAUDE_SERVICE)) ordered.push(PRIMARY_CLAUDE_SERVICE)
-  for (const svc of services) {
-    if (svc !== PRIMARY_CLAUDE_SERVICE) ordered.push(svc)
-  }
-  if (ordered.length > 0) return ordered
-  return [PRIMARY_CLAUDE_SERVICE]
-})
-
-/**
- * One Claude account discovered on this machine. `source` is the
- * keychain service name (or `"file"` on non-darwin) and is what every
- * source-aware credential helper expects. `label` is the
- * human-readable account name (the keychain `acct` field, e.g.
- * `"alice@example.com"`) — this is what the auth picker UI displays.
- */
-export interface ClaudeAccount {
-  readonly source: string
-  readonly label: string
-  readonly credentials: ClaudeCredentials
-}
 
 /**
  * Persist refreshed credentials back to the keychain entry named by
