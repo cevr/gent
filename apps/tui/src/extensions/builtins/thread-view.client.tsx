@@ -72,6 +72,8 @@ export interface ThreadWindow {
   readonly summary: Option.Option<string>
   /** Messages the opening handoff replaced. */
   readonly summarizedCount: number
+  /** Messages the last projection left out of the model's view; only the live window has any. */
+  readonly omittedCount: number
   /** First line of the first user message in the window. */
   readonly preview: string
   readonly updatedAt: number
@@ -186,6 +188,7 @@ const windowOf = (
               onSome: (summarized) => summarized.count,
             }),
         }),
+        omittedCount: 0,
         preview: Option.match(spoken, {
           onNone: () => "",
           onSome: (message) => firstLine(messageText(message)),
@@ -247,6 +250,10 @@ export const makeThreadController = (
   fetchMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, { readonly message: string }>,
+  fetchOmitted: (active: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<number, { readonly message: string }>,
   cast: (effect: Effect.Effect<void>) => void,
   current: () => Option.Option<{ sessionId: SessionId; branchId: BranchId }>,
 ): ThreadController => {
@@ -277,7 +284,17 @@ export const makeThreadController = (
             ),
         }),
       )
-      return { sessions: chain.length, windows: perSession.flat() }
+      const omitted = yield* fetchOmitted(active)
+      const windows = perSession.flat()
+      // The projection metric belongs to the live window: the last one on the shell's branch.
+      const live = windows.findLastIndex((window) => window.branchId === active.branchId)
+      return {
+        sessions: chain.length,
+        windows: windows.map((window, index) => {
+          if (index !== live) return window
+          return { ...window, omittedCount: omitted }
+        }),
+      }
     })
 
   const refresh = () => {
@@ -323,10 +340,11 @@ export const threadItems = (windows: ReadonlyArray<ThreadWindow>): ReadonlyArray
   return items
 }
 
-/** `window 3 · 12 messages · 7 summarized · <preview>` */
+/** `window 3 · 12 messages · 7 summarized · 2 omitted · <preview>` */
 export const windowLabel = (window: ThreadWindow): string => {
   const parts = [`window ${window.index}`, plural(window.count, "message")]
   if (window.summarizedCount > 0) parts.push(`${window.summarizedCount} summarized`)
+  if (window.omittedCount > 0) parts.push(`${window.omittedCount} omitted`)
   if (window.preview.length > 0) parts.push(window.preview)
   return parts.join(" · ")
 }
@@ -532,6 +550,11 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
         transport
           .listMessages(branchId)
           .pipe(Effect.mapError((error) => ({ message: error.message }))),
+      (active) =>
+        transport.agentDetail(active).pipe(
+          Effect.map((detail) => detail.omittedMessages),
+          Effect.mapError((error) => ({ message: error.message })),
+        ),
       shell.cast,
       () =>
         Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({

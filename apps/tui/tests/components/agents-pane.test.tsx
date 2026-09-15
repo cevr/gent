@@ -100,6 +100,7 @@ describe("Agents pane navigation", () => {
                         turns: 7,
                         costUsd: 0.125,
                         durationMs: 93_000,
+                        omittedMessages: 0,
                       }),
                     )
                   },
@@ -155,6 +156,7 @@ describe("Agents pane navigation", () => {
                   turns: 1,
                   costUsd: 0,
                   durationMs: 0,
+                  omittedMessages: 0,
                 }),
               select: () => {},
               open: () => true,

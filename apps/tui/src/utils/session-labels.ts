@@ -17,15 +17,13 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   return theme.textMuted
 }
 
-/** `ctx 42% · 3 omitted`: percent of the model's input budget, then what the projection dropped. */
+/** `ctx 42%`: percent of the model's input budget. What the projection dropped is in the thread pane. */
 const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): BorderLabelItem => {
   const pct = Math.min(
     100,
     Math.round((context.estimatedTokens / context.contextLimitTokens) * 100),
   )
-  const parts = [`ctx ${pct}%`]
-  if (context.omittedMessages > 0) parts.push(`${context.omittedMessages} omitted`)
-  return { text: parts.join(" · "), color: pressureColor(pct, theme) }
+  return { text: `ctx ${pct}%`, color: pressureColor(pct, theme) }
 }
 
 export function buildTopRightLabels(

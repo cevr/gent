@@ -48,6 +48,8 @@ export interface ExtensionAgentDetail {
   readonly turns: number
   readonly costUsd: number
   readonly durationMs: number
+  /** Messages the last projection left out of the model's view; 0 before a turn has run. */
+  readonly omittedMessages: number
 }
 
 export interface ClientTransportDefinition {
@@ -281,6 +283,10 @@ const agentDetailAt = (
       turns: snapshot.metrics.turns,
       costUsd: snapshot.metrics.costUsd,
       durationMs: snapshot.metrics.durationMs,
+      omittedMessages: Option.fromUndefinedOr(snapshot.metrics.context).pipe(
+        Option.map((context) => context.omittedMessages),
+        Option.getOrElse(() => 0),
+      ),
     })),
   )
 

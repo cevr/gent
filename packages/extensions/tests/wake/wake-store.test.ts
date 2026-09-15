@@ -3,7 +3,7 @@
  * the file, firing removes the entry, and the next turn re-arms what is left.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Ref, Schema } from "effect"
+import { Effect, Exit, FileSystem, Layer, Ref, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
@@ -15,6 +15,7 @@ import {
 } from "@gent/core-internal/domain/extension-services"
 import {
   rearmPendingAlarms,
+  CancelTool,
   WakeAlarms,
   WakeAlarmsLive,
   WakeEntry,
@@ -90,6 +91,34 @@ describe("wake store", () => {
       expect(again).toBe(0)
       const alarms = yield* WakeAlarms
       expect(yield* alarms.pending).toEqual(["later"])
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer)),
+      Effect.timeout("8 seconds"),
+    ),
+  )
+
+  it.scopedLive("cancelling stops the timer, empties the file, and nothing fires", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-cancel-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const ctx = contextWith(home, queued)
+      const first = yield* runToolWithCtx(WakeTool, { afterSeconds: 0.3, note: "one" }, ctx)
+      const second = yield* runToolWithCtx(WakeTool, { afterSeconds: 0.3, note: "two" }, ctx)
+      const alarms = yield* WakeAlarms
+      expect((yield* alarms.pending).length).toBe(2)
+      const one = yield* runToolWithCtx(CancelTool, { wakeId: first.wakeId }, ctx)
+      expect(one.cancelled).toEqual([first.wakeId])
+      yield* waitFor(alarms.pending, (ids) => ids.length === 1, 3_000, "one timer left")
+      expect(yield* readFile(home)).not.toContain(first.wakeId)
+      const rest = yield* runToolWithCtx(CancelTool, {}, ctx)
+      expect(rest.cancelled).toEqual([second.wakeId])
+      yield* waitFor(alarms.pending, (ids) => ids.length === 0, 3_000, "no timer left")
+      expect(yield* readFile(home)).toBe("[]")
+      // gent/no-sleep: allow both alarms were due at 0.3s; past that point nothing may have queued
+      yield* Effect.sleep("500 millis")
+      expect(yield* Ref.get(queued)).toEqual([])
+      const missing = yield* runToolWithCtx(CancelTool, { wakeId: "nope" }, ctx).pipe(Effect.exit)
+      expect(Exit.isFailure(missing)).toBe(true)
     }).pipe(
       Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer)),
       Effect.timeout("8 seconds"),

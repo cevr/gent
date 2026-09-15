@@ -149,10 +149,16 @@ describe("windows on a branch", () => {
       count: 12,
       summary: Option.some("state\nmore"),
       summarizedCount: 7,
+      omittedCount: 2,
       preview: "fix the tests",
       updatedAt: 0,
     }
-    expect(windowLabel(window)).toBe("window 3 · 12 messages · 7 summarized · fix the tests")
+    expect(windowLabel(window)).toBe(
+      "window 3 · 12 messages · 7 summarized · 2 omitted · fix the tests",
+    )
+    expect(windowLabel({ ...window, omittedCount: 0 })).toBe(
+      "window 3 · 12 messages · 7 summarized · fix the tests",
+    )
     expect(detailFor(Option.some(window))).toBe("state")
     expect(detailFor(Option.some({ ...window, summary: Option.some("## Heading\n\nbody") }))).toBe(
       "body",
@@ -172,6 +178,7 @@ describe("windows on a branch", () => {
       count: 1,
       summary: Option.none(),
       summarizedCount: 0,
+      omittedCount: 0,
       preview: "",
       updatedAt: 0,
     }
@@ -199,6 +206,7 @@ describe("thread pane", () => {
         count: 2,
         summary: Option.none(),
         summarizedCount: 0,
+        omittedCount: 0,
         preview: "first ask",
         updatedAt: 0,
       }

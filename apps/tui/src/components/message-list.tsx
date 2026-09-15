@@ -203,7 +203,7 @@ const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
   })
 
 const wakeHead = (value: WakeDetails): string => {
-  if (value.kind === "alarm") return "◷ alarm fired"
+  if (value.outcome === "fired") return "◷ alarm fired"
   if (value.outcome === "timed-out") return "◉ monitor timed out"
   return "◉ monitor matched"
 }

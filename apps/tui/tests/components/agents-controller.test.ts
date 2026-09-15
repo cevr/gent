@@ -27,6 +27,7 @@ const detail = (turns: number): ExtensionAgentDetail => ({
   turns,
   costUsd: 0,
   durationMs: 0,
+  omittedMessages: 0,
 })
 
 describe("Agents controller detail", () => {

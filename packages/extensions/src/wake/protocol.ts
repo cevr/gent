@@ -35,9 +35,8 @@ export const WakePending = Schema.Struct({
 })
 export type WakePending = typeof WakePending.Type
 
-/** `details` on a fired wake message; the transcript collapses the row to `kind` and `note`. */
+/** `details` on a fired wake message; the transcript collapses the row to the outcome and `note`. `fired` is an alarm, the rest a monitor. */
 export const WakeDetails = Schema.Struct({
-  kind: Schema.Literals(["alarm", "monitor"]),
   outcome: Schema.Literals(["fired", "matched", "timed-out"]),
   note: Schema.String,
 })

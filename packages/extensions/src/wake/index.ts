@@ -18,6 +18,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Match,
   Option,
@@ -66,6 +67,8 @@ export interface WakeAlarmsService {
    * cancels it. False when work for that id is already running.
    */
   readonly schedule: (wakeId: string, work: Effect.Effect<void>) => Effect.Effect<boolean>
+  /** Interrupts the timer under `wakeId`; false when none is running. */
+  readonly cancel: (wakeId: string) => Effect.Effect<boolean>
   /** Ids with a running timer. */
   readonly pending: Effect.Effect<ReadonlyArray<string>>
 }
@@ -79,10 +82,10 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
   Effect.gen(function* () {
     const scope = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void).pipe(Effect.asVoid))
-    const running = yield* Ref.make<ReadonlySet<string>>(new Set())
+    const running = yield* Ref.make<ReadonlyMap<string, Fiber.Fiber<void>>>(new Map())
     const forget = (wakeId: string) =>
       Ref.update(running, (current) => {
-        const next = new Set(current)
+        const next = new Map(current)
         next.delete(wakeId)
         return next
       })
@@ -90,13 +93,21 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
       Effect.gen(function* () {
         const current = yield* Ref.get(running)
         if (current.has(wakeId)) return false
-        yield* Ref.set(running, new Set(current).add(wakeId))
-        yield* work.pipe(Effect.ensuring(forget(wakeId)), Effect.forkIn(scope))
+        const fiber = yield* work.pipe(Effect.ensuring(forget(wakeId)), Effect.forkIn(scope))
+        yield* Ref.update(running, (latest) => new Map(latest).set(wakeId, fiber))
+        return true
+      })
+    const cancel: WakeAlarmsService["cancel"] = (wakeId) =>
+      Effect.gen(function* () {
+        const fiber = Option.fromUndefinedOr((yield* Ref.get(running)).get(wakeId))
+        if (Option.isNone(fiber)) return false
+        yield* Fiber.interrupt(fiber.value)
         return true
       })
     return WakeAlarms.of({
       schedule,
-      pending: Ref.get(running).pipe(Effect.map((current) => [...current])),
+      cancel,
+      pending: Ref.get(running).pipe(Effect.map((current) => [...current.keys()])),
     })
   }),
 )
@@ -212,11 +223,7 @@ const alarmWork = (
     )
     yield* Effect.sleep(Duration.millis(Math.max(0, entry.dueAt - now)))
     yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
-    yield* queueWake(entry.wakeId, wakeMessage(entry), {
-      kind: "alarm",
-      outcome: "fired",
-      note: entry.note,
-    })
+    yield* queueWake(entry.wakeId, wakeMessage(entry), { outcome: "fired", note: entry.note })
   })
 
 const matches = (
@@ -253,7 +260,7 @@ const monitorWork = (
         return yield* queueWake(
           entry.wakeId,
           monitorMessage(entry, "matched", checks, lastOutput),
-          { kind: "monitor", outcome: "matched", note: entry.note },
+          { outcome: "matched", note: entry.note },
         )
       }
       const now = yield* Clock.currentTimeMillis
@@ -261,7 +268,7 @@ const monitorWork = (
         return yield* queueWake(
           entry.wakeId,
           monitorMessage(entry, "timed-out", checks, lastOutput),
-          { kind: "monitor", outcome: "timed-out", note: entry.note },
+          { outcome: "timed-out", note: entry.note },
         )
       }
       yield* Effect.sleep(
@@ -287,11 +294,10 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
   const work = workFor(entry)
   const forget = modifyWakeEntries((current) =>
     current.filter((candidate) => candidate.wakeId !== entry.wakeId),
-  ).pipe(Effect.ignore, Effect.provideService(ExtensionContext, ctx))
+  ).pipe(Effect.ignore)
   return yield* alarms.schedule(
     entry.wakeId,
     work.pipe(
-      Effect.provideService(ExtensionContext, ctx),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void
         return Effect.logWarning("wake.fire.failed").pipe(
@@ -299,6 +305,7 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
         )
       }),
       Effect.ensuring(forget),
+      Effect.provideService(ExtensionContext, ctx),
     ),
   )
 })
@@ -317,6 +324,20 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
 const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: WakeEntry) {
   yield* modifyWakeEntries((current) => [...current, entry])
   yield* armEntry(entry)
+})
+
+/** Drops entries from the file and interrupts their timers; returns the ids removed. */
+const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEntry) => boolean) {
+  const alarms = yield* WakeAlarms
+  let removed: ReadonlyArray<string> = []
+  yield* modifyWakeEntries((current) => {
+    removed = current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId)
+    return current.filter(keep)
+  })
+  // A stored entry may have no timer yet (before the first turn re-arms it); an
+  // interrupted timer would drop the entry itself, but the file is already clean.
+  yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
+  return removed
 })
 
 // ── Tools ──
@@ -487,6 +508,37 @@ export const MonitorTool = tool({
   }),
 })
 
+export const CancelParams = Schema.Struct({
+  wakeId: Schema.optionalKey(
+    Schema.String.annotate({
+      description:
+        "The alarm or monitor to cancel. Omit to cancel every pending one on this branch.",
+    }),
+  ),
+})
+
+export const CancelResult = Schema.Struct({ cancelled: Schema.Array(Schema.String) })
+
+export const CancelTool = tool({
+  id: "wake.cancel",
+  readonly: true,
+  description:
+    "Cancel a pending alarm or monitor by wakeId, or every pending one on this branch when no id is given. Use it when the thing you were waiting for is already done.",
+  promptSnippet: "Cancel a pending alarm or monitor",
+  params: CancelParams,
+  output: CancelResult,
+  execute: Effect.fn("CancelTool.execute")(function* (params: typeof CancelParams.Type) {
+    const target = Option.fromUndefinedOr(params.wakeId)
+    const cancelled = yield* cancelWakes((entry) =>
+      Option.match(target, { onNone: () => false, onSome: (id) => entry.wakeId !== id }),
+    )
+    if (Option.isSome(target) && cancelled.length === 0) {
+      return yield* new WakeError({ message: `No pending wake ${target.value} on this branch` })
+    }
+    return { cancelled }
+  }),
+})
+
 // ── Requests ──
 
 export const WakeRpc = defineRequests(WAKE_EXTENSION_ID, {
@@ -521,7 +573,7 @@ export const WakeExtension = defineExtension({
   id: WAKE_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", WakeTool, MonitorTool)
+    yield* host.register("tool", WakeTool, MonitorTool, CancelTool)
     yield* host.register("request", WakeRpc.List)
     // The branch resource starts without a session facade, so the first turn
     // after a restart is where stored entries get their timers back.
