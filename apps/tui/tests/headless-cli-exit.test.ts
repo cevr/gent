@@ -77,7 +77,7 @@ describe("headless CLI", () => {
         )
         expect(stderr).toBe("")
         expect(exitCode).toBe(0)
-        expect(stdout.length).toBeGreaterThan(0)
+        expect(stdout).toContain("Latest user message: Say hi in 3 words")
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )

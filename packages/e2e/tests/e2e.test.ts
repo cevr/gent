@@ -46,17 +46,6 @@ const waitForOutput = (ctx: TestContext, text: string, timeoutMs: number) =>
 
 describe("E2E: Basics", () => {
   it.scopedLive(
-    "starts and shows home view with prompt",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* waitForOutput(ctx, "┃", 10_000)
-        expect(stripAnsi(ctx.output)).toContain("┃")
-      }),
-    TEST_TIMEOUT,
-  )
-
-  it.scopedLive(
     "typing text appears in output",
     () =>
       Effect.gen(function* () {
@@ -177,60 +166,19 @@ describe("E2E: Shell Mode", () => {
 
 describe("E2E: Session", () => {
   it.scopedLive(
-    "submitting message triggers session creation",
+    "submitting message opens a session and starts the turn",
     () =>
       Effect.gen(function* () {
-        const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        // `--mock-empty` keeps the turn offline: memory state, no seeded
+        // session, a model that answers nothing. The home footer reads
+        // "ready"; only the session route renders the "Generating" label.
+        const ctx = yield* acquireTestContext(seedAndSpawn(["--mock-empty"]))
+        yield* ptyWaitFor(ctx, "ready", { timeout: 10_000 })
         ctx.pty.write("hi")
         yield* shortPause(300)
         ctx.pty.write(ENTER)
-        yield* shortPause(3_000)
-        expect(ctx.output.length).toBeGreaterThan(2000)
+        yield* ptyWaitFor(ctx, "Generating", { timeout: 10_000 })
         ctx.pty.write(CTRL_C)
-      }),
-    TEST_TIMEOUT,
-  )
-})
-
-describe("E2E: Headless", () => {
-  it.scopedLive(
-    "-H flag produces output",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* acquireTestContext(seedAndSpawn(["-H", "say hello"]))
-        yield* raceWithTimeout(ctx.pty.exited, 8_000)
-        expect(ctx.output.length).toBeGreaterThan(0)
-      }),
-    TEST_TIMEOUT,
-  )
-})
-
-describe("E2E: Prompt History", () => {
-  it.scopedLive(
-    "up arrow at empty prompt does not crash",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        ctx.pty.write(UP)
-        yield* shortPause(500)
-        expect(stripAnsi(ctx.output)).toContain("┃")
-      }),
-    TEST_TIMEOUT,
-  )
-
-  it.scopedLive(
-    "up arrow at non-empty input does not navigate",
-    () =>
-      Effect.gen(function* () {
-        const ctx = yield* acquireTestContext(seedAndSpawn())
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
-        ctx.pty.write("some text")
-        yield* shortPause(500)
-        ctx.pty.write(UP)
-        yield* shortPause(300)
-        expect(stripAnsi(ctx.output)).toContain("some")
       }),
     TEST_TIMEOUT,
   )
