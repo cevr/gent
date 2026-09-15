@@ -6,7 +6,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Schema, Scope } from "effect"
 import { extractText, Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
-import { toTestFailure, waitFor } from "./transport-harness-boundary"
+import { toTestFailure, waitFor } from "./test-failure-boundary"
 import {
   killProcess,
   spawnIdleServer,

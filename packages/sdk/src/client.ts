@@ -163,7 +163,7 @@ const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Sc
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer with no requirements should infer the empty service context
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
-export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
+type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 
 export interface GentClientBundle<Services = Scope.Scope> {
   readonly client: GentNamespacedClient

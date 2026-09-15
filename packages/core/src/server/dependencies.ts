@@ -65,7 +65,7 @@ interface DependencyOverrides {
  * a typed error means the failure channel of the bootstrap layer carries
  * an explicit `BootstrapError` instead of an opaque defect.
  */
-export class BootstrapError extends Schema.TaggedError<BootstrapError>()("BootstrapError", {
+class BootstrapError extends Schema.TaggedError<BootstrapError>()("BootstrapError", {
   seed: Schema.Literals(["launchSessionProfile", "baseSections"]),
 }) {
   override get message(): string {

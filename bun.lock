@@ -32,9 +32,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-bun": "catalog:",
-        "@gent/core": "workspace:*",
-        "@gent/core-internal": "workspace:*",
-        "@gent/extensions": "workspace:*",
+        "@gent/sdk": "workspace:*",
         "msgpackr": "catalog:",
         "multipasta": "catalog:",
       },
@@ -102,11 +100,8 @@
       "name": "@gent/e2e",
       "version": "0.0.0",
       "dependencies": {
-        "@gent/core": "workspace:*",
         "@gent/core-internal": "workspace:*",
-        "@gent/extensions": "workspace:*",
         "@gent/sdk": "workspace:*",
-        "@gent/server-http": "workspace:*",
       },
       "devDependencies": {
         "zigpty": "^0.2.1",
