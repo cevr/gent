@@ -1950,3 +1950,30 @@ Thread model decision: a thread is a view, not a record. Session-per-handoff
 was rejected: it would cost a new actor entity, branch resources, the cell
 kernel's retained bindings, and re-keyed children on every handoff, and run
 36 handed off twelve times inside one turn.
+
+## Wake alarm; bindings note trimmed to the kept window (2026-09-15, `0442e73e` → `a9f22935`)
+
+`@gent/wake` (`packages/extensions/src/wake/index.ts`, 194 lines) is one tool
+and one branch-scoped resource over the existing
+`ctx.Session.queueFollowUp({ wake: true })`. `wake({ afterSeconds | at, note })`
+returns `{ wakeId, dueAt, note }`; a timer forked into the resource scope
+queues a user-role message with `customType: "wake"` at the due time and the
+loop answers it as a new turn. No core change. Two tests in
+`packages/extensions/tests/wake/wake.test.ts`; the RPC test times out when the
+alarm is not scheduled. In the loop, `wake: true` only matters for a cold
+actor: a warm idle loop with prior history starts the queued turn anyway.
+Terminal check in `/private/tmp/gent-gamut` (Opus 5, low): asked in plain
+words for a 60-second alarm, the session answered in 5s and went idle; at
+05:51:35 a `MessageReceived` with `customType: wake` started a new turn that
+ran `bun test` (16 pass) and completed. Known gap, recorded in
+`ARCHITECTURE.md`: branch resources start without an `ExtensionContext`, so
+a pending alarm does not survive a branch close or a server restart.
+
+`a9f22935` adds `kept` (the messages after the anchor) to `CompactionRequest`
+in `runtime/model-context-compactor.ts`; `turn-source.ts` fills it from the
+same slice that yields `history`. `referencedBindings(names, kept)` in
+`compaction/model-compaction.ts` keeps a retained name only when the kept
+text mentions it as a whole identifier (`$` and `_` count as word characters).
+Both the summary prompt note and the notice's "Names still bound" line use
+the filtered list. Two tests added; the compactor test fails when the list is
+not filtered. The gamut config no longer carries `contextLength: 20000`.
