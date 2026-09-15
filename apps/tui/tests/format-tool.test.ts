@@ -143,10 +143,11 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("delegate", {})).toBe("")
   })
 
-  test("delegate: truncates long todo text", () => {
+  test("delegate: truncates long todo text within its 40-column budget", () => {
     const longTodo = "a".repeat(60)
     const result = toolArgSummary("delegate", { todo: longTodo })
-    expect(result).toBe(`${"a".repeat(40)}…`)
+    expect(result).toBe(`${"a".repeat(39)}…`)
+    expect(Bun.stringWidth(result)).toBe(40)
   })
 
   test("read_session: goal", () => {

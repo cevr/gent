@@ -28,7 +28,7 @@ import { SelectList, selectable, type SelectListRow } from "./select-list"
 import type { Branch, BranchTreeNode } from "../client"
 import type { BranchId, SessionId } from "@gent/core/protocol"
 import { formatError } from "../utils/format-error"
-import { truncate } from "../utils/format-tool"
+import { truncate } from "../utils/truncate"
 
 export interface BranchPickerProps {
   readonly open: boolean

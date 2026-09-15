@@ -17,7 +17,7 @@ import { MessageList } from "../components/message-list"
 import { NativeTranscript } from "../components/native-transcript"
 import { Composer } from "../components/composer"
 import { ComposerFrame } from "../components/composer-frame"
-import { pickerText } from "../components/picker-text"
+import { truncate } from "../utils/truncate"
 import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme/index"
@@ -250,7 +250,7 @@ export function Session(props: SessionProps) {
                   if (controller.activity().phase === "tool") label = controller.phaseLabel()
                   if (controller.elapsed() >= 1000)
                     label += ` (${formatElapsed(controller.elapsed())})`
-                  return pickerText(label, Math.max(1, dimensions().width - 2))
+                  return truncate(label, Math.max(1, dimensions().width - 2))
                 })()}
               </text>
             </box>

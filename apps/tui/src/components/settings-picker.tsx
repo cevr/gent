@@ -4,7 +4,7 @@ import { ReasoningEffort, type Model } from "@gent/core/protocol"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
-import { truncate } from "../utils/format-tool"
+import { truncate } from "../utils/truncate"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 
 /** One selectable row: the id goes back to the caller, name and detail render. */

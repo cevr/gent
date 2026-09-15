@@ -28,7 +28,7 @@ import {
 } from "../../components/select-list"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
-import { truncate } from "../../utils/format-tool"
+import { truncate } from "../../utils/truncate"
 import {
   clientCommandContribution,
   clientContributions,

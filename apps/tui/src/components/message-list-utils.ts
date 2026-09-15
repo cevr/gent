@@ -4,6 +4,7 @@
 
 import { Predicate } from "effect"
 import { toolArgSummary } from "../utils/format-tool.js"
+import { truncate } from "../utils/truncate"
 import { getString } from "../utils/parse-tool-output.js"
 import type { ToolInput } from "../utils/parse-tool-output.js"
 
@@ -236,11 +237,6 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   return parts.join(" · ")
 }
 
-const truncateLabel = (text: string, maxLength: number) => {
-  if (text.length <= maxLength) return text
-  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
-}
-
 /** One-line label for a cell row: its error, else its operations, else its verbs, else its result, else its code. */
 export function formatCellRowLabel(
   call: ActivityCall,
@@ -248,7 +244,7 @@ export function formatCellRowLabel(
   maxLength = 72,
 ): string {
   if (call.status === "error" && fallback.error.length > 0) {
-    return truncateLabel(fallback.error.split("\n")[0] ?? "", maxLength)
+    return truncate(fallback.error.split("\n")[0] ?? "", maxLength)
   }
   if (call.operations.length > 0) {
     const labels = collapseRepeats(
@@ -259,13 +255,13 @@ export function formatCellRowLabel(
         return label
       }),
     )
-    return truncateLabel(labels.join(" · "), maxLength)
+    return truncate(labels.join(" · "), maxLength)
   }
   const verbs = describeCellCode(fallback.code)
-  if (verbs.length > 0) return truncateLabel(verbs.join(" · "), maxLength)
+  if (verbs.length > 0) return truncate(verbs.join(" · "), maxLength)
   const display = fallback.display.split("\n").find((line) => line.trim().length > 0) ?? ""
-  if (display.length > 0) return truncateLabel(`→ ${display.trim()}`, maxLength)
-  return truncateLabel(fallback.code.split("\n")[0] ?? "", maxLength)
+  if (display.length > 0) return truncate(`→ ${display.trim()}`, maxLength)
+  return truncate(fallback.code.split("\n")[0] ?? "", maxLength)
 }
 
 // ── Progressive disclosure ──

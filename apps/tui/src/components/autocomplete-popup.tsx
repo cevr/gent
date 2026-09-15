@@ -12,7 +12,7 @@ import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
-import { pickerText } from "./picker-text"
+import { truncate } from "../utils/truncate"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useExtensionUI } from "../extensions/context"
@@ -186,7 +186,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                   }}
                 >
                   <span style={{ bold: isSelected() }}>
-                    {pickerText(item.label, labelWidth() - 2)}
+                    {truncate(item.label, labelWidth() - 2)}
                   </span>
                 </text>
                 <text flexGrow={1} wrapMode="none" truncate style={{ fg: descriptionColor() }}>
@@ -198,7 +198,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
                         dim: !isSelected(),
                       }}
                     >
-                      {pickerText(item.description ?? "", dimensions().width - labelWidth() - 2)}
+                      {truncate(item.description ?? "", dimensions().width - labelWidth() - 2)}
                     </span>
                   </Show>
                 </text>

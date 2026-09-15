@@ -54,12 +54,32 @@ describe("wakeTrayLines", () => {
       const lines = wakeTrayLines(many, 0, 80)
       expect(lines.length).toBe(4)
       expect(lines[3]?.text).toBe("+2 more pending")
-      expect(wakeTrayLines(pending, 1_000_000, 20)[0]?.text).toBe("alarm in 1m 35s ·...")
+      expect(wakeTrayLines(pending, 1_000_000, 20)[0]?.text).toBe("alarm in 1m 35s · c…")
     }),
   )
 })
 
 describe("Wake tray", () => {
+  it.live("a CJK note stays inside the tray's column budget", () =>
+    Effect.sync(() => {
+      const wide: WakePendingType = {
+        now: 1_000_000,
+        entries: [
+          { _tag: "alarm", wakeId: "a2", dueAt: 1_000_000 + 60_000, note: "部署を確認する" },
+        ],
+      }
+      const [line] = wakeTrayLines(wide, wide.now, 24)
+      expect(Option.isSome(Option.fromNullishOr(line))).toBe(true)
+      const text = Option.getOrElse(
+        Option.map(Option.fromNullishOr(line), (l) => l.text),
+        () => "",
+      )
+      expect(text.length).toBeLessThanOrEqual(24)
+      expect(Bun.stringWidth(text)).toBeLessThanOrEqual(24)
+      expect(text.endsWith("…")).toBe(true)
+    }),
+  )
+
   it.live("shows pending entries and hides once none remain", () =>
     Effect.gen(function* () {
       const [value, setValue] = createSignal<Option.Option<WakePendingType>>(Option.some(pending))

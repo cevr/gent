@@ -25,7 +25,7 @@ import {
 } from "./command-palette-state"
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
-import { pickerQueryText, pickerText } from "./picker-text"
+import { truncate, truncateStart } from "../utils/truncate"
 import { textWidth } from "../platform/text-width-adapter"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
@@ -435,12 +435,12 @@ export function CommandPalette() {
     })
 
   const queryPrefix = () => {
-    if (searchQuery().length === 0) return pickerText(breadcrumb(), dimensions().width - 2)
+    if (searchQuery().length === 0) return truncate(breadcrumb(), dimensions().width - 2)
     const available = Math.max(1, Math.floor((dimensions().width - 3) / 2))
-    return `${pickerText(breadcrumb() || "›", available)} `
+    return `${truncate(breadcrumb() || "›", available)} `
   }
   const visibleQuery = () =>
-    pickerQueryText(searchQuery(), dimensions().width - 3 - textWidth(queryPrefix()))
+    truncateStart(searchQuery(), dimensions().width - 3 - textWidth(queryPrefix()))
 
   const LoadingIndicator = () => (
     <box paddingLeft={1}>
@@ -467,7 +467,7 @@ export function CommandPalette() {
           const detail = () => {
             let text = item.description ?? ""
             if (item.shortcut) text += ` [${item.shortcut}]`
-            return pickerText(text, dimensions().width - labelWidth() - 3)
+            return truncate(text, dimensions().width - labelWidth() - 3)
           }
           return (
             <box id={`item-${index()}`} paddingLeft={1} flexDirection="row" height={1} gap={2}>
@@ -479,7 +479,7 @@ export function CommandPalette() {
                 style={{ fg: itemTextColor() }}
               >
                 <span style={{ bold: isSelected() && !disabled }}>
-                  {pickerText(item.title, labelWidth() - 2)}
+                  {truncate(item.title, labelWidth() - 2)}
                 </span>
               </text>
               <Show when={hasDetails()}>

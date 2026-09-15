@@ -3,7 +3,7 @@ import type { BorderLabelItem } from "../utils/border-segments"
 import { useTheme } from "../theme/index"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { textWidth } from "../platform/text-width-adapter"
-import { pickerText } from "./picker-text"
+import { truncate } from "../utils/truncate"
 
 interface ComposerFrameProps {
   labels: readonly BorderLabelItem[]
@@ -20,7 +20,7 @@ export function ComposerFrame(props: ComposerFrameProps) {
       if (label.text.length === 0) continue
       if (labels.length > 0) remaining -= 3
       if (remaining <= 0) break
-      const text = pickerText(label.text, remaining)
+      const text = truncate(label.text, remaining)
       labels.push({ ...label, text })
       if (textWidth(label.text) > remaining) break
       remaining -= textWidth(text)

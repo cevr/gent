@@ -4,7 +4,7 @@ import { useTerminalDimensions } from "../terminal-dimensions"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import { truncate } from "../utils/format-tool"
+import { truncate } from "../utils/truncate"
 import type { ScopedKeyboardEvent } from "../keyboard/context"
 import { Option } from "effect"
 import {

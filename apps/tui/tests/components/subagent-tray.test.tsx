@@ -69,7 +69,7 @@ describe("trayLines", () => {
         "+2 more working",
       ])
       expect(lines.map((line) => line.pulse)).toEqual([true, true, true, false])
-      expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("main working · ...")
+      expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("main working · a …")
     }),
   )
 })

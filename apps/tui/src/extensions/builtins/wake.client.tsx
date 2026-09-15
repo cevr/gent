@@ -22,13 +22,9 @@ import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import { clientContributions, defineClientExtension, widgetContribution } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
 import { ClientLifecycle, ClientShell, makeClientSessionResource } from "../client-services"
+import { truncate } from "../../utils/truncate"
 
 const TRAY_MAX_ROWS = 3
-
-const truncate = (text: string, width: number): string => {
-  if (text.length <= width) return text
-  return `${text.slice(0, Math.max(0, width - 3))}...`
-}
 
 /** `1h 02m`, `4m 20s`, `45s`, or `now`. */
 export const formatRemaining = (millis: number): string => {

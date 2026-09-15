@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect"
 import type { ToolInput } from "./parse-tool-output"
+import { truncate } from "./truncate"
 
 export function formatTokens(count: number): string {
   if (count < 1000) return count.toString()
@@ -35,11 +36,6 @@ export function formatUsageStats(
   return parts.join(" ")
 }
 
-export const truncate = (value: string, max: number): string => {
-  if (value.length > max) return `${value.slice(0, Math.max(0, max - 3))}...`
-  return value
-}
-
 export function shortenPath(p: string, home?: string): string {
   const homePath = Option.fromNullishOr(home)
   if (Option.isSome(homePath) && homePath.value.length > 0 && p.startsWith(homePath.value)) {
@@ -69,11 +65,6 @@ const optionsHome = (options?: ToolArgSummaryOptions) =>
 
 function getPathArg(args: Schema.JsonObject): string {
   return getStringArg(args, "file_path", "path")
-}
-
-function truncateText(text: string, limit: number): string {
-  if (text.length <= limit) return text
-  return `${text.slice(0, limit)}…`
 }
 
 interface ToolArgSummaryOptions {
@@ -122,7 +113,7 @@ function summarizeScopedPattern(
 }
 
 function summarizeDelegate(args: Schema.JsonObject): string {
-  return truncateText(getStringArg(args, "todo"), 40)
+  return truncate(getStringArg(args, "todo"), 40)
 }
 
 type ToolArgFormatter = (args: Schema.JsonObject, options?: ToolArgSummaryOptions) => string
@@ -135,7 +126,7 @@ const toolArgFormatters = {
   },
   cell: (args) => {
     const code = getStringArg(args, "code")
-    return truncateText(code.split("\n")[0] ?? "", 60)
+    return truncate(code.split("\n")[0] ?? "", 60)
   },
   read: summarizeRead,
   write: summarizeWrite,
@@ -149,8 +140,8 @@ const toolArgFormatters = {
   grep: (args, options) => summarizeScopedPattern(args, options, "/", "/"),
   glob: (args, options) => summarizeScopedPattern(args, options),
   delegate: summarizeDelegate,
-  read_session: (args) => truncateText(getStringArg(args, "goal"), 50),
-  handoff: (args) => truncateText(getStringArg(args, "reason"), 50),
+  read_session: (args) => truncate(getStringArg(args, "goal"), 50),
+  handoff: (args) => truncate(getStringArg(args, "reason"), 50),
 } satisfies Record<string, ToolArgFormatter>
 const toolArgFormattersByName = new Map<string, ToolArgFormatter>(Object.entries(toolArgFormatters))
 

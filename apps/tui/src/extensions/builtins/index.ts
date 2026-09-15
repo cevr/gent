@@ -22,11 +22,7 @@ import {
 import { requestExtension } from "../client-transport"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ConnectionWidget } from "../../components/connection-widget"
-
-const truncateDescription = (description: string): string => {
-  if (description.length > 60) return description.slice(0, 60) + "..."
-  return description
-}
+import { truncate } from "../../utils/truncate"
 
 const builtinConnection = defineClientExtension("@gent/connection", {
   setup: Effect.succeed(
@@ -59,7 +55,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
             .map((s) => ({
               id: s.name,
               label: s.name,
-              description: truncateDescription(s.description),
+              description: truncate(s.description, 60),
             }))
         }),
       formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
