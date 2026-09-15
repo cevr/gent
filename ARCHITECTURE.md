@@ -264,7 +264,9 @@ Core orchestration lives in:
 - `packages/core/src/runtime/agent/agent-loop.actor.ts`
 - `packages/core/src/runtime/agent/agent-loop.behavior.ts`
 - `packages/core/src/runtime/agent/agent-loop.state.ts`
-- `packages/core/src/runtime/agent/turn-helpers.ts`
+- `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`
+- `packages/core/src/runtime/agent/turn-source.ts`
+- `packages/core/src/runtime/agent/turn-window.ts`
 - `packages/core/src/runtime/agent/turn-response.ts`
 
 Shape:
