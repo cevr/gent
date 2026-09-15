@@ -65,9 +65,10 @@
  */
 
 import { Effect, Option, Schedule, Schema } from "effect"
-import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
-import type { HttpClientResponse } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { HttpClient, Headers } from "effect/unstable/http"
+import type { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import type { HttpClientError } from "effect/unstable/http/HttpClientError"
+import { freshCredentials, recoverUnauthorized, withHeaders } from "../provider-http.js"
 import type { AnthropicBetaCacheApi } from "./beta-cache.js"
 import type { CredentialCache } from "../provider-credentials.js"
 import type { ClaudeCredentials } from "./oauth.js"
@@ -121,24 +122,6 @@ class LongContextBetaError extends Schema.TaggedError<LongContextBetaError>(
 }
 
 /**
- * Internal error driving 401 recovery. The credential cache TTL (30s)
- * can outlive the token's last minute, and tokens can be revoked
- * server-side between cache fill and wire send. On 401, invalidate the
- * cache and retry once — `creds.getFresh` then re-reads from keychain
- * or forces a refresh. Counsel-friendly typed error so the recovery
- * fires only on this signal, not other unrelated 4xx.
- */
-class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
-  "@gent/extensions/src/anthropic/keychain-transform/Unauthorized401Error",
-)("Unauthorized401Error", {
-  response: Schema.Any,
-}) {
-  getResponse(): HttpClientResponse.HttpClientResponse {
-    return this.response
-  }
-}
-
-/**
  * Pick the next long-context beta to drop given the candidates the
  * model actually emits and the set already excluded.
  */
@@ -154,24 +137,6 @@ const pickNextBetaToExclude = (
 }
 
 // ── Helpers ──
-
-/**
- * Reconstruct an `HttpClientRequest` with the same method/url/etc. but a
- * fresh headers map. The public `setHeaders` combinator only merges; it
- * cannot remove. To delete `x-api-key` we need a full reconstruction
- * via the public `make(method)(url, options)` constructor — verbose,
- * but no internals.
- */
-const withHeaders = (
-  req: HttpClientRequest.HttpClientRequest,
-  headers: Headers.Headers,
-): HttpClientRequest.HttpClientRequest =>
-  HttpClientRequest.make(req.method)(req.url, {
-    headers,
-    body: req.body,
-    urlParams: req.urlParams,
-    hash: Option.getOrUndefined(req.hash),
-  })
 
 /**
  * Decode the request body to a string for model-id extraction. The
@@ -262,22 +227,7 @@ export const buildKeychainTransformClient =
     client.pipe(
       HttpClient.mapRequestEffect((req) =>
         Effect.gen(function* () {
-          const fresh = yield* creds.getFresh.pipe(
-            // Convert ProviderAuthError → HttpClientError so the
-            // returned client type stays `With<HttpClientError, never>`
-            // (what the SDK signature requires). Surfaces credential
-            // unavailability through the standard transport channel.
-            Effect.mapError(
-              (cause) =>
-                new HttpClientError({
-                  reason: new TransportError({
-                    request: req,
-                    cause,
-                    description: cause.message,
-                  }),
-                }),
-            ),
-          )
+          const fresh = yield* freshCredentials(creds, req)
           const modelId = parseModelIdFromBody(requestBodyText(req))
           const betaFlags = env.betaFlags
           // Read the cross-request-learned exclusion set from the
@@ -339,7 +289,7 @@ export const buildKeychainTransformClient =
               }
             },
           ),
-          // Budget: at most LONG_CONTEXT_BETAS.length retries — bounded
+          // Budget: at most one retry per long-context beta — bounded
           // because every retry adds one beta to the cache's excluded
           // set, and `pickNextBetaToExclude` returns `None` once
           // exhausted (which short-circuits to success above without
@@ -383,41 +333,5 @@ export const buildKeychainTransformClient =
           Effect.catchTag("TransientResponseError", (e) => Effect.succeed(e.getResponse())),
         ),
       ),
-      // 401 recovery (outermost): invalidate the credential cache + retry
-      // ONCE. The cache TTL is 30s so it can outlive a token's last
-      // minute; tokens can also be revoked between cache fill and wire
-      // send. On the retry, `mapRequestEffect` re-enters and `creds.
-      // getFresh` re-reads keychain or forces a refresh. A second 401
-      // means a real auth failure (revoked session, missing scope) —
-      // surface the response to the caller so user-facing recovery
-      // (the "Run `claude`" message) can kick in.
-      //
-      // `tapError` runs the invalidate effect AFTER the failure but
-      // BEFORE Effect.retry decides to re-attempt — invalidate must
-      // commit before the next preprocess re-reads the cache.
-      HttpClient.transformResponse((effect) =>
-        effect.pipe(
-          Effect.flatMap(
-            (
-              response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> => {
-              switch (response.status) {
-                case 401:
-                  return Effect.fail(new Unauthorized401Error({ response }))
-                default:
-                  return Effect.succeed(response)
-              }
-            },
-          ),
-          Effect.tapError((e) => {
-            if (e._tag === "Unauthorized401Error") return creds.invalidate
-            return Effect.void
-          }),
-          Effect.retry({
-            while: (e) => e._tag === "Unauthorized401Error",
-            times: 1,
-          }),
-          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.getResponse())),
-        ),
-      ),
+      recoverUnauthorized(creds),
     )

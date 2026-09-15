@@ -2,19 +2,13 @@ export {
   getBillingHeaderInputs,
   getCliVersion,
   getLongContextBetasForWith,
-  getModelBetas,
   getUserAgent,
   isLongContextError,
-  LONG_CONTEXT_BETAS,
   parseModelIdFromBody,
   SYSTEM_IDENTITY_PREFIX,
 } from "./oauth/anthropic-headers.js"
-export {
-  listClaudeCodeKeychainServices,
-  readClaudeCodeCredentials,
-  writeBackCredentials,
-  type ClaudeAccount,
-} from "./oauth/accounts.js"
+export { getModelBetas } from "./model-config.js"
+export { readClaudeCodeCredentials, writeBackCredentials } from "./oauth/accounts.js"
 export {
   ClaudeCredentials,
   freshEnoughForUse,

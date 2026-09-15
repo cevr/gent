@@ -33,10 +33,10 @@
 
 // Preserve vendor JSON fields that this transport adapter does not interpret.
 /* oxlint-disable effect/noUnknownParameters, effect/noUnsafeDictionaryType */
-import { Predicate, Effect, Option, Schema } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse, Headers } from "effect/unstable/http"
+import { Effect, Predicate, Option, Schema } from "effect"
+import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import type { HttpBody } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { freshCredentials, recoverUnauthorized, withHeaders } from "../provider-http.js"
 import type { CredentialCache } from "../provider-credentials.js"
 import type { OpenAICredentials } from "./credential-service.js"
 
@@ -287,50 +287,6 @@ const buildOauthHeaders = (
   return headers
 }
 
-/**
- * Reconstruct an `HttpClientRequest` with the same method/url/body but
- * a fresh headers map. The public `setHeaders` combinator only merges
- * — to override values we already had to handle deletion via
- * `Headers.remove` upstream, so the safe shape is full reconstruction
- * via the public `make(method)(url, options)` constructor.
- *
- * Mirrors the Anthropic `withHeaders` helper — see
- * `keychain-transform.ts:167-176`.
- */
-const withHeaders = (
-  req: HttpClientRequest.HttpClientRequest,
-  headers: Headers.Headers,
-): HttpClientRequest.HttpClientRequest =>
-  HttpClientRequest.make(req.method)(req.url, {
-    headers,
-    body: req.body,
-    urlParams: req.urlParams,
-    hash: Option.getOrUndefined(req.hash),
-  })
-
-// ── 401 recovery ──
-
-/**
- * Internal error driving 401 recovery. The credential cache TTL (30s)
- * can outlive a token's last minute, and OAuth tokens can be revoked
- * server-side between cache fill and wire send. On 401, invalidate
- * the cache and retry once — the next preprocess re-enters and
- * `creds.getFresh` forces a refresh against the rotated refresh token
- * preserved in the cell.
- *
- * Mirrors the Anthropic `Unauthorized401Error` (keychain-transform.ts:
- * 132-140) — typed so the recovery fires only on this signal, not on
- * other 4xx that callers should see verbatim.
- */
-class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
-  "@gent/extensions/src/openai/codex-transform/Unauthorized401Error",
-)("Unauthorized401Error", {
-  response: Schema.declare<HttpClientResponse.HttpClientResponse>(
-    (input): input is HttpClientResponse.HttpClientResponse =>
-      Predicate.hasProperty(input, HttpClientResponse.TypeId),
-  ),
-}) {}
-
 // ── transformClient factory ──
 
 /**
@@ -371,22 +327,7 @@ export const buildCodexTransformClient =
     client.pipe(
       HttpClient.mapRequestEffect((req) =>
         Effect.gen(function* () {
-          const fresh = yield* creds.getFresh.pipe(
-            // Convert ProviderAuthError → HttpClientError so the
-            // returned client type stays `With<HttpClientError, never>`
-            // (what the SDK signature requires). Surfaces credential
-            // unavailability through the standard transport channel.
-            Effect.mapError(
-              (cause) =>
-                new HttpClientError({
-                  reason: new TransportError({
-                    request: req,
-                    cause,
-                    description: cause.message,
-                  }),
-                }),
-            ),
-          )
+          const fresh = yield* freshCredentials(creds, req)
           let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
           const url = new URL(req.url, "https://api.openai.com")
           if (codexUrlMatches(url)) {
@@ -402,42 +343,5 @@ export const buildCodexTransformClient =
           return withHeaders(req, headers)
         }),
       ),
-      // 401 recovery (outermost): invalidate the credential cache + retry
-      // ONCE. The cache TTL is 30s so it can outlive a token's last
-      // minute; tokens can also be revoked between cache fill and wire
-      // send. On the retry, `mapRequestEffect` re-enters and `creds.
-      // getFresh` re-reads the rotated refresh token (preserved across
-      // invalidate) and forces a refresh.
-      // A second 401 means a real auth failure (revoked session, expired
-      // refresh token) — surface the response to the caller so the user
-      // can re-authorize from the auth picker.
-      //
-      // `tapError` runs the invalidate effect AFTER the failure but
-      // BEFORE Effect.retry decides to re-attempt — invalidate must
-      // commit before the next preprocess re-reads the cache.
-      HttpClient.transformResponse((effect) =>
-        effect.pipe(
-          Effect.flatMap(
-            (
-              response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> => {
-              switch (response.status) {
-                case 401:
-                  return Effect.fail(new Unauthorized401Error({ response }))
-                default:
-                  return Effect.succeed(response)
-              }
-            },
-          ),
-          Effect.tapError((e) => {
-            if (e._tag === "Unauthorized401Error") return creds.invalidate
-            return Effect.void
-          }),
-          Effect.retry({
-            while: (e) => e._tag === "Unauthorized401Error",
-            times: 1,
-          }),
-          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.response)),
-        ),
-      ),
+      recoverUnauthorized(creds),
     )
