@@ -180,6 +180,12 @@ export interface SelectListProps<A> {
    * The value under the cursor is passed so a pane need not track it.
    */
   readonly extraKeys?: (event: ScopedKeyboardEvent, selected: Option.Option<A>) => boolean
+  /**
+   * The row under the cursor, reported whenever it changes. A pane that draws
+   * a detail line for the selected row, or fetches one, reads it here rather
+   * than keeping a second index of its own.
+   */
+  readonly onCursor?: (selected: Option.Option<A>) => void
 }
 
 /**
@@ -253,6 +259,19 @@ export function SelectList<A>(props: SelectListProps<A>) {
   useScrollSync(() => `${props.id}-row-${state().selectedIndex}`, {
     getRef: () => Option.getOrUndefined(scrollRef),
   })
+
+  // Report the cursor, closed panes included: a pane that fetches for the
+  // selected row has to be told to stop when it closes.
+  createEffect(
+    on([() => props.open, selected], ([open, value]) => {
+      if (!props.onCursor) return
+      if (!open) {
+        props.onCursor(Option.none())
+        return
+      }
+      props.onCursor(value)
+    }),
+  )
 
   const applyQuery = (next: SelectListState) => {
     setState(next)

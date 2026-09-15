@@ -15,19 +15,17 @@
  * @module
  */
 
-import { DateTime, Effect, Option, Predicate, Schema } from "effect"
-import { createEffect, createSignal, For, on, Show } from "solid-js"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import { DateTime, Effect, Option, Schema } from "effect"
+import { createSignal, Show } from "solid-js"
 import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
 import { ChromePanel } from "../../components/chrome-panel"
-import {
-  FilterListEvent,
-  FilterListState,
-  transitionFilterList,
-} from "../../components/filter-list-state"
 import { formatAge, plural } from "../../components/message-list-utils"
-import { useScrollSync } from "../../hooks/use-scroll-sync"
-import { useScopedKeyboard } from "../../keyboard/context"
+import {
+  SelectList,
+  decoration,
+  selectable,
+  type SelectListRow,
+} from "../../components/select-list"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
 import { truncate } from "../../utils/format-tool"
@@ -373,8 +371,7 @@ export function ThreadPane(
 ) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const [state, setState] = createSignal(FilterListState.initial())
-  let scrollRef: Option.Option<ScrollBoxRenderable> = Option.none()
+  const [cursor, setCursor] = createSignal(Option.none<ThreadWindow>())
 
   const windows = () => props.controller.windows()
   const isCurrent = (window: ThreadWindow): boolean =>
@@ -384,70 +381,12 @@ export function ThreadPane(
         active.sessionId === window.sessionId && active.branchId === window.branchId,
     })
 
-  // Open on the live window: the last one on the shell's own branch.
-  createEffect(
-    on([() => props.open, windows], ([open, rows]) => {
-      if (!open) return
-      let index = rows.length - 1
-      for (let cursor = rows.length - 1; cursor >= 0; cursor -= 1) {
-        const row = rows[cursor]
-        if (Predicate.isNotUndefined(row) && isCurrent(row)) {
-          index = cursor
-          break
-        }
-      }
-      setState(FilterListState.initial(Math.max(0, index)))
-    }),
-  )
-
-  useScrollSync(() => `thread-row-${state().selectedIndex}`, {
-    getRef: () => Option.getOrUndefined(scrollRef),
-  })
-
-  useScopedKeyboard(
-    (event) => {
-      if (event.name === "escape") {
-        props.onClose()
-        return true
-      }
-      const rows = windows()
-      if (event.name === "return") {
-        const selected = Option.fromNullishOr(rows[state().selectedIndex])
-        if (Option.isSome(selected)) props.onSelect(selected.value)
-        return true
-      }
-      if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
-        setState((current) =>
-          transitionFilterList(
-            current,
-            FilterListEvent.cases.MoveUp.make({ itemCount: rows.length }),
-          ),
-        )
-        return true
-      }
-      if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
-        setState((current) =>
-          transitionFilterList(
-            current,
-            FilterListEvent.cases.MoveDown.make({ itemCount: rows.length }),
-          ),
-        )
-        return true
-      }
-      return false
-    },
-    { when: () => props.open },
-  )
-
   const panelWidth = () => Math.max(0, dimensions().width - 2)
   const rowWidth = () => Math.max(0, panelWidth() - 5)
   const sectionWidth = () => Math.max(0, panelWidth() - 4)
   const BODY_ROWS = 10
   const CHROME_ROWS = 5
   const paneHeight = () => Math.max(6, Math.min(BODY_ROWS + CHROME_ROWS, dimensions().height - 4))
-
-  const items = () => threadItems(windows())
-  const selectedWindow = () => Option.fromNullishOr(windows()[state().selectedIndex])
 
   const marker = (window: ThreadWindow): string => {
     if (isCurrent(window) && window.index === windows().filter(isCurrent).length) return "› "
@@ -459,6 +398,42 @@ export function ThreadPane(
     const width = Math.max(0, rowWidth() - age.length - 2)
     const left = `${marker(window)}  ${windowLabel(window)}`
     return `${truncate(left, width).padEnd(width)}  ${age}`
+  }
+
+  const rows = (): ReadonlyArray<SelectListRow<ThreadWindow>> =>
+    threadItems(windows()).map((item) => {
+      if (item.kind === "heading") {
+        return decoration<ThreadWindow>(() => (
+          <box paddingLeft={1}>
+            <text style={{ fg: theme.textMuted }} wrapMode="none">
+              {truncate(`${item.sessionName} (${plural(item.count, "window")})`, rowWidth())}
+            </text>
+          </box>
+        ))
+      }
+      return selectable(item.window, (selected, id) => {
+        const background = () => {
+          if (selected()) return theme.primary
+          return "transparent"
+        }
+        const color = () => {
+          if (selected()) return theme.selectedListItemText
+          if (isCurrent(item.window)) return theme.text
+          return theme.textMuted
+        }
+        return (
+          <box id={id} backgroundColor={background()} paddingLeft={1}>
+            <text style={{ fg: color() }}>{rowLine(item.window)}</text>
+          </box>
+        )
+      })
+    })
+
+  /** Open on the live window: the last one on the shell's own branch. */
+  const sticky = (values: ReadonlyArray<ThreadWindow>): Option.Option<number> => {
+    const live = values.findLastIndex(isCurrent)
+    if (live >= 0) return Option.some(live)
+    return Option.some(Math.max(0, values.length - 1))
   }
 
   const title = () =>
@@ -478,55 +453,25 @@ export function ThreadPane(
         flexDirection="column"
         title={title()}
       >
-        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
-          <Show
-            when={windows().length > 0}
-            fallback={
-              <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
-            }
-          >
-            <For each={items()}>
-              {(item) => {
-                if (item.kind === "heading") {
-                  return (
-                    <box paddingLeft={1}>
-                      <text style={{ fg: theme.textMuted }} wrapMode="none">
-                        {truncate(
-                          `${item.sessionName} (${plural(item.count, "window")})`,
-                          rowWidth(),
-                        )}
-                      </text>
-                    </box>
-                  )
-                }
-                const selected = () => state().selectedIndex === item.index
-                const background = () => {
-                  if (selected()) return theme.primary
-                  return "transparent"
-                }
-                const color = () => {
-                  if (selected()) return theme.selectedListItemText
-                  if (isCurrent(item.window)) return theme.text
-                  return theme.textMuted
-                }
-                return (
-                  <box
-                    id={`thread-row-${item.index}`}
-                    backgroundColor={background()}
-                    paddingLeft={1}
-                  >
-                    <text style={{ fg: color() }}>{rowLine(item.window)}</text>
-                  </box>
-                )
-              }}
-            </For>
-          </Show>
-        </ChromePanel.Body>
+        <SelectList
+          id="thread"
+          open={props.open}
+          rows={rows}
+          sticky={sticky}
+          // The detail line below reads the row under the cursor; the list is
+          // the only thing that knows where it is.
+          onCursor={setCursor}
+          empty={() => (
+            <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
+          )}
+          onSelect={props.onSelect}
+          onDismiss={props.onClose}
+        />
 
         <Show when={windows().length > 0}>
           <ChromePanel.Section>
             <text style={{ fg: theme.textMuted }}>
-              {truncate(detailFor(selectedWindow()), sectionWidth())}
+              {truncate(detailFor(cursor()), sectionWidth())}
             </text>
           </ChromePanel.Section>
         </Show>

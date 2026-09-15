@@ -2,23 +2,21 @@
  * Branch picker route - choose branch when resuming multi-branch session
  */
 
-import { createEffect, createSignal, For } from "solid-js"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import { createEffect, createSignal } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import { Effect, Match, Option } from "effect"
+import { Effect, Option } from "effect"
 import { useTheme } from "../theme/index"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useClient } from "../client/index"
 import { useRouter } from "../router"
 import { useEnv } from "../env/context"
 import { useRuntime } from "../hooks/use-runtime"
-import { useScrollSync } from "../hooks/use-scroll-sync"
 import { ChromePanel } from "../components/chrome-panel"
+import { SelectList, selectable, type SelectListRow } from "../components/select-list"
 import type { Branch, BranchTreeNode } from "../client"
 import type { SessionId } from "@gent/core/protocol"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/format-tool"
-import { useScopedKeyboard } from "../keyboard/context"
 
 export interface BranchPickerProps {
   sessionId: SessionId
@@ -26,15 +24,6 @@ export interface BranchPickerProps {
   branches: readonly Branch[]
   prompt?: string
 }
-
-type BranchPickerState =
-  | { _tag: "loading"; error: Option.Option<string> }
-  | {
-      _tag: "ready"
-      selectedIndex: number
-      messageCounts: Map<string, number>
-      error: Option.Option<string>
-    }
 
 const formatBranchLabel = (
   branch: Branch,
@@ -69,141 +58,72 @@ export function BranchPicker(props: BranchPickerProps) {
   const dimensions = useTerminalDimensions()
   const { cast } = useRuntime()
 
-  const [state, setState] = createSignal<BranchPickerState>({
-    _tag: "loading",
-    error: Option.none(),
-  })
-  let scrollRef = Option.none<ScrollBoxRenderable>()
-
-  useScrollSync(
-    () => {
-      const current = state()
-      let selectedIndex = 0
-      if (current._tag === "ready") selectedIndex = current.selectedIndex
-      return `branch-picker-${selectedIndex}`
-    },
-    { getRef: () => Option.getOrUndefined(scrollRef) },
-  )
+  const [messageCounts, setMessageCounts] = createSignal(new Map<string, number>())
+  const [error, setError] = createSignal(Option.none<string>())
 
   createEffect(() => {
     cast(
       client.client.branch.getTree({ sessionId: props.sessionId }).pipe(
         Effect.tap((tree) =>
           Effect.sync(() => {
-            setState((current): BranchPickerState => {
-              let selectedIndex = 0
-              if (current._tag === "ready") selectedIndex = current.selectedIndex
-              return {
-                _tag: "ready",
-                selectedIndex,
-                messageCounts: collectCounts(tree),
-                error: Option.none(),
-              }
-            })
+            setMessageCounts(collectCounts(tree))
+            setError(Option.none())
           }),
         ),
-        Effect.catchEager((err) =>
-          Effect.sync(() => {
-            setState((current): BranchPickerState => {
-              const error = formatError(err)
-              return Match.value(current).pipe(
-                Match.tagsExhaustive({
-                  loading: (): BranchPickerState => ({
-                    _tag: "loading",
-                    error: Option.some(error),
-                  }),
-                  ready: (current): BranchPickerState => ({
-                    _tag: "ready",
-                    selectedIndex: current.selectedIndex,
-                    messageCounts: current.messageCounts,
-                    error: Option.some(error),
-                  }),
-                }),
-              )
-            })
-          }),
-        ),
+        Effect.catchEager((err) => Effect.sync(() => setError(Option.some(formatError(err))))),
       ),
     )
   })
 
-  createEffect(() => {
-    const current = state()
-    if (current._tag !== "ready") return
-    if (props.branches.length === 0) return
-    if (current.selectedIndex >= props.branches.length) {
-      setState({
-        _tag: "ready",
-        selectedIndex: props.branches.length - 1,
-        messageCounts: current.messageCounts,
-        error: current.error,
-      })
+  /**
+   * Escape leaves the route, not the list. This picker is where a session with
+   * several branches starts, so with nowhere to go back to the only way out is
+   * to quit.
+   */
+  const leave = () => {
+    if (router.canGoBack()) {
+      router.back()
+      return
     }
-  })
-
-  useScopedKeyboard((e) => {
-    if (e.name === "escape") {
-      if (router.canGoBack()) {
-        router.back()
-      } else {
-        renderer.destroy()
-        env.shutdown()
-      }
-      return true
-    }
-
-    const current = state()
-    if (current._tag !== "ready" || props.branches.length === 0) return false
-
-    if (e.name === "return") {
-      const branch = Option.fromNullishOr(props.branches[current.selectedIndex])
-      if (Option.isSome(branch)) {
-        client.switchSession(props.sessionId, branch.value.id, props.sessionName)
-        router.navigateToSession(props.sessionId, branch.value.id, props.prompt)
-      }
-      return true
-    }
-
-    if (e.name === "up") {
-      setState((prev) => {
-        if (prev._tag !== "ready") return prev
-        let next = props.branches.length - 1
-        if (prev.selectedIndex > 0) next = prev.selectedIndex - 1
-        return {
-          _tag: "ready",
-          selectedIndex: next,
-          messageCounts: prev.messageCounts,
-          error: prev.error,
-        }
-      })
-      return true
-    }
-
-    if (e.name === "down") {
-      setState((prev) => {
-        if (prev._tag !== "ready") return prev
-        let next = 0
-        if (prev.selectedIndex < props.branches.length - 1) next = prev.selectedIndex + 1
-        return {
-          _tag: "ready",
-          selectedIndex: next,
-          messageCounts: prev.messageCounts,
-          error: prev.error,
-        }
-      })
-      return true
-    }
-    return false
-  })
+    renderer.destroy()
+    env.shutdown()
+  }
 
   const panelWidth = () => Math.min(70, dimensions().width - 6)
   const panelHeight = () => Math.min(16, dimensions().height - 6)
   const left = () => Math.floor((dimensions().width - panelWidth()) / 2)
   const top = () => Math.floor((dimensions().height - panelHeight()) / 2)
-  const readyState = (): Option.Option<Extract<BranchPickerState, { _tag: "ready" }>> => {
-    const current = state()
-    if (current._tag !== "ready") return Option.none()
-    return Option.some(current)
+
+  const rows = (): ReadonlyArray<SelectListRow<Branch>> =>
+    props.branches.map((branch) =>
+      selectable(branch, (isSelected, id) => {
+        const count = () => Option.fromNullishOr(messageCounts().get(branch.id))
+        const backgroundColor = () => {
+          if (isSelected()) return theme.primary
+          return "transparent"
+        }
+        const foregroundColor = () => {
+          if (isSelected()) return theme.selectedListItemText
+          return theme.text
+        }
+        const line = () => formatBranchLabel(branch, count())
+        return (
+          <box id={id} backgroundColor={backgroundColor()} paddingLeft={1}>
+            <text
+              style={{
+                fg: foregroundColor(),
+              }}
+            >
+              {truncate(line(), panelWidth() - 4)}
+            </text>
+          </box>
+        )
+      }),
+    )
+
+  const choose = (branch: Branch) => {
+    client.switchSession(props.sessionId, branch.id, props.sessionName)
+    router.navigateToSession(props.sessionId, branch.id, props.prompt)
   }
 
   return (
@@ -215,44 +135,15 @@ export function BranchPicker(props: BranchPickerProps) {
         left={left()}
         top={top()}
       >
-        <ChromePanel.Error error={Option.getOrUndefined(state().error)} />
+        <ChromePanel.Error error={Option.getOrUndefined(error())} />
 
-        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
-          <For each={props.branches}>
-            {(branch, index) => {
-              const isSelected = () =>
-                Option.exists(readyState(), (current) => current.selectedIndex === index())
-              const count = () =>
-                Option.flatMap(readyState(), (current) =>
-                  Option.fromNullishOr(current.messageCounts.get(branch.id)),
-                )
-              const backgroundColor = () => {
-                if (isSelected()) return theme.primary
-                return "transparent"
-              }
-              const foregroundColor = () => {
-                if (isSelected()) return theme.selectedListItemText
-                return theme.text
-              }
-              const line = () => formatBranchLabel(branch, count())
-              return (
-                <box
-                  id={`branch-picker-${index()}`}
-                  backgroundColor={backgroundColor()}
-                  paddingLeft={1}
-                >
-                  <text
-                    style={{
-                      fg: foregroundColor(),
-                    }}
-                  >
-                    {truncate(line(), panelWidth() - 4)}
-                  </text>
-                </box>
-              )
-            }}
-          </For>
-        </ChromePanel.Body>
+        <SelectList
+          id="branch-picker"
+          open={true}
+          rows={rows}
+          onSelect={choose}
+          onDismiss={leave}
+        />
 
         <ChromePanel.Footer>Up/Down | Enter | Esc</ChromePanel.Footer>
       </ChromePanel.Root>

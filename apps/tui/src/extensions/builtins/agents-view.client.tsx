@@ -15,17 +15,16 @@
 
 import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
-import type { ScrollBoxRenderable } from "@opentui/core"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
 import { ref } from "@gent/core/extensions/api"
 import { ChromePanel } from "../../components/chrome-panel"
 import {
-  FilterListEvent,
-  FilterListState,
-  transitionFilterList,
-} from "../../components/filter-list-state"
+  SelectList,
+  decoration,
+  selectable,
+  type SelectListRow,
+} from "../../components/select-list"
 import { useScopedKeyboard } from "../../keyboard/context"
-import { useScrollSync } from "../../hooks/use-scroll-sync"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
 import { truncate } from "../../utils/format-tool"
@@ -406,10 +405,8 @@ export function AgentsPane(
 ) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const [state, setState] = createSignal(FilterListState.initial())
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())
-  let scrollRef: Option.Option<ScrollBoxRenderable> = Option.none()
 
   const isCurrent = (row: AgentRowEntry): boolean =>
     Option.match(props.controller.current(), {
@@ -417,108 +414,18 @@ export function AgentsPane(
       onSome: (active) => active.sessionId === row.sessionId && active.branchId === row.branchId,
     })
 
-  // Open on the loop the shell is already on, the way the session tree did.
-  // Re-runs when rows arrive, since the fetch resolves after the pane mounts.
-  createEffect(
-    on([() => props.open, () => props.controller.rows()], ([open, rows]) => {
-      if (!open) return
-      const index = rows.findIndex(isCurrent)
-      setState(FilterListState.initial(Math.max(0, index)))
-    }),
-  )
-
   // Filtering is the server's job — it owns the same search the projection
   // tests cover — so typing refetches rather than filtering a local copy.
   const visible = () => props.controller.rows()
 
-  // One detail read per selection, not per keystroke batch: the controller
-  // ignores a repeat of the row it is already fetching.
-  createEffect(
-    on([() => props.open, visible, () => state().selectedIndex], ([open, rows, index]) => {
-      if (!open) {
-        props.controller.select(Option.none())
-        return
-      }
-      props.controller.select(Option.fromNullishOr(rows[index]))
-    }),
-  )
-
-  useScrollSync(() => `agents-row-${state().selectedIndex}`, {
-    getRef: () => Option.getOrUndefined(scrollRef),
-  })
-
   // The toggle binds whether or not the pane is showing, so it can open as well
-  // as close. Registered separately from the pane's own keys, which are gated on
-  // `open` and would otherwise swallow every keystroke while docked.
+  // as close. Registered separately from the pane's own keys, which the list
+  // gates on `open` and would otherwise swallow every keystroke while docked.
   useScopedKeyboard((event) => {
     if (event.ctrl !== true || event.name !== "t") return false
     props.onToggle()
     return true
   })
-
-  useScopedKeyboard(
-    (event) => {
-      if (event.name === "escape") {
-        if (Option.isSome(armed())) {
-          setArmed(Option.none())
-          return true
-        }
-        props.onClose()
-        return true
-      }
-
-      if (event.ctrl === true && event.name === "x") return armOrDelete()
-      setArmed(Option.none())
-
-      if (event.name === "backspace") {
-        const next = transitionFilterList(state(), FilterListEvent.cases.Backspace.make({}))
-        setState(next)
-        props.controller.refresh(next.query)
-        return true
-      }
-
-      const rows = visible()
-      if (event.name === "return") {
-        const selected = Option.fromNullishOr(rows[state().selectedIndex])
-        if (Option.isNone(selected)) return true
-        props.onSelect(selected.value)
-        return true
-      }
-
-      if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
-        setState((current) =>
-          transitionFilterList(
-            current,
-            FilterListEvent.cases.MoveUp.make({ itemCount: rows.length }),
-          ),
-        )
-        return true
-      }
-
-      if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
-        setState((current) =>
-          transitionFilterList(
-            current,
-            FilterListEvent.cases.MoveDown.make({ itemCount: rows.length }),
-          ),
-        )
-        return true
-      }
-
-      const sequence = Option.fromNullishOr(event.sequence)
-      if (Option.isSome(sequence) && sequence.value.length === 1) {
-        const char = sequence.value
-        if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-          const next = transitionFilterList(state(), FilterListEvent.cases.TypeChar.make({ char }))
-          setState(next)
-          props.controller.refresh(next.query)
-          return true
-        }
-      }
-      return false
-    },
-    { when: () => props.open },
-  )
 
   // Docked under the composer rather than floating. The pane fills the width of
   // the container it is docked in, so it never sets one; the truncation budget
@@ -526,9 +433,9 @@ export function AgentsPane(
   // is what that container actually gets.
   const panelWidth = () => Math.max(0, dimensions().width - 2)
   /**
-   * Columns a row may actually use: the pane border takes 2, `ChromePanel.Body`
-   * pads 1 each side, and the row itself pads 1 more on the left. Budgeting less
-   * than that wraps the line and breaks the one-row-per-agent alignment.
+   * Columns a row may actually use: the pane border takes 2, the list body
+   * pads 1 each side, and the row itself pads 1 more on the left. Budgeting
+   * less than that wraps the line and breaks the one-row-per-agent alignment.
    */
   const rowWidth = () => Math.max(0, panelWidth() - 5)
   /**
@@ -568,12 +475,9 @@ export function AgentsPane(
     return colorFor(section, selected)
   }
 
-  const items = () => paneItems(visible())
-
   // First Ctrl+X arms the selected row; the second deletes it. The shell's own
   // loop is never a target: the pane would be deleting the session it lives on.
-  const armOrDelete = (): boolean => {
-    const selected = Option.fromNullishOr(visible()[state().selectedIndex])
+  const armOrDelete = (selected: Option.Option<AgentRowEntry>): boolean => {
     if (Option.isNone(selected) || isCurrent(selected.value)) return true
     if (Option.contains(armed(), selected.value.sessionId)) {
       setArmed(Option.none())
@@ -603,6 +507,40 @@ export function AgentsPane(
     return `${truncate(left, width).padEnd(width)}  ${age}`
   }
 
+  const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
+    paneItems(visible()).map((item) => {
+      if (item.kind === "heading") {
+        return decoration<AgentRowEntry>(() => (
+          <box paddingLeft={1}>
+            <text style={{ fg: theme.textMuted }}>
+              {`${SECTION_TITLE[item.section]} (${item.count})`}
+            </text>
+          </box>
+        ))
+      }
+      return selectable(item.row, (selected, id) => {
+        const background = () => {
+          if (selected()) return theme.primary
+          return "transparent"
+        }
+        const section = () => item.row.section
+        return (
+          <box id={id} backgroundColor={background()} paddingLeft={1}>
+            <text style={{ fg: lineColor(item.row, section(), selected()) }}>
+              <span style={{ fg: glyphColorFor(section(), selected()) }}>
+                {rowLine(item.row, selected()).slice(0, 1)}
+              </span>
+              {rowLine(item.row, selected()).slice(1)}
+            </text>
+          </box>
+        )
+      })
+    })
+
+  /** Open on the loop the shell is already on, the way the session tree did. */
+  const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
+    Option.some(Math.max(0, values.findIndex(isCurrent)))
+
   return (
     <Show when={props.open}>
       <box
@@ -620,56 +558,30 @@ export function AgentsPane(
         flexDirection="column"
         title={`Agents · ${countsLabel(visible())}`}
       >
-        <ChromePanel.Section>
-          <text style={{ fg: theme.text }}>
-            <span style={{ fg: theme.textMuted }}>› </span>
-            {state().query}
-            <span style={{ fg: theme.primary }}>│</span>
-          </text>
-        </ChromePanel.Section>
-
-        <ChromePanel.Body ref={(value) => (scrollRef = Option.some(value))}>
-          <Show
-            when={visible().length > 0}
-            fallback={
-              <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
+        <SelectList
+          id="agents"
+          open={props.open}
+          rows={rows}
+          filter={{ onQueryChange: (query) => props.controller.refresh(query) }}
+          sticky={sticky}
+          // One detail read per selection, not per keystroke batch: the
+          // controller ignores a repeat of the row it is already fetching.
+          onCursor={props.controller.select}
+          extraKeys={(event, selected) => {
+            if (event.name === "escape" && Option.isSome(armed())) {
+              setArmed(Option.none())
+              return true
             }
-          >
-            <For each={items()}>
-              {(item) => {
-                if (item.kind === "heading") {
-                  return (
-                    <box paddingLeft={1}>
-                      <text style={{ fg: theme.textMuted }}>
-                        {`${SECTION_TITLE[item.section]} (${item.count})`}
-                      </text>
-                    </box>
-                  )
-                }
-                const selected = () => state().selectedIndex === item.index
-                const background = () => {
-                  if (selected()) return theme.primary
-                  return "transparent"
-                }
-                const section = () => item.row.section
-                return (
-                  <box
-                    id={`agents-row-${item.index}`}
-                    backgroundColor={background()}
-                    paddingLeft={1}
-                  >
-                    <text style={{ fg: lineColor(item.row, section(), selected()) }}>
-                      <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                        {rowLine(item.row, selected()).slice(0, 1)}
-                      </span>
-                      {rowLine(item.row, selected()).slice(1)}
-                    </text>
-                  </box>
-                )
-              }}
-            </For>
-          </Show>
-        </ChromePanel.Body>
+            if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
+            setArmed(Option.none())
+            return false
+          }}
+          empty={() => (
+            <text style={{ fg: theme.textMuted }}>{emptyLabel(props.controller.loading())}</text>
+          )}
+          onSelect={props.onSelect}
+          onDismiss={props.onClose}
+        />
 
         <Show when={visible().length > 0}>
           <ChromePanel.Section>
