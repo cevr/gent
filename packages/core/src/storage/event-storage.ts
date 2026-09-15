@@ -25,11 +25,11 @@ const decodeLatestEventIdRow = Schema.decodeUnknownEffect(LatestEventIdRow)
 const EventJsonRow = Schema.Struct({ id: EventId, event_json: Schema.String })
 const decodeEventJsonRow = Schema.decodeUnknownEffect(EventJsonRow)
 
-type EventDecodeOperation = "listEvents" | "getLatestEvent"
+type EventDecodeOperation = "listEvents" | "getLatestEvent" | "listToolResultWindow"
 
 export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
   eventId: EventId,
-  operation: Schema.Literals(["listEvents", "getLatestEvent"]),
+  operation: Schema.Literals(["listEvents", "getLatestEvent", "listToolResultWindow"]),
   error: Schema.String,
 }) {}
 
@@ -91,6 +91,19 @@ interface EventStorageService {
     messageId?: MessageId
     // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching event exists.
   }) => Effect.Effect<AgentEvent | undefined, EventStorageError>
+  /**
+   * Events between one assistant message and the next assistant boundary.
+   *
+   * The point question a replaying tool step asks: what settled under *this*
+   * step. Both bounds are found by id, so the read is the window rather than
+   * the transcript. Envelopes, not events -- the publisher's dedup set keys
+   * on `envelope.id`.
+   */
+  readonly listToolResultWindow: (params: {
+    sessionId: SessionId
+    branchId: BranchId
+    assistantMessageId: MessageId
+  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
 }
 
 export class EventStorage extends Context.Service<EventStorage, EventStorageService>()(
@@ -248,6 +261,83 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             })
           },
           Effect.mapError(mapEventStorageError("Failed to get latest event")),
+        ),
+
+        listToolResultWindow: Effect.fn("EventStorage.listToolResultWindow")(
+          function* ({ sessionId, branchId, assistantMessageId }) {
+            const workspaceId = yield* CurrentWorkspaceId
+            // `MessageReceived` nests the message, so both bounds read
+            // `$.message.*`. Each probe rides idx_events_session_tag.
+            const anchorRows = yield* sql<{ id: EventId }>`SELECT e.id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                AND e.event_tag = 'MessageReceived'
+                AND json_extract(e.event_json, '$.message.id') = ${assistantMessageId}
+              ORDER BY e.id DESC LIMIT 1`
+            const anchor = anchorRows[0]
+            if (Predicate.isUndefined(anchor)) return []
+            const boundaryRows = yield* sql<{ id: EventId }>`SELECT e.id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                AND e.id > ${anchor.id}
+                AND e.event_tag = 'MessageReceived'
+                AND json_extract(e.event_json, '$.message.role') = 'assistant'
+              ORDER BY e.id ASC LIMIT 1`
+            const rawRows = yield* Option.match(Option.fromUndefinedOr(boundaryRows[0]), {
+              onSome: (
+                boundary,
+              ) => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
+                      FROM events e
+                      JOIN sessions s ON s.id = e.session_id
+                      WHERE e.session_id = ${sessionId}
+                        AND s.workspace_id = ${workspaceId}
+                        AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                        AND e.id > ${anchor.id}
+                        AND e.id < ${boundary.id}
+                      ORDER BY e.id ASC`,
+              onNone: () => sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
+                      FROM events e
+                      JOIN sessions s ON s.id = e.session_id
+                      WHERE e.session_id = ${sessionId}
+                        AND s.workspace_id = ${workspaceId}
+                        AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
+                        AND e.id > ${anchor.id}
+                      ORDER BY e.id ASC`,
+            })
+            const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
+            const envelopes = yield* Effect.forEach(rows, (row) =>
+              Effect.gen(function* () {
+                if (!isKnownEventTag(row.event_tag)) {
+                  yield* Effect.logWarning("event.retired-tag-skipped").pipe(
+                    Effect.annotateLogs({ event_id: row.id, event_tag: row.event_tag }),
+                  )
+                  return Option.none<EventEnvelope>()
+                }
+                const decoded = yield* decodePersistedEvent({
+                  eventId: row.id,
+                  eventJson: row.event_json,
+                  operation: "listToolResultWindow",
+                })
+                const fields = {
+                  id: row.id,
+                  event: decoded,
+                  createdAt: row.created_at,
+                }
+                if (!Predicate.isNull(row.trace_id)) {
+                  Object.assign(fields, { traceId: row.trace_id })
+                }
+                return Option.some(EventEnvelope.make(fields))
+              }),
+            )
+            return Arr.getSomes(envelopes)
+          },
+          Effect.mapError(mapEventStorageError("Failed to list tool result window")),
         ),
       } satisfies EventStorageService
     }),

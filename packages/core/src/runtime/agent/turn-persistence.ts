@@ -87,33 +87,17 @@ export const findPersistedToolResults = Effect.fn("TurnHelpers.findPersistedTool
     toolCalls: ReadonlyArray<Prompt.ToolCallPart>
   }) {
     const eventStorage = yield* EventStorage
-    const events = yield* eventStorage.listEvents({
+    // The window this step settled, read by id range. Every tool step of
+    // every turn reaches here, so the read is bounded by the step rather
+    // than by the transcript.
+    const events = yield* eventStorage.listToolResultWindow({
       sessionId: params.sessionId,
       branchId: params.branchId,
+      assistantMessageId: params.assistantMessageId,
     })
-    let assistantIndex = -1
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index]?.event
-      if (event?._tag === "MessageReceived" && event.message.id === params.assistantMessageId) {
-        assistantIndex = index
-        break
-      }
-    }
-    if (assistantIndex === -1) return new Map<string, Prompt.ToolResultPart>()
+    if (events.length === 0) return new Map<string, Prompt.ToolResultPart>()
 
-    let nextAssistantIndex = events.length
-    for (let index = assistantIndex + 1; index < events.length; index += 1) {
-      const event = events[index]?.event
-      if (event?._tag === "MessageReceived" && event.message.role === "assistant") {
-        nextAssistantIndex = index
-        break
-      }
-    }
-
-    const terminalEvents = events
-      .slice(assistantIndex + 1, nextAssistantIndex)
-      .map((envelope) => envelope.event)
-      .filter(isToolTerminalEvent)
+    const terminalEvents = events.map((envelope) => envelope.event).filter(isToolTerminalEvent)
     const results = new Map<string, Prompt.ToolResultPart>()
     for (const toolCall of params.toolCalls) {
       const event = terminalEvents.find(

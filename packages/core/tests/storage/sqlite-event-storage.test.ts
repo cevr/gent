@@ -5,9 +5,15 @@ import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { EventDecodeError, EventStorage } from "../../src/storage/event-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
-import { Branch, dateFromMillis, Session } from "../../src/domain/message"
-import { AgentSwitched, SessionStarted } from "../../src/domain/event"
-import { BranchId, SessionId } from "../../src/domain/ids"
+import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
+import {
+  AgentSwitched,
+  MessageReceived,
+  SessionStarted,
+  ToolCallStarted,
+  ToolCallSucceeded,
+} from "../../src/domain/event"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { AgentName } from "../../src/domain/agent"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
@@ -148,6 +154,136 @@ describe("Event decoding", () => {
       expect(error).toBeInstanceOf(EventDecodeError)
       expect(error.eventId).toBeDefined()
       expect(error.operation).toBe("getLatestEvent")
+    }).pipe(Effect.provide(layer)),
+  )
+})
+
+describe("tool result window", () => {
+  const layer = SqliteStorage.TestWithSql(() => Layer.empty, {})
+  const sessionId = SessionId.make("window-session")
+  const branchId = BranchId.make("window-branch")
+
+  const assistantMessage = (id: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make(id),
+      sessionId,
+      branchId,
+      role: "assistant",
+      parts: [],
+      createdAt: FIXED_NOW,
+    })
+
+  const userMessage = (id: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make(id),
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [],
+      createdAt: FIXED_NOW,
+    })
+
+  /**
+   * Two full tool steps back to back. The window for the first step must stop
+   * at the second assistant message, so the second step's result never leaks
+   * into the first step's replay.
+   */
+  const seedTwoSteps = Effect.gen(function* () {
+    const sessions = yield* SessionStorage
+    const branches = yield* BranchStorage
+    const events = yield* EventStorage
+    yield* sessions.createSession(
+      new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+    )
+    yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
+
+    yield* events.appendEvent(MessageReceived.make({ message: userMessage("m-user") }))
+    yield* events.appendEvent(MessageReceived.make({ message: assistantMessage("m-first") }))
+    yield* events.appendEvent(
+      ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId: ToolCallId.make("tc-first"),
+        toolName: "bash",
+      }),
+    )
+    yield* events.appendEvent(
+      ToolCallSucceeded.make({
+        sessionId,
+        branchId,
+        toolCallId: ToolCallId.make("tc-first"),
+        toolName: "bash",
+        output: "first",
+      }),
+    )
+    yield* events.appendEvent(MessageReceived.make({ message: assistantMessage("m-second") }))
+    yield* events.appendEvent(
+      ToolCallSucceeded.make({
+        sessionId,
+        branchId,
+        toolCallId: ToolCallId.make("tc-second"),
+        toolName: "bash",
+        output: "second",
+      }),
+    )
+  })
+
+  it.live("stops at the next assistant message", () =>
+    Effect.gen(function* () {
+      yield* seedTwoSteps
+      const events = yield* EventStorage
+      const window = yield* events.listToolResultWindow({
+        sessionId,
+        branchId,
+        assistantMessageId: MessageId.make("m-first"),
+      })
+      expect(window.map((envelope) => envelope.event._tag)).toEqual([
+        "ToolCallStarted",
+        "ToolCallSucceeded",
+      ])
+      const succeeded = window[1]?.event
+      expect(succeeded?._tag === "ToolCallSucceeded" && succeeded.output).toBe("first")
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("runs to the end of the branch for the newest assistant message", () =>
+    Effect.gen(function* () {
+      yield* seedTwoSteps
+      const events = yield* EventStorage
+      const window = yield* events.listToolResultWindow({
+        sessionId,
+        branchId,
+        assistantMessageId: MessageId.make("m-second"),
+      })
+      expect(window.map((envelope) => envelope.event._tag)).toEqual(["ToolCallSucceeded"])
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("carries the envelope id the publisher dedups on", () =>
+    Effect.gen(function* () {
+      yield* seedTwoSteps
+      const events = yield* EventStorage
+      const window = yield* events.listToolResultWindow({
+        sessionId,
+        branchId,
+        assistantMessageId: MessageId.make("m-first"),
+      })
+      const listed = yield* events.listEvents({ sessionId, branchId })
+      const byTag = new Map(listed.map((envelope) => [envelope.event._tag, envelope.id]))
+      expect(window[0]?.id).toBe(byTag.get("ToolCallStarted"))
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("returns nothing for a message the branch never received", () =>
+    Effect.gen(function* () {
+      yield* seedTwoSteps
+      const events = yield* EventStorage
+      const window = yield* events.listToolResultWindow({
+        sessionId,
+        branchId,
+        assistantMessageId: MessageId.make("m-absent"),
+      })
+      expect(window).toEqual([])
     }).pipe(Effect.provide(layer)),
   )
 })
