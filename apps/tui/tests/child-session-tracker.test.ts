@@ -1,8 +1,23 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Deferred, Effect, Fiber, Layer, Option, Result, Stream } from "effect"
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Result,
+  Scope,
+  Stream,
+} from "effect"
 import { Gent } from "@gent/sdk"
 import { AgentName, AgentEvent, ToolCallId } from "@gent/core/protocol"
-import { EventStore, type EventStoreService } from "@gent/core-internal/domain/event"
+import {
+  EventStore,
+  type EventStoreError,
+  type EventStoreService,
+} from "@gent/core-internal/domain/event"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import { baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer"
 import {
@@ -11,20 +26,41 @@ import {
   type ChildSessionTrackerService,
 } from "../src/services/child-session-tracker"
 
+const entryChanges = (tracker: ChildSessionTrackerService, childSessionId: string) =>
+  tracker.changes.pipe(
+    Stream.filterMap((entries) =>
+      Result.fromOption(Option.fromUndefinedOr(entries.get(childSessionId)), () => "missing"),
+    ),
+  )
+
 const waitForEntry = (
   tracker: ChildSessionTrackerService,
   childSessionId: string,
   predicate: (entry: ChildSessionEntry) => boolean,
 ) =>
-  tracker.changes.pipe(
-    Stream.filterMap((entries) =>
-      Result.fromOption(Option.fromUndefinedOr(entries.get(childSessionId)), () => "missing"),
-    ),
+  entryChanges(tracker, childSessionId).pipe(
     Stream.filter(predicate),
     Stream.runHead,
     Effect.flatMap(Effect.fromOption),
     Effect.timeout("2 seconds"),
   )
+
+/** Closing the tracker scope must end parent tracking: a later spawn never lands. */
+const expectTrackingEnded = (harness: {
+  tracker: ChildSessionTrackerService
+  trackerScope: Scope.Closeable
+  lateChild: { sessionId: string }
+  lateSpawn: Effect.Effect<unknown, EventStoreError>
+}) =>
+  Effect.gen(function* () {
+    yield* Scope.close(harness.trackerScope, Exit.void)
+    yield* harness.lateSpawn
+    const late = yield* entryChanges(harness.tracker, harness.lateChild.sessionId).pipe(
+      Stream.runHead,
+      Effect.timeoutOption("300 millis"),
+    )
+    expect(Option.isNone(late)).toBe(true)
+  })
 
 const makeHarness = Effect.gen(function* () {
   const storeReady = yield* Deferred.make<EventStoreService>()
@@ -46,7 +82,11 @@ const makeHarness = Effect.gen(function* () {
   expect(Option.isNone(clientStore)).toBe(true)
   const parent = yield* client.session.create({ cwd: "/tmp" })
   const child = yield* client.session.create({ cwd: "/tmp" })
-  const tracker = yield* makeChildSessionTracker(client.session.events)
+  const lateChild = yield* client.session.create({ cwd: "/tmp" })
+  const trackerScope = yield* Scope.fork(yield* Effect.scope)
+  const tracker = yield* makeChildSessionTracker(client.session.events).pipe(
+    Scope.provide(trackerScope),
+  )
   const parentToolCallId = ToolCallId.make("delegate-call")
   const childToolCallId = ToolCallId.make("child-tool-call")
   const spawn = eventStore.publish(
@@ -79,25 +119,40 @@ const makeHarness = Effect.gen(function* () {
       preview: "done",
     }),
   )
+  const lateSpawn = eventStore.publish(
+    AgentEvent.cases.AgentRunSpawned.make({
+      parentSessionId: parent.sessionId,
+      childSessionId: lateChild.sessionId,
+      childBranchId: lateChild.branchId,
+      branchId: parent.branchId,
+      agentName: AgentName.make("review"),
+      prompt: "too late",
+      toolCallId: ToolCallId.make("late-call"),
+    }),
+  )
   return {
     client,
     eventStore,
     tracker,
+    trackerScope,
     parent,
     child,
+    lateChild,
     parentToolCallId,
     childToolCallId,
     spawn,
     toolStarted,
     succeeded,
+    lateSpawn,
   }
 })
 
 describe("ChildSessionTracker over RPC", () => {
   it.scopedLive("tracks live child tools and text without a server service in the client", () =>
     Effect.gen(function* () {
+      const harness = yield* makeHarness
       const { eventStore, tracker, parent, child, childToolCallId, spawn, toolStarted, succeeded } =
-        yield* makeHarness
+        harness
       yield* tracker.track(parent)
       yield* spawn
       const running = yield* waitForEntry(
@@ -138,8 +193,7 @@ describe("ChildSessionTracker over RPC", () => {
       expect(completed.streamText).toBe("live text")
       expect(completed.preview).toBe("done")
       expect(completed.usage).toEqual({ input: 10, output: 20, cost: 0.01 })
-      yield* tracker.stop
-      expect((yield* tracker.getAll).size).toBe(0)
+      yield* expectTrackingEnded(harness)
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -149,6 +203,7 @@ describe("ChildSessionTracker over RPC", () => {
       `hydrates ${outcome} children after parent completion has already been saved`,
       () =>
         Effect.gen(function* () {
+          const harness = yield* makeHarness
           const {
             client,
             eventStore,
@@ -160,7 +215,7 @@ describe("ChildSessionTracker over RPC", () => {
             spawn,
             toolStarted,
             succeeded,
-          } = yield* makeHarness
+          } = harness
           yield* spawn
           yield* toolStarted
           yield* eventStore.publish(
@@ -220,8 +275,7 @@ describe("ChildSessionTracker over RPC", () => {
             },
           ])
           expect(restored.streamText).toBe("retained history")
-          yield* tracker.stop
-          expect((yield* tracker.getAll).size).toBe(0)
+          yield* expectTrackingEnded(harness)
         }).pipe(Effect.timeout("4 seconds")),
     )
   }

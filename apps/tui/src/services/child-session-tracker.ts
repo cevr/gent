@@ -4,7 +4,8 @@
  * Listens for AgentRunSpawned/Succeeded/Failed on a parent event stream,
  * opens per-child event subscriptions, and tracks child tool call state.
  * Entries persist after completion as the single TUI source of truth.
- * Child subscription fibers are interrupted on terminal state.
+ * Child subscription fibers are interrupted on terminal state; closing the
+ * scope that built the tracker interrupts every remaining subscription.
  */
 import { Effect, Fiber, FiberSet, Option, Ref, Stream, SubscriptionRef } from "effect"
 import type { Scope } from "effect"
@@ -56,12 +57,6 @@ export interface ChildSessionEntry {
 export interface ChildSessionTrackerService {
   /** Start tracking children for a parent session/branch. Subscribes to live events. */
   readonly track: (params: { sessionId: SessionId; branchId?: BranchId }) => Effect.Effect<void>
-  /** Stop tracking, interrupt all child fibers */
-  readonly stop: Effect.Effect<void>
-  /** Get children for a specific tool call */
-  readonly getChildren: (toolCallId: ToolCallId) => Effect.Effect<ReadonlyArray<ChildSessionEntry>>
-  /** Get all tracked children */
-  readonly getAll: Effect.Effect<ReadonlyMap<string, ChildSessionEntry>>
   /** Current children plus subsequent state snapshots for reactive consumers */
   readonly changes: Stream.Stream<ReadonlyMap<string, ChildSessionEntry>>
 }
@@ -272,24 +267,6 @@ export const make = (
             (envelope: EventEnvelope) => handleParentEvent(envelope.event),
           ).pipe(Effect.catchEager(() => Effect.void)),
         ),
-
-      stop: Effect.gen(function* () {
-        yield* FiberSet.clear(fiberSet)
-        yield* Ref.set(childFibers, new Map())
-        yield* SubscriptionRef.set(entries, new Map())
-      }),
-
-      getChildren: (toolCallId) =>
-        Effect.gen(function* () {
-          const current = yield* SubscriptionRef.get(entries)
-          const result: ChildSessionEntry[] = []
-          for (const entry of current.values()) {
-            if (entry.toolCallId === toolCallId) result.push(entry)
-          }
-          return result
-        }),
-
-      getAll: SubscriptionRef.get(entries),
 
       changes: SubscriptionRef.changes(entries),
     }
