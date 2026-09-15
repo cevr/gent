@@ -195,3 +195,17 @@ sdk 2,160, server 86, tooling 2,505, e2e 311 src LOC. Client, namespaced proxy, 
 | S20 | six e2e PTY tests assert only that the prompt glyph or typed text is still on screen, or an output byte count                                                                                         | Worth exploring; delete three, give two an observable assertion or delete | in flight (rift `tooling-pass3`) |
 
 Cross-package note for tui pass 3: `apps/tui/src/ops/local-health.ts:168-174` declares a second `ServerLockEntry` schema beside the SDK's.
+
+## tui — pass 3 (2026-09-15, after `84a6093c`)
+
+src 22,698 LOC. Dead-export scan over ~501 exports: zero unused. Every file above 250 LOC read; context stack and extension pipeline clean.
+
+| #   | Finding                                                                                                                                                                           | Verdict                                                        | Status                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------- |
+| T17 | `bordered-input.tsx` component (`BorderedInput`, `BorderLine`) has no consumer; only `formatCwdGit`/`formatElapsed` are imported; `utils/border-segments.ts` serves the dead half | Strong; delete, move the formatters                            | in flight (rift `tui-pass3`)      |
+| T18 | `createThemeView` is 55 hand-written getters forwarding to `values()`; a missed getter is a silent runtime hole                                                                   | Worth exploring; one reactive view built from the keys         | in flight (rift `tui-pass3`)      |
+| T19 | `Theme._hasSelectedListItemText` and `thinkingOpacity` declared, resolved, proxied, set in fx.json, never read; `tint` barrel export has no importer                              | Strong; delete                                                 | in flight (rift `tui-pass3`)      |
+| T20 | four duration formatters, three dialects (`2m05s` vs `2m 5s`); `formatElapsed` ≡ `formatThinkTime(ms/1000)`                                                                       | Worth exploring; one `utils/format-duration.ts`                | in flight (rift `tui-pass3`)      |
+| T21 | `autocomplete-popup.tsx` inlines a fourth wrap-around selection; with command palette and prompt-search still off `SelectList`, `PickerFrame` exists only to share a frame        | Worth exploring; finish the SelectList migration for all three | in flight (rift `tui-selectlist`) |
+| T22 | `branch-picker.tsx` re-declares the Dock box; `Dock` now takes `bodyRows`                                                                                                         | Speculative; needs a pane check; deferred                      | —                                 |
+| T23 | `ops/local-health.ts:168-174` declares a second `ServerLockEntry` schema beside the SDK's (main.tsx imports the SDK one)                                                          | Strong; one decoder                                            | in flight (rift `tui-pass3`)      |
