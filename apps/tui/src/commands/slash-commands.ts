@@ -2,7 +2,7 @@
  * Slash command resolution — looks up commands by slash name or alias.
  */
 
-import { Effect, Option } from "effect"
+import { Option } from "effect"
 import type { Command } from "../command/types"
 
 export interface SlashCommandResult {
@@ -19,7 +19,7 @@ export const executeSlashCommand = (
   cmd: string,
   args: string,
   commands: ReadonlyArray<Command>,
-): Effect.Effect<SlashCommandResult> => {
+): SlashCommandResult => {
   const lowerCmd = cmd.toLowerCase()
 
   // Collect all matching commands, sort by priority
@@ -40,13 +40,13 @@ export const executeSlashCommand = (
 
   const match = Option.fromNullishOr(matches[0])
   if (Option.isNone(match)) {
-    return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })
+    return { handled: false, error: `Unknown command: /${cmd}` }
   }
 
   const onSlash = Option.fromNullishOr(match.value.onSlash)
   if (Option.isSome(onSlash)) onSlash.value(args)
   else match.value.onSelect()
-  return Effect.succeed({ handled: true })
+  return { handled: true }
 }
 
 /**

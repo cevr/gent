@@ -40,9 +40,9 @@ describe("prompt history store", () => {
       yield* writeEntries(first, ["only in first"])
 
       expect(Option.isNone(yield* readEntries(second))).toBe(true)
-      expect(
-        Option.getOrElse(yield* readEntries(first), (): ReadonlyArray<string> => []),
-      ).toEqual(["only in first"])
+      expect(Option.getOrElse(yield* readEntries(first), (): ReadonlyArray<string> => [])).toEqual([
+        "only in first",
+      ])
     }),
   )
 })

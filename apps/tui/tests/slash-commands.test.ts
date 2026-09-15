@@ -1,6 +1,5 @@
-import { describe, it, expect, test } from "effect-bun-test"
+import { describe, expect, test } from "effect-bun-test"
 import { executeSlashCommand, parseSlashCommand } from "../src/commands/slash-commands"
-import { Effect } from "effect"
 import type { Command } from "../src/command/types"
 
 describe("parseSlashCommand", () => {
@@ -43,7 +42,7 @@ const cmd = (overrides: Partial<Command> & { id: string; slash: string }): Comma
 })
 
 describe("executeSlashCommand", () => {
-  it.live("executes matching command", () => {
+  test("executes matching command", () => {
     let called = false
     const commands = [
       cmd({
@@ -54,24 +53,18 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("new", "", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(called).toBe(true)
-      }),
-    )
+    const result = executeSlashCommand("new", "", commands)
+    expect(result.handled).toBe(true)
+    expect(called).toBe(true)
   })
 
-  it.live("unknown command returns error", () =>
-    executeSlashCommand("unknown", "", []).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(false)
-        expect(result.error).toBe("Unknown command: /unknown")
-      }),
-    ),
-  )
+  test("unknown command returns error", () => {
+    const result = executeSlashCommand("unknown", "", [])
+    expect(result.handled).toBe(false)
+    expect(result.error).toBe("Unknown command: /unknown")
+  })
 
-  it.live("case insensitive matching", () => {
+  test("case insensitive matching", () => {
     let called = false
     const commands = [
       cmd({
@@ -82,15 +75,12 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("NEW", "", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(called).toBe(true)
-      }),
-    )
+    const result = executeSlashCommand("NEW", "", commands)
+    expect(result.handled).toBe(true)
+    expect(called).toBe(true)
   })
 
-  it.live("prefers onSlash over onSelect when args present", () => {
+  test("prefers onSlash over onSelect when args present", () => {
     let receivedArgs = ""
     const commands = [
       cmd({
@@ -102,15 +92,12 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("think", "high", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(receivedArgs).toBe("high")
-      }),
-    )
+    const result = executeSlashCommand("think", "high", commands)
+    expect(result.handled).toBe(true)
+    expect(receivedArgs).toBe("high")
   })
 
-  it.live("falls back to onSelect when no onSlash", () => {
+  test("falls back to onSelect when no onSlash", () => {
     let selectCalled = false
     const commands = [
       cmd({
@@ -121,15 +108,12 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("ext", "ignored", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(selectCalled).toBe(true)
-      }),
-    )
+    const result = executeSlashCommand("ext", "ignored", commands)
+    expect(result.handled).toBe(true)
+    expect(selectCalled).toBe(true)
   })
 
-  it.live("lower priority wins", () => {
+  test("lower priority wins", () => {
     let winner = ""
     const commands = [
       cmd({
@@ -149,15 +133,12 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("test", "", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(winner).toBe("b")
-      }),
-    )
+    const result = executeSlashCommand("test", "", commands)
+    expect(result.handled).toBe(true)
+    expect(winner).toBe("b")
   })
 
-  it.live("aliases resolve to the command", () => {
+  test("aliases resolve to the command", () => {
     let called = false
     const commands = [
       cmd({
@@ -169,15 +150,12 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("clear", "", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(called).toBe(true)
-      }),
-    )
+    const result = executeSlashCommand("clear", "", commands)
+    expect(result.handled).toBe(true)
+    expect(called).toBe(true)
   })
 
-  it.live("alias matching is case insensitive", () => {
+  test("alias matching is case insensitive", () => {
     let called = false
     const commands = [
       cmd({
@@ -189,11 +167,8 @@ describe("executeSlashCommand", () => {
         },
       }),
     ]
-    return executeSlashCommand("CLEAR", "", commands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(called).toBe(true)
-      }),
-    )
+    const result = executeSlashCommand("CLEAR", "", commands)
+    expect(result.handled).toBe(true)
+    expect(called).toBe(true)
   })
 })

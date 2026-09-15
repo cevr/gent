@@ -60,8 +60,7 @@ describe("prompt search overlay", () => {
     })
     expect(opened.state.overlay).toEqual({
       _tag: "prompt-search",
-      draftBeforeOpen: "draft",
-      highlighted: Option.none(),
+      state: { _tag: "open", draftBeforeOpen: "draft", highlighted: Option.none() },
     })
     expect(opened.effects).toEqual([])
   })

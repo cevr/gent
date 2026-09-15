@@ -179,6 +179,7 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
 - `ClientWorkspace.cwd` / `ClientWorkspace.home` for workspace-relative operations
+- **`ClientActivity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (headless takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.
 
 ## Key Files (Composer + Session)
 

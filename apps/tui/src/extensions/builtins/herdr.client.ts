@@ -11,8 +11,7 @@ export default defineClientExtension("@gent/herdr", {
     const target = yield* herdrEnvironment.pipe(Effect.orDie)
     if (Option.isNone(target)) return clientContributions()
     const activity = yield* ClientActivity
-    if (Option.isNone(activity.snapshot)) return clientContributions()
-    const read = activity.snapshot.value
+    const read = activity.snapshot
     const lifecycle = yield* ClientLifecycle
     const reporter = yield* lifecycle.scoped(makeHerdrReporter(target.value))
     createRoot((dispose) => {

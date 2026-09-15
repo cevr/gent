@@ -1,4 +1,4 @@
-import { Match, Schema, type Option } from "effect"
+import { Match, Schema } from "effect"
 import { Branch, Message } from "@gent/core/protocol"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {
@@ -7,10 +7,10 @@ import {
   transitionPromptSearch,
 } from "../components/prompt-search-state"
 
+/** The palette owns its own state; the overlay carries it rather than copying its fields. */
 interface PromptSearchOverlayState {
   readonly _tag: "prompt-search"
-  readonly draftBeforeOpen: string
-  readonly highlighted: Option.Option<string>
+  readonly state: PromptSearchState
 }
 
 export type SessionOverlayState =
@@ -74,17 +74,6 @@ export type SessionUiEffect = { readonly _tag: "RestoreComposer"; readonly text:
 export interface SessionUiTransitionResult {
   readonly state: SessionUiState
   readonly effects: readonly SessionUiEffect[]
-}
-
-export const getPromptSearchState = (state: SessionUiState): PromptSearchState => {
-  if (state.overlay._tag === "prompt-search") {
-    return {
-      _tag: "open",
-      draftBeforeOpen: state.overlay.draftBeforeOpen,
-      highlighted: state.overlay.highlighted,
-    }
-  }
-  return PromptSearchStateFactory.closed()
 }
 
 export function transitionSessionUi(
@@ -159,7 +148,8 @@ export function transitionSessionUi(
         effects: [],
       }),
       PromptSearch: (event): SessionUiTransitionResult => {
-        const promptState = getPromptSearchState(state)
+        let promptState = PromptSearchStateFactory.closed()
+        if (state.overlay._tag === "prompt-search") promptState = state.overlay.state
         const result = transitionPromptSearch(promptState, event.event)
         // Only a preview reaches the composer; the palette closes through the overlay.
         const effects = result.effects
@@ -167,11 +157,7 @@ export function transitionSessionUi(
           .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
         let nextOverlay: SessionOverlayState = { _tag: "none" }
         if (result.state._tag === "open") {
-          nextOverlay = {
-            _tag: "prompt-search",
-            draftBeforeOpen: result.state.draftBeforeOpen,
-            highlighted: result.state.highlighted,
-          }
+          nextOverlay = { _tag: "prompt-search", state: result.state }
         }
         return {
           state: {

@@ -46,7 +46,6 @@ import { useExtensionUI } from "../extensions/context"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import {
-  getPromptSearchState,
   SessionUiEvent,
   SessionUiState,
   transitionSessionUi,
@@ -56,6 +55,7 @@ import {
   createPromptSearchController,
   type PromptSearchController,
 } from "./prompt-search-controller"
+import { PromptSearchState } from "../components/prompt-search-state"
 import {
   beginAuthCheck,
   clearQueue,
@@ -413,7 +413,11 @@ export function createSessionController(props: {
 
   const items = createMemo<SessionItem[]>(() => feed.items())
   const promptSearch = createPromptSearchController({
-    state: () => getPromptSearchState(uiState()),
+    state: () => {
+      const overlay = uiState().overlay
+      if (overlay._tag === "prompt-search") return overlay.state
+      return PromptSearchState.closed()
+    },
     entries: history.entries,
     draft: () => interactionState().draft,
     dispatch: (event) => dispatchSessionUi(SessionUiEvent.cases.PromptSearch.make({ event })),
@@ -540,17 +544,13 @@ export function createSessionController(props: {
   }
 
   const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
-    executeSlashCommand(cmd, args, command.commands()).pipe(
-      Effect.tap((result) =>
-        Effect.sync(() => {
-          Option.match(Option.fromNullishOr(result.error), {
-            onNone: () => {},
-            onSome: (error) => client.setError(error),
-          })
-        }),
-      ),
-      Effect.asVoid,
-    )
+    Effect.sync(() => {
+      const result = executeSlashCommand(cmd, args, command.commands())
+      Option.match(Option.fromNullishOr(result.error), {
+        onNone: () => {},
+        onSome: (error) => client.setError(error),
+      })
+    })
 
   const onModelSelect = (modelId: ModelId) => {
     closeOverlay()

@@ -5,7 +5,7 @@
  * restate no-op callbacks.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import { ClientActivity } from "../src/extensions/client-activity"
 import { makeClientRuntime } from "../src/extensions/client-runtime"
@@ -44,13 +44,13 @@ describe("makeClientRuntime", () => {
             lifecycle.addCleanup(() => {})
             return {
               cwd: ws.cwd,
-              activity: Option.isNone(activity.snapshot),
+              activity: activity.snapshot().state,
               session: transport.currentSession(),
             }
           }),
         ),
       )
-      expect(seen).toEqual({ cwd: workspace.cwd, activity: true, session })
+      expect(seen).toEqual({ cwd: workspace.cwd, activity: "unknown", session })
       yield* Effect.promise(() => runtime.dispose())
     })
   })
@@ -75,11 +75,11 @@ describe("makeClientRuntime", () => {
             const activity = yield* ClientActivity
             shell.sendMessage("hello")
             lifecycle.addCleanup(() => {})
-            return Option.map(activity.snapshot, (read) => read().state)
+            return activity.snapshot().state
           }),
         ),
       )
-      expect(state).toEqual(Option.some("working"))
+      expect(state).toEqual("working")
       expect(sent).toEqual(["hello"])
       expect(cleanups).toHaveLength(1)
       yield* Effect.promise(() => runtime.dispose())
