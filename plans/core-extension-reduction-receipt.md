@@ -1977,3 +1977,38 @@ text mentions it as a whole identifier (`$` and `_` count as word characters).
 Both the summary prompt note and the notice's "Names still bound" line use
 the filtered list. Two tests added; the compactor test fails when the list is
 not filtered. The gamut config no longer carries `contextLength: 20000`.
+
+## Durable wake, monitor tool, wake tray (2026-09-15, `9b4259bf` → `c04e28be`)
+
+`9b4259bf` stores alarms in one file per branch and re-arms them from the
+`turnProjection` hook, since branch resources start without an
+`ExtensionContext`. The first terminal check of that build did not fire after
+a restart and its log held no trace; the build had no log lines yet, and the
+same path with `wake.armed`/`wake.fired` logging (`d6fce356`) fired twice in
+a row after restarts (06:20:12 alarm; 06:31 monitor + 06:34:37 alarm with
+both re-armed from disk on the first turn back). The RPC test seeds a
+past-due alarm in a temp home before the first turn and expects the wake;
+the direct re-arm test fails when arming is skipped.
+
+`d6fce356` adds `monitor({ command, cwd?, everySeconds?, until?, timeoutSeconds?, note })`:
+the branch resource polls the command, fires on exit 0 (or an `until` match
+on stdout) with the last 2,000 chars of output, or at the deadline saying so.
+Entries are one `Schema.TaggedUnion` (`alarm | monitor`) in
+`~/.gent/wakes/<branchId>.json`; the goal store moves to `~/.gent/goals`
+for the same reason (`ctx.home` is the OS home, so both had been writing
+`~/goals` and `~/wakes`). `wake.list` feeds a tray under the status line
+(`apps/tui/src/extensions/builtins/wake.client.tsx`, soonest first, three
+rows then a count, re-read on tool/message events and every 5s while
+non-empty). Fired rows collapse to `◷ alarm fired · <note>` /
+`◉ monitor matched · <note>` (`c04e28be`: no emoji, fx-style glyph column).
+Seven extension tests (`tests/wake/`), three tray tests, one transcript
+test; the monitor test fails when a success exit is not a match.
+
+Gamut run 37 (opus-luna, normal window, at `34190f81`): 7 sessions, 60
+steps, 18 tests green in 6m51s, $1.53, 0 handoffs, so the trimmed bindings
+note could not be measured there; run 38 at a 20k window is the measurement
+(baseline from run 36: 15 to 143 names per marker, 2.6k to 4.0k chars).
+Run 38 (opus-luna, 20k window, at `c04e28be`): 6 sessions, 2 handoffs,
+17 tests green in 5m17s, $1.21; the two markers carry 12 and 4 names
+(2.4k and 2.9k chars), so the note now names only what the kept window
+uses.
