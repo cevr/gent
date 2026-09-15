@@ -9,7 +9,7 @@
  * whose result already committed.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Option, Schema, Stream } from "effect"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { Database } from "bun:sqlite"
 import { Gent } from "@gent/sdk"
@@ -18,7 +18,7 @@ import { ExtensionId } from "../../../src/domain/ids"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { makeTempDirectoryScoped, waitFor } from "../../../src/test-utils/fixtures"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { textStep, toolCallStep } from "../../../src/test-utils/sequence-steps"
+import { multiToolCallStep, textStep, toolCallStep } from "../../../src/test-utils/sequence-steps"
 import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"
 
 const TurnRecordRow = Schema.Struct({
@@ -56,8 +56,33 @@ const readTurnRecordRow = Effect.fn("test.readTurnRecordRow")(function* (params:
   return { step: row.step, continuations: row.continuations, pendingToolCalls }
 })
 
-/** Counts real executions across both processes; two layer graphs, one box. */
-const probe = { runs: 0 }
+/**
+ * What the probe tool did, across both processes; two layer graphs, one box.
+ * `gate` holds one labelled call open so a step can be cut in half: the other
+ * call's terminal event commits, the step's tool-result message does not.
+ */
+interface ProbeGate {
+  readonly label: string
+  readonly entered: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}
+
+interface ProbeBox {
+  runs: number
+  byLabel: Map<string, number>
+  gate: Option.Option<ProbeGate>
+}
+
+const probe: ProbeBox = { runs: 0, byLabel: new Map(), gate: Option.none() }
+
+const resetProbe = () => {
+  probe.runs = 0
+  probe.byLabel = new Map()
+  probe.gate = Option.none()
+}
+
+const probeRunsFor = (label: string) =>
+  Option.getOrElse(Option.fromUndefinedOr(probe.byLabel.get(label)), () => 0)
 
 const ResumeProbeExtension: LoadedExtension = {
   manifest: { id: ExtensionId.make("@test/turn-resume-probe") },
@@ -74,6 +99,12 @@ const ResumeProbeExtension: LoadedExtension = {
         execute: Effect.fn("resume_probe")(function* (params) {
           yield* ExtensionContext
           probe.runs += 1
+          probe.byLabel.set(params.label, probeRunsFor(params.label) + 1)
+          const gate = probe.gate
+          if (Option.isSome(gate) && gate.value.label === params.label) {
+            yield* Deferred.succeed(gate.value.entered, void 0)
+            yield* Deferred.await(gate.value.release)
+          }
           return { label: params.label, run: probe.runs }
         }),
       }),
@@ -83,14 +114,14 @@ const ResumeProbeExtension: LoadedExtension = {
 
 /** The user message id that opened the branch's only turn. */
 const openingTurnMessageId = (messages: ReadonlyArray<{ readonly id: string }>) =>
-  messages.map((message) => message.id).find((id) => !id.includes(":"))
+  Option.fromUndefinedOr(messages.map((message) => message.id).find((id) => !id.includes(":")))
 
 describe("turn record", () => {
   it.scopedLive(
     "records the completed step for a turn that answered after a tool call",
     () =>
       Effect.gen(function* () {
-        probe.runs = 0
+        resetProbe()
         const tempDir = yield* makeTempDirectoryScoped("gent-turn-record-")
         const dbPath = `${tempDir}/gent.db`
         const provider = yield* LanguageModelLayers.sequence([
@@ -118,13 +149,13 @@ describe("turn record", () => {
         yield* Fiber.join(completed)
         const messages = yield* client.message.list({ branchId })
         const messageId = openingTurnMessageId(messages)
-        expect(messageId).toBeDefined()
+        expect(Option.isSome(messageId)).toBe(true)
 
         const record = yield* readTurnRecordRow({
           dbPath,
           sessionId,
           branchId,
-          messageId: messageId ?? "",
+          messageId: Option.getOrElse(messageId, () => ""),
         })
         // Two steps ran: the tool call and the answer. Both closed.
         expect(record.step).toBe(2)
@@ -139,7 +170,7 @@ describe("turn record", () => {
     "finishes an interrupted turn from the record without re-running a settled tool",
     () =>
       Effect.gen(function* () {
-        probe.runs = 0
+        resetProbe()
         const tempDir = yield* makeTempDirectoryScoped("gent-turn-resume-")
         const dbPath = `${tempDir}/gent.db`
         const finalReply = "RESUMED-REPLY"
@@ -204,6 +235,93 @@ describe("turn record", () => {
         )
 
         expect(probe.runs).toBe(1)
+      }),
+    60_000,
+  )
+
+  it.scopedLive(
+    "replays the settled half of a cut step instead of running that tool again",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-partial-")
+        const dbPath = `${tempDir}/gent.db`
+        const finalReply = "PARTIAL-RESUMED"
+
+        // One step, two calls. "slow" blocks, so the step's tool-result
+        // message never commits; "fast" finishes and its terminal event does.
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        probe.gate = Option.some({ label: "slow", entered, release })
+
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "resume_probe", input: { label: "fast" } },
+            { toolName: "resume_probe", input: { label: "slow" } },
+          ),
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message
+              .send({ sessionId, branchId, content: "run both probes" })
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(entered)
+            // "fast" settled; wait for its terminal event to be durable.
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              () => probeRunsFor("fast") >= 1,
+              10_000,
+              "the fast probe settled",
+            )
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("15 seconds")),
+        )
+
+        // Release the blocked call and restart: the loop must replay "fast".
+        probe.gate = Option.none()
+        yield* Deferred.succeed(release, void 0)
+
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            yield* client.message.send({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+              content: "continue",
+            })
+            yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (messages) =>
+                messages.some((message) =>
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text.includes(finalReply),
+                  ),
+                ),
+              15_000,
+              "resumed turn produced its reply",
+            )
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+
+        // "fast" settled durably in the first process; it must not run twice.
+        expect(probeRunsFor("fast")).toBe(1)
       }),
     60_000,
   )
