@@ -1,4 +1,3 @@
-import type { PaletteLevel } from "../components/command-palette-state"
 import { Option } from "effect"
 
 export interface Command {
@@ -16,8 +15,6 @@ export interface Command {
   onSelect: () => void
   /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
   onSlash?: (args: string) => void
-  /** When set, selecting this command in the palette pushes a sub-level instead of calling onSelect. */
-  paletteLevel?: () => PaletteLevel
 }
 
 export interface Keybind {

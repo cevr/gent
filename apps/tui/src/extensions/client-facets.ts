@@ -6,7 +6,7 @@
 // the per-provider `clientRuntime`, and resolves contributions with scope
 // precedence (project > user > builtin). Setups yield typed services from
 // the runtime (`ClientTransport`, `ClientShell`, `ClientWorkspace`,
-// `ClientComposer`, `ClientLifecycle`, `FileSystem`, `Path`) — there is no
+// `ClientLifecycle`, `FileSystem`, `Path`) — there is no
 // `(ctx) => Array` arm and no imperative context bag.
 //
 // The `ClientContributions` bucket is the foundational data structure here.
@@ -32,13 +32,7 @@ import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 import type { ClientActivity } from "./client-activity"
 import type { ClientTransport } from "./client-transport"
-import type {
-  ClientComposer,
-  ClientDriver,
-  ClientLifecycle,
-  ClientShell,
-  ClientWorkspace,
-} from "./client-services"
+import type { ClientDriver, ClientLifecycle, ClientShell, ClientWorkspace } from "./client-services"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -47,15 +41,6 @@ export type WidgetSlot = "below-messages" | "above-input" | "below-input"
 export interface InteractionRendererProps {
   readonly event: ActiveInteraction
   readonly resolve: (result: ApprovalResult) => void
-}
-
-/** Props passed to a custom composer surface component */
-export interface ComposerSurfaceProps {
-  readonly draft: string
-  readonly setDraft: (text: string) => void
-  readonly submit: () => void
-  readonly focused: boolean
-  readonly mode: "editing" | "shell"
 }
 
 /** Props passed to registered overlay components. */
@@ -67,7 +52,6 @@ export interface OverlayProps {
 export type WidgetComponent = () => JSX.Element
 export type OverlayComponent = (props: OverlayProps) => JSX.Element
 export type InteractionRendererComponent = (props: InteractionRendererProps) => JSX.Element
-export type ComposerSurfaceComponent = (props: ComposerSurfaceProps) => JSX.Element
 
 export type ClientRuntimeServices =
   | ClientDeps
@@ -75,7 +59,6 @@ export type ClientRuntimeServices =
   | ClientWorkspace
   | ClientShell
   | ClientDriver
-  | ClientComposer
   | ClientLifecycle
   | ClientActivity
 
@@ -110,22 +93,6 @@ export interface WidgetContribution {
   readonly component: WidgetComponent
 }
 
-export interface PaletteLevelEntry {
-  readonly id: string
-  readonly title: string
-  readonly description?: string
-  readonly category?: string
-  readonly onSelect: () => void
-}
-
-export interface PaletteLevel {
-  readonly id: string
-  readonly title: string
-  // eslint-disable-next-line effect/noNullish -- palette sources use absence while loading.
-  readonly source: () => ReadonlyArray<PaletteLevelEntry> | undefined
-  readonly onEnter?: () => void
-}
-
 export interface ClientCommandContribution {
   readonly id: string
   readonly title: string
@@ -141,8 +108,6 @@ export interface ClientCommandContribution {
   readonly onSelect: () => void
   /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
   readonly onSlash?: (args: string) => void
-  /** When set, selecting in the palette pushes a sub-level instead of calling onSelect. */
-  readonly paletteLevel?: () => PaletteLevel
 }
 
 export interface OverlayContribution {
@@ -155,10 +120,6 @@ export interface InteractionRendererContribution {
   /** Matches against metadata.type. undefined = default fallback renderer. */
   readonly metadataType?: string
   readonly component: InteractionRendererComponent
-}
-
-export interface ComposerSurfaceContribution {
-  readonly component: ComposerSurfaceComponent
 }
 
 export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
@@ -209,7 +170,6 @@ export interface ClientContributions {
   readonly commands?: ReadonlyArray<ClientCommandContribution>
   readonly overlays?: ReadonlyArray<OverlayContribution>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
-  readonly composerSurface?: ComposerSurfaceContribution
   readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
@@ -244,11 +204,6 @@ export const clientContributions = (
     out.commands = append(out.commands, part.commands)
     out.overlays = append(out.overlays, part.overlays)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
-    out.composerSurface = Option.getOrUndefined(
-      Option.orElse(Option.fromNullishOr(part.composerSurface), () =>
-        Option.fromNullishOr(out.composerSurface),
-      ),
-    )
     out.borderLabels = append(out.borderLabels, part.borderLabels)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
   }
@@ -296,14 +251,6 @@ export const interactionRendererContribution = (
   return { interactionRenderers: [renderer] }
 }
 
-/**
- * Build a composer-surface contribution. The component must be a function
- * accepting `ComposerSurfaceProps` — core owns this prop shape.
- */
-export const composerSurfaceContribution = (
-  component: ComposerSurfaceComponent,
-): ClientContributions => ({ composerSurface: { component } })
-
 export const borderLabelContribution = (opts: BorderLabelContribution): ClientContributions => ({
   borderLabels: [opts],
 })
@@ -315,19 +262,11 @@ export const autocompleteContribution = (opts: AutocompleteContribution): Client
 /** Overlay identifier (registered in `OverlayContribution`). */
 export type OverlayId = string
 
-/** Snapshot of the active composer at a point in time. */
-export interface ComposerState {
-  readonly draft: string
-  readonly mode: "editing" | "shell"
-  readonly inputFocused: boolean
-  readonly autocompleteOpen: boolean
-}
-
 /**
  * A client extension's setup is an Effect that yields its dependencies
  * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
  * default, widened by every TUI service the extension yields
- * (`ClientWorkspace`, `ClientShell`, `ClientComposer`, `ClientTransport`).
+ * (`ClientWorkspace`, `ClientShell`, `ClientTransport`).
  *
  * The TUI shell publishes its typed `ClientTransport` tag at
  * `apps/tui/src/extensions/client-transport.ts`; an extension that needs
@@ -360,7 +299,7 @@ export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServic
  *
  * The setup is an Effect. Read the typed transport via
  * `yield* ClientTransport` and the other services via `yield* ClientShell` /
- * `ClientComposer` / `ClientWorkspace`.
+ * `ClientWorkspace`.
  */
 export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
   id: string,

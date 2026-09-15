@@ -22,7 +22,6 @@ import {
   Tracer,
 } from "effect"
 import { makeClientTraceLogger } from "./utils/client-trace-logger"
-import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
 import {
@@ -72,7 +71,6 @@ import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientTransportLayer } from "./extensions/client-transport"
 import {
-  makeClientComposerLayer,
   makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
@@ -94,8 +92,6 @@ clearClientLog()
 
 const formatMissingProviders = (providers: readonly ProviderId[]): string =>
   providers.map((provider) => provider).join(", ")
-
-const ATOM_CACHE_MAX = 256
 
 const toError = (cause: unknown): Error => {
   if (cause instanceof Error) return cause
@@ -205,14 +201,6 @@ const runHeadlessTurn = (
         list: bundle.client.driver.list().pipe(Effect.mapError(toError)),
         set: (input) => bundle.client.driver.set(input).pipe(Effect.mapError(toError)),
         clear: (input) => bundle.client.driver.clear(input).pipe(Effect.mapError(toError)),
-      }),
-      makeClientComposerLayer({
-        state: () => ({
-          draft: "",
-          mode: "editing",
-          inputFocused: false,
-          autocompleteOpen: false,
-        }),
       }),
       makeClientLifecycleLayer({ addCleanup: () => {} }),
     ),
@@ -478,30 +466,28 @@ const main = Command.make(
           () => (
             <EnvProvider env={envWithShutdown}>
               <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
-                <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
-                  <ClientProvider
-                    client={bundle.client}
-                    runtime={bundle.runtime}
-                    services={uiServices}
-                    log={log}
-                    initialSession={bootstrap.initialSession}
-                    initialAgent={initialAgent}
-                  >
-                    <ExtensionUIProvider scope={uiScope}>
-                      <RouterProvider initialRoute={bootstrap.initialRoute}>
-                        <TerminalDimensionsProvider>
-                          <ComposerDraftsProvider>
-                            <App
-                              debugMode={debug}
-                              missingAuthProviders={missingAuth}
-                              initialThemeMode={initialThemeMode}
-                            />
-                          </ComposerDraftsProvider>
-                        </TerminalDimensionsProvider>
-                      </RouterProvider>
-                    </ExtensionUIProvider>
-                  </ClientProvider>
-                </RegistryProvider>
+                <ClientProvider
+                  client={bundle.client}
+                  runtime={bundle.runtime}
+                  services={uiServices}
+                  log={log}
+                  initialSession={bootstrap.initialSession}
+                  initialAgent={initialAgent}
+                >
+                  <ExtensionUIProvider scope={uiScope}>
+                    <RouterProvider initialRoute={bootstrap.initialRoute}>
+                      <TerminalDimensionsProvider>
+                        <ComposerDraftsProvider>
+                          <App
+                            debugMode={debug}
+                            missingAuthProviders={missingAuth}
+                            initialThemeMode={initialThemeMode}
+                          />
+                        </ComposerDraftsProvider>
+                      </TerminalDimensionsProvider>
+                    </RouterProvider>
+                  </ExtensionUIProvider>
+                </ClientProvider>
               </WorkspaceProvider>
             </EnvProvider>
           ),

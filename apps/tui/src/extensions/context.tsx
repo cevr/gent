@@ -32,7 +32,6 @@ import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from 
 import type {
   AutocompleteContribution,
   ClientRuntime,
-  ComposerSurfaceComponent,
   InteractionRendererComponent,
   OverlayComponent,
 } from "./client-facets.js"
@@ -42,7 +41,6 @@ import {
   makeClientWorkspaceLayer,
   makeClientShellLayer,
   makeClientDriverLayer,
-  makeClientComposerLayer,
   makeClientLifecycleLayer,
 } from "./client-services"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
@@ -65,8 +63,6 @@ export interface ExtensionUIContextValue {
   readonly overlays: Accessor<Map<string, OverlayComponent>>
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
-  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid result.
-  readonly composerSurface: Accessor<ComposerSurfaceComponent | undefined>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   readonly loading: Accessor<boolean>
@@ -78,14 +74,6 @@ export interface ExtensionUIContextValue {
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   /** Wire composer state reactive getter from the session controller */
-  readonly setComposerStateProvider: (
-    provider: () => {
-      draft: string
-      mode: "editing" | "shell"
-      inputFocused: boolean
-      autocompleteOpen: boolean
-    },
-  ) => void
   /** Current session ID (absent before session is active). */
   // eslint-disable-next-line effect/noNullish -- extension consumers use absence before session activation.
   readonly sessionId: Accessor<string | undefined>
@@ -104,8 +92,6 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   commands: [],
   overlays: new Map(),
   interactionRenderers: new Map(),
-  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid resolved result.
-  composerSurface: undefined,
   borderLabels: [],
   autocompleteItems: [],
 }
@@ -160,20 +146,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   }
 
   // Composer state provider — wired by session controller
-  type ComposerStateSnapshot = {
-    draft: string
-    mode: "editing" | "shell"
-    inputFocused: boolean
-    autocompleteOpen: boolean
-  }
-  const [composerStateProvider, setComposerStateProviderSignal] = createSignal<
-    Option.Option<() => ComposerStateSnapshot>
-  >(Option.none())
-
-  const setComposerStateProvider = (provider: () => ComposerStateSnapshot) => {
-    setComposerStateProviderSignal(Option.some(provider))
-  }
-
   // Provider-scoped cleanup registry. Widget setups that detach Solid
   // roots or subscribe to pulses register their disposers here; the
   // `onCleanup` below runs them in order when the provider unmounts.
@@ -188,9 +160,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // (FileSystem, Path) with the TUI client services Effect-typed
   // extensions may yield: `ClientTransport` (typed RPC client + event
   // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
-  // (send/sendMessage/overlays), `ClientComposer` (reactive composer
-  // state). The loader's `invokeSetup` runs each setup against this
-  // runtime.
+  // (send/sendMessage/overlays). The loader's `invokeSetup` runs each
+  // setup against this runtime.
   const clientRuntime: ClientRuntime = ManagedRuntime.make(
     Layer.mergeAll(
       BunFileSystem.layer,
@@ -223,20 +194,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         list: transport.client.driver.list().pipe(Effect.mapError(toError)),
         set: (input) => transport.client.driver.set(input).pipe(Effect.mapError(toError)),
         clear: (input) => transport.client.driver.clear(input).pipe(Effect.mapError(toError)),
-      }),
-      makeClientComposerLayer({
-        state: () => {
-          const provider = composerStateProvider()
-          if (Option.isNone(provider)) {
-            return {
-              draft: "",
-              mode: "editing" satisfies ComposerStateSnapshot["mode"],
-              inputFocused: false,
-              autocompleteOpen: false,
-            }
-          }
-          return provider.value()
-        },
       }),
       makeClientLifecycleLayer({ addCleanup }),
     ),
@@ -359,14 +316,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         commands: () => [...resolved().commands, ...serverCommands()],
         overlays: () => resolved().overlays,
         interactionRenderers: () => resolved().interactionRenderers,
-        composerSurface: () => resolved().composerSurface,
         borderLabels: () => resolved().borderLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         loading,
         setDynamicAutocomplete,
         setOverlayDispatch,
         setSwitchSessionDispatch,
-        setComposerStateProvider,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
         sessionId: () =>
           Option.getOrUndefined(

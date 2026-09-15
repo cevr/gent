@@ -50,7 +50,7 @@ class TuiExtensionImportError extends Schema.TaggedError<TuiExtensionImportError
 /**
  * Run an extension's Effect-typed setup against the per-provider runtime.
  * The runtime carries every TUI service the setup may yield (FileSystem,
- * Path, ClientTransport, ClientWorkspace, ClientShell, ClientComposer);
+ * Path, ClientTransport, ClientWorkspace, ClientShell);
  * `runtime.runPromise` enforces dependency satisfaction dynamically.
  */
 const invokeSetup = (

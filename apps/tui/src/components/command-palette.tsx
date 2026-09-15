@@ -274,13 +274,8 @@ export function CommandPalette() {
           category: cmd.category ?? "General",
           shortcut: cmd.keybind,
           onSelect: () => {
-            const nextLevel = Option.fromNullishOr(cmd.paletteLevel)
-            if (Option.isSome(nextLevel)) {
-              pushLevel(nextLevel.value())
-            } else {
-              cmd.onSelect()
-              closePalette()
-            }
+            cmd.onSelect()
+            closePalette()
           },
         })),
     ],

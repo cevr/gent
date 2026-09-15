@@ -2,20 +2,19 @@
  * TUI client services — typed Effect services that compose into the
  * per-provider `ManagedRuntime`. Effect-typed extension setups yield
  * the services they need (`ClientWorkspace`, `ClientShell`,
- * `ClientComposer`, `ClientTransport`).
+ * `ClientTransport`).
  *
  * Why split: each service has a different lifetime/coupling profile.
  * `ClientWorkspace` is process-static (cwd/home don't change).
- * `ClientShell` captures session-bound callbacks. `ClientComposer` is
- * reactive (reads a Solid signal). Splitting lets a setup yield exactly
- * what it depends on and lets future client surfaces (SDK headless, web
+ * `ClientShell` captures session-bound callbacks. Splitting lets a setup
+ * yield exactly what it depends on and lets future client surfaces (SDK headless, web
  * UI) provide a subset.
  */
 
 import { createEffect, createRoot, createSignal } from "solid-js"
 import { Context, Effect, Layer, Option, Scope } from "effect"
 import type { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/extensions/api"
-import type { OverlayId, ComposerState } from "./client-facets.js"
+import type { OverlayId } from "./client-facets.js"
 import type { ClientTransportDefinition } from "./client-transport"
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
@@ -89,21 +88,6 @@ export class ClientDriver extends Context.Service<ClientDriver, ClientDriverDefi
 
 export const makeClientDriverLayer = (payload: ClientDriverDefinition): Layer.Layer<ClientDriver> =>
   Layer.succeed(ClientDriver, payload)
-
-// ── ClientComposer ───────────────────────────────────────────────────────
-
-export interface ClientComposerDefinition {
-  /** Reactive accessor for the current composer state. */
-  readonly state: () => ComposerState
-}
-
-export class ClientComposer extends Context.Service<ClientComposer, ClientComposerDefinition>()(
-  "@gent/tui/src/extensions/client-services/ClientComposer",
-) {}
-
-export const makeClientComposerLayer = (
-  payload: ClientComposerDefinition,
-): Layer.Layer<ClientComposer> => Layer.succeed(ClientComposer, payload)
 
 // ── ClientLifecycle ──────────────────────────────────────────────────────
 

@@ -9,13 +9,12 @@
  * per-call-site `Effect.provide`.
  */
 import { Cause, Context, Effect, Exit, Fiber } from "effect"
-import { createSignal, onCleanup, type Accessor } from "solid-js"
-import { type Result, initial, success, failure } from "../atom-solid/result"
+import { onCleanup } from "solid-js"
 import { useClientRuntime } from "../client/index"
 
 export interface UseRuntimeReturn {
-  /** Run Effect, track result in signal. Returns [result accessor, cancel fn] */
-  call: <A, E, R>(effect: Effect.Effect<A, E, R>) => [Accessor<Result<A, E>>, () => void]
+  /** Run Effect, interrupting it when the owning component unmounts. */
+  call: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
   /** Fire and forget - runs Effect without tracking result */
   cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
 }
@@ -31,29 +30,18 @@ export function useRuntime(): UseRuntimeReturn {
     // services required by the caller-supplied effect.
     Effect.runForkWith(Context.makeUnsafe<R>(services.mapUnsafe))(effect)
 
-  const call = <A, E, R>(effect: Effect.Effect<A, E, R>): [Accessor<Result<A, E>>, () => void] => {
-    const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))
-
-    let cancelled = false
+  const call = <A, E, R>(effect: Effect.Effect<A, E, R>): void => {
     const fiber = fork(effect)
 
     fiber.addObserver((exit) => {
-      if (cancelled) return
-      if (Exit.isSuccess(exit)) {
-        setResult(() => success<A, E>(exit.value, false))
-      } else {
-        setResult(() => failure<A, E>(exit.cause, false))
+      if (Exit.isFailure(exit)) {
+        log.error("call.failed", { error: Cause.pretty(exit.cause) })
       }
     })
 
-    const cancel = () => {
-      cancelled = true
+    onCleanup(() => {
       Effect.runFork(Fiber.interrupt(fiber))
-    }
-
-    onCleanup(cancel)
-
-    return [result, cancel]
+    })
   }
 
   const cast = <A, E, R>(effect: Effect.Effect<A, E, R>): void => {

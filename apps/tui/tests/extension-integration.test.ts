@@ -15,7 +15,6 @@ import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
 import {
-  makeClientComposerLayer,
   makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
@@ -72,14 +71,6 @@ const testRuntime = ManagedRuntime.make(
       list: Effect.succeed({ drivers: [], overrides: {} }),
       set: () => Effect.void,
       clear: () => Effect.void,
-    }),
-    makeClientComposerLayer({
-      state: () => ({
-        draft: "",
-        mode: "editing" satisfies "editing",
-        inputFocused: false,
-        autocompleteOpen: false,
-      }),
     }),
     makeClientTransportLayer({
       client: stubClient,

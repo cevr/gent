@@ -12,7 +12,6 @@ import type {
   AutocompleteContribution,
   BorderLabelItem,
   ClientContributions,
-  ComposerSurfaceComponent,
   InteractionRendererComponent,
   OverlayComponent,
   WidgetComponent,
@@ -71,8 +70,6 @@ export interface ResolvedTuiExtensions {
   readonly overlays: Map<string, OverlayComponent>
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
-  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid resolved result.
-  readonly composerSurface: ComposerSurfaceComponent | undefined
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
 }
@@ -298,26 +295,6 @@ const resolveInteractionRenderers = (
   return renderers
 }
 
-const resolveComposerSurface = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-  // eslint-disable-next-line effect/noNullish -- no composer contribution is a valid result.
-): ComposerSurfaceComponent | undefined => {
-  let winner = Option.none<ComposerSurfaceComponent>()
-  let winnerScope = Option.none<ScopeEntry>()
-
-  for (const ext of sorted) {
-    const contribution = Option.fromNullishOr(ext.contributions.composerSurface)
-    if (Option.isNone(contribution)) continue
-    if (Option.isSome(winnerScope)) {
-      checkCollision(winnerScope, ext, "composer surface", "composerSurface")
-    }
-    winner = Option.some(contribution.value.component)
-    winnerScope = Option.some({ scope: ext.scope, source: ext.filePath })
-  }
-
-  return Option.getOrUndefined(winner)
-}
-
 const resolveBorderLabels = (
   sorted: ReadonlyArray<LoadedTuiExtension>,
 ): ReadonlyArray<ResolvedBorderLabel> => {
@@ -366,7 +343,6 @@ export const resolveTuiExtensions = (
     commands: resolveCommands(sorted),
     overlays: resolveOverlays(sorted),
     interactionRenderers: resolveInteractionRenderers(sorted),
-    composerSurface: resolveComposerSurface(sorted),
     borderLabels: resolveBorderLabels(sorted),
     autocompleteItems: resolveAutocomplete(sorted),
   }

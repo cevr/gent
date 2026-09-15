@@ -6,7 +6,6 @@ import { Context, Effect, Layer, Option, Scope, Stream } from "effect"
 import { render } from "@opentui/solid"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { JSX } from "solid-js"
-import { RegistryProvider } from "../src/atom-solid"
 import { KeyboardScopeProvider } from "../src/keyboard/context"
 import { ThemeProvider } from "../src/theme"
 import { CommandProvider } from "../src/command/context"
@@ -257,46 +256,44 @@ export const renderWithProviders = (
           () => (
             <TerminalDimensionsProvider>
               <ComposerDraftsProvider>
-                <RegistryProvider services={services}>
-                  <KeyboardScopeProvider>
-                    <ThemeProvider mode="dark">
-                      <EnvProvider
-                        env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
-                      >
-                        <CommandProvider>
-                          <RouterProvider
-                            initialRoute={
-                              options?.initialRoute ??
-                              Route.session(
-                                SessionId.make("test-session"),
-                                BranchId.make("test-branch"),
-                              )
-                            }
+                <KeyboardScopeProvider>
+                  <ThemeProvider mode="dark">
+                    <EnvProvider
+                      env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
+                    >
+                      <CommandProvider>
+                        <RouterProvider
+                          initialRoute={
+                            options?.initialRoute ??
+                            Route.session(
+                              SessionId.make("test-session"),
+                              BranchId.make("test-branch"),
+                            )
+                          }
+                        >
+                          <WorkspaceProvider
+                            cwd={options?.cwd ?? defaultWorkspaceCwd}
+                            home="/tmp"
+                            services={services}
                           >
-                            <WorkspaceProvider
-                              cwd={options?.cwd ?? defaultWorkspaceCwd}
-                              home="/tmp"
+                            <ClientProvider
+                              client={client}
+                              runtime={runtime}
                               services={services}
+                              log={noopLog}
+                              initialSession={Option.getOrUndefined(
+                                toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                              )}
+                              initialAgent={options?.initialAgent}
                             >
-                              <ClientProvider
-                                client={client}
-                                runtime={runtime}
-                                services={services}
-                                log={noopLog}
-                                initialSession={Option.getOrUndefined(
-                                  toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                                )}
-                                initialAgent={options?.initialAgent}
-                              >
-                                <ExtensionUIProvider>{node()}</ExtensionUIProvider>
-                              </ClientProvider>
-                            </WorkspaceProvider>
-                          </RouterProvider>
-                        </CommandProvider>
-                      </EnvProvider>
-                    </ThemeProvider>
-                  </KeyboardScopeProvider>
-                </RegistryProvider>
+                              <ExtensionUIProvider>{node()}</ExtensionUIProvider>
+                            </ClientProvider>
+                          </WorkspaceProvider>
+                        </RouterProvider>
+                      </CommandProvider>
+                    </EnvProvider>
+                  </ThemeProvider>
+                </KeyboardScopeProvider>
               </ComposerDraftsProvider>
             </TerminalDimensionsProvider>
           ),

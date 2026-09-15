@@ -3,7 +3,6 @@ import { Deferred, Effect, Layer, ManagedRuntime, Option } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import {
-  makeClientComposerLayer,
   makeClientDriverLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
@@ -94,14 +93,6 @@ export const makeClientExtensionRuntime = (
         list: Effect.succeed({ drivers: [], overrides: {} }),
         set: () => Effect.void,
         clear: () => Effect.void,
-      }),
-      makeClientComposerLayer({
-        state: () => ({
-          draft: "",
-          mode: "editing" satisfies "editing",
-          inputFocused: false,
-          autocompleteOpen: false,
-        }),
       }),
       makeClientTransportLayer(opts.transport ?? makeClientTestTransport(opts)),
       makeClientLifecycleLayer({ addCleanup: () => {} }),

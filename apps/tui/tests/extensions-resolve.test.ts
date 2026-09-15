@@ -7,13 +7,11 @@ import {
   borderLabelContribution,
   clientContributions,
   clientCommandContribution,
-  composerSurfaceContribution,
   interactionRendererContribution,
   overlayContribution,
   rendererContribution,
   widgetContribution,
   type ClientContributions,
-  type ComposerSurfaceProps,
   type OverlayProps,
   type WidgetComponent,
 } from "../src/extensions/client-facets.js"
@@ -64,14 +62,6 @@ const interactionProps = {
   resolve: () => {},
 }
 const overlayProps: OverlayProps = { open: true, onClose: () => {} }
-const composerProps = {
-  draft: "",
-  setDraft: (_text: string) => {},
-  submit: () => {},
-  focused: false,
-  mode: "editing",
-} satisfies ComposerSurfaceProps
-
 describe("resolveTuiExtensions", () => {
   test("client contribution constructors enforce slot-specific component contracts", () => {
     const good = widgetContribution({
@@ -86,9 +76,6 @@ describe("resolveTuiExtensions", () => {
       // @ts-expect-error — widgets receive no props; overlays own open/onClose props
       component: (_props: OverlayProps) => "bad",
     })
-    // @ts-expect-error — composer surfaces receive ComposerSurfaceProps, not overlay props
-    composerSurfaceContribution((_props: OverlayProps) => "bad")
-
     expect(good.widgets?.[0]?.id).toBe("typed-widget")
   })
 
@@ -250,25 +237,6 @@ describe("resolveTuiExtensions", () => {
         make("b", "user", overlayContribution({ id: "dup", component: overlay("b") })),
       ]),
     ).toThrow(/Same-scope TUI overlay collision/)
-  })
-
-  test("composer surfaces stay single-winner by scope and still fail on same-scope collisions", () => {
-    const resolved = resolveTuiExtensions([
-      make("builtin-composer", "builtin", composerSurfaceContribution(widget("builtin"))),
-      make("project-composer", "project", composerSurfaceContribution(widget("project"))),
-    ])
-
-    const composerSurface = Option.fromNullishOr(resolved.composerSurface)
-    expect(Option.isSome(composerSurface)).toBe(true)
-    if (Option.isNone(composerSurface)) return
-    expect(composerSurface.value(composerProps)).toBe("project")
-
-    expect(() =>
-      resolveTuiExtensions([
-        make("a", "builtin", composerSurfaceContribution(widget("a"))),
-        make("b", "builtin", composerSurfaceContribution(widget("b"))),
-      ]),
-    ).toThrow(/Same-scope TUI composer surface collision/)
   })
 
   test("border labels remain collected and priority sorted", () => {

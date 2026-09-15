@@ -8,7 +8,6 @@ import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { useComposerController } from "./use-composer-controller"
-import { ComposerInteractionEvent } from "./composer-interaction-state"
 import { useSessionController } from "../routes/session-controller"
 import { useExtensionUI } from "../extensions/context"
 import { useRequiredContext } from "../utils/solid-context"
@@ -38,10 +37,6 @@ export function Composer(props: ComposerProps) {
   const editorHeight = () => Math.max(1, Math.min(8, dimensions().height - pickerHeight() - 4))
   const decodeMetadata = Schema.decodeUnknownOption(Schema.JsonObject)
   const decodeString = Schema.decodeUnknownOption(Schema.String)
-  const composerMode = (): "editing" | "shell" => {
-    if (controller.mode() === "shell") return "shell"
-    return "editing"
-  }
   const promptColor = () => {
     if (controller.mode() === "shell") return theme.warning
     return theme.primary
@@ -76,8 +71,6 @@ export function Composer(props: ComposerProps) {
     )
   }
 
-  const composerSurface = () => Option.fromNullishOr(ext.composerSurface())
-
   return (
     <ComposerContext.Provider value={contextValue}>
       <Show when={Option.getOrUndefined(activeInteraction())} keyed>
@@ -103,23 +96,7 @@ export function Composer(props: ComposerProps) {
         }}
       </Show>
 
-      <Show
-        when={controller.mode() !== "interaction" && Option.getOrUndefined(composerSurface())}
-        keyed
-      >
-        {(Surface) =>
-          Surface({
-            draft: sc.interactionState().draft,
-            setDraft: (text: string) =>
-              sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text })),
-            submit: () => controller.handleSubmitFromTextarea(),
-            focused: controller.inputFocused(),
-            mode: composerMode(),
-          })
-        }
-      </Show>
-
-      <Show when={controller.mode() !== "interaction" && Option.isNone(composerSurface())}>
+      <Show when={controller.mode() !== "interaction"}>
         <box
           flexShrink={0}
           flexDirection="row"
