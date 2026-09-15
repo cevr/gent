@@ -19,7 +19,9 @@
  *   beside the tool that reads them, and `Schema.Class` declares a value and
  *   a type under one name, so a reference inside the declaring file counts
  *   -- except the declaration's own self-references (`Schema.Class<X>`, the
- *   `_tag` string, a doc comment), which are not consumption.
+ *   `_tag` string, a doc comment), which are not consumption. The tooling and
+ *   e2e packages are read the same way: a guard's finding type and a fixture's
+ *   context type sit beside the function that returns them.
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
  *   `packages/sdk/src/index.ts`, `packages/extensions/src/client.ts`) exposes names with `export { X } from "..."`. Consumption is read from the import
@@ -115,6 +117,24 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   },
   {
     prefix: "packages/extensions/src/",
+    exempt: [],
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: true,
+    specifier: Option.none(),
+    enforced: true,
+  },
+  {
+    prefix: "packages/tooling/src/",
+    exempt: [],
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: true,
+    specifier: Option.none(),
+    enforced: true,
+  },
+  {
+    prefix: "packages/e2e/src/",
     exempt: [],
     outsideOf: [],
     testsCount: true,

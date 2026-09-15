@@ -1,7 +1,8 @@
 import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { Clock, Effect } from "effect"
+import { Effect } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { seedAuthBoundary } from "./auth-seed-boundary"
+import { waitForProcessExit } from "./wait-for-process-exit"
 
 const CTRL_C = "\x03"
 const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(
@@ -17,32 +18,10 @@ export interface TestContext {
   readonly cleanup: Effect.Effect<void>
 }
 
-const isPidAlive = (pid: number): Effect.Effect<boolean> => {
-  if (!Number.isInteger(pid) || pid <= 0) return Effect.succeed(false)
-  return Effect.try(() => process.kill(pid, 0)).pipe(
-    Effect.as(true),
-    Effect.catchEager(() => Effect.succeed(false)),
-  )
-}
-
-const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    const loop: Effect.Effect<void> = Effect.gen(function* () {
-      if (!(yield* isPidAlive(pid))) return
-      const now = yield* Clock.currentTimeMillis
-      if (now >= deadline) return
-      // gent/no-sleep: allow OS-level wait for kernel to reap the PTY subprocess
-      yield* Effect.sleep("50 millis")
-      return yield* loop
-    })
-    return yield* loop
-  })
-
 const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
   Effect.sync(evaluate).pipe(Effect.ignoreCause)
 
-export const spawnWithDir = (
+const spawnWithDir = (
   tempDir: string,
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
@@ -72,10 +51,10 @@ export const spawnWithDir = (
   const cleanup = Effect.gen(function* () {
     const pid = pty.pid
     yield* ignoreSyncDefect(() => pty.write(CTRL_C))
-    yield* waitForExit(pid, 1_000)
-    if (yield* isPidAlive(pid)) {
+    const exited = yield* waitForProcessExit(pid, 1_000)
+    if (!exited) {
       yield* ignoreSyncDefect(() => process.kill(pid, "SIGKILL"))
-      yield* waitForExit(pid, 2_000)
+      yield* waitForProcessExit(pid, 2_000)
     }
     yield* ignoreSyncDefect(() => pty.close())
   })

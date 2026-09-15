@@ -11,9 +11,9 @@ import {
   killProcess,
   spawnIdleServer,
   spawnServerOnPort,
-  waitForExit,
   waitUntil,
 } from "../src/server-process-fixture"
+import { waitForProcessExit } from "../src/wait-for-process-exit"
 
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
@@ -89,8 +89,8 @@ describe("server lifecycle", () => {
           const identityResp = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
           expect(identityResp.ok).toBe(true)
 
-          const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
-          expect(exitCode).toBe(0)
+          const exited = yield* waitForProcessExit(proc.pid, idleTimeoutMs + 3_000)
+          expect(exited).toBe(true)
         }),
       ),
     15_000,
@@ -130,8 +130,8 @@ describe("server lifecycle", () => {
           yield* Effect.sleep("100 millis")
           expect(() => process.kill(proc.pid, 0)).not.toThrow()
 
-          const exitCode = yield* waitForExit(proc.pid, idleTimeoutMs + 3_000)
-          expect(exitCode).toBe(0)
+          const exited = yield* waitForProcessExit(proc.pid, idleTimeoutMs + 3_000)
+          expect(exited).toBe(true)
         }),
       ),
     20_000,

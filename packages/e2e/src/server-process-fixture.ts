@@ -109,24 +109,6 @@ export const spawnServerOnPort = (opts: {
     return { url: `${url}/rpc`, proc }
   })
 
-export const waitForExit = (pid: number, timeoutMs: number): Effect.Effect<number> =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    const loop: Effect.Effect<number> = Effect.gen(function* () {
-      const alive = yield* Effect.try(() => process.kill(pid, 0)).pipe(
-        Effect.as(true),
-        Effect.catchEager(() => Effect.succeed(false)),
-      )
-      if (!alive) return 0
-      const now = yield* Clock.currentTimeMillis
-      if (now >= deadline) return -1
-      // gent/no-sleep: allow OS-level wait while polling subprocess exit status
-      yield* Effect.sleep("50 millis")
-      return yield* loop
-    })
-    return yield* loop
-  })
-
 export const waitUntil = (
   predicate: () => boolean,
   timeoutMs: number,
