@@ -21,7 +21,7 @@ import {
 import type { AcpProtocolAgentConfig } from "./config.js"
 import type { AcpConnection } from "./protocol.js"
 import { AcpClosedError, AcpError } from "./protocol.js"
-import type { SessionNotification } from "./schema.js"
+import type { SessionNotification, StopReason } from "./schema.js"
 import {
   composePromptWithTranscript,
   findLastUserMessage,
@@ -124,7 +124,7 @@ const extractToolResultOutput = (
 
 // The Effect AI response contract requires explicit undefined token counters and metadata.
 /* oxlint-disable effect/noNullish */
-const finishPart = (stopReason: string): TurnStreamPart =>
+const finishPart = (stopReason: StopReason): TurnStreamPart =>
   Response.makePart("finish", {
     reason: toResponseFinishReason(stopReason),
     usage: emptyUsage(),
@@ -260,7 +260,7 @@ export const makeAcpTurnExecutor = (
       )
 
       // Signal for when the prompt completes
-      const promptDone = yield* Deferred.make<string, TurnError>()
+      const promptDone = yield* Deferred.make<StopReason, TurnError>()
 
       // Wire abort signal → ACP cancellation
       if (ctx.abortSignal) {
