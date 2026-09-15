@@ -56,10 +56,7 @@ export interface ThemeColors {
   syntaxPunctuation: RGBA
 }
 
-export interface Theme extends ThemeColors {
-  _hasSelectedListItemText: boolean
-  thinkingOpacity: number
-}
+export type Theme = ThemeColors
 
 export type ThemeMode = "dark" | "light" | "system"
 
@@ -77,6 +74,5 @@ export interface ThemeJson {
   theme: Omit<Record<keyof ThemeColors, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
     selectedListItemText?: ColorValue
     backgroundMenu?: ColorValue
-    thinkingOpacity?: number
   }
 }

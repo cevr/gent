@@ -32,7 +32,7 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
     return resolveColor(c[mode])
   }
 
-  const { selectedListItemText, backgroundMenu, thinkingOpacity, ...colors } = theme.theme
+  const { selectedListItemText, backgroundMenu, ...colors } = theme.theme
   const resolved = Record.map(colors, resolveColor)
   const selectedText = Option.fromNullishOr(selectedListItemText)
   return {
@@ -45,8 +45,6 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
       onNone: () => resolved.backgroundElement,
       onSome: resolveColor,
     }),
-    _hasSelectedListItemText: Option.isSome(selectedText),
-    thinkingOpacity: thinkingOpacity ?? 0.6,
   }
 }
 
@@ -102,7 +100,7 @@ function ansiToRgba(code: number): RGBA {
 /**
  * Tint a base color with an overlay color
  */
-export function tint(base: RGBA, overlay: RGBA, alpha: number): RGBA {
+function tint(base: RGBA, overlay: RGBA, alpha: number): RGBA {
   const r = base.r + (overlay.r - base.r) * alpha
   const g = base.g + (overlay.g - base.g) * alpha
   const b = base.b + (overlay.b - base.b) * alpha

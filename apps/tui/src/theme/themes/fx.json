@@ -55,7 +55,6 @@
     "syntaxNumber": "text",
     "syntaxType": "text",
     "syntaxOperator": "text",
-    "syntaxPunctuation": "text",
-    "thinkingOpacity": 1
+    "syntaxPunctuation": "text"
   }
 }

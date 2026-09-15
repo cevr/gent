@@ -188,12 +188,6 @@ const createThemeView = (values: () => Theme): Theme => ({
   get syntaxPunctuation() {
     return values().syntaxPunctuation
   },
-  get _hasSelectedListItemText() {
-    return values()._hasSelectedListItemText
-  },
-  get thinkingOpacity() {
-    return values().thinkingOpacity
-  },
 })
 
 export function ThemeProvider(props: ThemeProviderProps) {
