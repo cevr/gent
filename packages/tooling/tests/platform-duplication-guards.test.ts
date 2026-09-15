@@ -1108,7 +1108,7 @@ describe("platform duplication guards", () => {
   test("flags server entrypoints that fork the composition root", () => {
     expect(
       findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
+        "packages/sdk/src/server.ts",
         [
           'import { createDependencies } from "@gent/core-internal/server/dependencies.js"',
           'import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"',
@@ -1116,12 +1116,12 @@ describe("platform duplication guards", () => {
       ),
     ).toEqual([
       {
-        file: "apps/server/src/main.ts",
+        file: "packages/sdk/src/server.ts",
         line: 1,
         message: "Server entrypoints must use server-root instead of hand-composing app services",
       },
       {
-        file: "apps/server/src/main.ts",
+        file: "packages/sdk/src/server.ts",
         line: 2,
         message: "Server entrypoints must use server-root instead of hand-composing app services",
       },
@@ -1131,6 +1131,54 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/sdk/src/server.ts",
         'import { buildServerRoot } from "@gent/core-internal/server/server-root.js"',
+      ),
+    ).toEqual([])
+  })
+
+  test("flags a server launcher that composes instead of calling Gent.server", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "apps/server/src/main.ts",
+        [
+          'import { buildServerRoot } from "@gent/core-internal/server/server-root.js"',
+          'import { BuiltinExtensions } from "@gent/extensions"',
+          "const root = yield* buildServerRoot(config)",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        file: "apps/server/src/main.ts",
+        line: 1,
+        message:
+          "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
+      },
+      // The same line names the builder too — both rules report it.
+      {
+        file: "apps/server/src/main.ts",
+        line: 1,
+        message: "The server launcher calls Gent.server, never buildServerRoot",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 2,
+        message:
+          "The server launcher does not name extensions; Gent.server defaults to the builtin set",
+      },
+      {
+        file: "apps/server/src/main.ts",
+        line: 3,
+        message: "The server launcher calls Gent.server, never buildServerRoot",
+      },
+    ])
+
+    // The launcher reading its environment and calling the SDK is clean.
+    expect(
+      findPlatformDuplicationViolations(
+        "apps/server/src/main.ts",
+        [
+          'import { Gent } from "@gent/sdk"',
+          "const server = yield* Gent.server(launch.options)",
+        ].join("\n"),
       ),
     ).toEqual([])
   })

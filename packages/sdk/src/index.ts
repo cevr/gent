@@ -27,6 +27,7 @@ export {
   Gent,
   type GentServer,
   type GentServerOptions,
+  type IdleShutdownSpec,
   type GentClientRpcError,
   type GentClientBundle,
 } from "./client.js"

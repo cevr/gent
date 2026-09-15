@@ -1,26 +1,27 @@
-import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { HttpRouter, HttpServer } from "effect/unstable/http"
-import { Clock, Config, Console, Context, Deferred, Effect, Layer, Option } from "effect"
-import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import { BuildFingerprint, GentObservability } from "@gent/sdk"
-import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
+/**
+ * Standalone HTTP server launcher. Reads the process environment, hands the
+ * resolved shape to `Gent.server`, announces the bound URL, and waits. Every
+ * composition decision lives in the SDK server primitive.
+ */
+import { BunRuntime } from "@effect/platform-bun"
+import { Config, Console, Effect, Option } from "effect"
+import { Gent, type IdleShutdownSpec } from "@gent/sdk"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
-/** `GENT_PROVIDER_MODE=debug-scripted` picks the scripted language model; anything else is the live resolver. */
-const resolveLanguageModelLayer = (value: Option.Option<string>) => {
-  if (Option.contains(value, "debug-scripted")) return Option.some(LanguageModelLayers.debug())
-  return Option.none()
+const finiteOr = (raw: Option.Option<string>, fallback: number): number => {
+  const parsed = Number(Option.getOrElse(raw, () => String(fallback)))
+  if (Number.isFinite(parsed)) return parsed
+  return fallback
 }
 
-const resolveRuntimeConfig = Effect.gen(function* () {
-  const platform = yield* GentPlatform
-  const osInfo = yield* platform.osInfo
-  const pid = yield* platform.pid
-  const homeDefault = yield* platform.homeDirectory
+/** `GENT_PROVIDER_MODE=debug-scripted` picks the scripted language model. */
+const resolveProvider = (value: Option.Option<string>) => {
+  if (Option.contains(value, "debug-scripted")) return Gent.provider.mock()
+  return Gent.provider.live()
+}
+
+const resolveLaunch = Effect.gen(function* () {
   const portRaw = yield* Config.option(Config.string("GENT_PORT"))
   const cwdOpt = yield* Config.option(Config.string("GENT_CWD"))
   const homeOpt = yield* Config.option(Config.string("HOME"))
@@ -32,158 +33,54 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
   const shellOpt = yield* Config.option(Config.string("SHELL"))
   const serverIdOpt = yield* Config.option(Config.string("GENT_SERVER_ID"))
-  const serverId = yield* Option.match(serverIdOpt, {
-    onNone: () => platform.randomId,
-    onSome: Effect.succeed,
-  })
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
 
-  const home = Option.getOrElse(homeOpt, () => homeDefault)
-  const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
-  const parsedPort = Number(Option.getOrElse(portRaw, () => "3000"))
+  const isManaged = Option.contains(serverModeOpt, "shared")
+  // A managed shared server exits once its workers disconnect; standalone runs forever.
+  let idleShutdown = Option.none<IdleShutdownSpec>()
+  if (isManaged) idleShutdown = Option.some({ idleMs: finiteOr(idleTimeoutOpt, 30_000) })
 
-  let port = 3000
-  if (Number.isFinite(parsedPort)) port = parsedPort
-  let persistenceMode: "memory" | "disk" = "disk"
-  if (Option.contains(persistenceOpt, "memory")) persistenceMode = "memory"
+  // `GENT_DATA_DIR` names the directory holding `data.db`. `GENT_DB_PATH`
+  // names that file outright and wins.
+  const dbPath = Option.orElse(dbPathOpt, () =>
+    Option.map(dataDirOpt, (dataDir) => joinPath(dataDir, "data.db")),
+  )
+  let state = Gent.state.sqlite({
+    home: Option.getOrUndefined(homeOpt),
+    dbPath: Option.getOrUndefined(dbPath),
+  })
+  if (Option.contains(persistenceOpt, "memory")) state = Gent.state.memory()
 
   return {
-    port,
-    cwd: Option.getOrElse(cwdOpt, () => process.cwd()),
-    home,
-    dataDir,
-    dbPath: Option.getOrElse(dbPathOpt, () => joinPath(dataDir, "data.db")),
-    authDirectory: authDirectoryOpt,
-    platform: osInfo.platform,
-    osVersion: osInfo.release,
-    hostname: osInfo.hostname,
-    pid,
-    persistenceMode,
-    languageModelLayer: resolveLanguageModelLayer(providerOpt),
-    isManaged: Option.getOrUndefined(serverModeOpt) === "shared",
-    shell: shellOpt,
-    serverId,
-    idleTimeoutMs: Number(Option.getOrElse(idleTimeoutOpt, () => "30000")),
+    isManaged,
+    options: {
+      cwd: Option.getOrElse(cwdOpt, () => process.cwd()),
+      port: finiteOr(portRaw, 3000),
+      state,
+      provider: resolveProvider(providerOpt),
+      authDirectory: Option.getOrUndefined(authDirectoryOpt),
+      shell: Option.getOrUndefined(shellOpt),
+      serverId: Option.getOrUndefined(serverIdOpt),
+      idleShutdown: Option.getOrUndefined(idleShutdown),
+    },
   }
 })
 
-// Platform layer for Storage
-const PlatformBaseLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  BunServices.layer,
-  BunGentPlatformLive,
-)
-const PlatformLayer = Layer.merge(
-  PlatformBaseLayer,
-  BuildFingerprint.Live.pipe(Layer.provide(PlatformBaseLayer)),
-)
-
 const program = Effect.scoped(
   Effect.gen(function* () {
-    const scope = yield* Effect.scope
-    const config = yield* resolveRuntimeConfig
-    const httpServerCtx = yield* Layer.buildWithScope(
-      BunHttpServer.layer({ port: config.port, idleTimeout: 0 }),
-      scope,
-    )
-    const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
-    let boundPort = config.port
-    if (httpServer.address._tag === "TcpAddress") boundPort = httpServer.address.port
-    const baseUrl = `http://localhost:${boundPort}`
-
-    const buildFingerprint = yield* (yield* BuildFingerprint).resolved
-    const startedAt = yield* Clock.currentTimeMillis
-
-    const serverRoot = yield* buildServerRoot({
-      observability: GentObservability(config.cwd),
-      dependencies: {
-        cwd: config.cwd,
-        home: config.home,
-        platform: config.platform,
-        shell: Option.getOrUndefined(config.shell),
-        osVersion: config.osVersion,
-        dbPath: config.dbPath,
-        authDirectory: Option.getOrUndefined(config.authDirectory),
-        persistenceMode: config.persistenceMode,
-        languageModelLayerOverride: Option.getOrUndefined(config.languageModelLayer),
-        extensions: BuiltinExtensions,
-        branchTools: CellBranchTools,
-      },
-      identity: {
-        serverId: config.serverId,
-        pid: config.pid,
-        hostname: config.hostname,
-        dbPath: config.dbPath,
-        buildFingerprint,
-        startedAt,
-      },
-    })
-
-    const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
-      Layer.provide(Layer.succeedContext(httpServerCtx)),
-      Layer.provide(serverRoot.coreServicesLive),
-      Layer.provide(BunFileSystem.layer),
-    )
-
-    yield* Layer.buildWithScope(HttpServerLive, scope)
+    const launch = yield* resolveLaunch
+    const server = yield* Gent.server(launch.options)
+    const baseUrl = server.url.replace("/rpc", "")
 
     // Process fixtures parse these raw stdout messages.
-    if (config.isManaged) {
+    if (launch.isManaged) {
       yield* Console.log(`GENT_SERVER_READY ${baseUrl}`)
     } else {
       yield* Console.log(`Gent server ready on ${baseUrl}`)
     }
 
-    // Idle shutdown: managed shared-server mode waits for idle, standalone runs forever.
-    if (config.isManaged) {
-      let idleTimeoutMs = 30_000
-      if (Number.isFinite(config.idleTimeoutMs)) idleTimeoutMs = config.idleTimeoutMs
-      const idleCheckIntervalMs = Math.max(50, Math.min(250, Math.floor(idleTimeoutMs / 4)))
-      const shutdownDeferred = yield* Deferred.make<void>()
-
-      // Idle watcher fiber — poll faster than the timeout so short-lived test workers exit promptly.
-      yield* Effect.forkScoped(
-        Effect.gen(function* () {
-          let idleStartMs = Option.none<number>()
-
-          while (true) {
-            yield* Effect.sleep(`${idleCheckIntervalMs} millis`)
-            const count = yield* serverRoot.connectionTracker.count
-
-            if (count === 0) {
-              let idleStart: number
-              if (Option.isNone(idleStartMs)) {
-                idleStart = yield* Clock.currentTimeMillis
-                idleStartMs = Option.some(idleStart)
-              } else {
-                idleStart = idleStartMs.value
-              }
-              if ((yield* Clock.currentTimeMillis) - idleStart >= idleTimeoutMs) {
-                // Final liveness check before shutdown
-                const finalCount = yield* serverRoot.connectionTracker.count
-                if (finalCount === 0) {
-                  yield* Effect.logInfo("idle-shutdown.triggered").pipe(
-                    Effect.annotateLogs({ idleMs: (yield* Clock.currentTimeMillis) - idleStart }),
-                  )
-                  yield* Deferred.succeed(shutdownDeferred, void 0)
-                  return
-                }
-                // Client connected during final check — reset
-                idleStartMs = Option.none()
-              }
-            } else {
-              idleStartMs = Option.none()
-            }
-          }
-        }),
-      )
-
-      return yield* Deferred.await(shutdownDeferred)
-    }
-
-    return yield* Effect.never
+    return yield* Gent.awaitShutdown(server)
   }),
 )
 
-// @effect-diagnostics-next-line strictEffectProvide:off
-BunRuntime.runMain(program.pipe(Effect.provide(PlatformLayer)))
+BunRuntime.runMain(program)

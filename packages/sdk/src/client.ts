@@ -40,12 +40,14 @@ import {
   type GentRuntime,
 } from "./namespaced-client.js"
 import {
+  awaitServerShutdown,
   resolveServer,
   getOwnedInternal,
   state as stateFactories,
   provider as providerFactories,
   type GentServer,
   type GentServerOptions,
+  type IdleShutdownSpec,
 } from "./server.js"
 import { workspaceHeadersForCwd } from "./transport-headers.js"
 
@@ -76,7 +78,7 @@ export type {
 }
 export { ConnectionState, GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }
-export type { GentServer, GentServerOptions }
+export type { GentServer, GentServerOptions, IdleShutdownSpec }
 
 // Re-export RPC errors. SDK clients can fail with both server-declared RPC errors
 // and transport-level RpcClientError values from the Effect RPC client.
@@ -286,6 +288,12 @@ export const Gent = {
   server: (
     options: GentServerOptions,
   ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => resolveServer(options),
+
+  /**
+   * Block until the server stops. A server started with `idleShutdown`
+   * returns after its idle window; every other server blocks forever.
+   */
+  awaitShutdown: (server: GentServer): Effect.Effect<void> => awaitServerShutdown(server),
 
   /** Connect to a server. Owned servers use direct RPC; attached servers or RPC URLs use WS. */
   client: (

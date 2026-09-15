@@ -237,7 +237,7 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
-const serverRootConsumerFiles = new Set(["apps/server/src/main.ts", "packages/sdk/src/server.ts"])
+const serverRootConsumerFiles = new Set(["packages/sdk/src/server.ts"])
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
   "packages/core/src/runtime/gent-platform-bun.ts",
@@ -247,7 +247,6 @@ const platformProviderRootFiles = new Set([
   // needs the live Bun platform to satisfy `GentPlatform` inside the
   // request-signing transform. It's a shipped builtin, not a user extension.
   "packages/extensions/src/anthropic/index.ts",
-  "apps/server/src/main.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
@@ -267,6 +266,31 @@ const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
     message: "Server entrypoints must use server-root instead of hand-composing app services",
   },
 ]
+
+/**
+ * `apps/server/src/main.ts` is a launcher, not a composition root. It reads
+ * the environment and calls `Gent.server`. Reaching for core-internal or a
+ * platform layer there rebuilds the second root the SDK server primitive
+ * replaced.
+ */
+const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
+  {
+    pattern: /@gent\/core-internal\//,
+    message:
+      "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
+  },
+  {
+    pattern: /@gent\/extensions/,
+    message:
+      "The server launcher does not name extensions; Gent.server defaults to the builtin set",
+  },
+  {
+    pattern: /\bbuildServerRoot\b/,
+    message: "The server launcher calls Gent.server, never buildServerRoot",
+  },
+]
+
+const launcherFiles = new Set(["apps/server/src/main.ts"])
 
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   const patterns = bannedActiveSourcePatterns.filter(
@@ -289,6 +313,7 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   )
   if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
   if (serverRootConsumerFiles.has(file)) patterns.push(...bannedServerRootConsumerPatterns)
+  if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
   if (file === "packages/core/src/server/transport-contract.ts") {
     patterns.push(...bannedTransportContractPatterns)
   }

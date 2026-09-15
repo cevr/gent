@@ -8,7 +8,7 @@
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
-import { Clock, Effect, Layer, Context, Match, Option, Schema } from "effect"
+import { Clock, Deferred, Effect, Layer, Context, Match, Option, Predicate, Schema } from "effect"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
@@ -68,6 +68,15 @@ export const ProviderSpec = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ProviderSpec = Schema.Schema.Type<typeof ProviderSpec>
 
+/**
+ * Shut the owned server down once no client has been connected for
+ * `idleMs`. A managed shared server uses this so short-lived workers stop
+ * paying for an idle process; a standalone server omits it and runs forever.
+ */
+export interface IdleShutdownSpec {
+  readonly idleMs: number
+}
+
 export interface GentServerOptions {
   readonly cwd: string
   /** Extension declarations for this server. Defaults to the builtins. */
@@ -84,6 +93,18 @@ export interface GentServerOptions {
   readonly authDirectory?: string
   /** Seed storage with a debug session on startup. */
   readonly debug?: boolean
+  /**
+   * Bind this TCP port instead of an ephemeral one. A fixed port also opts
+   * out of the shared-server registry: the caller already named the address
+   * its clients use, so there is nothing to discover.
+   */
+  readonly port?: number
+  /** Server identity to publish instead of a freshly minted one. */
+  readonly serverId?: string
+  /** Login shell for extension process launches. */
+  readonly shell?: string
+  /** Stop the owned server after this much client-free time. */
+  readonly idleShutdown?: IdleShutdownSpec
 }
 
 /** Public opaque server handle. */
@@ -106,6 +127,12 @@ interface OwnedServerInternal {
   readonly port: number
   readonly serverId: string
   readonly headers: WorkspaceHeaders
+  /**
+   * Completes when this server decides to stop. An `idleShutdown` server
+   * completes it after the idle window; every other server never completes,
+   * so awaiting it keeps a launcher process alive.
+   */
+  readonly awaitShutdown: Effect.Effect<void>
 }
 
 /** WeakMap keyed by GentServer object identity — keeps handler context private */
@@ -114,6 +141,17 @@ const ownedInternals = new WeakMap<GentServer, OwnedServerInternal>()
 /** @internal — used by Gent.client to access owned server handler context */
 export const getOwnedInternal = (server: GentServer): Option.Option<OwnedServerInternal> =>
   Option.fromNullishOr(ownedInternals.get(server))
+
+/**
+ * Block until this server decides to stop. An `idleShutdown` server returns
+ * after its idle window; every other server blocks forever. A launcher
+ * process awaits this as its last act.
+ */
+export const awaitServerShutdown = (server: GentServer): Effect.Effect<void> =>
+  Option.match(getOwnedInternal(server), {
+    onNone: () => Effect.never,
+    onSome: (internal) => internal.awaitShutdown,
+  })
 
 // ── Factories ──
 
@@ -193,6 +231,48 @@ const resolveDbPath = (home: string, stateSpec: StateSpec): string => {
   return pathResolve(pathJoin(dataDir, "data.db"))
 }
 
+/**
+ * Poll the connection tracker and complete `shutdown` once the server has
+ * been client-free for `idleMs`. Polls faster than the window so a
+ * short-lived worker exits promptly, and re-checks the count immediately
+ * before completing so a client that connects inside the last tick wins.
+ */
+const runIdleWatcher = (options: {
+  readonly idleMs: number
+  readonly connectionCount: Effect.Effect<number>
+  readonly shutdown: Deferred.Deferred<void>
+}): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const intervalMs = Math.max(50, Math.min(250, Math.floor(options.idleMs / 4)))
+    let idleStartMs = Option.none<number>()
+
+    const loop: Effect.Effect<void> = Effect.gen(function* () {
+      // gent/no-sleep: idle shutdown observes live client connections on the real clock
+      yield* Effect.sleep(`${intervalMs} millis`)
+      const count = yield* options.connectionCount
+      if (count > 0) {
+        idleStartMs = Option.none()
+        return yield* loop
+      }
+      const now = yield* Clock.currentTimeMillis
+      const idleStart = Option.getOrElse(idleStartMs, () => now)
+      idleStartMs = Option.some(idleStart)
+      if (now - idleStart < options.idleMs) return yield* loop
+      // A client can connect between the window closing and this check.
+      const finalCount = yield* options.connectionCount
+      if (finalCount > 0) {
+        idleStartMs = Option.none()
+        return yield* loop
+      }
+      yield* Effect.logInfo("idle-shutdown.triggered").pipe(
+        Effect.annotateLogs({ idleMs: now - idleStart }),
+      )
+      yield* Deferred.succeed(options.shutdown, void 0)
+    })
+
+    return yield* loop
+  })
+
 // ── Build owned server (in-process + HTTP listener) ──
 
 const buildOwnedServer = (
@@ -208,8 +288,9 @@ const buildOwnedServer = (
       const osInfo = yield* platform.osInfo
       const pid = yield* platform.pid
       const homeDirectory = yield* platform.homeDirectory
+      const requestedPort = Option.getOrElse(Option.fromNullishOr(options.port), () => 0)
       const httpServerCtx = yield* Layer.buildWithScope(
-        BunHttpServer.layer({ port: 0, idleTimeout: 0 }),
+        BunHttpServer.layer({ port: requestedPort, idleTimeout: 0 }),
         scope,
       ).pipe(
         Effect.mapError(
@@ -230,7 +311,10 @@ const buildOwnedServer = (
       const url = `http://127.0.0.1:${port}/rpc`
       const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
       const home = resolveHome(options, stateSpec, homeDirectory)
-      const serverId = yield* platform.randomId
+      const serverId = yield* Option.match(Option.fromNullishOr(options.serverId), {
+        onNone: () => platform.randomId,
+        onSome: Effect.succeed,
+      })
       const buildFingerprint = yield* (yield* BuildFingerprint).resolved
 
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
@@ -247,6 +331,7 @@ const buildOwnedServer = (
           home,
           platform: osInfo.platform,
           osVersion: osInfo.release,
+          shell: options.shell,
           dbPath: Option.getOrUndefined(dbPath),
           authDirectory: options.authDirectory,
           persistenceMode: Match.value(stateSpec).pipe(
@@ -293,6 +378,20 @@ const buildOwnedServer = (
         )
       }
 
+      const idleSpec = Option.fromNullishOr(options.idleShutdown)
+      let awaitShutdown: Effect.Effect<void> = Effect.never
+      if (Option.isSome(idleSpec)) {
+        const shutdown = yield* Deferred.make<void>()
+        yield* Effect.forkScoped(
+          runIdleWatcher({
+            idleMs: idleSpec.value.idleMs,
+            connectionCount: serverRoot.connectionTracker.count,
+            shutdown,
+          }),
+        )
+        awaitShutdown = Deferred.await(shutdown)
+      }
+
       const server: GentServer = GentServer.cases["owned"].make({
         url,
         workspaceId: workspaceIdForCwd(options.cwd),
@@ -302,6 +401,7 @@ const buildOwnedServer = (
         port,
         serverId,
         headers: workspaceHeaders,
+        awaitShutdown,
       })
 
       return server
@@ -371,8 +471,9 @@ const resolveServerInternal = (
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()
 
-    // Memory state: always owned, no registry
-    if (stateSpec._tag === "memory") {
+    // Memory state has nothing to share; a fixed port is already the address
+    // the caller hands its clients. Both are owned outright, no registry.
+    if (stateSpec._tag === "memory" || Predicate.isNotNullish(options.port)) {
       return yield* buildOwnedServer(options, stateSpec, providerSpec)
     }
 
