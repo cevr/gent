@@ -75,10 +75,19 @@ describe("model context RPC boundary", () => {
             5_000,
             "runtime idle after recovery turn",
           )
-          expect(providerCalls).toBe(1)
+          // The oversized message is clipped in the summary input, so the
+          // handoff summarizes it (one model call) before the recovery turn.
+          expect(providerCalls).toBe(2)
           expect(
             recovered.messages.some((message) =>
               message.parts.some((part) => part.type === "text" && part.text === "recovered"),
+            ),
+          ).toBe(true)
+          expect(
+            recovered.messages.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text.includes("Summary:\nrecovered"),
+              ),
             ),
           ).toBe(true)
         }).pipe(Effect.timeout("8 seconds")),

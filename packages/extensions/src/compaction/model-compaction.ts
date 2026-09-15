@@ -45,10 +45,25 @@ const SUMMARY_USER_PREFIX =
 
 const estimateTextTokens = (text: string): number => Math.ceil(text.length / 4)
 
+/**
+ * Characters of one message the summary input keeps. A single tool result
+ * can be larger than the whole summary budget; clipping it keeps the older
+ * turns in the summarized run, and the notice's id lets the model page the
+ * full text back.
+ */
+export const MODEL_COMPACTION_MESSAGE_CHARS = 8_000
+
+const clipMessageText = (text: string): string => {
+  if (text.length <= MODEL_COMPACTION_MESSAGE_CHARS) return text
+  const omitted = text.length - MODEL_COMPACTION_MESSAGE_CHARS
+  return `${text.slice(0, MODEL_COMPACTION_MESSAGE_CHARS)}\n[… ${omitted} more characters; read the message by id]`
+}
+
 const formatConversation = (messages: ReadonlyArray<Message>): string =>
   messages
     .map(
-      (message) => `${message.role} (${message.id}): ${message.parts.map(partToText).join("\n")}`,
+      (message) =>
+        `${message.role} (${message.id}): ${clipMessageText(message.parts.map(partToText).join("\n"))}`,
     )
     .join("\n\n")
 

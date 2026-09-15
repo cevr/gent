@@ -226,6 +226,30 @@ describe("context handoff", () => {
     }),
   )
 
+  it.scopedLive("one oversized message is clipped so the older turns still get summarized", () => {
+    let user = ""
+    return Effect.gen(function* () {
+      const result = yield* compact({
+        history: [
+          textMessage("old-1", "assistant", "the loader decision", 1),
+          textMessage("old-2", "assistant", "x".repeat(40_000), 2),
+        ],
+        budget: budget(4_000),
+      })
+      expect(result.notice).not.toContain("were not summarized")
+      expect(user).toContain("assistant (old-1): the loader decision")
+      expect(user).toContain("more characters; read the message by id")
+      expect(user.length).toBeLessThan(10_000)
+    }).pipe(
+      Effect.provide(
+        summaryProvider("clipped", (prompt) => {
+          user = promptText(prompt)
+        }),
+      ),
+      Effect.timeout("10 seconds"),
+    )
+  })
+
   it.scopedLive("a history too large for any summary fails without a model call", () => {
     let calls = 0
     return Effect.gen(function* () {
