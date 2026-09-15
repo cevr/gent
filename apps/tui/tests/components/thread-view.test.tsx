@@ -120,6 +120,19 @@ describe("windows on a branch", () => {
     expect(windows[1]?.preview).toBe("second ask")
   })
 
+  test("previews a window that opens mid-turn from its first spoken line", () => {
+    const messages = [
+      message("u1", "user", "ask", 1),
+      message("a1", "assistant", "", 2),
+      marker("a1", "summary", 1, 3),
+      message("a2", "assistant", "I will edit the rules file.", 4),
+    ]
+    expect(windowsOf(session("s1"), branchId, messages).map((window) => window.preview)).toEqual([
+      "ask",
+      "I will edit the rules file.",
+    ])
+  })
+
   test("ignores a marker whose anchor is gone", () => {
     const messages = [message("u1", "user", "ask", 1), marker("missing", "lost", 1, 2)]
     expect(windowsOf(session("s1"), branchId, messages).length).toBe(1)
@@ -141,6 +154,9 @@ describe("windows on a branch", () => {
     }
     expect(windowLabel(window)).toBe("window 3 · 12 messages · 7 summarized · fix the tests")
     expect(detailFor(Option.some(window))).toBe("state")
+    expect(detailFor(Option.some({ ...window, summary: Option.some("## Heading\n\nbody") }))).toBe(
+      "body",
+    )
     expect(detailFor(Option.some({ ...window, summary: Option.none() }))).toBe("a … b")
     expect(summaryBody("no preamble")).toBe("no preamble")
   })

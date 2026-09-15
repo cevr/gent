@@ -85,8 +85,11 @@ const messageText = (message: Message): string =>
     })
     .join("\n")
 
+/** The first line that says something: blank lines and markdown headings are skipped. */
 const firstLine = (text: string): string => {
-  const line = text.split("\n").find((candidate) => candidate.trim().length > 0)
+  const line = text
+    .split("\n")
+    .find((candidate) => candidate.trim().length > 0 && !candidate.trim().startsWith("#"))
   return Option.getOrElse(Option.fromUndefinedOr(line), () => "").trim()
 }
 
@@ -156,11 +159,16 @@ const windowOf = (
   branchId: BranchId,
   index: number,
   segment: ReadonlyArray<Message>,
-  opener: Option.Option<Cut>,
+  cut: Option.Option<Cut>,
 ): Option.Option<ThreadWindow> =>
   Option.all([Option.fromUndefinedOr(segment[0]), Option.fromUndefinedOr(segment.at(-1))]).pipe(
     Option.map(([first, last]) => {
-      const firstUser = segment.find((message) => message.role === "user")
+      const withText = (message: Message) => messageText(message).trim().length > 0
+      const asked = segment.find((message) => message.role === "user" && withText(message))
+      // A window that opens mid-turn has no ask of its own; its first spoken line stands in.
+      const spoken = Option.fromUndefinedOr(asked).pipe(
+        Option.orElse(() => Option.fromUndefinedOr(segment.find(withText))),
+      )
       return {
         sessionId: session.id,
         branchId,
@@ -169,18 +177,19 @@ const windowOf = (
         firstMessageId: first.id,
         lastMessageId: last.id,
         count: segment.length,
-        summary: Option.map(opener, (cut) => summaryBody(messageText(cut.marker))),
-        summarizedCount: Option.match(opener, {
+        summary: Option.map(cut, (value) => summaryBody(messageText(value.marker))),
+        summarizedCount: Option.match(cut, {
           onNone: () => 0,
-          onSome: (cut) =>
-            Option.match(Option.fromUndefinedOr(cut.details.summarized), {
+          onSome: (value) =>
+            Option.match(Option.fromUndefinedOr(value.details.summarized), {
               onNone: () => 0,
               onSome: (summarized) => summarized.count,
             }),
         }),
-        preview: firstLine(
-          messageText(Option.getOrElse(Option.fromUndefinedOr(firstUser), () => first)),
-        ),
+        preview: Option.match(spoken, {
+          onNone: () => "",
+          onSome: (message) => firstLine(messageText(message)),
+        }),
         updatedAt: last.createdAt.getTime(),
       }
     }),
@@ -463,8 +472,11 @@ export function ThreadPane(
                 if (item.kind === "heading") {
                   return (
                     <box paddingLeft={1}>
-                      <text style={{ fg: theme.textMuted }}>
-                        {`${item.sessionName} (${plural(item.count, "window")})`}
+                      <text style={{ fg: theme.textMuted }} wrapMode="none">
+                        {truncate(
+                          `${item.sessionName} (${plural(item.count, "window")})`,
+                          rowWidth(),
+                        )}
                       </text>
                     </box>
                   )
