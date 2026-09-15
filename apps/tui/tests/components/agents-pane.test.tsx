@@ -335,3 +335,161 @@ describe("Agents pane reopen", () => {
     }),
   )
 })
+
+describe("Agents pane framing", () => {
+  it.live("presents as the slash-command popup does: ruled off, titled, one muted footer", () =>
+    Effect.gen(function* () {
+      // The pane reads as a continuation of the composer, not a floating box
+      // over the transcript: the same frame the autocomplete popup draws.
+      const idle: AgentRowEntry = { ...row("framed", "Alpha", 0), section: "idle", live: true }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AgentsPane
+              open={true}
+              controller={{
+                rows: () => [idle],
+                current: () => Option.none(),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                detail: () =>
+                  Option.some({
+                    status: Option.none(),
+                    model: Option.some("anthropic/claude-sonnet-5"),
+                    turns: 7,
+                    costUsd: 0.125,
+                    durationMs: 93_000,
+                    omittedMessages: 0,
+                  }),
+                select: () => {},
+                open: () => true,
+                setOpen: () => {},
+              }}
+              onSelect={() => {}}
+              onToggle={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("^t hide"), "agents pane"),
+      )
+      const lines = renderFrame(setup).split("\n")
+
+      // Ruled top and bottom, never the rounded box a docked pane draws.
+      const rules = lines.filter((line) => line.startsWith("────"))
+      expect(rules.length).toBe(2)
+      expect(renderFrame(setup)).not.toContain("╭")
+      expect(renderFrame(setup)).not.toContain("╰")
+
+      // The title carries its counts, on the first line inside the top rule.
+      const top = lines.findIndex((line) => line.startsWith("────"))
+      expect(lines[top + 1]).toContain("Agents · 0 running, 1 idle, 0 inactive")
+
+      // One muted footer line, immediately under the bottom rule.
+      const bottom = lines.findLastIndex((line) => line.startsWith("────"))
+      expect(lines[bottom + 1]).toContain("↑↓ move   ↵ open   ^x delete   esc close   ^t hide")
+
+      // Every capability the pane had inside the bordered box still draws:
+      // the section heading, the row, and the detail line, each on its own
+      // line. The picker height rule counts items, so a pane that budgeted
+      // rows rather than drawn lines overprints these.
+      const body = lines.slice(top + 1, bottom)
+      expect(body.some((line) => line.includes("Idle (1)"))).toBe(true)
+      expect(body.some((line) => line.includes("Alpha"))).toBe(true)
+      expect(
+        body.some((line) => line.includes("claude-sonnet-5") && line.includes("7 turns")),
+      ).toBe(true)
+    }),
+  )
+
+  it.live("budgets a row the full width the rule spans, not a bordered pane's", () =>
+    Effect.gen(function* () {
+      // The frame rules off top and bottom and has no side border or margin,
+      // so a row spends only its own left pad. Budgeting a docked pane's
+      // allowance here truncates every row five columns short of the rule.
+      const wide = row("wide", "W".repeat(200), 0)
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AgentsPane
+              open={true}
+              controller={{
+                rows: () => [wide],
+                current: () => Option.none(),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                open: () => true,
+                setOpen: () => {},
+              }}
+              onSelect={() => {}}
+              onToggle={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("WWW"), "wide row"),
+      )
+      const lines = renderFrame(setup).split("\n")
+      const rule = Option.getOrThrow(
+        Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
+      )
+      // Only the row itself: the heading also holds a "W", in "Inactive".
+      const rowLine = Option.getOrThrow(
+        Option.fromNullishOr(lines.find((line) => line.includes("WWW"))),
+      )
+      // The name is truncated to the row's budget, so the drawn row reaching
+      // the rule's own width is what says the budget is the picker's.
+      expect(rowLine.trimEnd().length).toBeGreaterThan(rule.trimEnd().length - 3)
+    }),
+  )
+
+  it.live("keeps the error surface inside the frame", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AgentsPane
+              open={true}
+              controller={{
+                rows: () => [row("erred", "Alpha", 0)],
+                current: () => Option.none(),
+                error: () => Option.some("listing failed"),
+                loading: () => false,
+                refresh: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                open: () => true,
+                setOpen: () => {},
+              }}
+              onSelect={() => {}}
+              onToggle={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("listing failed"), "error row"),
+      )
+      const lines = renderFrame(setup).split("\n")
+      const top = lines.findIndex((line) => line.startsWith("────"))
+      const bottom = lines.findLastIndex((line) => line.startsWith("────"))
+      const body = lines.slice(top + 1, bottom)
+      expect(body.some((line) => line.includes("listing failed"))).toBe(true)
+    }),
+  )
+})

@@ -401,6 +401,8 @@ export function CommandPalette() {
       onSome: (level) => level.title,
     })
 
+  const paletteTitle = () => `${levelTitle()} ${filteredItems().length} ${categoryHeader()}`
+
   const queryPrefix = () => {
     if (searchQuery().length === 0) return truncate(breadcrumb(), dimensions().width - 2)
     const available = Math.max(1, Math.floor((dimensions().width - 3) / 2))
@@ -463,12 +465,7 @@ export function CommandPalette() {
 
   return (
     <Show when={command.paletteOpen()}>
-      <PickerFrame height={paletteHeight()} footer={footerHint()}>
-        <box height={1} flexShrink={0} overflow="hidden">
-          <text style={{ fg: theme.textMuted }}>
-            {levelTitle()} {filteredItems().length} {categoryHeader()}
-          </text>
-        </box>
+      <PickerFrame height={paletteHeight()} title={paletteTitle()} footer={footerHint()}>
         <ChromePanel.Section>
           <text height={1} wrapMode="none" truncate style={{ fg: theme.text }}>
             <span style={{ fg: theme.textMuted }}>{queryPrefix()}</span>

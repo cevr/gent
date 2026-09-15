@@ -18,6 +18,7 @@ import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
 import { ref } from "@gent/core/extensions/api"
 import { ChromePanel } from "../../components/chrome-panel"
+import { PickerFrame, pickerHeight, usePickerGeometry } from "../../components/picker-frame"
 import {
   SelectList,
   decoration,
@@ -408,9 +409,11 @@ export function AgentsPane(
     return true
   })
 
-  // Docked under the composer rather than floating: the Dock owns the box,
-  // the height, and the column budgets.
-  const { rowWidth, sectionWidth } = ChromePanel.useDockGeometry()
+  // The same framing the slash-command popup uses: ruled off top and bottom
+  // under the composer, so the columns come from the picker's budget rather
+  // than a bordered pane's.
+  const { rowWidth, sectionWidth } = usePickerGeometry()
+  const dimensions = useTerminalDimensions()
 
   const tick = useSpinnerClock()
   // The running pulse animates; idle and inactive share a dot and differ by colour.
@@ -498,9 +501,28 @@ export function AgentsPane(
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
     Option.some(Math.max(0, values.findIndex(isCurrent)))
 
+  /**
+   * The picker height rule, counted in lines the pane actually draws.
+   *
+   * `pickerHeight` budgets one body row per item, which is right for a flat
+   * list. This pane opens each section with a heading and adds a detail line
+   * under the list, so counting rows alone starves the body: the headings
+   * push the last rows past the rule and the detail line overprints them.
+   */
+  const drawnLines = () => {
+    const items = paneItems(visible()).length
+    if (visible().length === 0) return items
+    return items + 1
+  }
+  const paneHeight = () => pickerHeight(drawnLines(), dimensions().height)
+
   return (
     <Show when={props.open}>
-      <ChromePanel.Dock title={`Agents · ${countsLabel(visible())}`}>
+      <PickerFrame
+        height={paneHeight()}
+        title={`Agents · ${countsLabel(visible())}`}
+        footer={"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
+      >
         <SelectList
           id="agents"
           open={props.open}
@@ -535,10 +557,7 @@ export function AgentsPane(
         </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
-        <ChromePanel.Footer>
-          {"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
-        </ChromePanel.Footer>
-      </ChromePanel.Dock>
+      </PickerFrame>
     </Show>
   )
 }

@@ -148,10 +148,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   }
 
   return (
-    <PickerFrame height={popupHeight()} footer={footerHint()}>
-      <box height={1} flexShrink={0}>
-        <text style={{ fg: theme.textMuted }}>{title()}</text>
-      </box>
+    <PickerFrame height={popupHeight()} title={title()} footer={footerHint()}>
       {/* Filter display */}
       <ChromePanel.Section>
         <text style={{ fg: theme.textMuted }}>

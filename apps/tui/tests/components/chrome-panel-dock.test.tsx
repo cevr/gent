@@ -1,19 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 /**
- * The docked pane box shared by the agents, thread, and settings panes.
+ * The docked pane box shared by the thread and settings panes.
  *
  * A Dock's height is its fixed body plus the chrome rows mounted inside it.
  * These prove the derived height matches what reaches the screen, and that
- * the three panes that use it agree on that arithmetic.
+ * the panes that use it agree on that arithmetic. The agents pane left this
+ * box for the slash-command popup's frame; `agents-pane.test.tsx` covers it.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import { BranchId, Model, ModelId, ProviderId, SessionId } from "@gent/core/protocol"
-import type { AgentRowEntry } from "@gent/extensions/client"
 import { ChromePanel, DOCK_BODY_ROWS } from "../../src/components/chrome-panel"
 import { modelRows, SettingsPicker } from "../../src/components/settings-picker"
-import { AgentsPane } from "../../src/extensions/builtins/agents-view.client"
 import { ThreadPane, type ThreadWindow } from "../../src/extensions/builtins/thread-view.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
@@ -102,15 +101,6 @@ describe("ChromePanel.Dock", () => {
 const sessionId = SessionId.make("s1")
 const branchId = BranchId.make("s1-branch")
 
-const agentRow: AgentRowEntry = {
-  sessionId,
-  branchId,
-  section: "inactive",
-  name: "Alpha",
-  live: false,
-  depth: 0,
-}
-
 const threadWindow: ThreadWindow = {
   sessionId,
   branchId,
@@ -127,97 +117,63 @@ const threadWindow: ThreadWindow = {
 }
 
 describe("docked panes", () => {
-  it.live(
-    "agents, thread, and settings panes all keep the same body and count their own chrome",
-    () =>
-      Effect.gen(function* () {
-        const agents = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <AgentsPane
-                open={true}
-                controller={{
-                  rows: () => [agentRow],
-                  current: () => Option.none(),
-                  error: () => Option.none(),
-                  loading: () => false,
-                  refresh: () => {},
-                  detail: () => Option.none(),
-                  select: () => {},
-                  open: () => true,
-                  setOpen: () => {},
-                }}
-                onSelect={() => {}}
-                onToggle={() => {}}
-                onDelete={() => {}}
-                onClose={() => {}}
-              />
-            ),
-            { width: 80, height: 40 },
+  it.live("thread and settings panes keep the same body and count their own chrome", () =>
+    Effect.gen(function* () {
+      const thread = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <ThreadPane
+              open={true}
+              controller={{
+                windows: () => [threadWindow],
+                sessions: () => 1,
+                current: () => Option.some({ sessionId, branchId }),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                open: () => true,
+                setOpen: () => {},
+              }}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
           ),
-        )
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(agents, (frame) => frame.includes("^t hide"), "agents pane"),
-        )
-        // Border, query row, detail section, footer.
-        expect(renderedPaneRows(renderFrame(agents))).toBe(BORDER_ROWS + DOCK_BODY_ROWS + 3)
-        agents.renderer.destroy()
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(thread, (frame) => frame.includes("open session"), "thread pane"),
+      )
+      // Border, detail section, footer: no query row.
+      expect(renderedPaneRows(renderFrame(thread))).toBe(BORDER_ROWS + DOCK_BODY_ROWS + 2)
+      thread.renderer.destroy()
 
-        const thread = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <ThreadPane
-                open={true}
-                controller={{
-                  windows: () => [threadWindow],
-                  sessions: () => 1,
-                  current: () => Option.some({ sessionId, branchId }),
-                  error: () => Option.none(),
-                  loading: () => false,
-                  refresh: () => {},
-                  open: () => true,
-                  setOpen: () => {},
-                }}
-                onSelect={() => {}}
-                onClose={() => {}}
-              />
-            ),
-            { width: 80, height: 40 },
+      const settings = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <SettingsPicker
+              open={true}
+              title="Model"
+              rows={modelRows([
+                new Model({
+                  id: ModelId.make("anthropic/claude-sonnet-5"),
+                  name: "Claude Sonnet 5",
+                  provider: ProviderId.make("test"),
+                }),
+              ])}
+              current={Option.none()}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
           ),
-        )
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(thread, (frame) => frame.includes("open session"), "thread pane"),
-        )
-        // Border, detail section, footer: no query row.
-        expect(renderedPaneRows(renderFrame(thread))).toBe(BORDER_ROWS + DOCK_BODY_ROWS + 2)
-        thread.renderer.destroy()
-
-        const settings = yield* Effect.promise(() =>
-          renderWithProviders(
-            () => (
-              <SettingsPicker
-                open={true}
-                title="Model"
-                rows={modelRows([
-                  new Model({
-                    id: ModelId.make("anthropic/claude-sonnet-5"),
-                    name: "Claude Sonnet 5",
-                    provider: ProviderId.make("test"),
-                  }),
-                ])}
-                current={Option.none()}
-                onSelect={() => {}}
-                onClose={() => {}}
-              />
-            ),
-            { width: 80, height: 40 },
-          ),
-        )
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(settings, (frame) => frame.includes("Model · 1"), "settings pane"),
-        )
-        // Border, query row, footer: no detail section.
-        expect(renderedPaneRows(renderFrame(settings))).toBe(BORDER_ROWS + DOCK_BODY_ROWS + 2)
-      }),
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(settings, (frame) => frame.includes("Model · 1"), "settings pane"),
+      )
+      // Border, query row, footer: no detail section.
+      expect(renderedPaneRows(renderFrame(settings))).toBe(BORDER_ROWS + DOCK_BODY_ROWS + 2)
+    }),
   )
 })
