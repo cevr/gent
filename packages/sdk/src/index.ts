@@ -43,17 +43,8 @@ export {
 export { buildLogPaths, LOG_DIR } from "./log-paths.js"
 export { makeJsonFileLogger } from "./logger.js"
 
-// Message types
-export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.js"
-
 // Part types (re-exported from @gent/core)
-export type {
-  Message,
-  MessagePart,
-  MessageSegment,
-  ProjectedMessage,
-  ToolInteraction,
-} from "./client.js"
+export type { Message, MessageSegment, ProjectedMessage, ToolInteraction } from "./client.js"
 
 // Utility functions
 export { extractText, extractReasoning, extractImages, type ImageInfo } from "./client.js"

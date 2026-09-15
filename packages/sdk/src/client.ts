@@ -9,9 +9,6 @@ import {
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
-  type AuthAuthorization,
-  type AuthMethod,
-  type AuthProviderInfo,
   type Branch,
   type BranchId,
   type BranchTreeNode,
@@ -53,11 +50,7 @@ import {
 import { workspaceHeadersForCwd } from "./transport-headers.js"
 
 export type {
-  MessagePart,
   MessageSegment,
-  AuthProviderInfo,
-  AuthAuthorization,
-  AuthMethod,
   Message,
   SessionId,
   BranchId,

@@ -13,7 +13,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, Message, MessageId, SessionId, dateFromMillis } from "@gent/core/protocol"
 import { MessagePicker } from "../../src/components/message-picker"
 import { BranchPicker } from "../../src/components/branch-picker"
-import type { Branch } from "../../src/client"
+import type { Branch } from "@gent/sdk"
 import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

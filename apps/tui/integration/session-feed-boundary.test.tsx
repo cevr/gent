@@ -2,7 +2,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { Session } from "../src/routes/session"
-import type { GentRuntime } from "../src/client"
+import type { GentRuntime } from "@gent/sdk"
 import {
   createMockClient,
   createMockRuntime,

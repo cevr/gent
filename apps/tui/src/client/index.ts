@@ -1,23 +1,2 @@
-// Re-export client types/functions from SDK
-export {
-  type GentNamespacedClient,
-  type GentRuntime,
-  type GentClientRpcError,
-  type Message,
-  type Session as DomainSession,
-  type Branch,
-  type BranchTreeNode,
-  type SteerCommand,
-  type AuthProviderInfo,
-  type AuthMethod,
-  type AuthAuthorization,
-  type MessagePart,
-  type ImageInfo,
-  extractText,
-  extractReasoning,
-  extractImages,
-} from "@gent/sdk"
-
-// Local context exports
 export type { Session, SessionState, ClientContextValue } from "./context"
 export { ClientProvider, useClient, SteerCommandInput } from "./context"
