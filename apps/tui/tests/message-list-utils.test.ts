@@ -2,7 +2,6 @@ import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import {
   truncatePath,
-  getSpinnerFrames,
   formatToolInput,
   describeCellCode,
   formatActivityHeader,
@@ -13,7 +12,6 @@ import {
   formatGroupDuration,
   workingIconFrame,
   previewOutput,
-  TOOL_SPINNERS,
   type ActivityCall,
 } from "../src/components/message-list-utils.js"
 
@@ -58,45 +56,6 @@ describe("truncatePath", () => {
 
   test("handles just filename", () => {
     expect(truncatePath("file.ts", 5)).toBe("…/file.ts")
-  })
-})
-
-describe("getSpinnerFrames", () => {
-  test("returns read spinner for read tool", () => {
-    expect(getSpinnerFrames("read")).toBe(TOOL_SPINNERS["read"]!)
-    expect(getSpinnerFrames("Read")).toBe(TOOL_SPINNERS["read"]!) // case insensitive
-    expect(getSpinnerFrames("READ")).toBe(TOOL_SPINNERS["read"]!)
-  })
-
-  test("returns correct spinners for file tools", () => {
-    expect(getSpinnerFrames("glob")).toBe(TOOL_SPINNERS["glob"]!)
-    expect(getSpinnerFrames("grep")).toBe(TOOL_SPINNERS["grep"]!)
-  })
-
-  test("returns typing spinner for edit tools", () => {
-    expect(getSpinnerFrames("write")).toBe(TOOL_SPINNERS["write"]!)
-    expect(getSpinnerFrames("edit")).toBe(TOOL_SPINNERS["edit"]!)
-  })
-
-  test("returns bash spinner for bash", () => {
-    expect(getSpinnerFrames("bash")).toBe(TOOL_SPINNERS["bash"]!)
-  })
-
-  test("returns network spinner for fetch tools", () => {
-    expect(getSpinnerFrames("fetch")).toBe(TOOL_SPINNERS["fetch"]!)
-  })
-
-  test("returns default spinner for unknown tools", () => {
-    expect(getSpinnerFrames("unknowntool")).toBe(TOOL_SPINNERS["default"]!)
-    expect(getSpinnerFrames("custom")).toBe(TOOL_SPINNERS["default"]!)
-  })
-
-  test("all spinners have fixed width 3", () => {
-    for (const [, frames] of Object.entries(TOOL_SPINNERS)) {
-      for (const frame of frames) {
-        expect(frame.length).toBe(3)
-      }
-    }
   })
 })
 

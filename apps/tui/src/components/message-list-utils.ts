@@ -25,32 +25,6 @@ export function truncatePath(path: string, maxLen = 40): string {
   return "…/" + result
 }
 
-// Tool-specific spinner animations (fixed width: 3 chars)
-export const TOOL_SPINNERS = {
-  // File operations - scanning dots
-  read: [".  ", ".. ", "..."],
-  glob: [".  ", ".. ", "..."],
-  grep: [".  ", ".. ", "..."],
-  // Write/edit - typing cursor
-  write: ["_  ", "   "],
-  edit: ["_  ", "   "],
-  // Bash - command prompt
-  bash: [">  ", ">> ", ">>>"],
-  // Network - signal waves
-  fetch: ["~  ", "~~ ", "~~~"],
-  // Default - classic spinner
-  default: [" | ", " / ", " - ", " \\ "],
-} satisfies Record<string, readonly string[]>
-const toolSpinnersByName = new Map<string, readonly string[]>(Object.entries(TOOL_SPINNERS))
-
-/**
- * Get spinner frames for a tool by name
- */
-export function getSpinnerFrames(toolName: string): readonly string[] {
-  const name = toolName.toLowerCase()
-  return toolSpinnersByName.get(name) ?? TOOL_SPINNERS.default
-}
-
 /**
  * Format tool input for display in tool header.
  * Delegates to toolArgSummary for smart formatting, then applies
