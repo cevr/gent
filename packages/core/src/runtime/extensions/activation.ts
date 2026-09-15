@@ -5,17 +5,10 @@ import type {
   LoadedExtension,
   ExtensionLoaderServices,
 } from "../../domain/extension.js"
-import {
-  type ExtensionContributions,
-  modelCapabilities,
-  rpcCapabilities,
-} from "../../domain/contribution.js"
 import { getToolMetadata, isToolCapability } from "../../domain/capability/tool.js"
 import { causeMessage } from "../../domain/guards.js"
 import type { PromptSection } from "../../domain/prompt.js"
-
-const modelToolCount = (contribs: ExtensionContributions): number =>
-  modelCapabilities(contribs).length
+import type { ExtensionContributions } from "../../domain/contribution.js"
 import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
 
@@ -68,7 +61,7 @@ export const setupExtensions = (params: {
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
             scope: discovered.scope,
-            tools: modelToolCount(exit.value.contributions),
+            tools: (exit.value.contributions.tools ?? []).length,
           }),
         )
       } else {
@@ -181,7 +174,7 @@ const collectValidationFailures = (
 
   // Tool collisions: same-scope same-id model-callable tool leaves.
   collectScopedCollisions(
-    (cs) => modelCapabilities(cs),
+    (cs) => cs.tools ?? [],
     (cap) => {
       if (isToolCapability(cap)) {
         return Option.some(getToolMetadata(cap).id)
@@ -191,7 +184,7 @@ const collectValidationFailures = (
     "tool",
   )
   collectScopedCollisions(
-    (cs) => rpcCapabilities(cs),
+    (cs) => cs.requests ?? [],
     (cap) => Option.some(cap.id),
     "rpc",
   )
@@ -234,7 +227,7 @@ const collectValidationFailures = (
   // string is sent to the LLM as part of the tool schema, so empty/missing
   // becomes "why is the model dumb?" rot later.
   for (const ext of extensions) {
-    for (const cap of modelCapabilities(ext.contributions)) {
+    for (const cap of ext.contributions.tools ?? []) {
       if (!isToolCapability(cap)) {
         addFailure(ext, "Tool must be created with `tool({...})` so Gent metadata is attached.")
         continue

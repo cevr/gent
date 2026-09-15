@@ -60,26 +60,6 @@ export interface ExtensionContributions {
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }
 
-// ── Bucket readers ──
-
-/**
- * Read all model-callable capabilities from a contributions bag. Bucket name
- * IS the dispatch discrimination — every entry in `tools:` is a tool leaf by
- * construction.
- */
-export const modelCapabilities = (
-  contribs: ExtensionContributions,
-): ReadonlyArray<ToolCapability> => contribs.tools ?? []
-
-/**
- * Read all extension-to-extension RPC capabilities from a contributions bag.
- * Bucket name IS the dispatch discrimination — every entry in `requests:` is a
- * request leaf by construction.
- */
-export const rpcCapabilities = (
-  contribs: ExtensionContributions,
-): ReadonlyArray<RequestCapability> => contribs.requests ?? []
-
 // ── Smart constructors ──
 //
 // Capabilities are authored through the typed factories in
