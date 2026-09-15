@@ -19,7 +19,6 @@ describe("SDK public surface", () => {
       "ServerLockEntry",
       "Session",
       "SessionSnapshot",
-      "ShippedExtensions",
       "SlashCommandInfo",
       "buildLogPaths",
       "emptyQueueSnapshot",

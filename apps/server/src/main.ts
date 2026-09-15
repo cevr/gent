@@ -3,24 +3,16 @@ import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { Clock, Config, Console, Context, Deferred, Effect, Layer, Option } from "effect"
-import { startDebugScenario } from "./debug/scenario.js"
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import { BuildFingerprint, GentObservability, seedDebugSession } from "@gent/sdk"
+import { BuildFingerprint, GentObservability } from "@gent/sdk"
 import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
-import {
-  DebugSlowLanguageModelDelayMs,
-  LanguageModelLayers,
-} from "@gent/core-internal/test-utils/language-model.js"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
-/** GENT_PROVIDER_MODE picks a debug language model; anything else is the live resolver. */
+/** `GENT_PROVIDER_MODE=debug-scripted` picks the scripted language model; anything else is the live resolver. */
 const resolveLanguageModelLayer = (value: Option.Option<string>) => {
   if (Option.contains(value, "debug-scripted")) return Option.some(LanguageModelLayers.debug())
-  if (Option.contains(value, "debug-failing")) return Option.some(LanguageModelLayers.failing)
-  if (Option.contains(value, "debug-slow")) {
-    return Option.some(LanguageModelLayers.debug({ delayMs: DebugSlowLanguageModelDelayMs }))
-  }
   return Option.none()
 }
 
@@ -38,7 +30,6 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const persistenceOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
   const providerOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
-  const debugModeOpt = yield* Config.option(Config.string("GENT_DEBUG_MODE"))
   const shellOpt = yield* Config.option(Config.string("SHELL"))
   const serverIdOpt = yield* Config.option(Config.string("GENT_SERVER_ID"))
   const serverId = yield* Option.match(serverIdOpt, {
@@ -70,7 +61,6 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     persistenceMode,
     languageModelLayer: resolveLanguageModelLayer(providerOpt),
     isManaged: Option.getOrUndefined(serverModeOpt) === "shared",
-    isDebug: Option.getOrUndefined(debugModeOpt) === "1",
     shell: shellOpt,
     serverId,
     idleTimeoutMs: Number(Option.getOrElse(idleTimeoutOpt, () => "30000")),
@@ -135,22 +125,6 @@ const program = Effect.scoped(
       Layer.provide(BunFileSystem.layer),
     )
 
-    if (config.isManaged && config.isDebug) {
-      const seeded = yield* Effect.provideContext(
-        seedDebugSession(config.cwd),
-        serverRoot.coreServices,
-      )
-      yield* Effect.forkScoped(
-        Effect.provideContext(
-          startDebugScenario({
-            sessionId: seeded.sessionId,
-            branchId: seeded.branchId,
-            cwd: config.cwd,
-          }),
-          serverRoot.coreServices,
-        ),
-      )
-    }
     yield* Layer.buildWithScope(HttpServerLive, scope)
 
     // Process fixtures parse these raw stdout messages.

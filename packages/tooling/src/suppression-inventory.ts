@@ -1,11 +1,10 @@
-import { findBannedEslintDisableBlocks } from "./blanket-eslint-disable"
-
-export type SuppressionFindingKind =
-  | "ts-ignore"
-  | "as-any"
-  | "extension-host-context-cast"
-  | "eslint-disable-block"
-  | "effect-diagnostics"
+/**
+ * The one suppression the linters cannot police: `@effect-diagnostics` comments.
+ * Every other kind (`@ts-ignore`, `as any`, block eslint-disables) is banned by
+ * oxlint or by `blanket-eslint-disable`, so this inventory is the approved list
+ * of diagnostics suppressions and nothing else.
+ */
+export type SuppressionFindingKind = "effect-diagnostics"
 
 export interface SuppressionInventoryFinding {
   readonly file: string
@@ -364,18 +363,6 @@ const approvedSuppression = (
     (entry) => entry.file === file && entry.kind === kind && entry.text === text.trim(),
   )
 
-const linePatterns: ReadonlyArray<{
-  readonly kind: SuppressionFindingKind
-  readonly pattern: RegExp
-}> = [
-  { kind: "ts-ignore", pattern: new RegExp(`${["@ts", "ignore"].join("-")}\\b`) },
-  { kind: "as-any", pattern: /\bas\s+any\b/ },
-  {
-    kind: "extension-host-context-cast",
-    pattern: /as\s+unknown\s+as\s+ExtensionHostContext\b/,
-  },
-]
-
 export const findSuppressionInventoryFindings = (
   file: string,
   text: string,
@@ -386,18 +373,12 @@ export const findSuppressionInventoryFindings = (
   const lines = text.split("\n")
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? ""
-    for (const { kind, pattern } of linePatterns) {
-      if (pattern.test(line)) findings.push({ file, line: index + 1, kind })
-    }
     if (
       line.includes(["@effect", "diagnostics"].join("-")) &&
       !approvedSuppression(file, index + 1, "effect-diagnostics", line)
     ) {
       findings.push({ file, line: index + 1, kind: "effect-diagnostics" })
     }
-  }
-  for (const finding of findBannedEslintDisableBlocks(file, text)) {
-    findings.push({ ...finding, kind: "eslint-disable-block" })
   }
   return findings
 }

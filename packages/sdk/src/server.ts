@@ -13,7 +13,7 @@ import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
 
-import { ShippedBranchTools, ShippedExtensions } from "./shipped-extensions.js"
+import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core-internal/runtime/agent/branch-tool-feature.js"
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
@@ -255,8 +255,8 @@ const buildOwnedServer = (
               sqlite: (): "disk" => "disk",
             }),
           ),
-          extensions: options.extensions ?? ShippedExtensions,
-          branchTools: options.branchTools ?? ShippedBranchTools,
+          extensions: options.extensions ?? BuiltinExtensions,
+          branchTools: options.branchTools ?? CellBranchTools,
           languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
         },
         identity: {
