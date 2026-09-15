@@ -53,6 +53,16 @@ interface LogPaths {
   readonly client: string
 }
 
+/** The suffix each side writes. Owned here so readers never restate the rule. */
+const LOG_SUFFIX = { server: "-server.log", client: "-client.log" } as const
+
+/** Which side wrote a log file, by name; `None` for anything else in the directory. */
+export const classifyLogFile = (name: string): Option.Option<"server" | "client"> => {
+  if (name.endsWith(LOG_SUFFIX.server)) return Option.some("server")
+  if (name.endsWith(LOG_SUFFIX.client)) return Option.some("client")
+  return Option.none()
+}
+
 /**
  * Build log paths for a given cwd identity. Pure — no I/O. App entrypoints
  * (e.g. TUI) that need a stable path before Effect startup can call this
@@ -63,8 +73,8 @@ export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => 
   const prefix = `${hashCwd(cwd)}-${processStartTs()}`
   return {
     dir: LOG_DIR,
-    log: `${LOG_DIR}/${prefix}-server.log`,
-    client: `${LOG_DIR}/${prefix}-client.log`,
+    log: `${LOG_DIR}/${prefix}${LOG_SUFFIX.server}`,
+    client: `${LOG_DIR}/${prefix}${LOG_SUFFIX.client}`,
   }
 }
 

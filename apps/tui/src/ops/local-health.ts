@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite"
 import { DateTime, Effect, FileSystem, Match, Option } from "effect"
+import { classifyLogFile, LOG_DIR } from "@gent/sdk"
 import type { ExtensionHealthIssue, ExtensionHealthSnapshot, ServerLockEntry } from "@gent/sdk"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
-const LOG_DIR = "/tmp/gent/logs"
 const STORAGE_TABLES = [
   "sessions",
   "branches",
@@ -156,11 +156,21 @@ export const inspectLogs: Effect.Effect<LogHealth, never, FileSystem.FileSystem>
       }),
     )
     const sorted = entries.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    // The SDK writes these names, so it also says which side wrote one.
+    const latest = (side: "server" | "client") =>
+      Option.getOrUndefined(
+        Option.map(
+          Option.fromUndefinedOr(
+            sorted.find((entry) => Option.contains(classifyLogFile(entry.name), side)),
+          ),
+          (entry) => entry.path,
+        ),
+      )
 
     return {
       dir: LOG_DIR,
-      latestServer: sorted.find((entry) => entry.name.endsWith("-server.log"))?.path,
-      latestClient: sorted.find((entry) => entry.name.endsWith("-client.log"))?.path,
+      latestServer: latest("server"),
+      latestClient: latest("client"),
     }
   },
 )
