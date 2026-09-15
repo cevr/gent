@@ -19,6 +19,9 @@ import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
 import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
 import { ensureStorageParents } from "../../src/test-utils/index.js"
 import { testHostFacts } from "../../src/test-utils"
+import { SessionStorage } from "../../src/storage/session-storage.js"
+import { CurrentWorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc.js"
+import { dateFromMillis, Session } from "../../src/domain/message.js"
 
 const sessionId = SessionId.make("ambient-host-session")
 const branchId = BranchId.make("ambient-host-branch")
@@ -98,6 +101,40 @@ describe("ambient extension host context", () => {
           ),
         ),
       ),
+    ),
+  )
+
+  it.live("a session read lands in the workspace the run was built under, not the caller's", () =>
+    Effect.gen(function* () {
+      const runWorkspace = workspaceIdForCwd("/tmp/run-workspace")
+      const otherWorkspace = workspaceIdForCwd("/tmp/other-workspace")
+      const storage = yield* SessionStorage
+      // The session exists only in the workspace the run was opened under.
+      yield* storage
+        .createSession(
+          new Session({
+            id: sessionId,
+            name: "pinned",
+            cwd: "/tmp/run-workspace",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          }),
+        )
+        .pipe(Effect.provideService(CurrentWorkspaceId, runWorkspace))
+
+      // Build the run's context under the run's workspace, the way the
+      // actor does after decoding it from the entity id.
+      const ctx = yield* ambientContext.pipe(
+        Effect.provideService(CurrentWorkspaceId, runWorkspace),
+      )
+
+      // Read it back from a caller sitting in a different workspace.
+      const found = yield* ctx.Session.getSession().pipe(
+        Effect.provideService(CurrentWorkspaceId, otherWorkspace),
+      )
+      expect(found?.name).toBe("pinned")
+    }).pipe(
+      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
     ),
   )
 })

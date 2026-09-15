@@ -1,25 +1,28 @@
-import { makeFileWriter } from "../domain/file-writer.js"
 /** Test helpers for extension tool execution. */
 
-// @effect-diagnostics nodeBuiltinImport:off — test stub needs sync path ops; ExtensionFilesService captures Path.Path at runtime construction
-// oxlint-disable-next-line effect/noNodeBuiltinImport -- The synchronous test host implements the platform path adapter.
-import * as nodePath from "node:path"
-import { Effect, FileSystem, Layer, Option } from "effect"
+import { Effect, Layer } from "effect"
 import type { AgentDefinition, AgentRunner } from "../domain/agent.js"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
 import type { ToolCapability } from "../domain/capability/tool.js"
 import {
   ExtensionContext,
-  ExtensionServiceError,
+  provideExtensionServices,
   type ExtensionContextService,
   type ExtensionHostContext,
+  type ExtensionStateFacet,
 } from "../domain/extension-services.js"
 import { getToolMetadata } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { LanguageModelLayers } from "./language-model.js"
-import { testExtensionHostContext } from "./extension-host-context.js"
+import {
+  testExtensionFileLock,
+  testExtensionFiles,
+  testExtensionHostContext,
+  testExtensionProcess,
+  testExtensionState,
+} from "./extension-host-context.js"
 import { createDependencies } from "../server/dependencies.js"
 import {
   stubAgentRunnerLayer,
@@ -71,11 +74,23 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
 
+/**
+ * One stub that serves both halves of the boundary: a host context a runtime
+ * test can provide as `CurrentExtensionHostContext`, and, through
+ * `runToolWithCtx`, the leaf view a tool sees. `State` keeps the host's
+ * extension-id form; `runToolWithCtx` applies the leaf id the same way
+ * production does.
+ */
 export type TestToolContext = ExtensionHostContext &
-  ExtensionContextService & { readonly toolCallId: ToolCallId }
+  Omit<ExtensionContextService, "State" | "Agent"> & {
+    readonly toolCallId: ToolCallId
+    readonly Agent: ExtensionContextService["Agent"] & ExtensionHostContext["Agent"]
+  }
 
-type TestToolContextOverrides = Omit<Partial<TestToolContext>, "Agent"> & {
+type TestToolContextOverrides = Omit<Partial<TestToolContext>, "Agent" | "State"> & {
   readonly Agent?: Partial<TestToolContext["Agent"]>
+  /** Accepts the flat leaf facet; it is lifted to the host's id-taking form. */
+  readonly State?: ReturnType<ExtensionStateFacet>
 }
 
 /** Default ToolCapabilityContext for tests — overridable via spread */
@@ -104,79 +119,13 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     approve: dieStub("Interaction.approve"),
     present: dieStub("Interaction.present"),
   }
-  const process: ExtensionContextService["Process"] = {
-    randomId: host.randomId,
-    run: (command, args, options) =>
-      host.runProcess(command, args, options).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ExtensionServiceError({
-              service: "ExtensionProcess",
-              operation: "run",
-              message: cause.message,
-              cause,
-            }),
-        ),
-      ),
-    parentEnv: host.parentEnv,
-  }
-  const filesError = (operation: string) => (cause: unknown) => {
-    let message = String(cause)
-    if (cause instanceof Error) message = cause.message
-    return new ExtensionServiceError({
-      service: "ExtensionFiles",
-      operation,
-      message,
-      cause,
-    })
-  }
-  const filesFs = <A, E>(
-    operation: string,
-    op: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>,
-  ) =>
-    Effect.serviceOption(FileSystem.FileSystem).pipe(
-      Effect.flatMap((opt) => {
-        if (Option.isSome(opt)) {
-          return op(opt.value).pipe(Effect.mapError(filesError(operation)))
-        }
-        return Effect.fail(filesError(operation)("FileSystem service unavailable in test"))
-      }),
-    )
-  const files: ExtensionContextService["Files"] = {
-    read: (path) => filesFs("read", (fs) => fs.readFileString(path)),
-    write: (path, content, options) =>
-      filesFs("write", (fs) => makeFileWriter(fs, nodePath.dirname)(path, content, options)),
-    exists: (path) => filesFs("exists", (fs) => fs.exists(path)),
-    stat: (path) =>
-      filesFs("stat", (fs) =>
-        fs.stat(path).pipe(
-          Effect.map((info) => ({
-            type: info.type,
-            size: info.size,
-            mtime: Option.getOrUndefined(info.mtime),
-          })),
-        ),
-      ),
-    makeDirectory: (path, options) =>
-      filesFs("makeDirectory", (fs) => fs.makeDirectory(path, options)),
-    rename: (from, to) => filesFs("rename", (fs) => fs.rename(from, to)),
-    resolve: (...paths) => nodePath.resolve(...paths),
-    join: (...paths) => nodePath.join(...paths),
-    dirname: (path) => nodePath.dirname(path),
-  }
-  const fileLock: ExtensionContextService["FileLock"] = {
-    withLock: (_path, effect) => effect,
-  }
-  const state: ExtensionContextService["State"] = {
-    changed: () => Effect.void,
-  }
   const resolvedAgent = { ...Agent, ...overrides?.Agent }
   const resolvedSession = overrides?.Session ?? Session
   const resolvedInteraction = overrides?.Interaction ?? Interaction
-  const resolvedProcess = overrides?.Process ?? process
-  const resolvedFiles = overrides?.Files ?? files
-  const resolvedFileLock = overrides?.FileLock ?? fileLock
-  const resolvedState = overrides?.State ?? state
+  const resolvedProcess = overrides?.Process ?? testExtensionProcess(host)
+  const resolvedFiles = overrides?.Files ?? testExtensionFiles()
+  const resolvedFileLock = overrides?.FileLock ?? testExtensionFileLock()
+  const resolvedState = overrides?.State ?? testExtensionState()
   const resolvedExtensionId = overrides?.extensionId ?? ExtensionId.make("test-extension")
 
   return {
@@ -192,8 +141,8 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     Process: resolvedProcess,
     Files: resolvedFiles,
     FileLock: resolvedFileLock,
-    State: resolvedState,
     ...overrides,
+    State: () => resolvedState,
     Agent: resolvedAgent,
   }
 }
@@ -208,6 +157,14 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
 export const runToolWithCtx = <Input, Output, Error>(
   tool: ToolCapability<Input, Output, Error>,
   input: Input,
-  ctx: ExtensionContextService,
+  ctx: Omit<TestToolContext, "toolCallId"> & { readonly toolCallId?: ToolCallId },
 ): Effect.Effect<Output, Error, never> =>
-  getToolMetadata(tool).effect(input).pipe(Effect.provideService(ExtensionContext, ctx))
+  provideExtensionServices(ctx, getToolMetadata(tool).effect(input))
+
+/**
+ * The leaf view of a test host context, derived the way production derives it.
+ * Use it where a test provides `ExtensionContext` directly instead of running
+ * a tool.
+ */
+export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =>
+  Effect.runSync(provideExtensionServices(ctx, Effect.service(ExtensionContext)))

@@ -9,7 +9,7 @@
  * angle.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Effect, Option, Schema } from "effect"
 import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
 import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
 import { SessionStorage } from "../../src/storage/session-storage.js"
@@ -17,11 +17,8 @@ import { BranchStorage } from "../../src/storage/branch-storage.js"
 import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
-import {
-  requireCurrentAgent,
-  ExtensionContext,
-  ExtensionServiceError,
-} from "@gent/core/extensions/api"
+import { requireCurrentAgent, ExtensionServiceError } from "@gent/core/extensions/api"
+import { provideExtensionServices } from "../../src/domain/extension-services.js"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testToolContext } from "../../src/test-utils/index.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
@@ -38,17 +35,15 @@ describe("host facet survivors after C9.5 prune", () => {
     () =>
       Effect.gen(function* () {
         const base = testToolContext()
-        const ctxLayer = Layer.succeed(
-          ExtensionContext,
-          ExtensionContext.of({
-            ...base,
-            agentName: AgentName.make("missing-agent"),
-            Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
-          }),
-        )
         const exit = yield* Effect.exit(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          requireCurrentAgent.pipe(Effect.provide(ctxLayer)),
+          provideExtensionServices(
+            {
+              ...base,
+              agentName: AgentName.make("missing-agent"),
+              Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
+            },
+            requireCurrentAgent,
+          ),
         )
         expect(exit._tag).toBe("Failure")
         if (exit._tag !== "Failure") return

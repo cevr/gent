@@ -6,15 +6,23 @@
  * so a root that ships no approval flow provides no stub for one.
  */
 
-import { Context, DateTime, Effect, Option, Schema } from "effect"
+import { Context, DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
   extensionServiceError,
+  mapExtensionServiceError,
+  ExtensionServiceError as ExtensionServiceErrorClass,
+  type ExtensionFilesService,
+  type ExtensionFileLockServiceApi,
   type ExtensionHostContext,
+  type ExtensionProcessService,
   type ExtensionServiceError,
+  type ExtensionStateFacet,
 } from "../domain/extension-services.js"
+import { makeFileWriter } from "../domain/file-writer.js"
+import { FileLockService } from "../domain/file-lock.js"
 import { InteractionPendingError } from "../domain/interaction-request.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
@@ -27,7 +35,7 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { Message, type MessageMetadata } from "../domain/message.js"
-import { EventPublisher } from "../domain/event-publisher.js"
+import { EventPublisher, ExtensionStatePublisher } from "../domain/event-publisher.js"
 import { MessageReceived } from "../domain/event.js"
 import { SessionMutations } from "../domain/session-mutations.js"
 import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
@@ -135,6 +143,110 @@ export const makeExtensionHostContextProvider = (
     // which exists only where an actor layer is in scope.
     const registry = yield* facet(ActorStateRegistry, "ActorStateRegistry")
 
+    // A session call made later from a background fiber, after the turn that
+    // built this context, must still land in the workspace the loop opened
+    // under. The actor decodes that workspace from its entity id and provides
+    // it around this construction, so pinning it here anchors every later call
+    // to the loop rather than to whichever fiber happens to make it.
+    const workspaceId = yield* CurrentWorkspaceId
+    const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+
+    const Process: ExtensionProcessService = {
+      randomId: host.randomId,
+      run: (command, args, options) =>
+        mapExtensionServiceError(
+          "ExtensionProcess",
+          "run",
+          host.runProcess(command, args, options),
+        ),
+      parentEnv: host.parentEnv,
+    }
+
+    // The file facets read their platform services optionally, so a root that
+    // ships no file system still assembles a context; the facet reports the
+    // absence only when something calls it.
+    const fs = yield* facet(FileSystem.FileSystem, "FileSystem")
+    const pathOption = yield* Effect.serviceOption(Path.Path)
+    // `resolve`, `join` and `dirname` are synchronous in the facet, so an
+    // absent path service can only be reported as a defect at call time.
+    const onPath = <A>(use: (path: Path.Path) => A): A =>
+      Option.match(pathOption, {
+        onNone: (): A => {
+          // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- The facet's path helpers are synchronous, so an unwired path service can only surface as a defect here.
+          throw new Error("Path not available")
+        },
+        onSome: use,
+      })
+    const writeFile = (
+      fileSystem: FileSystem.FileSystem,
+      path: string,
+      content: string,
+      options?: { readonly atomic?: boolean },
+    ) =>
+      makeFileWriter(fileSystem, (target) => onPath((p) => p.dirname(target)))(
+        path,
+        content,
+        options,
+      )
+    const Files: ExtensionFilesService = {
+      read: (path) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "read",
+          fs((s) => s.readFileString(path)),
+        ),
+      write: (path, content, options) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "write",
+          fs((s) => writeFile(s, path, content, options)),
+        ),
+      exists: (path) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "exists",
+          fs((s) => s.exists(path)),
+        ),
+      stat: (path) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "stat",
+          fs((s) =>
+            s.stat(path).pipe(
+              Effect.map((info) => ({
+                type: info.type,
+                size: info.size,
+                mtime: Option.getOrUndefined(info.mtime),
+              })),
+            ),
+          ),
+        ),
+      makeDirectory: (path, options) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "makeDirectory",
+          fs((s) => s.makeDirectory(path, options)),
+        ),
+      rename: (from, to) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "rename",
+          fs((s) => s.rename(from, to)),
+        ),
+      resolve: (...paths) => onPath((p) => p.resolve(...paths)),
+      join: (...paths) => onPath((p) => p.join(...paths)),
+      dirname: (path) => onPath((p) => p.dirname(path)),
+    }
+
+    const fileLockOption = yield* Effect.serviceOption(FileLockService)
+    const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
+      onNone: () => ({ withLock: (_path, effect) => effect }),
+      onSome: (fileLock) => ({ withLock: (path, effect) => fileLock.withLock(path, effect) }),
+    })
+
+    const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+
     const forRun = (
       runInfo: MakeExtensionHostContextRunInfo,
       extensionRegistry: ExtensionRegistryService = input.extensionRegistry,
@@ -144,6 +256,41 @@ export const makeExtensionHostContextProvider = (
       cwd: runInfo.sessionCwd ?? platform.cwd,
       home: platform.home,
       host,
+      Process,
+      Files,
+      FileLock,
+
+      State: ((extensionId) =>
+        Option.match(statePublisherOption, {
+          onNone: () => ({ changed: () => Effect.void }),
+          onSome: (statePublisher) =>
+            Option.match(extensionId, {
+              onNone: () => ({
+                changed: () =>
+                  Effect.fail(
+                    new ExtensionServiceErrorClass({
+                      service: "ExtensionState",
+                      operation: "changed",
+                      message: "Extension id unavailable for state change notification",
+                    }),
+                  ),
+              }),
+              onSome: (id) => ({
+                changed: () =>
+                  mapExtensionServiceError(
+                    "ExtensionState",
+                    "changed",
+                    inWorkspace(
+                      statePublisher.changed({
+                        extensionId: id,
+                        sessionId: runInfo.sessionId,
+                        branchId: runInfo.branchId,
+                      }),
+                    ),
+                  ),
+              }),
+            }),
+        })) satisfies ExtensionStateFacet,
 
       Agent: {
         listAgents: Effect.succeed([...extensionRegistry.getResolved().agents.values()]),
@@ -197,18 +344,21 @@ export const makeExtensionHostContextProvider = (
         getSession: (sessionId) =>
           sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
             Effect.mapError(sessionError("getSession")),
+            inWorkspace,
           ),
         getDetail: (sessionId) =>
           relationships((storage) => storage.getSessionDetail(sessionId)).pipe(
             Effect.mapError(sessionError("getDetail")),
+            inWorkspace,
           ),
         renameCurrent: (name) =>
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name }),
-          ).pipe(Effect.mapError(sessionError("renameCurrent"))),
+          ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
         search: (query, options) =>
           messages((storage) => storage.searchMessages(query, options)).pipe(
             Effect.mapError(sessionError("search")),
+            inWorkspace,
           ),
         queueFollowUp: (params) =>
           control((loop) =>
@@ -220,7 +370,7 @@ export const makeExtensionHostContextProvider = (
               metadata: params.metadata,
               wake: params.wake,
             }),
-          ).pipe(Effect.mapError(sessionError("queueFollowUp"))),
+          ).pipe(Effect.mapError(sessionError("queueFollowUp")), inWorkspace),
         dequeueFollowUp: (params) =>
           control((loop) =>
             loop.dequeueFollowUp({
@@ -228,12 +378,14 @@ export const makeExtensionHostContextProvider = (
               sessionId: runInfo.sessionId,
               branchId: params.branchId ?? runInfo.branchId,
             }),
-          ).pipe(Effect.mapError(sessionError("dequeueFollowUp"))),
+          ).pipe(Effect.mapError(sessionError("dequeueFollowUp")), inWorkspace),
         listBranches: branches((storage) => storage.listBranches(runInfo.sessionId)).pipe(
           Effect.mapError(sessionError("listBranches")),
+          inWorkspace,
         ),
         listSessions: sessions((storage) => storage.listSessions).pipe(
           Effect.mapError(sessionError("listSessions")),
+          inWorkspace,
         ),
         listActiveLoops: registry((stateRegistry) =>
           Effect.gen(function* () {
@@ -263,7 +415,7 @@ export const makeExtensionHostContextProvider = (
               { concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY },
             )
           }),
-        ).pipe(Effect.mapError(sessionError("listActiveLoops"))),
+        ).pipe(Effect.mapError(sessionError("listActiveLoops")), inWorkspace),
       },
 
       Interaction: {

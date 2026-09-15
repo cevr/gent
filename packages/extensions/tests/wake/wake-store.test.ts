@@ -6,7 +6,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, FileSystem, Layer, Ref, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testLeafContext } from "@gent/core-internal/test-utils"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
 import {
@@ -35,7 +35,6 @@ const contextWith = (home: string, queued: Ref.Ref<ReadonlyArray<string>>) =>
       ...testToolContext().Session,
       queueFollowUp: ({ content }) => Ref.update(queued, (all) => [...all, content]),
     },
-    State: { changed: () => Effect.void },
   })
 
 const readFile = (home: string) =>
@@ -71,7 +70,7 @@ describe("wake store", () => {
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("wake-rearm-")
       const queued = yield* Ref.make<ReadonlyArray<string>>([])
-      const ctx: ExtensionContextService = contextWith(home, queued)
+      const ctx: ExtensionContextService = testLeafContext(contextWith(home, queued))
       const fs = yield* FileSystem.FileSystem
       yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
       yield* fs.writeFileString(

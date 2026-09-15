@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect"
-import type { Exit, FileSystem, Path, Schema } from "effect"
+import type { Exit, Schema } from "effect"
 import type { ExtensionId, ToolCallId } from "../../domain/ids.js"
 import type { ExtensionTurnContext } from "../../domain/extension.js"
 import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
@@ -87,11 +87,7 @@ export const provideExtensionLeaf =
   (frame: ExtensionLeafFrame) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<
-    A,
-    E,
-    Exclude<R, ExtensionContext> | CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
-  > =>
+  ): Effect.Effect<A, E, Exclude<R, ExtensionContext> | CurrentExtensionHostContext> =>
     Effect.gen(function* () {
       const host = yield* CurrentExtensionHostContext
       return yield* provideExtensionServices({ ...host, ...frame }, effect).pipe(

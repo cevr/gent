@@ -1,4 +1,4 @@
-import { Predicate, Context, Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Predicate, Context, Effect, Option, Schema } from "effect"
 import type {
   AgentDefinition,
   AgentName,
@@ -15,11 +15,7 @@ import type {
   ExtensionHostProcessResult,
   ExtensionTurnContext,
 } from "./extension.js"
-import { makeFileWriter } from "./file-writer.js"
 import type { RunProcessOptions } from "../runtime/run-process.js"
-import { FileLockService } from "./file-lock.js"
-import { ExtensionStatePublisher } from "./event-publisher.js"
-import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -55,7 +51,8 @@ export const extensionServiceError =
       cause,
     })
 
-const mapError = <A, E, R>(
+/** Restates a facet failure as the one error extensions see. */
+export const mapExtensionServiceError = <A, E, R>(
   service: string,
   operation: string,
   effect: Effect.Effect<A, E, R>,
@@ -185,7 +182,7 @@ export interface ExtensionInteractionService {
   }) => Effect.Effect<void, ExtensionServiceError | InteractionPendingError>
 }
 
-interface ExtensionProcessService {
+export interface ExtensionProcessService {
   readonly randomId: Effect.Effect<string>
   readonly run: (
     command: string,
@@ -195,13 +192,6 @@ interface ExtensionProcessService {
   // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>
 }
-
-const extensionProcessFromHostContext = (host: ExtensionHostPlatform): ExtensionProcessService => ({
-  randomId: host.randomId,
-  run: (command, args, options) =>
-    mapError("ExtensionProcess", "run", host.runProcess(command, args, options)),
-  parentEnv: host.parentEnv,
-})
 
 interface ExtensionFileStat {
   readonly type:
@@ -238,7 +228,7 @@ export interface ExtensionFilesService {
   readonly dirname: (path: string) => string
 }
 
-interface ExtensionFileLockServiceApi {
+export interface ExtensionFileLockServiceApi {
   readonly withLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
@@ -250,8 +240,18 @@ interface ExtensionStateServiceApi {
 }
 
 /**
- * What the host builds once per run. The per-call context adds tool identity
- * and the ambient file, lock and state services on top of it.
+ * The run's half of the state facet: it knows the session and branch, and
+ * takes the extension id from whichever leaf reports the change.
+ */
+export type ExtensionStateFacet = (
+  extensionId: Option.Option<ExtensionId>,
+) => ExtensionStateServiceApi
+
+/**
+ * Every facet, built once per run by the provider that owns its inputs.
+ * A leaf adds only the two facts a run does not carry: the tool call
+ * `Agent.start` charges a child to, and the extension id `State.changed`
+ * reports under.
  */
 export interface ExtensionHostContext {
   readonly extensionId?: ExtensionId
@@ -264,6 +264,11 @@ export interface ExtensionHostContext {
   readonly Agent: ExtensionHostAgentService
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
+  readonly Process: ExtensionProcessService
+  readonly Files: ExtensionFilesService
+  readonly FileLock: ExtensionFileLockServiceApi
+  /** Reports under the leaf's extension id, which a run does not know. */
+  readonly State: ExtensionStateFacet
 }
 
 export interface ExtensionContextService {
@@ -288,134 +293,53 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
   "@gent/core/src/domain/extension-services/ExtensionContext",
 ) {}
 
+/**
+ * The per-leaf half of the extension context: the run's facets, plus the two
+ * facts only a leaf knows. `Agent.start` charges the child to the leaf's tool
+ * call, and `State.changed` reports under the leaf's extension id. Every other
+ * facet is forwarded, because the run already built it over the services that
+ * own its inputs.
+ */
 const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & {
     readonly toolCallId?: ToolCallId
     readonly turn?: ExtensionTurnContext
   },
-): Effect.Effect<Context.Context<ExtensionContext>, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    // A session call made later from a background fiber, after the turn that
-    // built this context, must still land in the workspace it was made from.
-    const workspaceId = yield* CurrentWorkspaceId
-    const inWorkspace = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
-      effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
-    const Session: ExtensionSessionService = {
-      getSession: (sessionId) => inWorkspace(ctx.Session.getSession(sessionId)),
-      getDetail: (sessionId) => inWorkspace(ctx.Session.getDetail(sessionId)),
-      renameCurrent: (name) => inWorkspace(ctx.Session.renameCurrent(name)),
-      search: (query, options) => inWorkspace(ctx.Session.search(query, options)),
-      queueFollowUp: (params) => inWorkspace(ctx.Session.queueFollowUp(params)),
-      dequeueFollowUp: (params) => inWorkspace(ctx.Session.dequeueFollowUp(params)),
-      listBranches: inWorkspace(ctx.Session.listBranches),
-      listSessions: inWorkspace(ctx.Session.listSessions),
-      listActiveLoops: inWorkspace(ctx.Session.listActiveLoops),
-    }
-    const Agent: ExtensionAgentService = {
-      ...ctx.Agent,
-      start: Effect.fn("ExtensionAgent.start")(function* (params) {
-        if (Predicate.isUndefined(ctx.toolCallId)) {
-          return yield* new ExtensionServiceError({
-            service: "ExtensionAgent",
-            operation: "start",
-            message: "Child start requires a host-owned tool call",
-          })
-        }
-        return yield* ctx.Agent.start({ ...params, toolCallId: ctx.toolCallId })
-      }),
-    }
-    const Process = extensionProcessFromHostContext(ctx.host)
-
-    const fileLockOption = yield* Effect.serviceOption(FileLockService)
-    const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
-    const currentExtensionId = ctx.extensionId
-    const fs = yield* FileSystem.FileSystem
-    const pathSvc = yield* Path.Path
-
-    const writeFile = makeFileWriter(fs, pathSvc.dirname)
-    const Files: ExtensionFilesService = {
-      read: (path) => mapError("ExtensionFiles", "read", fs.readFileString(path)),
-      write: (path, content, options) =>
-        mapError("ExtensionFiles", "write", writeFile(path, content, options)),
-      exists: (path) => mapError("ExtensionFiles", "exists", fs.exists(path)),
-      stat: (path) =>
-        mapError(
-          "ExtensionFiles",
-          "stat",
-          fs.stat(path).pipe(
-            Effect.map((info) => ({
-              type: info.type,
-              size: info.size,
-              mtime: Option.getOrUndefined(info.mtime),
-            })),
-          ),
-        ),
-      makeDirectory: (path, options) =>
-        mapError("ExtensionFiles", "makeDirectory", fs.makeDirectory(path, options)),
-      rename: (from, to) => mapError("ExtensionFiles", "rename", fs.rename(from, to)),
-      resolve: (...paths) => pathSvc.resolve(...paths),
-      join: (...paths) => pathSvc.join(...paths),
-      dirname: (path) => pathSvc.dirname(path),
-    }
-
-    const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
-      onNone: () => ({ withLock: (_path, effect) => effect }),
-      onSome: (fileLock) => ({
-        withLock: (path, effect) => fileLock.withLock(path, effect),
-      }),
-    })
-
-    const State: ExtensionStateServiceApi = Option.match(statePublisherOption, {
-      onNone: () => ({ changed: () => Effect.void }),
-      onSome: (statePublisher) => {
-        if (Predicate.isUndefined(currentExtensionId)) {
-          return {
-            changed: () =>
-              Effect.fail(
-                new ExtensionServiceError({
-                  service: "ExtensionState",
-                  operation: "changed",
-                  message: "Extension id unavailable for state change notification",
-                }),
-              ),
-          }
-        }
-        return {
-          changed: () =>
-            mapError(
-              "ExtensionState",
-              "changed",
-              statePublisher.changed({
-                extensionId: currentExtensionId,
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-              }),
-            ),
-        }
-      },
-    })
-
-    const currentExtensionIdOption = Option.fromUndefinedOr(currentExtensionId)
-    return Context.empty().pipe(
-      Context.add(ExtensionContext, {
-        extensionId: Option.getOrElse(currentExtensionIdOption, () => ExtensionId.make("unknown")),
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
-        agentName: ctx.agentName,
-        toolCallId: ctx.toolCallId,
-        turn: ctx.turn,
-        cwd: ctx.cwd,
-        home: ctx.home,
-        Session,
-        Agent,
-        Interaction: ctx.Interaction,
-        Process,
-        Files,
-        FileLock,
-        State,
-      }),
-    )
-  })
+): Context.Context<ExtensionContext> => {
+  const Agent: ExtensionAgentService = {
+    ...ctx.Agent,
+    start: Effect.fn("ExtensionAgent.start")(function* (params) {
+      if (Predicate.isUndefined(ctx.toolCallId)) {
+        return yield* new ExtensionServiceError({
+          service: "ExtensionAgent",
+          operation: "start",
+          message: "Child start requires a host-owned tool call",
+        })
+      }
+      return yield* ctx.Agent.start({ ...params, toolCallId: ctx.toolCallId })
+    }),
+  }
+  const extensionIdOption = Option.fromUndefinedOr(ctx.extensionId)
+  return Context.empty().pipe(
+    Context.add(ExtensionContext, {
+      extensionId: Option.getOrElse(extensionIdOption, () => ExtensionId.make("unknown")),
+      sessionId: ctx.sessionId,
+      branchId: ctx.branchId,
+      agentName: ctx.agentName,
+      toolCallId: ctx.toolCallId,
+      turn: ctx.turn,
+      cwd: ctx.cwd,
+      home: ctx.home,
+      Session: ctx.Session,
+      Agent,
+      Interaction: ctx.Interaction,
+      Process: ctx.Process,
+      Files: ctx.Files,
+      FileLock: ctx.FileLock,
+      State: ctx.State(extensionIdOption),
+    }),
+  )
+}
 
 export const provideExtensionServices = <A, E, R>(
   ctx: ExtensionHostContext & {
@@ -423,10 +347,8 @@ export const provideExtensionServices = <A, E, R>(
     readonly turn?: ExtensionTurnContext
   },
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, Exclude<R, ExtensionContext> | FileSystem.FileSystem | Path.Path> =>
-  Effect.flatMap(extensionServicesFromHostContext(ctx), (services) =>
-    effect.pipe(Effect.provideContext(services)),
-  )
+): Effect.Effect<A, E, Exclude<R, ExtensionContext>> =>
+  effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))
 
 /**
  * The agent running the current turn. Children spawned from a cell inherit

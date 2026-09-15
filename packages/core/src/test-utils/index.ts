@@ -297,6 +297,7 @@ export { createE2ELayer, type E2ELayerConfig } from "./e2e-layer.js"
 export {
   createToolTestLayer,
   runToolWithCtx,
+  testLeafContext,
   testToolContext,
   type ToolTestLayerConfig,
 } from "./extension-harness.js"
