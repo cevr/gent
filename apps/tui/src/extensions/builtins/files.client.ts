@@ -5,6 +5,9 @@
  * empty-filter top-level directory listing. Non-empty filter goes through
  * the FFF-backed `searchFiles` Effect — no runtime glob fallback (deleted in
  *  with the "no native bun apis" mandate).
+ *
+ * The FFF db directory is resolved once here, from the workspace home this
+ * setup already yields, so the finder module never re-decides where it lives.
  */
 
 import { Effect, FileSystem, Option } from "effect"
@@ -30,6 +33,9 @@ const formatMatch = (f: { path: string; name: string }) => {
 export default defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
     const workspace = yield* ClientWorkspace
+    const fs = yield* FileSystem.FileSystem
+    const dbDir = `${workspace.home}/.gent/fff`
+    yield* Effect.ignore(fs.makeDirectory(dbDir, { recursive: true }))
     return autocompleteContribution({
       prefix: "@",
       title: "Files",
@@ -41,7 +47,6 @@ export default defineClientExtension("@gent/files-ui", {
           // Drops gitignore filtering at the top level — FFF respects
           // gitignore for the actual fuzzy search where it matters.
           if (filter.length === 0) {
-            const fs = yield* FileSystem.FileSystem
             const entries = yield* Effect.orElseSucceed(
               fs.readDirectory(cwd),
               (): ReadonlyArray<string> => [],
@@ -57,9 +62,7 @@ export default defineClientExtension("@gent/files-ui", {
           // Non-empty filter: FFF Effect. Failures (FFF unavailable, init
           // failure) are caught here so the popup adapter still shows []
           // instead of swallowing the failure as opaque.
-          const fffResult = yield* Effect.option(
-            searchFiles(cwd, workspace.home, filter, MAX_RESULTS),
-          )
+          const fffResult = yield* Effect.option(searchFiles(cwd, dbDir, filter, MAX_RESULTS))
           if (Option.isNone(fffResult)) return []
           return fffResult.value.items.map((item: { relativePath: string; fileName: string }) =>
             formatMatch({ path: item.relativePath, name: item.fileName }),

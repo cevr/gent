@@ -2,8 +2,9 @@
  * FileFinder — Effect-typed wrapper around the @ff-labs/fff-bun native finder.
  *
  * Exposes Effect-typed `searchFiles` and `trackSelection` over a per-cwd
- * cached `FileFinder` instance. The DB directory is created via Effect's
- * `FileSystem` (no direct Bun APIs).
+ * cached `FileFinder` instance. The caller resolves the db directory once and
+ * passes it in, so "where is the FFF db" is decided at the one place that
+ * knows the workspace home.
  *
  * FFF is the *only* file-search path — there is no runtime glob fallback. If
  * `FileFinder.isAvailable()` is false the search Effect fails with
@@ -18,7 +19,7 @@
  * is fine — the finder stays valid for the next search).
  */
 
-import { Effect, FileSystem, Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 
 // ── Errors ───────────────────────────────────────────────────────────────
@@ -38,20 +39,6 @@ export class FileFinderScanError extends Schema.TaggedError<FileFinderScanError>
   { reason: Schema.String },
 ) {}
 
-// ── DB dir ───────────────────────────────────────────────────────────────
-
-let dbDir = Option.none<string>()
-
-const ensureDbDir = (home: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    if (Option.isSome(dbDir)) return dbDir.value
-    const fs = yield* FileSystem.FileSystem
-    const dir = `${home}/.gent/fff`
-    yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
-    dbDir = Option.some(dir)
-    return dir
-  })
-
 // ── Singleton cache ──────────────────────────────────────────────────────
 
 type ScanOutcome = { ok: true } | { ok: false; reason: string }
@@ -67,12 +54,8 @@ const finders = new Map<string, FinderEntry>()
 
 const ensureFinder = (
   cwd: string,
-  home: string,
-): Effect.Effect<
-  FinderEntry,
-  FileFinderUnavailableError | FileFinderInitError,
-  FileSystem.FileSystem
-> =>
+  dbDir: string,
+): Effect.Effect<FinderEntry, FileFinderUnavailableError | FileFinderInitError> =>
   Effect.gen(function* () {
     const existing = Option.fromNullishOr(finders.get(cwd))
     if (Option.isSome(existing)) return existing.value
@@ -81,7 +64,6 @@ const ensureFinder = (
       return yield* new FileFinderUnavailableError()
     }
 
-    const dbDir = yield* ensureDbDir(home)
     const result = FileFinder.create({
       basePath: cwd,
       frecencyDbPath: `${dbDir}/frecency.mdb`,
@@ -121,21 +103,21 @@ const ensureFinder = (
 // ── Public API ───────────────────────────────────────────────────────────
 
 /**
- * Search for files matching `query` under `cwd`. Fails with a typed error if
- * FFF is unavailable, init failed, or the initial scan failed.
+ * Search for files matching `query` under `cwd`, keeping its frecency and
+ * history databases in `dbDir`. Fails with a typed error if FFF is
+ * unavailable, init failed, or the initial scan failed.
  */
 export const searchFiles = (
   cwd: string,
-  home: string,
+  dbDir: string,
   query: string,
   pageSize: number = 50,
 ): Effect.Effect<
   SearchResult,
-  FileFinderUnavailableError | FileFinderInitError | FileFinderScanError,
-  FileSystem.FileSystem
+  FileFinderUnavailableError | FileFinderInitError | FileFinderScanError
 > =>
   Effect.gen(function* () {
-    const entry = yield* ensureFinder(cwd, home)
+    const entry = yield* ensureFinder(cwd, dbDir)
     const outcome = yield* entry.scanReady
     if (!outcome.ok) {
       return yield* new FileFinderScanError({ reason: outcome.reason })
