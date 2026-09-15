@@ -781,6 +781,101 @@ describe("useSessionFeed", () => {
     )
   }
 
+  it.live("starts a late tool call on the message the event names, not the newest one", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-late-tool")
+      const branchId = BranchId.make("branch-feed-late-tool")
+      const inputId = MessageId.make("late-tool-input")
+      const firstAnswerId = assistantMessageIdForTurn(inputId, 1)
+      const secondAnswerId = assistantMessageIdForTurn(inputId, 2)
+      const lateToolCallId = ToolCallId.make("late-tool-call")
+      const events = [
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
+        AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First answer" }),
+        AgentEvent.cases.StreamEnded.make({ sessionId, branchId }),
+        AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
+        AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Second answer" }),
+        // The first step's tool receipt arrives after the second step began.
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: lateToolCallId,
+          toolName: "read",
+          input: {},
+          assistantMessageId: firstAnswerId,
+        }),
+      ]
+      let applied = 0
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = {
+          session: active,
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () =>
+                Stream.concat(
+                  Stream.make(
+                    ...events.map((event, index) => makeEnvelope(index + 1, event, index * 100)),
+                  ),
+                  Stream.never,
+                ),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
+          applySessionSnapshot: () => {},
+          applySessionEvent: () => {
+            applied += 1
+          },
+          applyBufferedSessionEvent: () => {
+            applied += 1
+          },
+        } satisfies FeedClient
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+
+      yield* waitFor(
+        () =>
+          applied === events.length &&
+          Option.isSome(feed) &&
+          feed.value.messages().length === 2 &&
+          feed.value.messages().some((message) => Predicate.isNotUndefined(message.toolCalls)),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (Option.isNone(feed)) return
+            const messages = feed.value.messages()
+            const first = messages.find((message) => message.id === firstAnswerId)
+            const second = messages.find((message) => message.id === secondAnswerId)
+            expect(first?.toolCalls?.map((call) => call.id)).toEqual([lateToolCallId])
+            expect(second?.toolCalls).toBe(absent)
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
+
   it.live("shows a live compaction message as soon as its event arrives", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-compaction-live")
