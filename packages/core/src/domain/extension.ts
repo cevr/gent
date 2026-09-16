@@ -117,6 +117,19 @@ export interface TurnAfterInput {
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
+  /**
+   * The turn ended on a provider stream that broke and never recovered.
+   *
+   * A turn can end without an answer two ways, and they need different
+   * handling: an interrupt is expected, a broken stream is a fault. Both facts
+   * ride on this one input so a handler picks one action for the turn. A
+   * handler that reads neither treats every turn alike, as before.
+   *
+   * The driver already retries a stream that breaks before any output, and the
+   * loop already spends its continuations on one that breaks after partial
+   * output. This is true only once both are exhausted.
+   */
+  readonly streamFailed: boolean
   /** Provider-reported tokens summed over every model call of the turn. */
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
 }

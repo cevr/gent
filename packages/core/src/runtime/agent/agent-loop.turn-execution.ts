@@ -741,6 +741,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         durationMs: Number(turnDurationMs),
         agentName: params.currentAgent,
         interrupted: params.turnInterrupted,
+        streamFailed: params.streamFailed,
         usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
       })
       yield* Effect.logDebug("finalize.turn-after.done")

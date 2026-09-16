@@ -196,6 +196,33 @@ const continueGoal = (input: TurnAfterInput) =>
   Effect.gen(function* () {
     if (input.interrupted) return
     const ctx = yield* ExtensionContext
+    // A turn that died on a broken stream must not drive the goal on. Charging
+    // the budget and queueing another prompt would spend the goal against an
+    // answer that never arrived, so it pauses here and the person decides
+    // whether to resume. This runs before the charge for a reason: pausing
+    // afterwards would leave the queued continuation behind to wake the branch.
+    if (input.streamFailed) {
+      const paused = yield* modifyGoal((current) =>
+        Effect.gen(function* () {
+          if (Option.isNone(current)) return { next: current, result: false }
+          const goal = current.value
+          if (goal.status !== "active") return { next: current, result: false }
+          return {
+            next: Option.some<GoalState>({ ...goal, status: "paused", updatedAt: yield* now }),
+            result: true,
+          }
+        }),
+      )
+      if (!paused) return
+      yield* ctx.State.changed()
+      yield* Effect.logWarning("goal.paused.stream-failed").pipe(
+        Effect.annotateLogs({
+          sessionId: String(input.sessionId),
+          agent: String(input.agentName),
+        }),
+      )
+      return
+    }
     const decision = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current)) return { next: current, result: Option.none<GoalState>() }
