@@ -21,7 +21,7 @@ bun run clean      # Remove dist and tsbuildinfo files
 bun run --cwd apps/tui dev
 
 # Continue last session for cwd
-bun run --cwd apps/tui dev -c
+bun run --cwd apps/tui dev resume
 
 # Start with prompt (creates session, goes straight to session view)
 bun run --cwd apps/tui dev -p "your prompt"

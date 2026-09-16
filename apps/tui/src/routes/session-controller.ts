@@ -131,8 +131,19 @@ export function createSessionController(props: {
   const renderer = useRenderer()
   const env = useEnv()
   const exit = () => {
+    // The session id is the only way back into this conversation, and it is
+    // about to leave the screen. Printed after the renderer is destroyed so it
+    // lands in the terminal the reader keeps, not in the alternate screen.
+    const leaving = Option.fromNullishOr(client.session())
     shutdownLog("exit.renderer-destroy")
     renderer.destroy()
+    Option.match(leaving, {
+      onNone: () => {},
+      onSome: (session) => {
+        // eslint-disable-next-line effect/noGlobals -- The line must reach the real terminal after the renderer is destroyed, outside any Effect.
+        process.stdout.write(`\nto resume: gent resume ${session.sessionId}\n`)
+      },
+    })
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }

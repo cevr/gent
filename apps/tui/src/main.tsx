@@ -216,268 +216,328 @@ const runHeadlessTurn = (
   })
 }
 
+// The inputs the TUI/headless entry takes. `resume` reuses them.
+const gentFlags = {
+  connect: Flag.string("connect").pipe(
+    Flag.withDescription("Connect to an existing gent server"),
+    Flag.optional,
+  ),
+  session: Flag.string("session").pipe(
+    Flag.withAlias("s"),
+    Flag.withDescription("Session ID to continue"),
+    Flag.optional,
+  ),
+  headless: Flag.boolean("headless").pipe(
+    Flag.withAlias("H"),
+    Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
+    Flag.withDefault(false),
+  ),
+  isolate: Flag.boolean("isolate").pipe(
+    Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
+    Flag.withDefault(false),
+  ),
+  debug: Flag.boolean("debug").pipe(
+    Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
+    Flag.withDefault(false),
+  ),
+  mockEmpty: Flag.boolean("mock-empty").pipe(
+    Flag.withDescription(
+      "Run against a model that answers nothing, to exercise the unanswered turn",
+    ),
+    Flag.withDefault(false),
+  ),
+  prompt: Flag.string("prompt").pipe(
+    Flag.withAlias("p"),
+    Flag.withDescription("Initial prompt (TUI mode)"),
+    Flag.optional,
+  ),
+  promptArg: Argument.string("prompt").pipe(
+    Argument.withDescription("Prompt for headless mode"),
+    Argument.optional,
+  ),
+  agent: Flag.string("agent").pipe(
+    Flag.withAlias("a"),
+    Flag.withDescription("Agent to use for headless mode (default: main)"),
+    Flag.optional,
+  ),
+  runSpec: Flag.string("run-spec").pipe(
+    Flag.withDescription("JSON-encoded RunSpec (internal, used by subprocess runner)"),
+    Flag.optional,
+  ),
+}
+
+/**
+ * Launch the TUI, or run one headless turn.
+ *
+ * `gent` and `gent resume` differ only in how they name the session to open, so
+ * they share this body: `resume` fills `session` from its argument, or asks for
+ * the last session in this directory when given none.
+ */
+const runGent = ({
+  connect,
+  session,
+  continue_,
+  isolate,
+  headless,
+  debug,
+  mockEmpty,
+  prompt,
+  promptArg,
+  agent,
+  runSpec: runSpecJson,
+}: {
+  readonly connect: Option.Option<string>
+  readonly session: Option.Option<string>
+  readonly continue_: boolean
+  readonly isolate: boolean
+  readonly headless: boolean
+  readonly debug: boolean
+  readonly mockEmpty: boolean
+  readonly prompt: Option.Option<string>
+  readonly promptArg: Option.Option<string>
+  readonly agent: Option.Option<string>
+  readonly runSpec: Option.Option<string>
+}) =>
+  Effect.gen(function* () {
+    const cwd = process.cwd()
+    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
+    const scope = yield* Effect.scope
+    const builtUiServices = yield* Layer.buildWithScope(makeUiLayer(), scope)
+    const uiServices = Context.makeUnsafe<unknown>(builtUiServices.mapUnsafe)
+    const visualOpt = yield* Config.option(Config.string("VISUAL"))
+    const editorOpt = yield* Config.option(Config.string("EDITOR"))
+    const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
+    const env = {
+      visual: visualOpt,
+      editor: editorOpt,
+    }
+
+    // Create Effect-backed logger from captured services
+    const logServices = yield* Effect.context<never>()
+    const log = createClientLog(Context.makeUnsafe<unknown>(logServices.mapUnsafe))
+    let mainFiber: Option.Option<Fiber.Fiber<unknown, unknown>> = Option.none()
+    yield* Effect.withFiber((fiber) =>
+      Effect.sync(() => {
+        mainFiber = Option.some(fiber)
+      }),
+    )
+    const mainServices = yield* Effect.context<never>()
+    const interruptMain = () => {
+      shutdownLog("shutdown.interrupt-fiber")
+      if (Option.isSome(mainFiber)) {
+        Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber.value))
+      }
+    }
+
+    const resolveBundle = () => {
+      if (Option.isSome(connect)) return Gent.client(connect.value)
+      let serverState = Gent.state.sqlite()
+      if (debug || isolate || mockEmpty) serverState = Gent.state.memory()
+      let serverProvider = Gent.provider.live()
+      if (debug) serverProvider = Gent.provider.mock()
+      if (mockEmpty) serverProvider = Gent.provider.mock({ empty: true })
+      const serverOptions = {
+        cwd,
+        state: serverState,
+        provider: serverProvider,
+        debug,
+      }
+      const configuredOptions = Option.match(authDirectoryOpt, {
+        onNone: () => serverOptions,
+        onSome: (authDirectory) => ({ ...serverOptions, authDirectory }),
+      })
+      return Effect.flatMap(Gent.server(configuredOptions), Gent.client)
+    }
+    const bundle = yield* resolveBundle()
+    const requestedAgent = Option.match(agent, {
+      onNone: () => Option.none<AgentName>(),
+      onSome: (value) => {
+        if (!Schema.is(AgentNameSchema)(value)) return Option.none<AgentName>()
+        return Option.some(value)
+      },
+    })
+
+    if (headless) {
+      yield* bundle.runtime.lifecycle.waitForReady
+      const state = yield* resolveInitialState({
+        client: bundle.client,
+        cwd,
+        session,
+        continue_: continue_ || debug,
+        headless,
+        prompt,
+        promptArg,
+      })
+
+      const startupAuth = yield* resolveStartupAuthState({
+        client: bundle.client,
+        state,
+        requestedAgent: Option.getOrUndefined(requestedAgent),
+      })
+      const missingProviders = startupAuth.missingProviders
+
+      if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
+        const hint = formatMissingProviders(missingProviders)
+        yield* Console.error(`Error: missing required API keys: ${hint}`)
+        return yield* new CliStartupError({ message: hint })
+      }
+
+      if (state._tag !== "headless") {
+        return yield* new CliStartupError({
+          message: "headless startup resolved an interactive state",
+        })
+      }
+
+      const decodedRunSpec = yield* Option.match(runSpecJson, {
+        onNone: () => Effect.succeed(Option.none<RunSpec>()),
+        onSome: (runSpec) =>
+          Schema.decodeEffect(Schema.fromJsonString(RunSpecSchema))(runSpec).pipe(
+            Effect.asSome,
+            Effect.mapError(
+              (e) => new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
+            ),
+          ),
+      })
+
+      yield* runHeadlessTurn(bundle, state, cwd, home, requestedAgent, decodedRunSpec)
+      return
+    }
+
+    // Block until supervisor is ready (same as headless path)
+    yield* bundle.runtime.lifecycle.waitForReady
+
+    // Resolve session + auth before rendering — eliminates the loading route
+    const { bootstrap, initialAgent } = yield* resolveInteractiveBootstrap({
+      client: bundle.client,
+      cwd,
+      sessionId: Option.getOrUndefined(session),
+      continue_: continue_ || debug,
+      prompt: Option.getOrUndefined(prompt),
+      debugMode: debug,
+    })
+
+    const missingAuth = bootstrap.missingAuthProviders
+
+    // Resolve the terminal color scheme once before render so theme detection
+    // never runs in the synchronous Solid render path.
+    const initialThemeMode = yield* detectColorScheme
+
+    // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
+    // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
+    const envWithShutdown = {
+      ...env,
+      shutdown: () => {
+        interruptMain()
+      },
+    }
+
+    const uiScope = yield* Scope.Scope
+    const renderer = yield* Effect.promise(() =>
+      createCliRenderer({
+        exitOnCtrlC: false,
+        onDestroy: () => {
+          shutdownLog("exit.renderer-destroy")
+        },
+      }),
+    )
+    yield* Effect.promise(() =>
+      render(
+        () => (
+          <EnvProvider env={envWithShutdown}>
+            <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
+              <ClientProvider
+                client={bundle.client}
+                runtime={bundle.runtime}
+                services={uiServices}
+                log={log}
+                initialSession={bootstrap.initialSession}
+                initialAgent={initialAgent}
+              >
+                <ExtensionUIProvider scope={uiScope}>
+                  <SessionShellProvider
+                    initialPrompt={bootstrap.initialPrompt}
+                    initialSessionId={Option.map(
+                      Option.fromNullishOr(bootstrap.initialSession),
+                      (session) => session.sessionId,
+                    )}
+                  >
+                    <TerminalDimensionsProvider>
+                      <ComposerDraftsProvider>
+                        <App
+                          debugMode={debug}
+                          missingAuthProviders={missingAuth}
+                          initialBranches={bootstrap.initialBranches}
+                          initialThemeMode={initialThemeMode}
+                        />
+                      </ComposerDraftsProvider>
+                    </TerminalDimensionsProvider>
+                  </SessionShellProvider>
+                </ExtensionUIProvider>
+              </ClientProvider>
+            </WorkspaceProvider>
+          </EnvProvider>
+        ),
+        renderer,
+      ),
+    )
+    // Keep a real process handle open until the renderer is destroyed.
+    // OpenTUI mounts synchronously and `render(...)` resolves immediately;
+    // a bare suspended fiber does not keep Bun alive.
+    return yield* waitForRendererDestroy(renderer).pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => {
+          shutdownLog("shutdown.interrupted")
+        }),
+      ),
+    )
+  })
+
 // Main command - launches TUI or runs headless
-const main = Command.make(
-  "gent",
+const main = Command.make("gent", gentFlags, (input) => runGent({ ...input, continue_: false }))
+
+/**
+ * Resume a conversation: `gent resume <id>`, or `gent resume` for the last
+ * session in this directory.
+ *
+ * The session id is the only handle on a conversation once the TUI exits, so
+ * the exit prints it. Naming one is the ordinary case; omitting it asks for the
+ * most recent session here, which is what `--continue` used to mean.
+ */
+const resume = Command.make(
+  "resume",
   {
+    sessionId: Argument.string("session-id").pipe(
+      Argument.withDescription("Session to resume (default: the last one in this directory)"),
+      Argument.optional,
+    ),
     connect: Flag.string("connect").pipe(
       Flag.withDescription("Connect to an existing gent server"),
       Flag.optional,
-    ),
-    session: Flag.string("session").pipe(
-      Flag.withAlias("s"),
-      Flag.withDescription("Session ID to continue"),
-      Flag.optional,
-    ),
-    continue_: Flag.boolean("continue").pipe(
-      Flag.withAlias("c"),
-      Flag.withDescription("Continue last session from current directory"),
-      Flag.withDefault(false),
-    ),
-    headless: Flag.boolean("headless").pipe(
-      Flag.withAlias("H"),
-      Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
-      Flag.withDefault(false),
     ),
     isolate: Flag.boolean("isolate").pipe(
       Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
       Flag.withDefault(false),
     ),
-    debug: Flag.boolean("debug").pipe(
-      Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
-      Flag.withDefault(false),
-    ),
-    mockEmpty: Flag.boolean("mock-empty").pipe(
-      Flag.withDescription(
-        "Run against a model that answers nothing, to exercise the unanswered turn",
-      ),
-      Flag.withDefault(false),
-    ),
     prompt: Flag.string("prompt").pipe(
       Flag.withAlias("p"),
-      Flag.withDescription("Initial prompt (TUI mode)"),
-      Flag.optional,
-    ),
-    promptArg: Argument.string("prompt").pipe(
-      Argument.withDescription("Prompt for headless mode"),
-      Argument.optional,
-    ),
-    agent: Flag.string("agent").pipe(
-      Flag.withAlias("a"),
-      Flag.withDescription("Agent to use for headless mode (default: main)"),
-      Flag.optional,
-    ),
-    runSpec: Flag.string("run-spec").pipe(
-      Flag.withDescription("JSON-encoded RunSpec (internal, used by subprocess runner)"),
+      Flag.withDescription("Initial prompt"),
       Flag.optional,
     ),
   },
-  ({
-    connect,
-    session,
-    continue_,
-    isolate,
-    headless,
-    debug,
-    mockEmpty,
-    prompt,
-    promptArg,
-    agent,
-    runSpec: runSpecJson,
-  }) =>
-    Effect.gen(function* () {
-      const cwd = process.cwd()
-      const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-      const scope = yield* Effect.scope
-      const builtUiServices = yield* Layer.buildWithScope(makeUiLayer(), scope)
-      const uiServices = Context.makeUnsafe<unknown>(builtUiServices.mapUnsafe)
-      const visualOpt = yield* Config.option(Config.string("VISUAL"))
-      const editorOpt = yield* Config.option(Config.string("EDITOR"))
-      const authDirectoryOpt = yield* Config.option(Config.string("GENT_AUTH_DIRECTORY"))
-      const env = {
-        visual: visualOpt,
-        editor: editorOpt,
-      }
-
-      // Create Effect-backed logger from captured services
-      const logServices = yield* Effect.context<never>()
-      const log = createClientLog(Context.makeUnsafe<unknown>(logServices.mapUnsafe))
-      let mainFiber: Option.Option<Fiber.Fiber<unknown, unknown>> = Option.none()
-      yield* Effect.withFiber((fiber) =>
-        Effect.sync(() => {
-          mainFiber = Option.some(fiber)
-        }),
-      )
-      const mainServices = yield* Effect.context<never>()
-      const interruptMain = () => {
-        shutdownLog("shutdown.interrupt-fiber")
-        if (Option.isSome(mainFiber)) {
-          Effect.runForkWith(mainServices)(Fiber.interrupt(mainFiber.value))
-        }
-      }
-
-      const resolveBundle = () => {
-        if (Option.isSome(connect)) return Gent.client(connect.value)
-        let serverState = Gent.state.sqlite()
-        if (debug || isolate || mockEmpty) serverState = Gent.state.memory()
-        let serverProvider = Gent.provider.live()
-        if (debug) serverProvider = Gent.provider.mock()
-        if (mockEmpty) serverProvider = Gent.provider.mock({ empty: true })
-        const serverOptions = {
-          cwd,
-          state: serverState,
-          provider: serverProvider,
-          debug,
-        }
-        const configuredOptions = Option.match(authDirectoryOpt, {
-          onNone: () => serverOptions,
-          onSome: (authDirectory) => ({ ...serverOptions, authDirectory }),
-        })
-        return Effect.flatMap(Gent.server(configuredOptions), Gent.client)
-      }
-      const bundle = yield* resolveBundle()
-      const requestedAgent = Option.match(agent, {
-        onNone: () => Option.none<AgentName>(),
-        onSome: (value) => {
-          if (!Schema.is(AgentNameSchema)(value)) return Option.none<AgentName>()
-          return Option.some(value)
-        },
-      })
-
-      if (headless) {
-        yield* bundle.runtime.lifecycle.waitForReady
-        const state = yield* resolveInitialState({
-          client: bundle.client,
-          cwd,
-          session,
-          continue_: continue_ || debug,
-          headless,
-          prompt,
-          promptArg,
-        })
-
-        const startupAuth = yield* resolveStartupAuthState({
-          client: bundle.client,
-          state,
-          requestedAgent: Option.getOrUndefined(requestedAgent),
-        })
-        const missingProviders = startupAuth.missingProviders
-
-        if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
-          const hint = formatMissingProviders(missingProviders)
-          yield* Console.error(`Error: missing required API keys: ${hint}`)
-          return yield* new CliStartupError({ message: hint })
-        }
-
-        if (state._tag !== "headless") {
-          return yield* new CliStartupError({
-            message: "headless startup resolved an interactive state",
-          })
-        }
-
-        const decodedRunSpec = yield* Option.match(runSpecJson, {
-          onNone: () => Effect.succeed(Option.none<RunSpec>()),
-          onSome: (runSpec) =>
-            Schema.decodeEffect(Schema.fromJsonString(RunSpecSchema))(runSpec).pipe(
-              Effect.asSome,
-              Effect.mapError(
-                (e) =>
-                  new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
-              ),
-            ),
-        })
-
-        yield* runHeadlessTurn(bundle, state, cwd, home, requestedAgent, decodedRunSpec)
-        return
-      }
-
-      // Block until supervisor is ready (same as headless path)
-      yield* bundle.runtime.lifecycle.waitForReady
-
-      // Resolve session + auth before rendering — eliminates the loading route
-      const { bootstrap, initialAgent } = yield* resolveInteractiveBootstrap({
-        client: bundle.client,
-        cwd,
-        sessionId: Option.getOrUndefined(session),
-        continue_: continue_ || debug,
-        prompt: Option.getOrUndefined(prompt),
-        debugMode: debug,
-      })
-
-      const missingAuth = bootstrap.missingAuthProviders
-
-      // Resolve the terminal color scheme once before render so theme detection
-      // never runs in the synchronous Solid render path.
-      const initialThemeMode = yield* detectColorScheme
-
-      // Shutdown signal — interrupt the main fiber to break out of Layer.launch's
-      // Effect.never, triggering scope finalization (supervisor.stop, WS close, etc).
-      const envWithShutdown = {
-        ...env,
-        shutdown: () => {
-          interruptMain()
-        },
-      }
-
-      const uiScope = yield* Scope.Scope
-      const renderer = yield* Effect.promise(() =>
-        createCliRenderer({
-          exitOnCtrlC: false,
-          onDestroy: () => {
-            shutdownLog("exit.renderer-destroy")
-          },
-        }),
-      )
-      yield* Effect.promise(() =>
-        render(
-          () => (
-            <EnvProvider env={envWithShutdown}>
-              <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
-                <ClientProvider
-                  client={bundle.client}
-                  runtime={bundle.runtime}
-                  services={uiServices}
-                  log={log}
-                  initialSession={bootstrap.initialSession}
-                  initialAgent={initialAgent}
-                >
-                  <ExtensionUIProvider scope={uiScope}>
-                    <SessionShellProvider
-                      initialPrompt={bootstrap.initialPrompt}
-                      initialSessionId={Option.map(
-                        Option.fromNullishOr(bootstrap.initialSession),
-                        (session) => session.sessionId,
-                      )}
-                    >
-                      <TerminalDimensionsProvider>
-                        <ComposerDraftsProvider>
-                          <App
-                            debugMode={debug}
-                            missingAuthProviders={missingAuth}
-                            initialBranches={bootstrap.initialBranches}
-                            initialThemeMode={initialThemeMode}
-                          />
-                        </ComposerDraftsProvider>
-                      </TerminalDimensionsProvider>
-                    </SessionShellProvider>
-                  </ExtensionUIProvider>
-                </ClientProvider>
-              </WorkspaceProvider>
-            </EnvProvider>
-          ),
-          renderer,
-        ),
-      )
-      // Keep a real process handle open until the renderer is destroyed.
-      // OpenTUI mounts synchronously and `render(...)` resolves immediately;
-      // a bare suspended fiber does not keep Bun alive.
-      return yield* waitForRendererDestroy(renderer).pipe(
-        Effect.onInterrupt(() =>
-          Effect.sync(() => {
-            shutdownLog("shutdown.interrupted")
-          }),
-        ),
-      )
+  ({ sessionId, connect, isolate, prompt }) =>
+    runGent({
+      connect,
+      session: sessionId,
+      // No id names the last session in this directory.
+      continue_: Option.isNone(sessionId),
+      isolate,
+      headless: false,
+      debug: false,
+      mockEmpty: false,
+      prompt,
+      promptArg: Option.none(),
+      agent: Option.none(),
+      runSpec: Option.none(),
     }),
 )
 
@@ -671,7 +731,7 @@ const storage = Command.make("storage", {}, () => Console.log("Usage: gent stora
 
 // Root command with subcommands
 const command = main.pipe(
-  Command.withSubcommands([sessions, server, doctor, storage]),
+  Command.withSubcommands([resume, sessions, server, doctor, storage]),
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 

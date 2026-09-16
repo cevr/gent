@@ -21,7 +21,7 @@ bun run gate       # typecheck + lint + fmt + build + test
 bun run --cwd apps/tui dev          # default mode
 bun run --cwd apps/tui dev -p "..." # one-shot prompt → session view
 bun run --cwd apps/tui dev -H "..." # headless: stream to stdout, exit
-bun run --cwd apps/tui dev -c       # continue last session for cwd
+bun run --cwd apps/tui dev resume   # resume last session for cwd
 bun run --cwd apps/tui dev sessions # list sessions
 ```
 

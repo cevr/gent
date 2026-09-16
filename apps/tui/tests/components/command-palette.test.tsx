@@ -172,6 +172,85 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
+  it.live("marks a spawned session so side work is visible before opening it", () =>
+    Effect.gen(function* () {
+      const rootId = SessionId.make("session-root")
+      const rootBranchId = BranchId.make("branch-root")
+      const handoffId = SessionId.make("session-handoff")
+      const spawnId = SessionId.make("session-spawn")
+      // The three shapes the picker has to tell apart: a root, the handoff that
+      // continues its thread, and a delegate run that opened a thread of its own.
+      const client = createMockClient({
+        session: {
+          list: () =>
+            Effect.succeed([
+              {
+                id: rootId,
+                activeBranchId: rootBranchId,
+                threadId: rootId,
+                name: "Root",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(3),
+              },
+              {
+                id: handoffId,
+                activeBranchId: BranchId.make("branch-handoff"),
+                parentSessionId: rootId,
+                threadId: rootId,
+                name: "Handoff",
+                createdAt: dateFromMillis(1),
+                updatedAt: dateFromMillis(2),
+              },
+              {
+                id: spawnId,
+                activeBranchId: BranchId.make("branch-spawn"),
+                parentSessionId: rootId,
+                threadId: spawnId,
+                name: "Delegate",
+                createdAt: dateFromMillis(2),
+                updatedAt: dateFromMillis(1),
+              },
+            ]),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <OpenPaletteOnMount />, {
+          client,
+          initialSession: {
+            id: rootId,
+            activeBranchId: rootBranchId,
+            name: "Root",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(3),
+          },
+          width: 90,
+          height: 28,
+        }),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (frame) => frame.includes("Commands") && frame.includes("Sessions"),
+          "commands root",
+        ),
+      )
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (frame) => frame.includes("Delegate") && frame.includes("Handoff"),
+          "sessions level",
+        ),
+      )
+      const frame = renderFrame(setup)
+      // The marker rides the row, so the reader sees it without opening anything.
+      const delegateRow = frame.split("\n").find((line) => line.includes("Delegate"))
+      const handoffRow = frame.split("\n").find((line) => line.includes("Handoff"))
+      expect(delegateRow).toContain("side thread")
+      expect(handoffRow).not.toContain("side thread")
+    }),
+  )
+
   it.live("creates palette sessions with workspace cwd", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()

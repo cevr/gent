@@ -38,6 +38,22 @@ type SessionNode = {
   readonly children: SessionNode[]
 }
 
+/**
+ * Whether this session was spawned beside its parent's work rather than
+ * continuing it.
+ *
+ * A compaction handoff inherits the parent's thread. A delegate run or a `/btw`
+ * side question is admitted under a parent but opens a thread of its own, so it
+ * is the session whose thread is itself while still having a parent. The reader
+ * sees which rows are side work before opening one.
+ */
+export const isSpawn = (session: DomainSession): boolean =>
+  Option.isSome(Option.fromNullishOr(session.parentSessionId)) &&
+  Option.match(Option.fromNullishOr(session.threadId), {
+    onNone: () => false,
+    onSome: (threadId) => threadId === session.id,
+  })
+
 const buildSessionTree = (list: readonly DomainSession[]): SessionNode[] => {
   const nodes = new Map<string, SessionNode>()
   for (const session of list) {
@@ -168,9 +184,14 @@ export function CommandPalette() {
         const isActive = currentSession?.sessionId === session.id
         const title = selectedTitle(`${prefix}${session.name ?? "Unnamed"}`, isActive)
 
+        const spawnLabel = Option.getOrUndefined(
+          Option.map(Option.liftPredicate(session, isSpawn), () => "side thread"),
+        )
+
         items.push({
           id: `session.${session.id}`,
           title,
+          description: spawnLabel,
           onSelect: () => {
             const branchId = Option.fromNullishOr(session.activeBranchId)
             if (Option.isNone(branchId)) return
