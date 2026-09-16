@@ -928,3 +928,77 @@ child after a handoff and the root after resuming the root — correct both
 times, because it names the session that was live, not the thread.
 
 Gate `GATE EXIT 0` on the rift and again on main.
+
+## Two defects on the steering path (2026-09-16, `380363fa`)
+
+Counsel on the async-question design found these; both were then confirmed
+against the code before anything was written. The counsel ran in a codex pane
+on `gpt-6-astra high`, reading this repo at `7ae39d16` and openai/codex at
+`fd346b8d`.
+
+**The premise I brought was wrong, and that mattered.** I had described the
+pending-singleton index — `idx_interaction_requests_pending_singleton`
+(`schema.ts:190`) — as the reason a question blocks the turn. It is a symptom.
+The wait is a stored continuation built from three stacked layers: the approval
+service raises `InteractionPendingError` *after* it saves the row
+(`interaction-request.ts:265`), the loop parks in `WaitingForInteraction` with
+a single `pendingRequestId` and `pendingToolCallId` (`agent-loop.state.ts:329`),
+and the response RPC accepts only the branch's current id
+(`agent-loop.worker.ts:269`). Dropping the index alone would allow rows the
+rest of the system cannot handle. Persistence and blocking are separate
+choices; that is the finding worth keeping.
+
+**An interject on an idle branch never started a turn.** The comment at
+`agent-loop.actor.ts:784` promised "starts the next turn when the loop is
+idle"; the body only called `appendSteering`. Compare `admitTurn`, one screen
+above, which calls `reserveAndStart(..., { queueOnly: false })`.
+
+My first fix started a turn for *every* interject, and the gate said no: two
+tests in `session-idempotency.test.ts` (`:416`, `:460`) steer an idle branch
+and then read the queue, and both went red while passing on clean main. Their
+subjects are requestId idempotency and drain-replay; parked steering is only
+their vehicle. But the failure was the useful part — it showed the change was
+touching a public contract. `queue.get` and `queue.drain` are RPCs
+(`rpcs/session.ts:113-122`), and the TUI renders queued steering
+(`session-controller-state.ts:113`, `session.tsx:262`), so consuming an idle
+interject immediately removes state a reader can see.
+
+The remedy was already in the codebase. `wake` is how gent says "start even
+when idle" — `wake/index.ts:164` documents it in those words, `goal/index.ts:74`
+and `child-completion.ts:129` set it, and recovery gates on
+`queueRequestsWake(...)` at `agent-loop.actor.ts:618`. `SteerCommand.Interject`
+now carries `wake` too. A plain interject parks; one that asks to wake starts a
+turn. Both idempotency tests pass untouched, which is the evidence that the
+vehicle survived.
+
+**Delivery dropped steering before the transcript held it.**
+`takeSteeringForStep` committed the queue removal with `persist: true`
+(`agent-loop.behavior.ts:362`), and `deliverSteeringAtStepBoundary` then wrote
+the message in a separate transaction (`agent-loop.turn-execution.ts:1018`).
+The two writes belong to different subsystems and cannot share a transaction,
+so the order decides how a crash between them fails: writing first replays a
+delivery that `persistMessageReceived` already treats as a no-op, dropping
+first loses input the branch accepted. The read and the drop are now
+`peekSteeringForStep` and `dropSteeringDelivered`, so the order is stated
+rather than implied.
+
+Deletion probes, both non-vacuous. Idle wake: remove the start and the test
+reports `Expected: 1, Received: 0`, one failure in thirty-two, with both
+idempotency tests still green — so it is the `wake` branch under test, not
+steering in general. Ordering: invert the two writes and the test reports
+`"value": false` where it wants `true` **while its delivery assertion still
+passes** — the interjection still reaches the transcript either way, so the
+test measures the order alone. Reaching that took three attempts; the first two
+injected a storage failure that killed the turn at 4ms, before any step
+boundary, and would have failed under both orderings. A test that cannot
+discriminate is not a test.
+
+One counsel finding is recorded but unverified: recovery may treat a delivered
+interjection as an unfinished user turn. `incompleteUserTurn`
+(`agent-loop.behavior.ts:837`) selects user-role messages absent from
+`TurnCompleted.messageId`, excluding only `isRuntimeUserMessage`, and
+`RuntimeUserMessageType` (`message.ts:49`) lists just continuation,
+context-window, and model-change. An interjection is none of those. The code
+supports the concern; no restart test reproduces it yet.
+
+Gate `GATE EXIT 0` on the rift.
