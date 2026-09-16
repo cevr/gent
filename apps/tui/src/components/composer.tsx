@@ -19,6 +19,7 @@ interface ComposerContextValue {
   handleAutocompleteSelect: (value: string) => void
   handleAutocompleteComplete: (value: string) => void
   handleAutocompleteClose: () => void
+  setGhost: (ghost: Option.Option<string>) => void
 }
 
 const ComposerContext = createContext<ComposerContextValue>()
@@ -43,11 +44,34 @@ export function Composer(props: ComposerProps) {
     return theme.primary
   }
 
+  /**
+   * The completion the popup's top row offers, or none.
+   *
+   * It is drawn as a muted line under the input rather than as text inside it.
+   * The buffer's own virtual-text facility (`extmarks`) cannot draw it: marks
+   * created with `virtual: true` are stored and returned by `getVirtual()` but
+   * never reach the screen, and holding one across an edit breaks undo. Drawing
+   * beside the textarea fails differently — a shrink-to-fit input hands the
+   * ghost whatever columns are left on each wrapped row, so a long draft splits
+   * the ghost mid-word across lines. A row of its own is the one placement that
+   * survives wrapping, and it keeps the draft literally what the reader typed:
+   * the ghost is never in the buffer, so Enter can never submit it.
+   */
+  const [ghost, setGhost] = createSignal(Option.none<string>())
+
   const contextValue: ComposerContextValue = {
     autocomplete: controller.autocomplete,
     handleAutocompleteSelect: controller.handleAutocompleteSelect,
     handleAutocompleteComplete: controller.handleAutocompleteComplete,
     handleAutocompleteClose: controller.handleAutocompleteClose,
+    setGhost,
+  }
+
+  /** The ghost is only an offer while there is an open popup to complete from. */
+  const visibleGhost = (): Option.Option<string> => {
+    if (Option.isNone(Option.fromNullishOr(controller.autocomplete()))) return Option.none()
+    if (controller.mode() !== "editing") return Option.none()
+    return ghost()
   }
 
   const activeInteraction = (): Option.Option<ActiveInteraction> => {
@@ -133,6 +157,18 @@ export function Composer(props: ComposerProps) {
           </box>
         </box>
       </Show>
+
+      {/* The ghost line: what Tab would complete, muted, on a row of its own. */}
+      <Show when={Option.getOrUndefined(visibleGhost())}>
+        {(completion) => (
+          <box flexShrink={0} height={1} paddingLeft={2} overflow="hidden">
+            <text style={{ fg: theme.textMuted }} wrapMode="none">
+              {completion()} <span style={{ fg: theme.textMuted }}>⇥</span>
+            </text>
+          </box>
+        )}
+      </Show>
+
       <box
         flexDirection="column"
         flexShrink={0}
@@ -160,6 +196,7 @@ Composer.Autocomplete = function ComposerAutocomplete() {
           onSelect={ctx.handleAutocompleteSelect}
           onComplete={ctx.handleAutocompleteComplete}
           onClose={ctx.handleAutocompleteClose}
+          onGhostChange={ctx.setGhost}
         />
       )}
     </Show>

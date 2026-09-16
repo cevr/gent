@@ -11,7 +11,7 @@
  * binds and unbinds those keys; escape closes the popup either way.
  */
 
-import { createMemo, createResource, Show } from "solid-js"
+import { createEffect, createMemo, createResource, onCleanup, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
@@ -24,6 +24,7 @@ import { useClient } from "../client/index"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import type { AutocompleteState } from "./composer-interaction-state"
 import { runAutocompleteContributions } from "./autocomplete-popup-boundary"
+import { ghostCompletion } from "./autocomplete-ranking"
 import { Option } from "effect"
 
 export type { AutocompleteState }
@@ -38,6 +39,15 @@ export interface AutocompletePopupProps {
   /** Tab on the selected row: completes the text and stops there. */
   onComplete: (value: string) => void
   onClose: () => void
+  /**
+   * The completion the composer may offer as ghost text, or none.
+   *
+   * The popup reports it rather than the composer deriving it, because the
+   * popup already holds the fetched and ranked rows. Deriving it a second time
+   * would run every contribution again on each keystroke — a filesystem search,
+   * for `@` — to learn something already known here.
+   */
+  onGhostChange: (ghost: Option.Option<string>) => void
 }
 
 export function AutocompletePopup(props: AutocompletePopupProps) {
@@ -73,6 +83,22 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // during refetch instead of flashing "Loading..."
   const visibleItems = () => Option.getOrElse(Option.fromNullishOr(items.latest), () => [])
   const hasItems = () => visibleItems().length > 0
+
+  /**
+   * The ghost tracks the top row, which is the row Tab completes.
+   *
+   * It is reported on every change of rows or filter, and cleared when the
+   * popup unmounts — a ghost outliving its popup would offer a completion the
+   * composer can no longer perform.
+   */
+  createEffect(() => {
+    const top = Option.fromNullishOr(visibleItems()[0])
+    props.onGhostChange(ghostCompletion(top, props.state.filter))
+  })
+
+  onCleanup(() => {
+    props.onGhostChange(Option.none())
+  })
 
   // The list binds escape only while it has rows; the popup closes on it always.
   useScopedKeyboard((e) => {

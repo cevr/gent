@@ -55,6 +55,7 @@ describe("AutocompletePopup renderer", () => {
                 onSelect={(value) => picked.push(value)}
                 onComplete={(value) => completed.push(value)}
                 onClose={() => {}}
+                onGhostChange={() => {}}
               />
             </>
           ),
@@ -97,6 +98,7 @@ describe("AutocompletePopup renderer", () => {
                 onClose={() => {
                   closed += 1
                 }}
+                onGhostChange={() => {}}
               />
             </>
           ),
