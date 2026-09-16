@@ -724,3 +724,35 @@ Probe counts (baseline 13 pass / 0 fail on the two prior regression files): A (r
 Binary rebuilt 01:13 from gated main at `34ff5e26`, `GATE EXIT 0` at log line 679. Nine checks, all PASS.
 
 `/ag` → popup lists `/agents` first (was `/fork`) and a muted `agents ⇥` row renders under the composer; ANSI confirms it is genuinely muted at `138;138;138` against the selected row's `238;238;238`. Tab → draft becomes `/agents `, nothing runs, ghost clears. `/agzz` → "No matches", **no ghost row**. `/agents` fully typed → no ghost, nothing left to offer. Plain prose `hello wor` → no ghost row, and Enter sent exactly `hello wor`. `/agents` + one Enter → agents pane opens, so the first-Enter dispatch survives the ranking change. `$te` → skills popup with `test` first and ghost `test ⇥`. `$t` → `tdd` above `test`, the disclosed limit, reproduced. `@gam` → FFF order unchanged, `gamut.ts` first, ghost `gamut.ts ⇥`.
+
+## Frecency ranking over the picks you make (2026-09-16, `7394005d`)
+
+User ask: "we can also do frecency by creating some sort of view over the session dbs, since it should log when skills are/commands are used maybe?" then "ok lets record, and make a read-only for derived ranking".
+
+**The session-DB premise did not survive a check of the live data.** The gamut session DB holds 88,865 events and contains **no slash-command events and no `skill` tool** — slash commands are resolved entirely in the TUI and never reach the runtime as events, and skills arrive as ordinary prompt text. A view over the session DBs would have ranked nothing. So the recording had to be added at the point of the pick, and a new store was the only place to put it.
+
+`components/autocomplete-frecency-store.ts` is the module: a 14-day half-life over `count * 0.5^(age/HALF_LIFE_MS)`, capped at `MAX_ENTRIES = 200`, persisted to `~/.cache/gent/autocomplete-frecency.json`. Ranking reads a module-level snapshot so scoring stays synchronous inside the scorer's hot path; only writes go through Effect.
+
+**`FRECENCY_MAX = 8` sits deliberately below `BOUNDARY = 12`.** Frecency can reorder rows that already score comparably, and cannot lift a poor subsequence match above a word-boundary hit. A frequently-picked `/thread` does not outrank an exact `/tree` prefix.
+
+Recording happens in `completeAutocomplete` (`use-composer-controller.ts:173`), above the dispatch branch, so **both Enter and Tab record**. That is intended: Tab is a use of the item. Verified live — Tab on `/tree` moved its count from 1 to 1.9999 (the fractional part is the half-life decay on the prior entry, not an error).
+
+## The second writer silently dropped the first's picks (2026-09-16, `316e494f`)
+
+Found in my own pane check of the shipped feature, reproduced four times before I trusted it.
+
+`use-autocomplete-frecency.ts` held the store in a module singleton behind a `cell.loaded` guard. The guard meant a **write that landed after the first load was invisible to the hook**, so the next `/` pick serialized a stale in-memory snapshot over the file. The `$` popup (`extensions/builtins/index.ts`) was a second, independent writer. Picking `/tree`, then `$triage`, then `/thread` produced `["/tree","/thread"]` — `$triage` was silently gone.
+
+Two writers, one file, no shared fold. The fix makes the store module the single writer: both surfaces call `recordFrecencyPick`, a `Semaphore.makeUnsafe(1)` serializes the read-fold-write, and `writeFrecencyStore` no longer appears outside the module. `tests/autocomplete-frecency-cross-writer.test.ts` covers it, 6/0; regression proof against the two original writer strategies is 0 pass / 1 fail, naming the missing `$triage`.
+
+**Scope stated honestly: this is within-process safety only.** Two `gent` processes sharing a home each hold their own semaphore and can still interleave. That exposure predates this fix, is untested and unfixed, and is the next thing to close if it matters.
+
+## Pane receipts, frecency and the lost write (2026-09-16, `wZ:p18`)
+
+Binary rebuilt from gated main at `316e494f`, `GATE EXIT 0` at log line 680.
+
+The clobber sequence, from `rm -f ~/.cache/gent/autocomplete-frecency.json`: `/tree` → `["/tree"]`; `$triage` → `["/tree","$triage"]`; `/thread` → **`["/tree","$triage","/thread"]`**. On the old build step 3 returned `["/tree","/thread"]`. Reverse order from a second cold start: `$triage` → `["$triage"]`; `/tree` → `["$triage","/tree"]`. The fold holds in both directions.
+
+Derived ranking confirmed on the same store: `/t` returned `/tree /thread /think`, lifting the two picked commands above `/think`, which had sorted first on `/th` when nothing had been picked. Tab on `/tree` completed the draft to `/tree` and **did not** open the tree pane, so the `6d5279f7` split survives the frecency change.
+
+One pane-reading note worth keeping: the split pane is 23 columns, which truncated every capture mid-word and made popup rows unreadable. `herdr pane zoom --on` widened it to the full terminal and the rows resolved. Check the pane's own width before trusting a narrow capture — a truncated row is not a short row.
