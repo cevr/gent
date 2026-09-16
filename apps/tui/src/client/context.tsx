@@ -87,9 +87,17 @@ import {
 const isReconnectingState = (state: ConnectionState): boolean =>
   Predicate.isTagged("connecting")(state) || Predicate.isTagged("reconnecting")(state)
 
+/**
+ * What this UI can ask a running loop to do.
+ *
+ * Narrower than the wire `SteerCommand` on purpose. The domain also carries
+ * `Interrupt`, which the loop folds into `Cancel` (`agent-loop.actor.ts:763`),
+ * and `wake` on an interjection, which this UI never needs: it interjects only
+ * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
+ * that starts a turn by itself.
+ */
 export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
-  Interrupt: {},
   Interject: {
     message: Schema.String,
     agent: Schema.optional(AgentNameSchema),
