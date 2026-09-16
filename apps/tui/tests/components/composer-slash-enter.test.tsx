@@ -9,6 +9,13 @@
  *
  * The other autocomplete prefixes keep the trailing space: `@file.ts ` is the
  * start of a sentence, not a command.
+ *
+ * An unregistered name is the same one Enter. `/xyz` opens the popup — the
+ * trigger only needs a `/` at position 0, not a matching row — and the popup
+ * then holds no rows to select. The composer used to claim that Enter anyway
+ * and drop it, so the first press did nothing and only a second one reported
+ * `Unknown command: /xyz`. The popup declines a key it cannot act on, so the
+ * draft submits and the error surfaces on the first press.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { createSignal, onMount, type JSX } from "solid-js"
@@ -266,6 +273,29 @@ describe("Composer slash Enter", () => {
       // The `@` path inserts and waits — it never dispatches a command.
       expect(dispatched).toEqual([])
       expect(renderFrame(setup)).toContain("@notes.ts")
+    }),
+  )
+
+  it.live("reports an unregistered command on the first Enter", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      // `/xyz` matches no registered command, so the popup opens with no rows.
+      // The Enter has to reach the submit path regardless: dispatching is what
+      // produces `Unknown command: /xyz` from `executeSlashCommand`.
+      const setup = yield* typeThenEnter(dispatched, "/xyz", "No matches")
+      expect(dispatched).toEqual([{ cmd: "xyz", args: "" }])
+      // The draft is gone — the key was consumed by the submit, not dropped.
+      expect(renderFrame(setup)).not.toContain("/xyz")
+    }),
+  )
+
+  it.live("selects a row instead of submitting while the popup has one", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      // `/mod` matches `/model`, so a row exists. Enter must select that row,
+      // which dispatches `/model` — not submit the literal text `/mod`.
+      yield* typeThenEnter(dispatched, "/mod", "/model")
+      expect(dispatched).toEqual([{ cmd: "model", args: "" }])
     }),
   )
 })

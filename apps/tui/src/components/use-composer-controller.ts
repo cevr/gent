@@ -383,7 +383,14 @@ export function useComposerController(): ComposerController {
       return Option.some(true)
     }
     const keyName = Option.getOrElse(Option.fromNullishOr(event.name), () => "")
-    if (["up", "down", "return", "tab"].includes(keyName)) {
+    // Enter is deliberately absent from this list. A popup holding rows binds
+    // its keys after this handler and consumes enter before the composer sees
+    // it, so an enter arriving here is one the popup already declined for want
+    // of a row to select. Claiming it anyway is what swallowed `/xyz`: the
+    // popup opened on zero rows, so nothing selected the key and nothing
+    // submitted the draft. The navigation keys stay claimed — while a popup is
+    // open the cursor is its business, rows or no rows.
+    if (["up", "down", "tab"].includes(keyName)) {
       return Option.some(false)
     }
     if (event.ctrl === true && (event.name === "p" || event.name === "n")) {
@@ -490,10 +497,15 @@ export function useComposerController(): ComposerController {
     return false
   })
 
-  /** Called by textarea onSubmit (keybinding: bare return → submit action). */
+  /**
+   * Called by textarea onSubmit (keybinding: bare return → submit action).
+   *
+   * An open popup is not consulted. A popup with rows never lets enter reach
+   * the textarea, so reaching here means the draft is the only thing the key
+   * can act on.
+   */
   const handleSubmitFromTextarea = () => {
     if (sc.promptSearch.isOpen() || effectiveMode() === "interaction") return
-    if (Option.isSome(autocompleteOption())) return
     submitMode = "queue"
     handleSubmit()
   }
@@ -523,18 +535,15 @@ export function useComposerController(): ComposerController {
     // Meta/Super+Enter = interject (bypasses keybindings)
     if (event.meta === true || event.super === true) {
       event.preventDefault()
-      if (Option.isSome(autocompleteOption())) return
       submitMode = "interject"
       handleSubmit()
       return
     }
 
-    // Autocomplete open: swallow Enter so it doesn't submit
-    if (Option.isSome(autocompleteOption())) {
-      event.preventDefault()
-      return
-    }
-
+    // An open popup is not a reason to swallow enter. A popup with rows has
+    // already consumed the key through its own list; one without rows has
+    // nothing to select, and the draft underneath is what the reader meant to
+    // send. Both cases fall through to the textarea keybindings below.
     // All other Enter variants (bare, shift, ctrl) fall through to textarea keybindings
   }
 
