@@ -23,11 +23,14 @@ describe("SDK public surface", () => {
       "extractText",
       "getLocalHostname",
       "isPidAlive",
+      "knownModeOr",
       "makeJsonFileLogger",
+      "positiveIntegerOr",
       "probeServerLockEntryIdentity",
       "readServerLock",
       "removeServerLock",
       "signalIfIdentityOwned",
+      "tcpPortOr",
       "validateServerLockEntry",
     ])
     expect("GentRpcs" in RuntimePublicSdk).toBe(false)

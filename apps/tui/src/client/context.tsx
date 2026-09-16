@@ -360,6 +360,20 @@ export function ClientProvider(props: ClientProviderProps) {
   const [contextMetrics, setContextMetrics] = createSignal<Option.Option<ModelContextMetrics>>(
     Option.none(),
   )
+
+  /**
+   * Drop every metric the previous session left behind.
+   *
+   * All three session changes go through here so none can reset a subset. The
+   * context gauge is the reason this is one function: `buildContextLabels`
+   * prefers the projection over the live token count whenever it carries a
+   * limit, so a `contextMetrics` left from the previous session outranks the
+   * fresh `latestInputTokens` of the new one and renders the old percentage.
+   */
+  const resetSessionMetrics = (): void => {
+    setLatestInputTokens(0)
+    setContextMetrics(Option.none())
+  }
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
   )
@@ -528,6 +542,14 @@ export function ClientProvider(props: ClientProviderProps) {
       client.session.getSnapshot({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
         Effect.tap((snapshot) =>
           Effect.sync(() => {
+            // The session can change while this reply is in flight. Writing it
+            // blind would restore the previous session's cost, model, tokens
+            // and context over the new session's reset values, so a reply that
+            // no longer names the active branch is dropped.
+            const active = sessionOption()
+            if (Option.isNone(active)) return
+            if (active.value.sessionId !== s.sessionId) return
+            if (active.value.branchId !== s.branchId) return
             setAgentStore({
               cost: snapshot.metrics.costUsd,
               resolvedModelId: Option.some(snapshot.resolvedModelId),
@@ -667,7 +689,7 @@ export function ClientProvider(props: ClientProviderProps) {
               resolvedModelId: Option.none(),
               resolvedReasoningLevel: Option.none(),
             })
-            setLatestInputTokens(0)
+            resetSessionMetrics()
             clearConnectionIssue()
             setExtensionHealth(EMPTY_EXTENSION_HEALTH)
             dispatchSession(
@@ -725,7 +747,7 @@ export function ClientProvider(props: ClientProviderProps) {
         resolvedModelId: Option.none(),
         resolvedReasoningLevel: Option.none(),
       })
-      setLatestInputTokens(0)
+      resetSessionMetrics()
       clearConnectionIssue()
       if (Option.isNone(currentSessionId) || currentSessionId.value !== sessionId) {
         setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -752,7 +774,7 @@ export function ClientProvider(props: ClientProviderProps) {
         resolvedModelId: Option.none(),
         resolvedReasoningLevel: Option.none(),
       })
-      setLatestInputTokens(0)
+      resetSessionMetrics()
       clearConnectionIssue()
       setExtensionHealth(EMPTY_EXTENSION_HEALTH)
     },

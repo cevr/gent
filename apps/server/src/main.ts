@@ -5,19 +5,18 @@
  */
 import { BunRuntime } from "@effect/platform-bun"
 import { Config, Console, Effect, Option } from "effect"
-import { Gent, type IdleShutdownSpec } from "@gent/sdk"
+import { Gent, knownModeOr, positiveIntegerOr, tcpPortOr, type IdleShutdownSpec } from "@gent/sdk"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
-const finiteOr = (raw: Option.Option<string>, fallback: number): number => {
-  const parsed = Number(Option.getOrElse(raw, () => String(fallback)))
-  if (Number.isFinite(parsed)) return parsed
-  return fallback
-}
+/** The mode words each variable accepts. An unknown one stops the launch. */
+const SERVER_MODES: ReadonlyArray<"standalone" | "shared"> = ["standalone", "shared"]
+const PERSISTENCE_MODES: ReadonlyArray<"sqlite" | "memory"> = ["sqlite", "memory"]
+const PROVIDER_MODES: ReadonlyArray<"live" | "debug-scripted"> = ["live", "debug-scripted"]
 
 /** `GENT_PROVIDER_MODE=debug-scripted` picks the scripted language model. */
-const resolveProvider = (value: Option.Option<string>) => {
-  if (Option.contains(value, "debug-scripted")) return Gent.provider.mock()
+const resolveProvider = (mode: "live" | "debug-scripted") => {
+  if (mode === "debug-scripted") return Gent.provider.mock()
   return Gent.provider.live()
 }
 
@@ -32,10 +31,28 @@ const resolveLaunch = Effect.gen(function* () {
   const shellOpt = yield* Config.option(Config.string("SHELL"))
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
 
-  const isManaged = Option.contains(serverModeOpt, "shared")
+  const serverMode = yield* knownModeOr(
+    "GENT_SERVER_MODE",
+    serverModeOpt,
+    SERVER_MODES,
+    "standalone",
+  )
+  const persistenceMode = yield* knownModeOr(
+    "GENT_PERSISTENCE_MODE",
+    persistenceOpt,
+    PERSISTENCE_MODES,
+    "sqlite",
+  )
+  const providerMode = yield* knownModeOr("GENT_PROVIDER_MODE", providerOpt, PROVIDER_MODES, "live")
+  const port = yield* tcpPortOr("GENT_PORT", portRaw, 3000)
+
+  const isManaged = serverMode === "shared"
   // A managed shared server exits once its workers disconnect; standalone runs forever.
   let idleShutdown = Option.none<IdleShutdownSpec>()
-  if (isManaged) idleShutdown = Option.some({ idleMs: finiteOr(idleTimeoutOpt, 30_000) })
+  if (isManaged) {
+    const idleMs = yield* positiveIntegerOr("GENT_IDLE_TIMEOUT_MS", idleTimeoutOpt, 30_000)
+    idleShutdown = Option.some({ idleMs })
+  }
 
   // `GENT_DATA_DIR` names the directory holding `data.db`.
   const dbPath = Option.map(dataDirOpt, (dataDir) => joinPath(dataDir, "data.db"))
@@ -43,15 +60,15 @@ const resolveLaunch = Effect.gen(function* () {
     home: Option.getOrUndefined(homeOpt),
     dbPath: Option.getOrUndefined(dbPath),
   })
-  if (Option.contains(persistenceOpt, "memory")) state = Gent.state.memory()
+  if (persistenceMode === "memory") state = Gent.state.memory()
 
   return {
     isManaged,
     options: {
       cwd: process.cwd(),
-      port: finiteOr(portRaw, 3000),
+      port,
       state,
-      provider: resolveProvider(providerOpt),
+      provider: resolveProvider(providerMode),
       authDirectory: Option.getOrUndefined(authDirectoryOpt),
       shell: Option.getOrUndefined(shellOpt),
       idleShutdown: Option.getOrUndefined(idleShutdown),

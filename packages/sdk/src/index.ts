@@ -29,6 +29,9 @@ export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 
 // Server identity probe (shared by resolveServer + CLI `server stop`)
 export { probeServerLockEntryIdentity } from "./server.js"
+// Launch-value decoders: a launcher reads strings from its environment,
+// and these turn one into a value `Gent.server` accepts, or fail at startup.
+export { knownModeOr, positiveIntegerOr, tcpPortOr } from "./server.js"
 // Server discovery: the shared lock file clients read to find a running server
 export {
   getLocalHostname,
