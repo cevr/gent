@@ -2,7 +2,8 @@ import { createEffect, onCleanup, type Accessor } from "solid-js"
 import { Match, Option, Schema, type Effect } from "effect"
 import type { ClientContextValue } from "../client/index"
 import type { Command } from "../command/types"
-import type { AutocompleteContribution } from "../extensions/client-facets.js"
+import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
+import { rankAutocompleteItems } from "../components/autocomplete-ranking"
 import { resolveModelQuery, type ModelQueryResult } from "../client/model-query"
 import { ReasoningEffort, type Model, type ModelId } from "@gent/core/protocol"
 
@@ -38,40 +39,36 @@ export const describeAmbiguous = (query: string, candidates: readonly Model[]): 
   return `"${query}" matches ${candidates.length} models: ${shown.join(", ")}`
 }
 
-const slashAutocompleteItems = (
+/**
+ * Every command the reader could mean, ranked best first.
+ *
+ * The filtering used to happen here, by asking whether the slash name or the
+ * title contained the filter, and the surviving commands kept their
+ * registration order. Both halves were wrong for a popup whose first row is
+ * preselected: a title match counted for as much as a name match, so `/ag` led
+ * with `/fork` ("Fork from Mess**ag**e"), and nothing afterwards reordered it.
+ *
+ * Now the list is built unfiltered — names and aliases both — and
+ * {@link rankAutocompleteItems} decides what matches and in what order. It
+ * scores names far above descriptions, so a command whose description happens
+ * to carry the letters still appears, but never ahead of the one actually
+ * named.
+ */
+export const slashAutocompleteItems = (
   commands: readonly Command[],
   filter: string,
-): Array<{ id: string; label: string; description?: string }> => {
-  const lowerFilter = filter.toLowerCase()
-  const hasFilter = lowerFilter.length > 0
-  const items: Array<{ id: string; label: string; description?: string }> = []
+): ReadonlyArray<AutocompleteItem> => {
+  const items: Array<AutocompleteItem> = []
   for (const command of commands) {
     const slash = Option.fromNullishOr(command.slash)
     if (Option.isNone(slash)) continue
-    if (
-      !hasFilter ||
-      slash.value.toLowerCase().includes(lowerFilter) ||
-      command.title.toLowerCase().includes(lowerFilter)
-    ) {
-      items.push({
-        id: slash.value,
-        label: `/${slash.value}`,
-        description: command.description ?? command.title,
-      })
-    }
-    if (hasFilter) {
-      for (const alias of command.aliases ?? []) {
-        if (alias.toLowerCase().includes(lowerFilter)) {
-          items.push({
-            id: alias,
-            label: `/${alias}`,
-            description: command.description ?? command.title,
-          })
-        }
-      }
+    const description = command.description ?? command.title
+    items.push({ id: slash.value, label: `/${slash.value}`, description })
+    for (const alias of command.aliases ?? []) {
+      items.push({ id: alias, label: `/${alias}`, description })
     }
   }
-  return items
+  return rankAutocompleteItems(items, filter)
 }
 
 const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] => [

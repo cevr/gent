@@ -23,6 +23,7 @@ import { ClientTransport } from "../client-transport"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils/truncate"
+import { rankAutocompleteItems } from "../../components/autocomplete-ranking"
 
 const builtinConnection = defineClientExtension("@gent/connection", {
   setup: Effect.succeed(
@@ -46,18 +47,23 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
     autocompleteContribution({
       prefix: "$",
       title: "Skills",
+      // Skills were filtered by a plain substring test and left in whatever
+      // order the host returned them, so `$te` answered with the first skill
+      // whose name happened to contain those letters rather than the closest
+      // one. Ranking puts the nearest name first, which is also the completion
+      // the composer's ghost line offers.
       items: (filter: string) =>
         Effect.gen(function* () {
           const transport = yield* ClientTransport
           const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
-          const lowerFilter = filter.toLowerCase()
-          return skills
-            .filter((s) => s.name.toLowerCase().includes(lowerFilter))
-            .map((s) => ({
+          return rankAutocompleteItems(
+            skills.map((s) => ({
               id: s.name,
               label: s.name,
               description: truncate(s.description, 60),
-            }))
+            })),
+            filter,
+          )
         }),
       formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
     }),
