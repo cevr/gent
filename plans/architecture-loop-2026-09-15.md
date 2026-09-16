@@ -756,3 +756,21 @@ The clobber sequence, from `rm -f ~/.cache/gent/autocomplete-frecency.json`: `/t
 Derived ranking confirmed on the same store: `/t` returned `/tree /thread /think`, lifting the two picked commands above `/think`, which had sorted first on `/th` when nothing had been picked. Tab on `/tree` completed the draft to `/tree` and **did not** open the tree pane, so the `6d5279f7` split survives the frecency change.
 
 One pane-reading note worth keeping: the split pane is 23 columns, which truncated every capture mid-word and made popup rows unreadable. `herdr pane zoom --on` widened it to the full terminal and the rows resolved. Check the pane's own width before trusting a narrow capture — a truncated row is not a short row.
+
+## Durable picks, a floor under frecency, and a reordered status row (2026-09-16, `8400fd25`)
+
+Three asks in one batch, plus one the user raised mid-flight.
+
+**The write is atomic against other processes.** `writeFrecencyStore` replaced the file in place, so the single-permit gate from `316e494f` protected one TUI and nothing else: a second `gent` sharing a home could still interleave. Writes now land on a pid-named temp file and `rename` onto the target. The pid is in the name because two processes sharing one temp path would corrupt each other rather than merely race.
+
+**What I could not prove, stated rather than papered over.** I wrote a test asserting a reader never observes a half-written file, and it passed with the fix reverted — so it proved nothing. A direct probe settled why: 20,000 concurrent reads against 200 overwrites of a megabyte store produced **zero** torn reads, because Bun's `write` is not observably partial to a same-process reader. The test was deleted rather than kept for the look of coverage, and the module comment now carries the justification instead: `rename(2)` is atomic against readers in _other_ processes, which is the case the in-process semaphore cannot reach. Two tests that do discriminate were kept — the temp file never survives a write, and a pick written behind this process's back is folded rather than clobbered.
+
+**Frecency now has a floor at three characters** (`FRECENCY_MIN_FILTER`). At one or two characters the matcher separates rows by hundredths of a point — `$t` splits `tdd` from `test` by 0.08 — so a single past pick decided the row under the cursor for a filter naming almost nothing, and the ghost line offered it. Below the floor rows rank exactly as they did before frecency existed. This deliberately gives back the short-filter tie-break that frecency was introduced to fix; the user chose that trade.
+
+Five existing tests asserted the superseded contract and were rewritten, not relaxed: four proved the seam using a one-character filter, which the floor now forbids, so they moved to three characters where the seam is still real. A new case pins the floor itself — fifty picks of `test` still leave `$t` answering `tdd`.
+
+**`/frecency-reset` forgets every pick**, on disk and in memory, inside the write gate so a concurrent pick cannot re-create what was just removed. It removes the file rather than writing an empty store, keeping "never picked" and "picked then cleared" the same state.
+
+**The status row reads phase, cwd, model, effort, context, cost.** Cost moved out of the top-left group to the far end, effort moved ahead of the context gauge to sit beside the model name, and the cwd came out from behind `props.debugMode` — several concurrent sessions were otherwise indistinguishable.
+
+Four deletion probes, each run against its own fix: the floor removed → 1 fail; effort-before-ctx reverted → 2 fail; the reset's snapshot clear removed → 1 fail; the atomic write reverted → **0 fail**, which is what condemned that test. Gate `GATE EXIT 0` on the rift and again on main.
