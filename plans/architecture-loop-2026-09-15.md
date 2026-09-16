@@ -656,3 +656,39 @@ Binary rebuilt 23:49 from gated main at `370c3ed4`, `GATE EXIT 0` sole occurrenc
 **Ordering was verified against the data, not by eye.** The picker showed 103 models — more providers are authed on this machine than the agent assumed when it predicted a 14-model Anthropic-only list. Head of list: GPT-5.6 Luna, GPT-5.6, GPT-5.6 Terra (all `2026-07-09`), then Claude Sonnet 5 (`2026-06-29`). Descending, confirmed by reading the cached `releaseDate` for those exact ids. The gateway-prefixed `2026-09-15` entries that top the raw payload are correctly absent, since those providers are not wired. Ties are stable rather than ordered — `Claude Opus 4.5` and `Claude Opus 4.5 (latest)` share `2025-11-24` — which the comparator's `if (l === r) return 0` intends.
 
 The picker does not render dates, so the order is implicit to a user reading it.
+
+## Tab ran commands instead of completing them (2026-09-16, `6d5279f7`)
+
+**A regression I shipped at `370c3ed4` and signed off with a pane check that could not see it.** Caught on the next pane check, not by the gate.
+
+`370c3ed4` put the slash-dispatch branch inside `handleAutocompleteSelect`. Tab and Enter share that exact callback: `autocomplete-popup.tsx:167-174` (Tab's `extraKeys`) and `:175` (Enter's `onSelect`) both call `props.onSelect(item.id)`, both wired to `ctx.handleAutocompleteSelect` at `composer.tsx:158`. So Tab inherited dispatch and there was no code path by which it could complete-without-running. Live proof: `/ag` + Tab executed `/fork` and printed `No messages to fork`, leaving the composer empty.
+
+The loss was real, not cosmetic. Tab-completes is how a reader builds `/model sonnet` — complete the name, then type the argument. A Tab that dispatches leaves no way to reach an argument at all.
+
+**Why my earlier check missed it.** I typed `/ag` + Tab on the `370c3ed4` binary and recorded Tab as unchanged. The selected row happened to be `/agents`, so dispatching it looked exactly like completing-then-running. The check was real; it could not discriminate. The agent that wrote `370c3ed4` reported "Tab behaviour unchanged" and cited the correct file — it read the lines it quoted but did not follow the callback into the branch it had just added one screen above.
+
+**The fix is a second prop, not a boolean parameter on one callback.** `AutocompletePopupProps` gained `onComplete` beside `onSelect`. The popup is the last place in the chain that still knows which key arrived — `extraKeys` fires only for Tab — so that is where the two intents part company. Behind the seam, `use-composer-controller.ts` keeps one insert core, `completeAutocomplete(value, dispatch)`, with two named entry points; the boolean is private to the module and no key name travels downstream. Deletion test: rewiring Tab back to `props.onSelect` fails 4 tests, so the prop is load-bearing.
+
+The dispatch guard now reads `dispatch && type === "/" && Option.isNone(formatInsertion) && beforeTrigger.length === 0 && isSlashCommandName(...)`, so the `@` and `formatInsertion` paths are untouched on both keys.
+
+Probes: baseline 9 pass / 0 fail across the two neighbour files; with the fix 13 pass / 0 fail; Tab rewired to `props.onSelect` (the exact pre-fix wiring) 9 pass / **4 fail**. The fifth new test, `inserts a file reference on Tab`, correctly still passes under the break — `@` never dispatched, so the regression cannot reach it. That is the "do not regress `@`" constraint holding, not a coverage gap.
+
+One deliberate change beyond the ask: the popup footer read `Enter Select`, which is now false. It reads `↑↓ Navigate   Enter Run   Tab Complete   Esc Close` (narrow: `↑↓ Move · ↵ Run · ⇥ Complete · Esc`). The first gate run was `GATE EXIT 1` on `composer-render.test.tsx:162`, which asserted the old label; the assertion was updated rather than the footer reverted, because the footer is where a reader learns the two keys differ.
+
+**A row-ordering fact that made the bug visible.** `slashAutocompleteItems` (`session-command-registry.ts:41-66`) does no relevance sorting — unlike the command palette, it walks `commands` in registration order and keeps anything matching slash name **or title**. Under filter `ag`, "Fork from Message" and "Manage API Keys" both match, so `/fork` and `/auth` precede `/agents`. That is why Tab ran `/fork`.
+
+## Pane receipts, Tab split (2026-09-16, `wZ:p18`)
+
+Binary rebuilt 00:34 from gated main at `6d5279f7`, `GATE EXIT 0`. Seven checks, all PASS.
+
+`/ag` + Tab → composer reads `/fork `, nothing runs. `/model` + Tab → composer reads `/model `, no picker; typing `sonnet` + Enter then switches the model — the destroyed affordance, restored. `/agents` + one Enter → pane opens. `/mod` + one Enter → Model picker opens, 103 rows, still ordered newest-first (GPT-5.6 Luna `2026-07-09` → Claude Sonnet 5 `2026-06-29`). `/xyz` + one Enter → `Unknown command: /xyz`, composer clears. `@gam` + Tab and `@gam` + Enter → both insert `@gamut.ts` and neither submits. Footer renders `↑↓ Navigate   Enter Run   Tab Complete   Esc Close`.
+
+**Two lessons about reading a pane, both of which produced a false reading this session.**
+
+The popup marks its selected row with `fg: theme.primary` plus `bold` and **no marker glyph** (`autocomplete-popup.tsx:98-119`), unlike `/model` and `/agents`, which draw `●`/`›`. `herdr pane read` strips color, so two captures across an arrow press are byte-identical and the selection appears frozen. It is not: reading with `--format ansi` showed the selected row at `238;238;238` against `208;208;208` for the rest, moving from `/fork` to `/think` on one Down. **A capture that cannot witness the thing under test is not evidence of absence.**
+
+Separately, a `--lines 6` window over a tall open picker returned an empty capture, which reads as "nothing happened" and is indistinguishable from a real failure. Re-run at `--lines 20` showed the picker open and correct. Size the window to the surface, and re-run an empty capture before believing it.
+
+## Open, not oversight (2026-09-16)
+
+**Cmd/Meta+Enter over an open popup now submits**, where before it silently did nothing. `5d39e8a7` removed two guards from `handleTextareaKeyDown`: the interject branch's own `Option.isSome(autocompleteOption())` bail and a separate blanket swallow below it. Nothing binds Cmd+Enter to a row — `SelectList` claims plain `return`, never the meta variant — so a Cmd+Enter reaching the composer is one no popup was going to consume, and the old bail made interject a dead key whenever a `/` popup happened to be open. The edge worth naming: `/mod` + Cmd+Enter now submits the raw draft and reports `Unknown command: /mod` rather than resolving to `/model`. Untested either way, left for the user to decide.
