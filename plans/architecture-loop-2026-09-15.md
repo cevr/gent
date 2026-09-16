@@ -816,3 +816,62 @@ A rebuilt message therefore broke the committed prefix, `requestReplay` cleared 
 The first regression test repeated the same error in a new shape. It called `transcriptFingerprint` directly, so it passed with the call site returned to the whole-object encode — green against the bug it was written for. The test that ships drives the component: it commits an item, hands the transcript the same messages rebuilt in the other key order, and asserts the committed rows do not grow. Reverted, it fails 4 → 8, the rows written a second time.
 
 Gate `GATE EXIT 0` on the rift and again on main.
+
+## A thread is a column, not a walk (2026-09-16, `88db927c`)
+
+The thread pane showed the parent line only, so a session that handed off twice
+showed one of its two children and the sibling work was invisible from inside
+the thread it belonged to. The first fix walked `parentSessionId` to the root
+and descended the tree. The user then asked that handoffs be marked "so legit
+forks or `/btw` doesn't pollute the thread", and I recommended deriving that at
+read time from the spawn receipt: `admitChildSession` files an `agent.start`
+row naming its child, a compaction handoff files none, so a `LEFT JOIN` with
+`WHERE receipt IS NULL` separates them with no new state.
+
+**That recommendation was wrong, and the user's "thread_id? maybe idk" was
+right.** `parent_session_id` carries two meanings — "continued from" and
+"spawned by" — and the receipt separates them only from the perspective of the
+thread being asked about. A delegate that later compacts asks for its own
+thread, climbs `parent_session_id` into its parent's tree, and is then filtered
+out of that tree by its own receipt: it gets back a thread it is not in. I had
+written that exact case as the third storage test and asserted `["root"]` as
+correct. The bug was encoded as an expectation, which is why the derivation
+looked green.
+
+A column answers both halves. A handoff inherits the parent's thread; every
+other create says nothing and storage roots a new thread at the session itself.
+It is barely state: `createSession` is the only `INSERT INTO sessions`, so
+there is one writer, and the value is derived once at write time — when the
+writer already knows which kind of child it is making — instead of on every
+read. The read collapsed from a two-stage recursive CTE plus a `json_extract`
+anti-join to one indexed lookup.
+
+The receipt stays the discriminator; it moved to the one place that does not
+need to infer it. Migration 019 still uses it, correctly, for the one-time
+backfill: an existing session is a spawn exactly when a receipt names it, and
+everything else inherits the nearest non-spawn ancestor's thread. Probed
+out-of-band against a rebuilt pre-019 schema — `root/handoff1/handoff2 → root`,
+`delegate/delegate-handoff → delegate`.
+
+`threadChain` lost its tree walk rather than keeping a client-side copy of the
+rule. The walk is not merely redundant now, it is wrong: a spawn's own handoff
+shares no parent link with its thread's root, so a DFS would drop a row the
+server correctly returned.
+
+Deletion probe: with the write-time distinction removed, so that every child
+inherits its parent's thread, the two tests that encode it fail — the spawn
+reappears in the thread it was launched from, and the spawn's own thread gains
+`"root"`. The other two stay green, which is right; they do not exercise it.
+
+Two failures the targeted runs missed and the gate caught: the pinned migration
+list needed `session_thread` in **both** assertions, since the test asserts the
+same set before and after a reboot, and `ADD COLUMN` needed
+`ignoreAlreadyAppliedSqliteError` like `003` — the schema-rewind test deletes
+migrations `>= 11` and replays them against a database that already has the
+column. A misplaced `yield* RelationshipStorage`, anchored into
+`getSessionSnapshot` instead of the handler factory, produced sixteen
+`TS377030` errors in six files that never mention it; `rpc-handlers.ts` says
+why in a comment above its own yields — `RpcGroup.toLayer` erases handler
+residual requirements, so a Tag yielded anywhere else degrades the layer.
+
+Gate `GATE EXIT 0` on the rift and again on main.
