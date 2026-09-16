@@ -875,3 +875,56 @@ why in a comment above its own yields — `RpcGroup.toLayer` erases handler
 residual requirements, so a Tag yielded anywhere else degrades the layer.
 
 Gate `GATE EXIT 0` on the rift and again on main.
+
+## One verb to come back, and side work you can see (2026-09-16, `cff6c392`)
+
+The thread column shipped in `88db927c` was verified by its tests and by the
+gate. This entry is the live half, in a real terminal, plus the two CLI changes
+that came out of running it.
+
+**The thread, measured against the real database.** A delegate run, a `/btw`
+side question, and a forced `/handoff`, in one session in the gamut pane. The
+delegate's child was written `thread_id = id` with a parent — a spawn, by the
+new write path, not the backfill. `/btw` left no row at all: it is private and
+its session is deleted. The handoff child was written `thread_id != id`, and
+the thread went from one member to two. `/thread` agreed with the query at
+every step: `Thread · 1 session` before the handoff, `Thread · 2 sessions`
+after, with the spawn absent from both.
+
+Migration 019 also ran for real, against 571 existing sessions: 21 spawns, 301
+handoffs, the rest roots. Handoffs outnumbering spawns fifteen to one is the
+right shape — compaction is routine, delegation is occasional — and is evidence
+the receipt backfill did not mistake chains for side work.
+
+**`-c` could only say "the last one".** The session id is the only handle on a
+conversation once the TUI exits, and nothing printed it. Exiting now prints
+`to resume: gent resume <id>`; `gent resume <id>` opens that session, and
+`gent resume` with no argument opens the last one in this directory. That is
+the whole of what `--continue` meant, so the flag retires. `gent` and
+`gent resume` differ only in how they name the session to open, so the entry
+body became `runGent` and both commands call it.
+
+Printing the line needs `process.stdout` after `renderer.destroy()` — outside
+Effect by construction, since the renderer is gone. `noGlobals` is disabled on
+that one line with the reason, the way `main.tsx` already does for the CLI
+teardown's `process.exit`.
+
+**The picker marks side work.** The sessions palette nests children under
+parents, so a delegate run and a `/btw` sat in the list looking like
+continuations. A session whose thread is itself while still having a parent is
+side work, so those rows now carry "side thread" in the description column. It
+is a pure function of fields the row already has; no new query.
+
+Deletion probe: remove `description: spawnLabel` from the row and the test
+fails with `Received: "    - Delegate"` — no marker. The assertion reads the
+rendered row, not `isSpawn`, so deleting the wiring fails it. A unit test on
+the predicate alone would have passed, which is the vacuous shape this ledger
+recorded two entries ago.
+
+Two things the pane taught that the gate could not: a double-tap Esc needs both
+presses inside one second, so sending them in separate calls a second apart
+only resets the timer and never quits; and the resume line printed the handoff
+child after a handoff and the root after resuming the root — correct both
+times, because it names the session that was live, not the thread.
+
+Gate `GATE EXIT 0` on the rift and again on main.
