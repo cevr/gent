@@ -6,6 +6,7 @@ import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
 import { findUnadmittedChildSessionWriters } from "./core-child-session-depth"
+import { findIdentityEncodes } from "./core-identity-encode"
 import {
   collectExportFacts,
   findPackageSurfaceFindings,
@@ -95,6 +96,7 @@ const program = Effect.gen(function* () {
         ...findAliasTestLayers(file, text),
         ...findE2eFixtureImportFindings(file, text),
         ...findUnadmittedChildSessionWriters(file, text),
+        ...findIdentityEncodes(file, text),
       ]) {
         pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
       }

@@ -18,7 +18,8 @@ import { createSignal } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { SyntaxStyle } from "@opentui/core"
 import type { CliRenderer, CliRendererExternalOutputEvent } from "@opentui/core"
-import { NativeTranscript, transcriptFingerprint } from "../src/components/native-transcript"
+import { NativeTranscript } from "../src/components/native-transcript"
+import { transcriptFingerprint } from "../src/components/transcript-fingerprint"
 import {
   MessageList,
   type Message,

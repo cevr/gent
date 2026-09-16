@@ -17,9 +17,10 @@ import type { ScrollbackSurface, ScrollBoxRenderable } from "@opentui/core"
 import { Effect, Fiber, Option, Predicate, Schema } from "effect"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useScopedKeyboard } from "../keyboard/context"
-import type { AssistantSegment, SessionItem, ToolCall } from "./message-list"
+import type { SessionItem } from "./message-list"
 import type { DisclosureLevel } from "../routes/session-ui-state"
 import { captureTranscriptDisplay, projectTranscriptDisplay } from "./transcript-display"
+import { transcriptFingerprint } from "./transcript-fingerprint"
 
 interface NativeTranscriptProps {
   items: SessionItem[]
@@ -31,83 +32,6 @@ interface NativeTranscriptProps {
   overlayOpen: boolean
   renderItems: (items: SessionItem[], streaming: boolean) => JSX.Element
   children: JSX.Element
-}
-
-const encodeFingerprint = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
-
-const toolFingerprint = (call: ToolCall): ReadonlyArray<unknown> => [
-  call.id,
-  call.toolName,
-  call.status,
-  call.summary,
-  call.output,
-  call.durationMs,
-  (call.operations ?? []).map(toolFingerprint),
-]
-
-const segmentFingerprint = (segment: AssistantSegment): ReadonlyArray<unknown> => {
-  if (segment._tag === "tool-call") return [segment._tag, toolFingerprint(segment.toolCall)]
-  if (segment._tag === "image") return [segment._tag, segment.image.mediaType]
-  return [segment._tag, segment.content]
-}
-
-const isMessageItem = Predicate.or(
-  Predicate.isTagged("regular-message"),
-  Predicate.isTagged("interjection-message"),
-)
-
-/**
- * What a committed item looks like on screen, as a value that does not depend
- * on how the item was built.
- *
- * The transcript compares these position by position to decide what already
- * reached scrollback. The feed constructs one message two ways — the streaming
- * path writes `_tag` first and omits `segments` and `metadata`, the rebuild
- * path spreads the body and appends `_tag` last — so encoding the object
- * itself gave the same message two different strings. A rebuild then broke the
- * committed prefix, forced a replay, and cleared the terminal's saved lines.
- * Naming the drawn fields in a fixed order keeps a rebuild silent while real
- * edits, new text, and tool results still change the value.
- */
-export const transcriptFingerprint = (item: SessionItem): string => {
-  if (isMessageItem(item))
-    return encodeFingerprint([
-      item._tag,
-      item.id,
-      item.role,
-      item.content,
-      item.reasoning,
-      item.images.length,
-      item.createdAt,
-      item.pendingMode,
-      (item.toolCalls ?? []).map(toolFingerprint),
-      (item.segments ?? []).map(segmentFingerprint),
-      item.metadata?.customType,
-      item.metadata?.hidden,
-    ])
-  if (item._tag === "turn-ended")
-    return encodeFingerprint([
-      item._tag,
-      item.createdAt,
-      item.seq,
-      item.durationSeconds,
-      item.steps.count,
-      item.steps.toolCalls,
-      item.steps.costUsd,
-    ])
-  if (item._tag === "error")
-    return encodeFingerprint([item._tag, item.createdAt, item.seq, item.error])
-  if (item._tag === "retrying")
-    return encodeFingerprint([
-      item._tag,
-      item.createdAt,
-      item.seq,
-      item.attempt,
-      item.maxAttempts,
-      item.delayMs,
-      item.resolved,
-    ])
-  return encodeFingerprint([item._tag, item.createdAt, item.seq])
 }
 
 /** The surface did not settle before its timeout; the rows still commit as rendered. */

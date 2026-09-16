@@ -145,6 +145,57 @@ const buildSegments = (
   )
 }
 
+/**
+ * The one place a feed message is built.
+ *
+ * Every message the transcript compares for identity is spelled here, so two
+ * writers cannot produce the same message with different key order. They did:
+ * the streaming placeholder wrote `_tag` first and carried no `segments`, the
+ * rebuild spread the body and appended `_tag` last, and a fingerprint that
+ * encoded the object saw two different messages. The fingerprint no longer
+ * reads key order, and this factory keeps the second half of that guarantee —
+ * one spelling, so a reader comparing two feed messages compares like with
+ * like.
+ */
+const feedMessage = (fields: {
+  readonly _tag: Message["_tag"]
+  readonly id: string
+  readonly role: Message["role"]
+  readonly content: string
+  readonly reasoning: string
+  readonly images: Message["images"]
+  readonly createdAt: number
+  readonly toolCalls: Message["toolCalls"]
+  readonly segments: Message["segments"]
+  readonly metadata: Message["metadata"]
+}): Message => {
+  if (fields._tag === "interjection-message")
+    return {
+      _tag: "interjection-message",
+      id: fields.id,
+      role: "user",
+      content: fields.content,
+      reasoning: fields.reasoning,
+      images: fields.images,
+      createdAt: fields.createdAt,
+      toolCalls: fields.toolCalls,
+      segments: fields.segments,
+      metadata: fields.metadata,
+    }
+  return {
+    _tag: "regular-message",
+    id: fields.id,
+    role: fields.role,
+    content: fields.content,
+    reasoning: fields.reasoning,
+    images: fields.images,
+    createdAt: fields.createdAt,
+    toolCalls: fields.toolCalls,
+    segments: fields.segments,
+    metadata: fields.metadata,
+  }
+}
+
 const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
@@ -155,7 +206,21 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
     let segments = Option.none<AssistantSegment[]>()
     if (m.role === "assistant")
       segments = Option.some(buildSegments(m.segments, m.toolInteractions))
-    const message = {
+    if (m._tag === "interjection")
+      return feedMessage({
+        _tag: "interjection-message",
+        id: m.id,
+        role: "user",
+        content: extractText(m.parts),
+        reasoning: extractReasoning(m.parts),
+        images: extractImages(m.parts),
+        createdAt: m.createdAt.getTime(),
+        toolCalls: Option.getOrUndefined(toolCallsOption),
+        segments: Option.getOrUndefined(segments),
+        metadata: m.metadata,
+      })
+    return feedMessage({
+      _tag: "regular-message",
       id: m.id,
       role: m.role,
       content: extractText(m.parts),
@@ -165,11 +230,7 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       toolCalls: Option.getOrUndefined(toolCallsOption),
       segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
-    }
-    if (m._tag === "interjection") {
-      return { ...message, _tag: "interjection-message", role: "user" }
-    }
-    return { ...message, _tag: "regular-message" }
+    })
   })
 }
 
@@ -191,17 +252,6 @@ const upsertReceivedMessage = (
     }),
   )
 }
-
-const createAssistantMessage = (content: string, id: string, createdAt: number): Message => ({
-  _tag: "regular-message",
-  id,
-  role: "assistant",
-  content,
-  reasoning: "",
-  images: [],
-  createdAt,
-  toolCalls: Option.getOrUndefined(Option.none<ToolCall[]>()),
-})
 
 const resolveRetryingEvents = (setStore: SetStoreFunction<SessionFeedStore>) => {
   setStore(
@@ -261,9 +311,20 @@ const ensureAssistantMessage = (
         return
       }
 
-      const msg = createAssistantMessage(content, id, createdAt)
-      msg.segments = [{ _tag: "text", content }]
-      draft.messages.push(msg)
+      draft.messages.push(
+        feedMessage({
+          _tag: "regular-message",
+          id,
+          role: "assistant",
+          content,
+          reasoning: "",
+          images: [],
+          createdAt,
+          toolCalls: Option.getOrUndefined(Option.none<ToolCall[]>()),
+          segments: [{ _tag: "text", content }],
+          metadata: Option.getOrUndefined(Option.none<Message["metadata"]>()),
+        }),
+      )
     }),
   )
 }

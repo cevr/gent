@@ -15,7 +15,7 @@
  * @module
  */
 
-import { DateTime, Effect, Option, Schema } from "effect"
+import { DateTime, Effect, Option, Predicate, Schema } from "effect"
 import { createSignal, Show } from "solid-js"
 import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
 import { ChromePanel } from "../../components/chrome-panel"
@@ -113,26 +113,70 @@ export const sessionLabel = (session: Session): string =>
   )
 
 /**
- * The sessions a thread runs through, root first. Each session names the one
- * it continued from, so the chain is the parent walk from the shell's
- * session; a session that is not listed ends it.
+ * The sessions a thread runs through, root first.
+ *
+ * A thread is an ancestry, not a line. Walking `parentSessionId` upward finds
+ * the sessions the shell's own session descends from, but a session that
+ * handed off twice has two children, and the walk showed only the one the
+ * reader happened to be sitting in — the sibling work was invisible from
+ * inside the thread it belongs to. So the walk finds the root, and the thread
+ * is every session under that root.
+ *
+ * Order is a depth-first walk from the root, children oldest first, which puts
+ * a parent immediately above the work it started and keeps each branch of the
+ * ancestry contiguous. A session whose parent is not listed is a root of its
+ * own and ends the walk upward.
  */
 export const threadChain = (
   sessions: ReadonlyArray<Session>,
   sessionId: SessionId,
 ): ReadonlyArray<Session> => {
   const byId = new Map(sessions.map((session) => [session.id, session]))
-  const chain: Array<Session> = []
-  const seen = new Set<string>()
-  let cursor = Option.fromNullishOr(byId.get(sessionId))
-  while (Option.isSome(cursor) && !seen.has(cursor.value.id)) {
-    seen.add(cursor.value.id)
-    chain.unshift(cursor.value)
+  const start = Option.fromNullishOr(byId.get(sessionId))
+  if (Option.isNone(start)) return []
+
+  // Up to the root: the furthest ancestor still present in the listing.
+  const climbed = new Set<string>()
+  let root = start.value
+  let cursor = Option.some(root)
+  while (Option.isSome(cursor) && !climbed.has(cursor.value.id)) {
+    climbed.add(cursor.value.id)
+    root = cursor.value
     cursor = Option.fromUndefinedOr(cursor.value.parentSessionId).pipe(
       Option.flatMap((id) => Option.fromNullishOr(byId.get(id))),
     )
   }
-  return chain
+
+  const noChildren: ReadonlyArray<Session> = []
+  const childrenOf = new Map<string, Array<Session>>()
+  for (const session of sessions) {
+    const parent = Option.fromUndefinedOr(session.parentSessionId)
+    if (Option.isNone(parent)) continue
+    if (!byId.has(parent.value)) continue
+    const existing = childrenOf.get(parent.value)
+    if (Predicate.isUndefined(existing)) {
+      childrenOf.set(parent.value, [session])
+      continue
+    }
+    existing.push(session)
+  }
+  for (const siblings of childrenOf.values())
+    siblings.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+
+  const thread: Array<Session> = []
+  const seen = new Set<string>()
+  const visit = (session: Session): void => {
+    if (seen.has(session.id)) return
+    seen.add(session.id)
+    thread.push(session)
+    for (const child of Option.getOrElse(
+      Option.fromNullishOr(childrenOf.get(session.id)),
+      () => noChildren,
+    ))
+      visit(child)
+  }
+  visit(root)
+  return thread
 }
 
 interface Cut {

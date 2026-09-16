@@ -1,7 +1,7 @@
-import { Option, Predicate, Schema } from "effect"
+import { Option, Predicate } from "effect"
 import type { AssistantSegment, Message, SessionItem } from "./message-list"
+import { segmentIdentity, toolIdentity } from "./transcript-fingerprint"
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const isMessage = Predicate.or(
   Predicate.isTagged("regular-message"),
   Predicate.isTagged("interjection-message"),
@@ -28,7 +28,7 @@ const itemKey = (item: SessionItem): string => {
 
 const segmentContent = (segment: AssistantSegment): string => {
   if (isTextSegment(segment)) return segment.content
-  return encode(segment)
+  return segmentIdentity(segment)
 }
 
 export function captureTranscriptDisplay(items: SessionItem[]): TranscriptDisplayBoundary {
@@ -40,7 +40,7 @@ export function captureTranscriptDisplay(items: SessionItem[]): TranscriptDispla
       reasoning: item.reasoning,
       imageCount: item.images.length,
       segments: (item.segments ?? []).map(segmentContent),
-      tools: new Map((item.toolCalls ?? []).map((tool) => [tool.id, encode(tool)])),
+      tools: new Map((item.toolCalls ?? []).map((tool) => [tool.id, toolIdentity(tool)])),
     })
   }
   return { items: new Set(items.map(itemKey)), messages }
@@ -63,7 +63,7 @@ function projectMessage(message: Message, boundary: MessageBoundary): Message {
     }
   }
   const toolCalls = Option.map(Option.fromNullishOr(message.toolCalls), (tools) =>
-    tools.filter((tool) => boundary.tools.get(tool.id) !== encode(tool)),
+    tools.filter((tool) => boundary.tools.get(tool.id) !== toolIdentity(tool)),
   )
   return {
     ...message,
