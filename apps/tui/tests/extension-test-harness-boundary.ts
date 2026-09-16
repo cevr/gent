@@ -26,6 +26,12 @@ export interface ClientExtensionHarnessOptions {
   readonly requestEffect?: () => Effect.Effect<unknown, Error>
   readonly requestReply?: unknown
   readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
+  /**
+   * Workspace the extension sees. Defaults to a shared `/tmp` pair, which is
+   * fine for a setup that only reads `cwd`; a test whose extension writes
+   * under `home` must supply its own temp directory, or runs share one file.
+   */
+  readonly workspace?: { readonly cwd: string; readonly home: string }
 }
 
 const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) => Deferred.await(deferred)
@@ -70,7 +76,10 @@ export const makeClientExtensionRuntime = (
     transport: Option.getOrElse(Option.fromUndefinedOr(opts.transport), () =>
       makeClientTestTransport(opts),
     ),
-    workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
+    workspace: Option.getOrElse(Option.fromUndefinedOr(opts.workspace), () => ({
+      cwd: "/tmp/test-cwd",
+      home: "/tmp/test-home",
+    })),
     shell: {
       run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
