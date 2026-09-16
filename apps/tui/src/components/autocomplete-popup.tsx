@@ -30,7 +30,13 @@ export type { AutocompleteState }
 
 export interface AutocompletePopupProps {
   state: AutocompleteState
+  /**
+   * Enter on the selected row. A slash command name completed this way runs;
+   * see the composer controller for why the two keys differ.
+   */
   onSelect: (value: string) => void
+  /** Tab on the selected row: completes the text and stops there. */
+  onComplete: (value: string) => void
   onClose: () => void
 }
 
@@ -88,8 +94,8 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const labelWidth = () => Math.max(8, Math.min(24, Math.floor(dimensions().width * 0.28)))
 
   const footerHint = () => {
-    if (dimensions().width < 44) return "↑↓ Move · ↵ Select · Esc Close"
-    return "↑↓ Navigate     Enter Select     Esc Close"
+    if (dimensions().width < 44) return "↑↓ Move · ↵ Run · ⇥ Complete · Esc"
+    return "↑↓ Navigate   Enter Run   Tab Complete   Esc Close"
   }
 
   const rows = (): ReadonlyArray<SelectListRow<AutocompleteItem>> =>
@@ -165,10 +171,13 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         sticky={() => Option.some(0)}
         empty={emptyRow}
         extraKeys={(event, selected) => {
+          // Tab completes without running. The popup is the last place that
+          // still knows which key arrived, so it is where the two intents part
+          // company; downstream both look like "the reader chose this row".
           if (event.name !== "tab") return false
           Option.match(selected, {
             onNone: () => {},
-            onSome: (item) => props.onSelect(item.id),
+            onSome: (item) => props.onComplete(item.id),
           })
           return true
         }}

@@ -3,6 +3,11 @@
  * The autocomplete popup under the composer: its rows come from extension
  * contributions, its cursor is the shared list's, and its keys are the
  * composer's whenever it has nothing to select.
+ *
+ * Enter and tab act on the same row through different props. The popup is the
+ * last place that still knows which key arrived, so it reports them apart:
+ * `onSelect` for enter, `onComplete` for tab. Collapsing the two is what made
+ * tab run commands instead of completing them.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
@@ -39,6 +44,7 @@ describe("AutocompletePopup renderer", () => {
   it.live("wraps the cursor at both ends through the shared list", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
+      const completed: Array<string> = []
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
@@ -47,6 +53,7 @@ describe("AutocompletePopup renderer", () => {
               <AutocompletePopup
                 state={{ type: "/", filter: "", triggerPos: 0 }}
                 onSelect={(value) => picked.push(value)}
+                onComplete={(value) => completed.push(value)}
                 onClose={() => {}}
               />
             </>
@@ -62,11 +69,13 @@ describe("AutocompletePopup renderer", () => {
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       expect(picked).toEqual(["gamma"])
-      // Down from the last row lands on the first; tab selects like enter.
+      // Down from the last row lands on the first. Tab acts on the same row as
+      // enter would, and reports through the completion prop instead.
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressTab()
-      expect(picked).toEqual(["gamma", "alpha"])
+      expect(completed).toEqual(["alpha"])
+      expect(picked).toEqual(["gamma"])
     }),
   )
 
@@ -84,6 +93,7 @@ describe("AutocompletePopup renderer", () => {
               <AutocompletePopup
                 state={{ type: "/", filter: "zzz", triggerPos: 0 }}
                 onSelect={(value) => picked.push(value)}
+                onComplete={(value) => picked.push(value)}
                 onClose={() => {
                   closed += 1
                 }}

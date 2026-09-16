@@ -16,6 +16,11 @@
  * and drop it, so the first press did nothing and only a second one reported
  * `Unknown command: /xyz`. The popup declines a key it cannot act on, so the
  * draft submits and the error surfaces on the first press.
+ *
+ * Tab does not run anything. It is the key that builds `/model sonnet`:
+ * complete the name, keep the caret, type the argument. Enter and tab reach
+ * the popup as separate props for exactly that reason — when they shared one
+ * callback, tab dispatched the first matching row, so `/ag` + Tab ran `/fork`.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { createSignal, onMount, type JSX } from "solid-js"
@@ -50,6 +55,23 @@ function RegisterCommands() {
   const command = useCommand()
   onMount(() => {
     command.register([
+      // `slashAutocompleteItems` keeps registration order — it does no
+      // relevance sorting — so row 0 under a filter is the earliest-registered
+      // match. These two carry `ag` in their titles, not their slash names,
+      // and live they are registered before `/agents`. That is why `/ag`
+      // preselects `/fork`, and why dispatching row 0 ran the wrong command.
+      {
+        id: "message.fork",
+        title: "Fork from Message",
+        slash: "fork",
+        onSelect: () => {},
+      },
+      {
+        id: "auth.manage",
+        title: "Manage API Keys",
+        slash: "auth",
+        onSelect: () => {},
+      },
       {
         id: "agents.view",
         title: "Agents",
@@ -84,12 +106,16 @@ function Contribute() {
     {
       prefix: "/",
       title: "Commands",
+      // The live popup matches a slash name or its title, which is why `/ag`
+      // lists `/fork` ("Fork from Message") and `/auth` ("Manage API Keys")
+      // ahead of `/agents`.
       items: (filter: string) =>
         command.commands().flatMap((c) =>
           Option.match(Option.fromNullishOr(c.slash), {
             onNone: () => [],
             onSome: (slash) => {
-              if (!slash.includes(filter)) return []
+              const haystack = `${slash} ${c.title}`.toLowerCase()
+              if (!haystack.includes(filter.toLowerCase())) return []
               return [{ id: slash, label: `/${slash}` }]
             },
           }),
@@ -188,6 +214,36 @@ const typeThenEnter = (
       waitForRenderedFrame(setup, (frame) => frame.includes(expected), expected),
     )
     setup.mockInput.pressEnter()
+    yield* Effect.promise(() => setup.renderOnce())
+    return setup
+  })
+
+/** Type `text`, wait for the popup to list `expected`, then press Tab once. */
+const typeThenTab = (
+  dispatched: Array<Dispatched>,
+  text: string,
+  expected: string,
+): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>> =>
+  Effect.gen(function* () {
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <TestComposer
+            onSlashCommand={(cmd, args) => {
+              dispatched.push({ cmd, args })
+            }}
+          >
+            <Composer.Autocomplete />
+          </TestComposer>
+        ),
+        { width: 80, height: 24 },
+      ),
+    )
+    yield* Effect.promise(() => setup.mockInput.typeText(text))
+    yield* Effect.promise(() =>
+      waitForRenderedFrame(setup, (frame) => frame.includes(expected), expected),
+    )
+    setup.mockInput.pressTab()
     yield* Effect.promise(() => setup.renderOnce())
     return setup
   })
@@ -296,6 +352,62 @@ describe("Composer slash Enter", () => {
       // which dispatches `/model` — not submit the literal text `/mod`.
       yield* typeThenEnter(dispatched, "/mod", "/model")
       expect(dispatched).toEqual([{ cmd: "model", args: "" }])
+    }),
+  )
+
+  it.live("completes a command name on Tab without running it", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      const setup = yield* typeThenTab(dispatched, "/agents", "/agents")
+      // Tab is the completion key. Nothing ran.
+      expect(dispatched).toEqual([])
+      // The name is in the draft with its trailing space, ready for an argument.
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("/agents "), "completed draft"),
+      )
+    }),
+  )
+
+  it.live("completes the selected row, not the first match, on Tab", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      // The regression: `/ag` matches `/fork` and `/auth` by title before it
+      // matches `/agents` by name, and the first row is preselected. Tab used
+      // to dispatch that row, so `/ag` + Tab ran `/fork`. Tab must run nothing
+      // whatever sits under the cursor.
+      const setup = yield* typeThenTab(dispatched, "/ag", "/fork")
+      expect(dispatched).toEqual([])
+      // The draft holds a completed name, so the composer is not left empty.
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("/fork "), "completed draft"),
+      )
+    }),
+  )
+
+  it.live("leaves an argument typeable after Tab completes the name", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      // The affordance Tab exists for: complete `/model`, then type `sonnet`,
+      // then submit the pair. A Tab that dispatched would never reach the arg.
+      const setup = yield* typeThenTab(dispatched, "/model", "/model")
+      expect(dispatched).toEqual([])
+      yield* Effect.promise(() => setup.mockInput.typeText("sonnet"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(dispatched).toEqual([{ cmd: "model", args: "sonnet" }])
+    }),
+  )
+
+  it.live("inserts a file reference on Tab", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      // The `@` path never dispatched and must not start now.
+      const setup = yield* typeThenTab(dispatched, "@notes", "notes.ts")
+      expect(dispatched).toEqual([])
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted"),
+      )
     }),
   )
 })

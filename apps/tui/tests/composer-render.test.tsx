@@ -159,7 +159,10 @@ describe("Composer renderer", () => {
       expect(frame).toContain("/clear")
       expect(frame).toContain("Clear messages")
       expect(frame).toContain("/sessions")
-      expect(frame).toContain("Enter Select")
+      // The footer names both keys because they do different things: enter
+      // runs the command it completes, tab only completes it.
+      expect(frame).toContain("Enter Run")
+      expect(frame).toContain("Tab Complete")
       setup.renderer.destroy()
     }),
   )

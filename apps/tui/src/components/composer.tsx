@@ -17,6 +17,7 @@ interface ComposerContextValue {
   // eslint-disable-next-line effect/noNullish -- AutocompletePopup uses null for its closed Solid state.
   autocomplete: Accessor<AutocompleteState | null>
   handleAutocompleteSelect: (value: string) => void
+  handleAutocompleteComplete: (value: string) => void
   handleAutocompleteClose: () => void
 }
 
@@ -45,6 +46,7 @@ export function Composer(props: ComposerProps) {
   const contextValue: ComposerContextValue = {
     autocomplete: controller.autocomplete,
     handleAutocompleteSelect: controller.handleAutocompleteSelect,
+    handleAutocompleteComplete: controller.handleAutocompleteComplete,
     handleAutocompleteClose: controller.handleAutocompleteClose,
   }
 
@@ -156,6 +158,7 @@ Composer.Autocomplete = function ComposerAutocomplete() {
         <AutocompletePopup
           state={state()}
           onSelect={ctx.handleAutocompleteSelect}
+          onComplete={ctx.handleAutocompleteComplete}
           onClose={ctx.handleAutocompleteClose}
         />
       )}

@@ -78,7 +78,10 @@ export interface ComposerController {
   readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (result: ApprovalResult) => void
   readonly cancelInteraction: () => void
+  /** Enter on a row: completes, and dispatches when the row names a command. */
   readonly handleAutocompleteSelect: (value: string) => void
+  /** Tab on a row: completes only, never dispatches. */
+  readonly handleAutocompleteComplete: (value: string) => void
   readonly handleAutocompleteClose: () => void
 }
 
@@ -152,7 +155,22 @@ export function useComposerController(): ComposerController {
     if (Option.isSome(inputRef)) inputRef.value.focus()
   }
 
-  const handleAutocompleteSelect = (value: string) => {
+  /**
+   * Completes the open popup's row into the draft.
+   *
+   * Two keys reach this: enter and tab. They agree on everything the reader
+   * can see — the same row, the same text, the same trailing space — and
+   * disagree on one thing only, which is whether naming a slash command is
+   * also a reason to run it. `dispatch` is that disagreement, and it is the
+   * whole reason the two keys are not one function.
+   *
+   * Enter completes and runs, because a reader who pressed enter on `/agents`
+   * asked for the agents pane. Tab completes and stops, because tab is how a
+   * reader builds `/model sonnet`: it puts `/model ` in the draft and hands
+   * the caret back so the argument can be typed. A tab that dispatched would
+   * leave no way to reach an argument at all.
+   */
+  const completeAutocomplete = (value: string, dispatch: boolean) => {
     const state = autocompleteOption()
     if (Option.isNone(state) || Option.isNone(inputRef)) return
 
@@ -179,6 +197,7 @@ export function useComposerController(): ComposerController {
     // carried by the submit path instead. An extension that supplies
     // `formatInsertion` for `/` keeps its own insertion semantics.
     if (
+      dispatch &&
       state.value.type === "/" &&
       Option.isNone(formatInsertion) &&
       beforeTrigger.length === 0 &&
@@ -201,6 +220,14 @@ export function useComposerController(): ComposerController {
     sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }))
     applyTokenHighlights()
     focusTextarea()
+  }
+
+  const handleAutocompleteSelect = (value: string) => {
+    completeAutocomplete(value, true)
+  }
+
+  const handleAutocompleteComplete = (value: string) => {
+    completeAutocomplete(value, false)
   }
 
   const handleAutocompleteClose = () => {
@@ -591,6 +618,7 @@ export function useComposerController(): ComposerController {
       sc.dispatchComposer(ComposerEvent.cases.CancelInteraction.make({}))
     },
     handleAutocompleteSelect,
+    handleAutocompleteComplete,
     handleAutocompleteClose,
   }
 }
