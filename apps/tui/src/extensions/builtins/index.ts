@@ -1,6 +1,7 @@
 import type { AnyExtensionClientModule } from "../client-facets.js"
 
-import { Effect } from "effect"
+import { Clock, Effect, Option } from "effect"
+import type { FileSystem, Path } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { SkillsRpc } from "@gent/extensions/client.js"
 import builtinAgentsView from "./agents-view.client"
@@ -20,10 +21,17 @@ import {
   widgetContribution,
 } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
+import { ClientWorkspace } from "../client-services"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils/truncate"
 import { rankAutocompleteItems } from "../../components/autocomplete-ranking"
+import {
+  emptyFrecencyStore,
+  frecencyLookup,
+  recordPick,
+} from "../../components/autocomplete-frecency"
+import { readFrecencyStore, writeFrecencyStore } from "../../components/autocomplete-frecency-store"
 
 const builtinConnection = defineClientExtension("@gent/connection", {
   setup: Effect.succeed(
@@ -43,8 +51,15 @@ const builtinHandoff = defineClientExtension("@gent/handoff", {
 })
 
 const builtinSkills = defineClientExtension("@gent/skills-ui", {
-  setup: Effect.succeed(
-    autocompleteContribution({
+  setup: Effect.gen(function* () {
+    const workspace = yield* ClientWorkspace
+    // The store's reads and writes need `FileSystem` and `Path`. `onSelect`
+    // is a plain sync callback from the composer with no Effect context of
+    // its own, so the setup captures the services once and forks the write
+    // against them.
+    const storeServices = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
+    const forkStoreWrite = Effect.runForkWith(storeServices)
+    return autocompleteContribution({
       prefix: "$",
       title: "Skills",
       // Skills were filtered by a plain substring test and left in whatever
@@ -52,10 +67,19 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
       // whose name happened to contain those letters rather than the closest
       // one. Ranking puts the nearest name first, which is also the completion
       // the composer's ghost line offers.
+      // The store is re-read per request rather than cached in the setup. A
+      // popup opens on a keystroke and the file is a few KB, so the read is
+      // cheap; caching it would mean a pick made this session never affects
+      // ranking until the TUI restarts, which is the opposite of the point.
       items: (filter: string) =>
         Effect.gen(function* () {
           const transport = yield* ClientTransport
           const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
+          const store = yield* readFrecencyStore(workspace.home)
+          const lookup = frecencyLookup(
+            Option.getOrElse(store, () => emptyFrecencyStore()),
+            yield* Clock.currentTimeMillis,
+          )
           return rankAutocompleteItems(
             skills.map((s) => ({
               id: s.name,
@@ -63,11 +87,30 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
               description: truncate(s.description, 60),
             })),
             filter,
+            { prefix: "$", frecency: lookup },
           )
         }),
       formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
-    }),
-  ),
+      // Recording happens here rather than at the composer seam for `$`
+      // alone, because the skills popup is the only surface that knows a
+      // chosen row was a skill. The write is read-modify-write against the
+      // file so a pick from another surface in the same session is not lost.
+      onSelect: (id: string) => {
+        forkStoreWrite(
+          Effect.gen(function* () {
+            const store = yield* readFrecencyStore(workspace.home)
+            const next = recordPick(
+              Option.getOrElse(store, () => emptyFrecencyStore()),
+              "$",
+              id,
+              yield* Clock.currentTimeMillis,
+            )
+            yield* writeFrecencyStore(workspace.home, next)
+          }),
+        )
+      },
+    })
+  }),
 })
 
 // Builtins keep their precise `R` locally; the load membrane erases them in

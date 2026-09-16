@@ -39,6 +39,7 @@ import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
+import { useAutocompleteFrecency } from "../hooks/use-autocomplete-frecency"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
 import { useSessionShell } from "../session-shell"
 import { formatError } from "../utils/format-error"
@@ -168,6 +169,7 @@ export function createSessionController(props: {
     },
   }
   const history = usePromptHistory()
+  const frecency = useAutocompleteFrecency()
 
   const currentSessionName = (): string =>
     Option.getOrElse(
@@ -508,6 +510,8 @@ export function createSessionController(props: {
     command,
     ext,
     cast,
+    frecency: () => frecency.lookup(),
+    recordPick: (id: string) => frecency.record("/", id),
     openForkPicker,
     openModelPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" })),

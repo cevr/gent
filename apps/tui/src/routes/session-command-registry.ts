@@ -4,6 +4,7 @@ import type { ClientContextValue } from "../client/index"
 import type { Command } from "../command/types"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import { rankAutocompleteItems } from "../components/autocomplete-ranking"
+import { noFrecency, type FrecencyLookup } from "../components/autocomplete-frecency"
 import { resolveModelQuery, type ModelQueryResult } from "../client/model-query"
 import { ReasoningEffort, type Model, type ModelId } from "@gent/core/protocol"
 
@@ -19,6 +20,10 @@ interface SessionCommandRegistryProps {
     readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
+  /** The reader's pick history, so a command they choose often ranks first. */
+  readonly frecency: () => FrecencyLookup
+  /** Records that the reader chose a command from the `/` popup. */
+  readonly recordPick: (id: string) => void
   readonly openForkPicker: () => void
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
@@ -53,10 +58,16 @@ export const describeAmbiguous = (query: string, candidates: readonly Model[]): 
  * scores names far above descriptions, so a command whose description happens
  * to carry the letters still appears, but never ahead of the one actually
  * named.
+ *
+ * `frecency` carries the reader's own pick history. Without it `/t` answers
+ * `think` forever, because `think` and `thread` tie on everything but length;
+ * with it, the one this reader actually opens wins. It defaults to "no
+ * history", so a caller that has not loaded a store ranks exactly as before.
  */
 export const slashAutocompleteItems = (
   commands: readonly Command[],
   filter: string,
+  frecency: FrecencyLookup = noFrecency,
 ): ReadonlyArray<AutocompleteItem> => {
   const items: Array<AutocompleteItem> = []
   for (const command of commands) {
@@ -68,7 +79,7 @@ export const slashAutocompleteItems = (
       items.push({ id: alias, label: `/${alias}`, description })
     }
   }
-  return rankAutocompleteItems(items, filter)
+  return rankAutocompleteItems(items, filter, { prefix: "/", frecency })
 }
 
 const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] => [
@@ -206,7 +217,10 @@ export const createSessionCommandRegistry = (props: SessionCommandRegistryProps)
       {
         prefix: "/",
         title: "Commands",
-        items: (filter) => slashAutocompleteItems(allCommands, filter),
+        items: (filter) => slashAutocompleteItems(allCommands, filter, props.frecency()),
+        // Without this a slash pick is never recorded, and `/t` answers
+        // `think` forever however often the reader opens `/thread`.
+        onSelect: (id: string) => props.recordPick(id),
       },
     ])
   })
