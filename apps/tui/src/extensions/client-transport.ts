@@ -94,6 +94,16 @@ export interface ClientTransportDefinition {
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ClientTransportRequestError>
   /** Every stored session, with its parent links. */
   readonly listSessions: Effect.Effect<ReadonlyArray<Session>, ClientTransportRequestError>
+  /**
+   * The sessions of one thread, oldest first.
+   *
+   * Sessions carry the thread they belong to, so a compaction handoff stays in
+   * the thread it continues while a delegate run or a `/btw` side question sits
+   * in its own. Membership is the server's answer; nothing here re-derives it.
+   */
+  readonly threadSessions: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, ClientTransportRequestError>
   /** Every durable message on one branch, in order. */
   readonly listMessages: (
     branchId: BranchId,
@@ -151,6 +161,8 @@ export const makeClientTransportLayer = (
     agentDetail: (key) => agentDetailAt(payload, key),
     deleteSession: (sessionId) => deleteSessionAt(payload, sessionId),
     listSessions: shellRead(payload, "session.list", (client) => client.session.list()),
+    threadSessions: (sessionId) =>
+      shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
     listMessages: (branchId) =>
       shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
     driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),

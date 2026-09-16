@@ -31,6 +31,7 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
+import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, InvalidStateError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
@@ -294,6 +295,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
     const sessionStorage = yield* SessionStorage
+    const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
@@ -363,6 +365,9 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       "session.list": () => sessionStorage.listSessions,
+
+      "session.thread": ({ sessionId }: SessionIdPayload) =>
+        relationshipStorage.getThreadSessions(sessionId),
 
       "session.get": ({ sessionId }: SessionIdPayload) =>
         sessionStorage

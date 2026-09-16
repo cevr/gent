@@ -225,6 +225,16 @@ export class Session extends Schema.Class<Session>("Session")({
   activeBranchId: Schema.optional(BranchId),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
+  /**
+   * The thread this session belongs to, named by the session that started it.
+   *
+   * A compaction handoff inherits its parent's thread, so work that outgrew one
+   * context window stays one thread. A delegate run or a `/btw` side question
+   * starts its own, so it never pollutes the thread it was launched from.
+   * Storage fills it in on create; only a caller continuing existing work
+   * passes one.
+   */
+  threadId: Schema.optional(SessionId),
   createdAt: DateFromNumber,
   updatedAt: DateFromNumber,
 }) {}

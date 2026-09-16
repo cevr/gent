@@ -72,23 +72,20 @@ const marker = (anchor: string, summary: string, count: number, at: number): Mes
   })
 
 describe("thread chain", () => {
-  test("walks parent links to the root, root first, and stops at a missing parent", () => {
-    const sessions = [
-      session("root"),
-      session("mid", Option.some("root")),
-      session("leaf", Option.some("mid")),
-      session("other"),
-    ]
-    expect(threadChain(sessions, SessionId.make("leaf")).map((entry) => String(entry.id))).toEqual([
+  test("keeps the server's order, including work with no parent link to the root", () => {
+    // The server sends the thread. A spawn's own handoff is in its thread
+    // without sharing a parent link with the root, so nothing here may walk
+    // `parentSessionId` to decide membership.
+    const sessions = [session("root"), session("mid", Option.some("root")), session("detached")]
+    expect(threadChain(sessions, SessionId.make("mid")).map((entry) => String(entry.id))).toEqual([
       "root",
       "mid",
-      "leaf",
+      "detached",
     ])
-    expect(
-      threadChain([session("orphan", Option.some("gone"))], SessionId.make("orphan")).map((entry) =>
-        String(entry.id),
-      ),
-    ).toEqual(["orphan"])
+  })
+
+  test("shows nothing when the reader's own session is not in the listing", () => {
+    expect(threadChain([session("other")], SessionId.make("mine"))).toEqual([])
   })
 })
 

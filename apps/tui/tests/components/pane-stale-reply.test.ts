@@ -72,7 +72,7 @@ describe("Thread controller across a session switch", () => {
 
       const result = createRoot((dispose) => {
         const controller = makeThreadController(
-          Deferred.await(gate),
+          () => Deferred.await(gate),
           () => Effect.succeed([]),
           () => Effect.succeed(0),
           (effect) => {

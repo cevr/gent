@@ -15,7 +15,7 @@
  * @module
  */
 
-import { DateTime, Effect, Option, Predicate, Schema } from "effect"
+import { DateTime, Effect, Option, Schema } from "effect"
 import { createSignal, Show } from "solid-js"
 import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
 import { ChromePanel } from "../../components/chrome-panel"
@@ -113,69 +113,31 @@ export const sessionLabel = (session: Session): string =>
   )
 
 /**
- * The sessions a thread runs through, root first.
+ * The thread's sessions, oldest first.
  *
- * A thread is an ancestry, not a line. Walking `parentSessionId` upward finds
- * the sessions the shell's own session descends from, but a session that
- * handed off twice has two children, and the walk showed only the one the
- * reader happened to be sitting in — the sibling work was invisible from
- * inside the thread it belongs to. So the walk finds the root, and the thread
- * is every session under that root.
+ * The server decides membership: sessions carry the thread they belong to, so
+ * a compaction handoff stays in the thread it continues and a delegate run or
+ * a `/btw` side question sits in its own. Re-deriving that here from
+ * `parentSessionId` would be a second, weaker copy of the rule — and a wrong
+ * one, because a spawn's own handoff shares no parent link with this thread's
+ * root and a tree walk would drop it.
  *
- * Order is a depth-first walk from the root, children oldest first, which puts
- * a parent immediately above the work it started and keeps each branch of the
- * ancestry contiguous. A session whose parent is not listed is a root of its
- * own and ends the walk upward.
+ * What is left is ordering and a guard: keep the listing's order, drop any
+ * duplicate, and return nothing when the reader's own session is absent, which
+ * is what a stale listing looks like.
  */
 export const threadChain = (
   sessions: ReadonlyArray<Session>,
   sessionId: SessionId,
 ): ReadonlyArray<Session> => {
-  const byId = new Map(sessions.map((session) => [session.id, session]))
-  const start = Option.fromNullishOr(byId.get(sessionId))
-  if (Option.isNone(start)) return []
-
-  // Up to the root: the furthest ancestor still present in the listing.
-  const climbed = new Set<string>()
-  let root = start.value
-  let cursor = Option.some(root)
-  while (Option.isSome(cursor) && !climbed.has(cursor.value.id)) {
-    climbed.add(cursor.value.id)
-    root = cursor.value
-    cursor = Option.fromUndefinedOr(cursor.value.parentSessionId).pipe(
-      Option.flatMap((id) => Option.fromNullishOr(byId.get(id))),
-    )
-  }
-
-  const noChildren: ReadonlyArray<Session> = []
-  const childrenOf = new Map<string, Array<Session>>()
-  for (const session of sessions) {
-    const parent = Option.fromUndefinedOr(session.parentSessionId)
-    if (Option.isNone(parent)) continue
-    if (!byId.has(parent.value)) continue
-    const existing = childrenOf.get(parent.value)
-    if (Predicate.isUndefined(existing)) {
-      childrenOf.set(parent.value, [session])
-      continue
-    }
-    existing.push(session)
-  }
-  for (const siblings of childrenOf.values())
-    siblings.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
-
-  const thread: Array<Session> = []
+  if (!sessions.some((session) => session.id === sessionId)) return []
   const seen = new Set<string>()
-  const visit = (session: Session): void => {
-    if (seen.has(session.id)) return
+  const thread: Array<Session> = []
+  for (const session of sessions) {
+    if (seen.has(session.id)) continue
     seen.add(session.id)
     thread.push(session)
-    for (const child of Option.getOrElse(
-      Option.fromNullishOr(childrenOf.get(session.id)),
-      () => noChildren,
-    ))
-      visit(child)
   }
-  visit(root)
   return thread
 }
 
@@ -300,7 +262,9 @@ export interface ThreadController {
 }
 
 export const makeThreadController = (
-  fetchSessions: Effect.Effect<ReadonlyArray<Session>, { readonly message: string }>,
+  fetchSessions: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, { readonly message: string }>,
   fetchMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, { readonly message: string }>,
@@ -324,7 +288,7 @@ export const makeThreadController = (
 
   const load = (active: { sessionId: SessionId; branchId: BranchId }) =>
     Effect.gen(function* () {
-      const chain = threadChain(yield* fetchSessions, active.sessionId)
+      const chain = threadChain(yield* fetchSessions(active.sessionId), active.sessionId)
       const perSession = yield* Effect.forEach(chain, (session) =>
         Option.match(branchFor(session, active), {
           onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
@@ -535,7 +499,10 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
     const lifecycle = yield* ClientLifecycle
 
     const controller = makeThreadController(
-      transport.listSessions.pipe(Effect.mapError((error) => ({ message: error.message }))),
+      (sessionId) =>
+        transport
+          .threadSessions(sessionId)
+          .pipe(Effect.mapError((error) => ({ message: error.message }))),
       (branchId) =>
         transport
           .listMessages(branchId)

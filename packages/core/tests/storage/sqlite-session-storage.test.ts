@@ -223,6 +223,7 @@ describe("Sessions", () => {
           "drop_write_only_storage",
           "session_model",
           "turn_records",
+          "session_thread",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -252,6 +253,7 @@ describe("Sessions", () => {
           "drop_write_only_storage",
           "session_model",
           "turn_records",
+          "session_thread",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))

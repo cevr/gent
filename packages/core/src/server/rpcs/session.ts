@@ -37,6 +37,11 @@ export class SessionRpcs extends RpcGroup.make(
     success: Schema.Array(Session),
     error: GentRpcError,
   }),
+  Rpc.make("session.thread", {
+    payload: { sessionId: SessionId },
+    success: Schema.Array(Session),
+    error: GentRpcError,
+  }),
   Rpc.make("session.get", {
     payload: { sessionId: SessionId },
     success: Schema.NullOr(Session),

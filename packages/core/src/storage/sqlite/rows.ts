@@ -51,6 +51,7 @@ export const SessionRow = Schema.Struct({
   active_branch_id: Schema.NullOr(BranchId),
   parent_session_id: Schema.NullOr(SessionId),
   parent_branch_id: Schema.NullOr(BranchId),
+  thread_id: Schema.NullOr(SessionId),
   created_at: Schema.Finite,
   updated_at: Schema.Finite,
 })
@@ -101,7 +102,7 @@ export const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
 
 export const SESSION_COLUMNS =
-  "id, name, cwd, model_id, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at"
+  "id, name, cwd, model_id, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, thread_id, created_at, updated_at"
 
 /** One message row per content chunk, scoped through the owning session. Interpolate with `sql.literal`. */
 export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.kind, m.role, m.created_at, m.turn_duration_ms, m.metadata,
@@ -126,6 +127,7 @@ const rowToSession = (row: SessionRow) =>
       activeBranchId: Option.getOrUndefined(Option.fromNullishOr(row.active_branch_id)),
       parentSessionId: Option.getOrUndefined(Option.fromNullishOr(row.parent_session_id)),
       parentBranchId: Option.getOrUndefined(Option.fromNullishOr(row.parent_branch_id)),
+      threadId: Option.getOrUndefined(Option.fromNullishOr(row.thread_id)),
       createdAt,
       updatedAt,
     })

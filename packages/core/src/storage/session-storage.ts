@@ -5,8 +5,8 @@
  * all focused storage Tags from one SQLite client.
  */
 
-import { Context, Effect, Layer, Predicate } from "effect"
-import type { Session } from "../domain/message.js"
+import { Context, Effect, Layer, Option, Predicate } from "effect"
+import { Session } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError, storageError } from "../domain/storage-error.js"
 import { SqlClient } from "effect/unstable/sql"
@@ -66,6 +66,13 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 })
               }
             }
+            // A session with no thread of its own starts one. Only a caller
+            // continuing existing work — a compaction handoff — passes the
+            // parent's thread; a spawn stays out of it by saying nothing.
+            const stored = Option.match(Option.fromUndefinedOr(session.threadId), {
+              onNone: () => new Session({ ...session, threadId: session.id }),
+              onSome: () => session,
+            })
             yield* sql`INSERT INTO sessions ${sql.insert({
               id: session.id,
               workspace_id: workspaceId,
@@ -76,10 +83,11 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               active_branch_id: toSqlNull(session.activeBranchId),
               parent_session_id: toSqlNull(session.parentSessionId),
               parent_branch_id: toSqlNull(session.parentBranchId),
+              thread_id: stored.threadId,
               created_at: session.createdAt.getTime(),
               updated_at: session.updatedAt.getTime(),
             })}`
-            return session
+            return stored
           },
           Effect.mapError(storageError("Failed to create session")),
         ),

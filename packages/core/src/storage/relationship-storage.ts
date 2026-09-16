@@ -32,6 +32,19 @@ interface RelationshipStorageService {
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
+  /**
+   * Every session in one thread, oldest first.
+   *
+   * A thread is the work itself, not one session's parent line: a session that
+   * handed off twice has two children and both continue it. Sessions carry the
+   * thread they belong to, so this is one indexed read — a delegate run or a
+   * `/btw` side question started its own thread when it was created and is
+   * simply not in this one.
+   */
+  readonly getThreadSessions: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+
   /** Returns branches + messages within a single session (not cross-session tree) */
   readonly getSessionDetail: (sessionId: SessionId) => Effect.Effect<
     {
@@ -73,7 +86,7 @@ export class RelationshipStorage extends Context.Service<
             SELECT ${sql.literal(SESSION_COLUMNS)}, 0
             FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
             UNION ALL
-            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
+            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.thread_id, s.created_at, s.updated_at, a.depth + 1
             FROM sessions s
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20 AND s.workspace_id = ${workspaceId}
@@ -84,6 +97,22 @@ export class RelationshipStorage extends Context.Service<
             return yield* Effect.forEach(rows, sessionFromRow)
           },
           Effect.mapError(storageError("Failed to get session ancestors")),
+        ),
+
+        getThreadSessions: Effect.fn("RelationshipStorage.getThreadSessions")(
+          function* (sessionId) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const rows = yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)}
+          FROM sessions
+          WHERE workspace_id = ${workspaceId}
+            AND thread_id = (
+              SELECT thread_id FROM sessions
+              WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+            )
+          ORDER BY created_at ASC`
+            return yield* Effect.forEach(rows, sessionFromRow)
+          },
+          Effect.mapError(storageError("Failed to get thread sessions")),
         ),
 
         getSessionDetail: Effect.fn("RelationshipStorage.getSessionDetail")(
