@@ -798,3 +798,21 @@ Second: that a committed item's own late fields break the prefix check. `committ
 Third: that an overlay or pane leaves `renderer.useMouse` true, swallowing the wheel. `overlayOpen` and `transcriptExpanded` are both read reactively inside the effect that owns `useMouse`, so closing either re-runs it and restores `false`; a docked pane is not an overlay at all and never touches it. There are exactly four `useMouse` writers, all in one file.
 
 The user scrolls with the **mouse wheel**, which depends on gent leaving mouse tracking off so the terminal receives it. That is where the next attempt should start, and it should start from an observation of the live terminal rather than another reading of the code — three readings produced three refuted theories.
+
+## The buffer kept its rows, then lost them to a key order (2026-09-16, `4c043775`)
+
+The observation the last section asked for. Five turns on the live pane, each one long enough to overflow the viewport, with the offering pass instrumented to a file: `max_offset_from_bottom` grew 23 → 32 → 41 → 50 → 59 and the markers from every turn stayed in the buffer together. Scrollback accumulates. Two of my earlier readings were measurement error — a capture taken before the commit queue drained reported a frozen buffer, and re-reading after the queue settled showed the rows had landed.
+
+What the instrumentation did catch, once, is the defect. One pass recorded `prefixMatches: false` at index 1 with the same message id on both sides, `oldFp` beginning `{"_tag":"regular-message","id":…` and `newFp` beginning `{"id":…`. Same message, same text, different string.
+
+**The feed builds one message two ways.** `createAssistantMessage` writes `_tag` first and carries no `segments` and no `metadata`; `buildMessages` spreads the body and appends `_tag` last. `fingerprint` was a JSON encode of the whole item, so it carried key order and key presence. Reduced to two literals outside the app: `EQUAL false`, `SORTED EQUAL true` — the objects differ by nothing but the order of their keys.
+
+A rebuilt message therefore broke the committed prefix, `requestReplay` cleared `committed`, and `resetSplitFooterForReplay({ clearSavedLines: true })` discarded the terminal's saved lines. The session above the fold disappeared.
+
+`transcriptFingerprint` now names the drawn fields in a fixed order, for messages and for all four session events. A rebuild is silent; new text, a completed tool call, and a changed event still change the value.
+
+**This corrects the second theory in the section above.** The mechanism was right — a committed item's fingerprint changing under it — and the field I blamed was wrong. I accused the tool-call fields that arrive late, tested that with synthetic plain objects, watched the test pass with the fix reverted, and reverted the change. Plain objects cannot reproduce it: the divergence needs the two real construction sites. The instrument had to run against the live feed to see it.
+
+The first regression test repeated the same error in a new shape. It called `transcriptFingerprint` directly, so it passed with the call site returned to the whole-object encode — green against the bug it was written for. The test that ships drives the component: it commits an item, hands the transcript the same messages rebuilt in the other key order, and asserts the committed rows do not grow. Reverted, it fails 4 → 8, the rows written a second time.
+
+Gate `GATE EXIT 0` on the rift and again on main.
