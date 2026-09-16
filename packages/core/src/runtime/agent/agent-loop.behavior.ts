@@ -134,11 +134,19 @@ type AgentLoopQueue = {
   ) => Effect.Effect<boolean, AgentLoopError>
   readonly appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
   /**
-   * Remove the steering items a running turn can deliver at its next step
-   * boundary. Items with an agent override or run spec need their own turn
-   * profile and stay queued for the turn boundary.
+   * The steering items a running turn can deliver at its next step boundary,
+   * left in the queue. Items with an agent override or run spec need their own
+   * turn profile and stay queued for the turn boundary.
    */
-  readonly takeSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
+  readonly peekSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
+  /**
+   * Drop the items a step boundary has written to the transcript. Separate from
+   * the read so the transcript write commits first: a crash between the two
+   * replays the delivery instead of losing input the branch already accepted.
+   */
+  readonly dropSteeringDelivered: (
+    delivered: ReadonlyArray<QueuedTurnItem>,
+  ) => Effect.Effect<void, AgentLoopError>
   readonly drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
   /** True when a queued follow-up was removed; false when it was absent or already in flight. */
   readonly removeFollowUp: (
@@ -359,16 +367,26 @@ const makeAgentLoopQueue = (
     const deliverableAtStep = (item: QueuedTurnItem) =>
       Predicate.isUndefined(item.agentOverride) && Predicate.isUndefined(item.runSpec)
 
-    const takeSteeringForStep = commitQueueTransaction("delivered steering at step", (s) => {
-      const delivered = s.queue.steering.filter(deliverableAtStep)
-      if (delivered.length === 0) return { value: delivered, next: s, persist: false }
-      const kept = s.queue.steering.filter((item) => !deliverableAtStep(item))
-      return {
-        value: delivered,
-        next: { ...s, queue: { ...s.queue, steering: kept } },
-        persist: true,
-      }
-    }).pipe(Effect.withSpan("AgentLoop.takeSteeringForStep"))
+    const peekSteeringForStep = TxSubscriptionRef.get(scope.loopRef).pipe(
+      Effect.map((s) => s.queue.steering.filter(deliverableAtStep)),
+      Effect.withSpan("AgentLoop.peekSteeringForStep"),
+    )
+
+    const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
+      if (delivered.length === 0) return Effect.void
+      const deliveredIds = new Set<string>(delivered.map((item) => item.message.id))
+      return commitQueueTransaction("dropped delivered steering", (s) => {
+        const kept = s.queue.steering.filter((item) => !deliveredIds.has(item.message.id))
+        if (kept.length === s.queue.steering.length) {
+          return { value: void 0, next: s, persist: false }
+        }
+        return {
+          value: void 0,
+          next: { ...s, queue: { ...s.queue, steering: kept } },
+          persist: true,
+        }
+      }).pipe(Effect.withSpan("AgentLoop.dropSteeringDelivered"))
+    }
 
     const drainQueue = commitQueueTransaction("drained queue", (s) => ({
       value: queueSnapshotFromQueueState(s.queue),
@@ -411,7 +429,8 @@ const makeAgentLoopQueue = (
       takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),
       clearInFlightTurn,
       appendSteering,
-      takeSteeringForStep,
+      peekSteeringForStep,
+      dropSteeringDelivered,
       drainQueue,
       removeFollowUp,
       saveCheckpoint,
@@ -719,7 +738,8 @@ export const makeAgentLoopBehavior = (
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       clearInFlightTurn,
       appendSteering,
-      takeSteeringForStep,
+      peekSteeringForStep,
+      dropSteeringDelivered,
       drainQueue,
       removeFollowUp,
       saveCheckpoint,
@@ -760,7 +780,8 @@ export const makeAgentLoopBehavior = (
       turnMetricsRef,
       turnInterruption,
       clearInFlightTurn,
-      takeSteeringForStep,
+      peekSteeringForStep,
+      dropSteeringDelivered,
     })
 
     const worker = makeAgentLoopWorker({

@@ -25,6 +25,15 @@ export const SteerCommand = Schema.Union([
     ...SteerTargetFields,
     message: Schema.String,
     agent: Schema.optional(AgentName),
+    /**
+     * Start a turn when the branch is idle, instead of waiting in the queue.
+     *
+     * Steering exists to reach a turn that is already running, so an idle
+     * branch parks it by default and a reader can still see it through
+     * `queue.get`. A caller that wants an answer now — a queued question
+     * being answered, a child reporting back — says so here.
+     */
+    wake: Schema.optional(Schema.Boolean),
   }),
   Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
 ])

@@ -163,6 +163,38 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
+  it.live("an interjection that asks to wake starts a turn on an idle branch", () =>
+    Effect.gen(function* () {
+      const idleSessionId = SessionId.make("cont-idle-session")
+      const idleBranchId = BranchId.make("cont-idle-branch")
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("Answered the idle steer."),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        // No turn is running: nothing for the steering to join. The queue would
+        // hold it forever if the actor did not start a turn on an idle branch.
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId: idleSessionId,
+          branchId: idleBranchId,
+          requestId: "req-interject-idle-start",
+          message: "answer me",
+          wake: true,
+        })
+        yield* waitForPhase(agentLoop, { sessionId: idleSessionId, branchId: idleBranchId }, "Idle")
+        expect(yield* controls.callCount).toBe(1)
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "TurnCompleted")).toHaveLength(1)
+        const messages = yield* messageStorage.listMessages(idleBranchId)
+        expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(1)
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }),
+  )
   it.live("interrupt during tool execution stops continuation", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

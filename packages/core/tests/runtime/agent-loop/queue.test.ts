@@ -1,7 +1,7 @@
 import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Predicate, Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { Predicate, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -9,6 +9,8 @@ import {
   textDeltaPart,
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
+import { textStep, toolCallStep } from "../../../src/test-utils/sequence-steps"
+import { tool } from "@gent/core/extensions/api"
 import { dateFromMillis, Message } from "../../../src/domain/message"
 import { EventStore, MessageReceived, TurnCompleted } from "../../../src/domain/event"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
@@ -28,10 +30,12 @@ import { ModelResolver } from "../../../src/providers/model-resolver"
 import {
   makeAgentLoopService,
   makeExtRegistry,
+  steerAgentLoop,
   submitAgentLoop,
   waitFor,
   waitForPhase,
 } from "./helpers"
+import { MessageStorage } from "../../../src/storage/message-storage"
 import {
   appendFollowUpQueueState,
   emptyLoopQueueState,
@@ -573,6 +577,125 @@ describe("queue drain regression", () => {
             expect(Option.isNone(called)).toBe(true)
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "steering reaches the transcript before the queue lets it go",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-steer-transcript-first")
+        const branchId = BranchId.make("branch-steer-transcript-first")
+        const storedQueueRef = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
+        const echoTool = tool({
+          id: "echo",
+          description: "Echoes input",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ text: Schema.String }),
+          execute: (params) => Effect.succeed({ text: params.text }),
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+          textStep("Done after steering."),
+        ])
+        // Read at the drop: the write that empties a non-empty steering queue
+        // is the one that follows delivery. Recording whether the transcript
+        // already holds the interjection at that instant says which of the two
+        // writes went first, without failing either.
+        const transcriptHeldAtDrop = yield* Ref.make(Option.none<boolean>())
+        const storageLayer = SqliteStorage.TestWithSql(
+          noBranchTools.storage,
+          noBranchTools.migrations,
+        )
+        const queueStorageLayer = Layer.provide(
+          Layer.effect(
+            AgentLoopQueueStorage,
+            Effect.gen(function* () {
+              const messageStorage = yield* MessageStorage
+              return AgentLoopQueueStorage.of({
+                getQueueState: () => Ref.get(storedQueueRef),
+                putQueueState: (_sessionId, _branchId, queue) =>
+                  Effect.gen(function* () {
+                    const previous = yield* Ref.get(storedQueueRef)
+                    if (previous.steering.length > 0 && queue.steering.length === 0) {
+                      const messages = yield* messageStorage
+                        .listMessages(branchId)
+                        .pipe(Effect.catchEager(() => Effect.succeed([])))
+                      const held = messages.some((message) => message._tag === "interjection")
+                      // First drop wins: a later step boundary must not
+                      // overwrite what the one under test recorded.
+                      yield* Ref.update(transcriptHeldAtDrop, (current) =>
+                        Option.orElse(current, () => Option.some(held)),
+                      )
+                    }
+                    yield* Ref.set(storedQueueRef, queue)
+                  }),
+              })
+            }),
+          ),
+          storageLayer,
+        )
+        const deps = Layer.mergeAll(
+          storageLayer,
+          queueStorageLayer,
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry([echoTool]),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          ApprovalService.Test(),
+          BunServices.layer,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const messageStorage = yield* MessageStorage
+            const turn = Message.cases.regular.make({
+              id: MessageId.make("msg-steer-transcript-first"),
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: "run a tool" })],
+              createdAt: dateFromMillis(1_767_225_600_000),
+            })
+            const fiber = yield* Effect.forkChild(
+              submitAgentLoop(agentLoop, turn, { interactive: true }).pipe(Effect.ignore),
+            )
+            yield* controls.waitForCall(0)
+            yield* steerAgentLoop({
+              _tag: "Interject",
+              sessionId,
+              branchId,
+              requestId: "req-steer-transcript-first",
+              message: "answer this too",
+            })
+            yield* controls.emitAll(0)
+            yield* Fiber.join(fiber).pipe(Effect.ignore)
+            // The submit returns once the turn is admitted, not once it ends.
+            // Reading the transcript before the loop parks would tear the layer
+            // down mid-stream and interrupt the very delivery under test.
+            yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+            const messages = yield* messageStorage.listMessages(branchId)
+            expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(1)
+            // The drop happened, and the transcript already held the interjection
+            // when it did. A crash in that window replays a delivery the message
+            // id makes a no-op; the other order loses input the branch accepted.
+            expect(yield* Ref.get(transcriptHeldAtDrop)).toStrictEqual(Option.some(true))
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),
     15000,

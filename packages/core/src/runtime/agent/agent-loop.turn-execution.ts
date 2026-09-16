@@ -155,7 +155,10 @@ type AgentLoopTurnExecutionContext = {
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<boolean, AgentLoopError>
-  readonly takeSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
+  readonly peekSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
+  readonly dropSteeringDelivered: (
+    delivered: ReadonlyArray<QueuedTurnItem>,
+  ) => Effect.Effect<void, AgentLoopError>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -1016,7 +1019,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * next model call reads it without an interrupted stream.
      */
     const deliverSteeringAtStepBoundary = Effect.fn("AgentLoop.deliverSteering")(function* () {
-      const items = yield* scope.takeSteeringForStep
+      const items = yield* scope.peekSteeringForStep
       for (const item of items) {
         // The message joins the transcript now. Its admission time could sort it
         // between a tool call and its result, which the projection rejects.
@@ -1024,6 +1027,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           message: { ...item.message, createdAt: yield* DateTime.nowAsDate },
         })
       }
+      // Dropped only once the transcript holds them. The queue write and the
+      // message write cannot share a transaction, so the order decides which
+      // way a crash between them fails: this way replays a delivery that
+      // `persistMessageReceived` already treats as a no-op, the other way
+      // loses input the branch accepted.
+      yield* scope.dropSteeringDelivered(items)
     })
 
     /**

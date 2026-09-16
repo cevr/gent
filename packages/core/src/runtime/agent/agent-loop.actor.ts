@@ -780,10 +780,25 @@ const buildAgentLoopActorHandlers = (config: {
           const item: QueuedTurnItem = {
             message: interjectMessage,
             agentOverride: command.agent,
+            wake: command.wake,
           }
-          // Steering joins the running turn at its next step boundary, or starts
-          // the next turn when the loop is idle. The open stream is not interrupted.
-          yield* handle.appendSteering(item)
+          // Steering joins the running turn at its next step boundary; the open
+          // stream is not interrupted.
+          //
+          // An idle branch has no turn to join, so the item waits in the queue
+          // where `queue.get` can still show it. Only a caller that asked to
+          // wake gets a turn of its own — the same signal recovery uses at
+          // startup. `appendSteering` answers with the state the queue had
+          // *before* the append, so the idle test is made on that. The start
+          // belongs here, inside the actor: a caller that read the state first
+          // and steered second would race a turn that ended in between.
+          // `startTurn` re-reads the state under its own permit, so it is a
+          // no-op when a turn did begin meanwhile.
+          const before = yield* handle.appendSteering(item)
+          if (command.wake !== true || before._tag !== "Idle") return
+          const next = yield* handle.takeNextQueuedTurnIfIdle
+          if (Option.isNone(next)) return
+          yield* handle.startTurn(next.value).pipe(orCleanup(handle))
           return
         }
       }
