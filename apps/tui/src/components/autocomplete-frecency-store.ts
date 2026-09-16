@@ -18,8 +18,13 @@
  * @module
  */
 
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { FrecencyStore, type FrecencyStoreValue } from "./autocomplete-frecency"
+import { Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect"
+import {
+  FrecencyStore,
+  emptyFrecencyStore,
+  recordPick,
+  type FrecencyStoreValue,
+} from "./autocomplete-frecency"
 
 const decodeStore = Schema.decodeUnknownOption(Schema.fromJsonString(FrecencyStore))
 const encodeStore = Schema.encodeSync(Schema.fromJsonString(FrecencyStore))
@@ -67,3 +72,76 @@ export const writeFrecencyStore = (
     yield* fs.makeDirectory(paths.directory, { recursive: true })
     yield* fs.writeFileString(paths.file, encodeStore(store))
   }).pipe(Effect.ignoreCause)
+
+/**
+ * Serializes the read-modify-write below.
+ *
+ * Two surfaces record picks — the `/` commands registry and the `$` skills
+ * extension — and before this gate they wrote by different strategies. `$`
+ * re-read the file every time; `/` serialized a snapshot the module had
+ * loaded once and never refreshed. So a `$` pick that landed after that load
+ * was invisible to the `/` writer, and the next `/` pick wrote the stale
+ * snapshot back over the file. Every `$` pick was erased by the next `/`
+ * pick, and the reverse order lost the `/` pick the same way.
+ *
+ * One permit means the file is read, folded and written as one step with no
+ * other pick interleaved. It is a module singleton because the thing it
+ * protects is a single path on disk, not a value any one caller owns.
+ *
+ * Its reach is this process. Two `gent` processes sharing a home each hold
+ * their own gate, so a pick from one can still be lost to a pick from the
+ * other — the write is not atomic against an outside writer. That is the
+ * pre-existing exposure, unchanged and untested here; what this closes is the
+ * cross-surface loss inside one TUI, which is the one a reader hits, because
+ * a reader uses `/` and `$` in the same session.
+ */
+const writeGate = Semaphore.makeUnsafe(1)
+
+/**
+ * The store as this process last saw it, for callers that must rank without
+ * awaiting.
+ *
+ * Ranking runs inside the popup's resource callback and cannot await a file
+ * read while the reader types, so it reads this snapshot synchronously. Every
+ * recorded pick refreshes it, which is what lets a pick made in this session
+ * steer the very next keystroke.
+ */
+let snapshot: FrecencyStoreValue = emptyFrecencyStore()
+
+/** The store as last read or written by this process. Never awaits. */
+export const frecencySnapshot = (): FrecencyStoreValue => snapshot
+
+/** Replaces the snapshot — the load path's way of seeding it. */
+export const setFrecencySnapshot = (value: FrecencyStoreValue): void => {
+  snapshot = value
+}
+
+/**
+ * Records a pick against the file, folding it into whatever is on disk.
+ *
+ * This is the only write. A caller hands over the prefix and the id and gets
+ * back the store that was written, so an in-memory reader can refresh from the
+ * same value the file now holds rather than from a guess.
+ *
+ * Reading inside the gate is the point. The alternative — folding into a
+ * cached value — is what lost picks: the cache goes stale the moment another
+ * surface writes, and nothing tells it so.
+ */
+export const recordFrecencyPick = (
+  home: string,
+  prefix: string,
+  id: string,
+  now: number,
+): Effect.Effect<FrecencyStoreValue, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const current = yield* readFrecencyStore(home)
+    const next = recordPick(
+      Option.getOrElse(current, () => emptyFrecencyStore()),
+      prefix,
+      id,
+      now,
+    )
+    yield* writeFrecencyStore(home, next)
+    snapshot = next
+    return next
+  }).pipe(writeGate.withPermits(1))

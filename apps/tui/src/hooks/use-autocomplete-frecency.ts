@@ -1,34 +1,38 @@
 /**
  * The live pick history behind the composer's autocomplete ranking.
  *
- * One store serves every prefix and every session, so it is a module
- * singleton in the shape `use-prompt-history.ts` already established: a Solid
- * signal holding the loaded value, filled once on first use and written back
- * on every pick.
+ * One store serves every prefix and every session. The value lives in
+ * `autocomplete-frecency-store.ts` rather than here, because two surfaces
+ * record picks — this hook for `/` commands, and the `$` skills extension —
+ * and a cache owned by one of them goes stale the moment the other writes.
+ * That is not hypothetical: it is the bug this hook used to have. A snapshot
+ * loaded once and never refreshed was serialized back over the file on every
+ * `/` pick, erasing whatever `$` had written in between.
  *
- * The signal matters for more than caching. Ranking runs inside the popup's
- * resource callback, which is synchronous with respect to the store — it
- * cannot await a file read while the reader is typing. So the store is read
- * once into memory, and every rank afterwards is a map lookup. Until that read
- * lands the lookup answers zero, which is the same thing it answers for a
- * reader with no history: the popup ranks by match quality and nothing waits.
+ * So this hook keeps no store of its own. It reads the shared snapshot for
+ * ranking and delegates every write to `recordFrecencyPick`, which folds the
+ * pick into what is actually on disk under a single-permit gate.
+ *
+ * Ranking stays synchronous. It runs inside the popup's resource callback,
+ * which cannot await a file read while the reader is typing, so it reads the
+ * snapshot as a plain map lookup. Until the first load lands the lookup
+ * answers zero, which is the same thing it answers for a reader with no
+ * history: the popup ranks by match quality and nothing waits.
  *
  * Writes never block the keystroke path either. `cast` forks the write onto
- * the client runtime and returns immediately; the in-memory signal is updated
- * first, so the next keystroke already ranks with the new pick whether or not
- * the file has been written yet.
+ * the client runtime and returns immediately, and the Solid signal is bumped
+ * when the write lands so the next keystroke ranks with the new pick.
  */
 
 import { createSignal } from "solid-js"
 import { DateTime, Effect, Option } from "effect"
+import { frecencyLookup, type FrecencyLookup } from "../components/autocomplete-frecency"
 import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  recordPick,
-  type FrecencyLookup,
-  type FrecencyStoreValue,
-} from "../components/autocomplete-frecency"
-import { readFrecencyStore, writeFrecencyStore } from "../components/autocomplete-frecency-store"
+  frecencySnapshot,
+  readFrecencyStore,
+  recordFrecencyPick,
+  setFrecencySnapshot,
+} from "../components/autocomplete-frecency-store"
 import { useWorkspace } from "../workspace/context"
 import { useRuntime } from "./use-runtime"
 
@@ -42,9 +46,14 @@ export interface AutocompleteFrecency {
   readonly record: (prefix: string, id: string) => void
 }
 
+/**
+ * Tracks that the shared snapshot changed, so Solid re-runs a ranking that
+ * read it. The counter is the reactive handle; the value itself lives in the
+ * store module, which is the only thing both writers can reach.
+ */
 type FrecencyStoreCell = {
-  store: ReturnType<typeof createSignal<FrecencyStoreValue>>[0]
-  setStore: ReturnType<typeof createSignal<FrecencyStoreValue>>[1]
+  revision: ReturnType<typeof createSignal<number>>[0]
+  bump: ReturnType<typeof createSignal<number>>[1]
   loaded: boolean
 }
 
@@ -52,8 +61,8 @@ let singleton: Option.Option<FrecencyStoreCell> = Option.none()
 
 const getCell = (): FrecencyStoreCell => {
   if (Option.isSome(singleton)) return singleton.value
-  const [store, setStore] = createSignal<FrecencyStoreValue>(emptyFrecencyStore())
-  const cell: FrecencyStoreCell = { store, setStore, loaded: false }
+  const [revision, bump] = createSignal<number>(0)
+  const cell: FrecencyStoreCell = { revision, bump, loaded: false }
   singleton = Option.some(cell)
   return cell
 }
@@ -69,18 +78,26 @@ export function useAutocompleteFrecency(): AutocompleteFrecency {
       Effect.tap(readFrecencyStore(workspace.home), (loaded) =>
         Effect.sync(() => {
           if (Option.isNone(loaded)) return
-          cell.setStore(loaded.value)
+          setFrecencySnapshot(loaded.value)
+          cell.bump((value) => value + 1)
         }),
       ),
     )
   }
 
   return {
-    lookup: () => frecencyLookup(cell.store(), currentMillis()),
+    lookup: () => {
+      cell.revision()
+      return frecencyLookup(frecencySnapshot(), currentMillis())
+    },
     record: (prefix: string, id: string) => {
-      const next = recordPick(cell.store(), prefix, id, currentMillis())
-      cell.setStore(next)
-      cast(writeFrecencyStore(workspace.home, next))
+      cast(
+        Effect.tap(recordFrecencyPick(workspace.home, prefix, id, currentMillis()), () =>
+          Effect.sync(() => {
+            cell.bump((value) => value + 1)
+          }),
+        ),
+      )
     },
   }
 }

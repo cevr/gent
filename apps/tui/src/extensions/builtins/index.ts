@@ -26,12 +26,8 @@ import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils/truncate"
 import { rankAutocompleteItems } from "../../components/autocomplete-ranking"
-import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  recordPick,
-} from "../../components/autocomplete-frecency"
-import { readFrecencyStore, writeFrecencyStore } from "../../components/autocomplete-frecency-store"
+import { emptyFrecencyStore, frecencyLookup } from "../../components/autocomplete-frecency"
+import { readFrecencyStore, recordFrecencyPick } from "../../components/autocomplete-frecency-store"
 
 const builtinConnection = defineClientExtension("@gent/connection", {
   setup: Effect.succeed(
@@ -93,20 +89,15 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
       formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
       // Recording happens here rather than at the composer seam for `$`
       // alone, because the skills popup is the only surface that knows a
-      // chosen row was a skill. The write is read-modify-write against the
-      // file so a pick from another surface in the same session is not lost.
+      // chosen row was a skill. The write itself belongs to the store, which
+      // folds the pick into what is on disk under one gate — the `/` registry
+      // records through the same function. Two writers with two strategies is
+      // exactly what used to lose picks.
       onSelect: (id: string) => {
         forkStoreWrite(
-          Effect.gen(function* () {
-            const store = yield* readFrecencyStore(workspace.home)
-            const next = recordPick(
-              Option.getOrElse(store, () => emptyFrecencyStore()),
-              "$",
-              id,
-              yield* Clock.currentTimeMillis,
-            )
-            yield* writeFrecencyStore(workspace.home, next)
-          }),
+          Effect.flatMap(Clock.currentTimeMillis, (now) =>
+            recordFrecencyPick(workspace.home, "$", id, now),
+          ),
         )
       },
     })
