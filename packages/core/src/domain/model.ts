@@ -27,7 +27,26 @@ export class Model extends Schema.Class<Model>("Model")({
   provider: ProviderId,
   contextLength: Schema.optional(Schema.Finite),
   pricing: Schema.optional(ModelPricing),
+  /** models.dev `release_date`, an ISO-8601 prefix: `2026-02-17` or `2025-04`. */
+  releaseDate: Schema.optional(Schema.String),
 }) {}
+
+/**
+ * Newest release first; models without a date sort last.
+ *
+ * ISO-8601 prefixes compare correctly as plain strings, so a partial
+ * `2025-04` orders just ahead of any fuller date in that month.
+ */
+export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
+  [...models].sort((left, right) => {
+    const l = Option.getOrElse(Option.fromUndefinedOr(left.releaseDate), () => "")
+    const r = Option.getOrElse(Option.fromUndefinedOr(right.releaseDate), () => "")
+    if (l === r) return 0
+    if (l.length === 0) return 1
+    if (r.length === 0) return -1
+    if (l > r) return -1
+    return 1
+  })
 
 // Calculate cost from token usage
 

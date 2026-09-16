@@ -4,7 +4,13 @@ import { HttpClient, type HttpClient as HttpClientService } from "effect/unstabl
 import { Auth } from "../domain/auth.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
-import { Model, ModelId, ProviderId, parseModelProvider } from "../domain/model.js"
+import {
+  Model,
+  ModelId,
+  ProviderId,
+  byReleaseDateDesc,
+  parseModelProvider,
+} from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
@@ -27,6 +33,7 @@ const ModelsDevModel = Schema.Struct({
   name: Schema.optional(Schema.String),
   cost: Schema.optional(ModelsDevCost),
   limit: Schema.optional(ModelsDevLimit),
+  release_date: Schema.optional(Schema.String),
 })
 type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
@@ -53,6 +60,7 @@ const parseModelsDev = (data: Schema.Json): readonly Model[] => {
       const name = Option.getOrElse(Option.fromUndefinedOr(modelValue.name), () => modelKey)
       const pricing = parsePricing(modelValue.cost)
       const contextLength = parseContextLength(modelValue.limit)
+      const releaseDate = Option.fromUndefinedOr(modelValue.release_date)
       const id = ModelId.make(`${providerId}/${modelKey}`)
 
       models.push(
@@ -63,6 +71,7 @@ const parseModelsDev = (data: Schema.Json): readonly Model[] => {
           ...omitUndefined({
             contextLength: Option.getOrUndefined(contextLength),
             pricing: Option.getOrUndefined(pricing),
+            releaseDate: Option.getOrUndefined(releaseDate),
           }),
         }),
       )
@@ -185,7 +194,8 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       /** Load + apply auth-sensitive provider filters (not cached — re-evaluated per call) */
       const load = Effect.fn("ModelRegistry.load")(function* () {
         const raw = yield* loadRaw
-        return yield* applyFilters(Option.getOrElse(raw, () => EMPTY_MODELS))
+        const filtered = yield* applyFilters(Option.getOrElse(raw, () => EMPTY_MODELS))
+        return byReleaseDateDesc(filtered)
       })
 
       const resolveAuthOption = (

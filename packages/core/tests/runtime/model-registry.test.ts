@@ -61,6 +61,32 @@ const mixedRemoteCatalog = {
   },
 }
 
+const releaseOrderCatalog = {
+  anthropic: {
+    models: {
+      "claude-sonnet-4-6": {
+        name: "Claude Sonnet 4.6",
+        release_date: "2026-02-17",
+        limit: { context: 1_000_000 },
+      },
+      "claude-opus-5": {
+        name: "Claude Opus 5",
+        release_date: "2026-07-24",
+        limit: { context: 1_000_000 },
+      },
+      undated: {
+        name: "Undated",
+        limit: { context: 1_000 },
+      },
+      "claude-opus-4-6": {
+        name: "Claude Opus 4.6",
+        release_date: "2026-02",
+        limit: { context: 200_000 },
+      },
+    },
+  },
+}
+
 const passThroughDrivers = DriverRegistry.fromResolved({
   modelDrivers: new Map(),
   externalDrivers: new Map(),
@@ -519,6 +545,73 @@ describe("model catalog resolution", () => {
         )
         expect(freshList).toHaveLength(1)
         expect(freshList[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
+      }),
+    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+
+  it.live("carries the models.dev release date onto the parsed model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson(releaseOrderCatalog))
+        const models = yield* waitFor(
+          registry.list,
+          (models) => models.some((model) => model.id === "anthropic/claude-opus-5"),
+          5_000,
+          "background refresh to land",
+        )
+
+        const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
+        expect(opus?.releaseDate).toBe("2026-07-24")
+      }),
+    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+
+  it.live("lists models newest release first, undated last", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson(releaseOrderCatalog))
+        const models = yield* waitFor(
+          registry.list,
+          (models) => models.length === 4,
+          5_000,
+          "background refresh to land",
+        )
+
+        expect(models.map((model) => model.id)).toEqual([
+          ModelId.make("anthropic/claude-opus-5"),
+          ModelId.make("anthropic/claude-sonnet-4-6"),
+          ModelId.make("anthropic/claude-opus-4-6"),
+          ModelId.make("anthropic/undated"),
+        ])
+      }),
+    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+
+  it.live("orders a cache written before release dates existed, without refetching", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        const cachePath = path.join(tmpDir, ".gent/models.json")
+        yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true })
+        // Exactly the shape every shipped cache already on disk has: no
+        // releaseDate key at all. It must still decode.
+        yield* fs.writeFileString(
+          cachePath,
+          '[{"id":"openai/gpt-5.4","name":"GPT-5.4","provider":"openai","contextLength":400000}]',
+        )
+
+        const registry = yield* loadRegistry(tmpDir, encodeAnyJson({}))
+        const models = yield* registry.list
+
+        expect(models).toHaveLength(1)
+        expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
+        expect(models[0]?.releaseDate).toBeUndefined()
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
