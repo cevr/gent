@@ -18,6 +18,8 @@
  * which is a real alternative because the sibling it reaches for is not
  * `Live`.
  *
+ * Scope is every shipped source tree, `packages/` and `apps/` alike.
+ *
  * @module
  */
 
@@ -30,7 +32,17 @@ export interface AliasTestLayerFinding {
   readonly message: string
 }
 
-const SRC_PREFIX = "packages/"
+/**
+ * Shipped source, the same reading `core-retired-reconciler` uses.
+ *
+ * The rule this guard enforces is a project rule, not a core rule: a service
+ * in the TUI earns a `Test` layer on the same terms as a service in core. A
+ * `packages/`-only prefix left `apps/tui/src/services/` outside the question
+ * entirely. The two guards that do pin `packages/core/src/` -- feature
+ * independence, vendor model pins -- are scoped that way because what they
+ * forbid is core reaching outward; nothing about an alias is core-specific.
+ */
+const SHIPPED_SOURCE = /^(?:packages|apps)\/[^/]+\/(?:[^/]+\/)*src\//
 
 /**
  * Member names that claim to be an alternative implementation.
@@ -95,8 +107,7 @@ export const findAliasTestLayers = (
   file: string,
   text: string,
 ): ReadonlyArray<AliasTestLayerFinding> => {
-  if (!file.startsWith(SRC_PREFIX)) return []
-  if (!/\/src\//.test(file)) return []
+  if (!SHIPPED_SOURCE.test(file)) return []
 
   const findings: AliasTestLayerFinding[] = []
   const lines = text.split("\n")

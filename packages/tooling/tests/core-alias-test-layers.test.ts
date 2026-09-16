@@ -93,11 +93,23 @@ describe("alias alternative-layer guard", () => {
     expect(findings).toEqual([])
   })
 
-  test("ignores files outside a package source tree", () => {
+  test("flags an alias in an app source tree, not only a package one", () => {
+    const file = "apps/tui/src/services/widget.ts"
+    const findings = findAliasTestLayers(
+      file,
+      wrap("  static Test = (): Layer.Layer<Widget> => Widget.Live"),
+    )
+    expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([`${file}:2`])
+    expect(findings[0]?.message).toContain("Widget.Live")
+  })
+
+  test("ignores files outside a shipped source tree", () => {
     const member = "  static Test = (): Layer.Layer<Widget> => Widget.Live"
     expect(findAliasTestLayers("packages/core/tests/domain/widget.test.ts", wrap(member))).toEqual(
       [],
     )
+    expect(findAliasTestLayers("apps/tui/tests/services/widget.test.ts", wrap(member))).toEqual([])
+    expect(findAliasTestLayers("scripts/widget.ts", wrap(member))).toEqual([])
     expect(findAliasTestLayers("ARCHITECTURE.md", wrap(member))).toEqual([])
   })
 })
