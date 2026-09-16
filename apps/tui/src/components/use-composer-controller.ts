@@ -11,7 +11,7 @@ import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useWorkspace } from "../workspace/context"
 import { useSessionController } from "../routes/session-controller"
-import { parseSlashCommand } from "../commands/slash-commands"
+import { isSlashCommandName, parseSlashCommand } from "../commands/slash-commands"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeShell } from "../utils/shell"
@@ -166,9 +166,27 @@ export function useComposerController(): ComposerController {
     }
     const beforeTrigger = inputRef.value.plainText.slice(0, state.value.triggerPos)
     let insertion = `${state.value.type}${value} `
-    if (Option.isSome(contribution)) {
-      const formatInsertion = Option.fromNullishOr(contribution.value.formatInsertion)
-      if (Option.isSome(formatInsertion)) insertion = formatInsertion.value(value)
+    const formatInsertion = Option.flatMap(contribution, (c) =>
+      Option.fromNullishOr(c.formatInsertion),
+    )
+    if (Option.isSome(formatInsertion)) insertion = formatInsertion.value(value)
+
+    // Completing a slash command name runs it, rather than parking it in the
+    // composer behind a second Enter. Every slash command treats an empty arg
+    // as "open my picker" or "show usage", so the name alone is a full
+    // invocation. Only the bare `/name` completion dispatches: a typed
+    // argument (`/model sonnet`) leaves `beforeTrigger` non-empty or is
+    // carried by the submit path instead. An extension that supplies
+    // `formatInsertion` for `/` keeps its own insertion semantics.
+    if (
+      state.value.type === "/" &&
+      Option.isNone(formatInsertion) &&
+      beforeTrigger.length === 0 &&
+      isSlashCommandName(value, command.commands())
+    ) {
+      clearAutocomplete()
+      submitSlashCommand(`/${value}`)
+      return
     }
 
     // Track the inserted token for highlighting (trim trailing space)

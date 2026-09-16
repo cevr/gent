@@ -66,3 +66,25 @@ export function parseSlashCommand(input: string): [string, string] | null {
 
   return [trimmed.slice(1, spaceIdx), trimmed.slice(spaceIdx + 1).trim()]
 }
+
+/**
+ * Whether `/name` is a registered slash command, matched like
+ * {@link executeSlashCommand} does — by `slash` or `aliases`, case-insensitively.
+ *
+ * The composer asks this to decide whether completing a slash name should
+ * dispatch the command or only insert its text. No command in this repo
+ * requires an argument: the arg-aware ones (`/model`, `/think`, `/goal`,
+ * `/driver`, `/loop`, `/btw`) all treat an empty arg as "open my picker" or
+ * "show usage", so naming a command is always enough to run it.
+ */
+export const isSlashCommandName = (cmd: string, commands: ReadonlyArray<Command>): boolean => {
+  const lowerCmd = cmd.toLowerCase()
+  return commands.some((c) => {
+    const slash = Option.fromNullishOr(c.slash)
+    if (Option.isNone(slash)) return false
+    if (slash.value.toLowerCase() === lowerCmd) return true
+    const aliases = Option.fromNullishOr(c.aliases)
+    if (Option.isNone(aliases)) return false
+    return aliases.value.some((a) => a.toLowerCase() === lowerCmd)
+  })
+}
