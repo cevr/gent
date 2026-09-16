@@ -11,13 +11,36 @@ import { ComposerState } from "../src/components/composer-state"
 import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
 import { SessionUiState } from "../src/routes/session-ui-state"
 import { PromptSearchState } from "../src/components/prompt-search-state"
+import { useExtensionUI } from "../src/extensions/context"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { waitForRenderedFrame } from "./helpers-boundary"
+
+/**
+ * Registers the `/` contribution the popup draws from. Without a contribution
+ * `deriveAutocomplete` finds no prefixes and returns none, so no popup can
+ * open and a test asserting on one would be asserting on the echoed draft.
+ */
+function Contribute() {
+  const ui = useExtensionUI()
+  ui.setDynamicAutocomplete([
+    {
+      prefix: "/",
+      title: "Commands",
+      items: () => [
+        { id: "clear", label: "/clear", description: "Clear messages" },
+        { id: "sessions", label: "/sessions", description: "Open sessions picker" },
+      ],
+    },
+  ])
+  return <box />
+}
 function TestComposer(props: {
   readonly suspended?: boolean
   readonly onSubmit: (content: string, mode?: "queue" | "interject") => void
   readonly children?: JSX.Element
 }) {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
+  const ext = useExtensionUI()
   const mockController = {
     items: () => [],
     messages: () => [],
@@ -38,8 +61,13 @@ function TestComposer(props: {
     phaseLabel: () => "idle",
     elapsed: () => 0,
     getChildren: () => [],
+    // Production threads the live contributions here (session-controller.ts).
+    // Dropping them makes every popup assertion vacuous, so the harness
+    // matches the real call.
     onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
-      setInteractionState((current) => transitionComposerInteraction(current, event)),
+      setInteractionState((current) =>
+        transitionComposerInteraction(current, event, ext.autocompleteItems()),
+      ),
     onSubmit: props.onSubmit,
     onSlashCommand: (_cmd: string, _args: string) => Effect.void,
     onRestoreQueue: () => {},
@@ -55,6 +83,7 @@ function TestComposer(props: {
   } satisfies SessionController
   return (
     <SessionControllerContext.Provider value={mockController}>
+      <Contribute />
       <Composer>{props.children}</Composer>
     </SessionControllerContext.Provider>
   )
@@ -116,10 +145,21 @@ describe("Composer renderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      setup.mockInput.pressKeys(["/"])
-      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.mockInput.typeText("/"))
+      // The rows arrive through a resource, so the frame is polled rather than
+      // rendered once.
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("/sessions"), "command rows"),
+      )
       const frame = renderFrame(setup)
-      expect(frame).toContain("/")
+      // Assert the popup itself: its title, both contributed rows, and the
+      // footer it draws. A bare `toContain("/")` passes on the slash echoed in
+      // the composer, so it holds even with no popup mounted at all.
+      expect(frame).toContain("Commands")
+      expect(frame).toContain("/clear")
+      expect(frame).toContain("Clear messages")
+      expect(frame).toContain("/sessions")
+      expect(frame).toContain("Enter Select")
       setup.renderer.destroy()
     }),
   )
