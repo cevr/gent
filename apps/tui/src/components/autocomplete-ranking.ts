@@ -23,14 +23,24 @@
  * accidental: gaps between matched letters, and length. A name outranks a
  * description by a wide margin for the same reason.
  *
+ * Match quality alone leaves ties it cannot break. At one typed character
+ * `$t` separates `tdd` from `test` by 0.08 — one character of length charge —
+ * and the reader who picks `test` daily still finds `tdd` under the cursor.
+ * So a caller may supply the reader's own pick history, and a row that has
+ * been chosen before earns a bounded bonus on top of its match score. Bounded
+ * is the operative word: see {@link FRECENCY_MAX}.
+ *
  * `@` is deliberately not routed through this. FFF ranks files better than a
- * string matcher can, because it knows which files this reader actually opens.
+ * string matcher can, because it knows which files this reader actually opens
+ * — it already keeps its own frecency, and a second layer on top would fight
+ * it rather than help.
  *
  * @module
  */
 
 import { Option } from "effect"
 import type { AutocompleteItem } from "../extensions/client-facets.js"
+import { noFrecency, type FrecencyLookup } from "./autocomplete-frecency"
 
 /** Characters that begin a new word, so a match just after one reads as deliberate. */
 const WORD_BOUNDARY = new Set(["/", "-", "_", ".", ":", " "])
@@ -56,6 +66,37 @@ const LENGTH = 0.08
  * whose summary happens to contain those letters.
  */
 const DESCRIPTION_PENALTY = 12
+/**
+ * The most a pick history can add to a row's score.
+ *
+ * Sized deliberately below {@link BOUNDARY}. A row that matches the filter at
+ * a word boundary earns 12 points that no amount of history can make up, so
+ * frecency can only reorder rows the matcher already considers comparable —
+ * which is exactly the tie it exists to break. Raise this above 12 and a
+ * stale favourite starts jumping ahead of the row the reader is spelling out,
+ * which is the failure mode this whole feature has to avoid.
+ */
+const FRECENCY_MAX = 8
+/**
+ * How fast the bonus approaches {@link FRECENCY_MAX} as picks accumulate.
+ *
+ * The curve is logarithmic, so the first pick buys most of the benefit and the
+ * fiftieth buys almost none. That is the right shape: the point is to separate
+ * "chosen before" from "never chosen", not to let a hundred picks of one row
+ * bury everything else.
+ */
+const FRECENCY_GROWTH = 1.6
+
+/**
+ * The score bonus for a row with decayed pick weight `weight`.
+ *
+ * Zero weight yields exactly zero, so a reader with no history — or a store
+ * that failed to load — ranks precisely as they did before frecency existed.
+ */
+export const frecencyBonus = (weight: number): number => {
+  if (weight <= 0) return 0
+  return FRECENCY_MAX * (1 - Math.pow(2, -weight / FRECENCY_GROWTH))
+}
 
 /**
  * Scores `needle` against `haystack`, or {@link NO_MATCH} when the needle is
@@ -113,6 +154,19 @@ const scoreItem = (item: AutocompleteItem, filter: string): number => {
 }
 
 /**
+ * How a caller opts into pick history.
+ *
+ * Both fields are optional and default to "no history", so every existing call
+ * site keeps ranking purely by match quality.
+ */
+export interface RankOptions {
+  /** The prefix the rows were offered under, namespacing the store keys. */
+  readonly prefix?: string
+  /** The reader's decayed pick weights, already fixed at an instant. */
+  readonly frecency?: FrecencyLookup
+}
+
+/**
  * Orders `items` by how well they match `filter`, best first, dropping the
  * ones the filter does not appear in at all.
  *
@@ -123,8 +177,12 @@ const scoreItem = (item: AutocompleteItem, filter: string): number => {
 export const rankAutocompleteItems = (
   items: ReadonlyArray<AutocompleteItem>,
   filter: string,
+  options: RankOptions = {},
 ): ReadonlyArray<AutocompleteItem> => {
   if (filter.length === 0) return items
+
+  const prefix = Option.getOrElse(Option.fromNullishOr(options.prefix), () => "")
+  const lookup = Option.getOrElse(Option.fromNullishOr(options.frecency), () => noFrecency)
 
   const scored: Array<{
     readonly item: AutocompleteItem
@@ -132,8 +190,12 @@ export const rankAutocompleteItems = (
     readonly index: number
   }> = []
   for (const [index, item] of items.entries()) {
-    const score = scoreItem(item, filter)
-    if (score <= NO_MATCH) continue
+    const matchScore = scoreItem(item, filter)
+    if (matchScore <= NO_MATCH) continue
+    // Frecency lifts a row the reader has chosen before, but only among rows
+    // the matcher already admitted: a row the filter does not match is not
+    // rescued by history.
+    const score = matchScore + frecencyBonus(lookup(prefix, item.id))
     scored.push({ item, score, index })
   }
 
