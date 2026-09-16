@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import { MessageId } from "@gent/core/protocol"
 import { RGBA } from "@opentui/core"
-import { buildTopRightLabels, formatCwdGit } from "../src/utils/session-labels"
+import { buildContextLabels, buildTopRightLabels, formatCwdGit } from "../src/utils/session-labels"
 
 const absent = Option.getOrUndefined(Option.none())
 
@@ -15,44 +15,55 @@ const theme = {
 
 describe("buildTopRightLabels", () => {
   test("empty when no data", () => {
-    const labels = buildTopRightLabels(absent, 0, absent, theme)
+    const labels = buildTopRightLabels(absent, theme)
     expect(labels.length).toBe(0)
   })
 
   test("shows thinking level when set", () => {
-    const labels = buildTopRightLabels("high", 0, absent, theme)
+    const labels = buildTopRightLabels("high", theme)
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("high")
     expect(labels[0]!.color).toBe(theme.info)
   })
 
+  test("debug mode shows debug label", () => {
+    const labels = buildTopRightLabels(absent, theme, { debugMode: true })
+    expect(labels.length).toBe(1)
+    expect(labels[0]!.text).toBe("debug")
+  })
+
+  test("carries no context gauge — that anchors to the right edge", () => {
+    const labels = buildTopRightLabels("high", theme, { debugMode: true })
+    expect(labels.map((label) => label.text)).toEqual(["high", "debug"])
+  })
+})
+
+describe("buildContextLabels", () => {
   test("shows context utilization", () => {
-    const labels = buildTopRightLabels(absent, 50_000, 200_000, theme)
+    const labels = buildContextLabels(50_000, 200_000, theme, absent)
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("50k (25%)")
     expect(labels[0]!.color).toBe(theme.textMuted)
   })
 
   test("context at 70% uses warning color", () => {
-    const labels = buildTopRightLabels(absent, 70_000, 100_000, theme)
+    const labels = buildContextLabels(70_000, 100_000, theme, absent)
     expect(labels[0]!.color).toBe(theme.warning)
   })
 
   test("context at 90% uses error color", () => {
-    const labels = buildTopRightLabels(absent, 95_000, 100_000, theme)
+    const labels = buildContextLabels(95_000, 100_000, theme, absent)
     expect(labels[0]!.color).toBe(theme.error)
   })
 
   test("a projection replaces the usage estimate with what the model saw", () => {
-    const labels = buildTopRightLabels(absent, 50_000, 200_000, theme, {
-      context: {
-        estimatedTokens: 84_000,
-        availableInputTokens: 190_000,
-        contextLimitTokens: 200_000,
-        omittedMessages: 3,
-        compactions: 2,
-        handoffMessageId: MessageId.make("context-handoff:b:m"),
-      },
+    const labels = buildContextLabels(50_000, 200_000, theme, {
+      estimatedTokens: 84_000,
+      availableInputTokens: 190_000,
+      contextLimitTokens: 200_000,
+      omittedMessages: 3,
+      compactions: 2,
+      handoffMessageId: MessageId.make("context-handoff:b:m"),
     })
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("ctx 42%")
@@ -60,55 +71,34 @@ describe("buildTopRightLabels", () => {
   })
 
   test("a projection with nothing dropped shows only the percent", () => {
-    const labels = buildTopRightLabels(absent, 0, absent, theme, {
-      context: {
-        estimatedTokens: 180_000,
-        availableInputTokens: 190_000,
-        contextLimitTokens: 200_000,
-        omittedMessages: 0,
-        compactions: 0,
-      },
+    const labels = buildContextLabels(0, absent, theme, {
+      estimatedTokens: 180_000,
+      availableInputTokens: 190_000,
+      contextLimitTokens: 200_000,
+      omittedMessages: 0,
+      compactions: 0,
     })
     expect(labels[0]!.text).toBe("ctx 90%")
     expect(labels[0]!.color).toBe(theme.error)
   })
 
   test("a summary-free projection does not label the old compaction count", () => {
-    const labels = buildTopRightLabels(absent, 0, absent, theme, {
-      context: {
-        estimatedTokens: 1000,
-        availableInputTokens: 190000,
-        contextLimitTokens: 200000,
-        omittedMessages: 0,
-        compactions: 2,
-      },
+    const labels = buildContextLabels(0, absent, theme, {
+      estimatedTokens: 1000,
+      availableInputTokens: 190000,
+      contextLimitTokens: 200000,
+      omittedMessages: 0,
+      compactions: 2,
     })
     expect(labels[0]?.text).toBe("ctx 1%")
   })
 
-  test("full layout: thinking then context", () => {
-    // Effort sits beside the model name the caller prepends; the context
-    // gauge follows, next to the running total at the end of the row.
-    const labels = buildTopRightLabels("high", 10_000, 200_000, theme)
-    expect(labels.length).toBe(2)
-    expect(labels[0]!.text).toBe("high")
-    expect(labels[1]!.text).toBe("10k (5%)")
-  })
-
   test("skips context when tokens are 0", () => {
-    const labels = buildTopRightLabels(absent, 0, 200_000, theme)
-    expect(labels.length).toBe(0)
+    expect(buildContextLabels(0, 200_000, theme, absent).length).toBe(0)
   })
 
   test("skips context when contextLength undefined", () => {
-    const labels = buildTopRightLabels(absent, 50_000, absent, theme)
-    expect(labels.length).toBe(0)
-  })
-
-  test("debug mode shows debug label", () => {
-    const labels = buildTopRightLabels(absent, 0, absent, theme, { debugMode: true })
-    expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("debug")
+    expect(buildContextLabels(50_000, absent, theme, absent).length).toBe(0)
   })
 })
 

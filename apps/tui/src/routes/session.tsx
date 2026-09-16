@@ -32,7 +32,12 @@ import {
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace/context"
-import { buildTopRightLabels, formatCwdGit, type BorderLabelItem } from "../utils/session-labels"
+import {
+  buildContextLabels,
+  buildTopRightLabels,
+  formatCwdGit,
+  type BorderLabelItem,
+} from "../utils/session-labels"
 import { formatDuration } from "../utils/format-duration"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
@@ -146,15 +151,22 @@ export function Session(props: SessionProps) {
     const items: BorderLabelItem[] = []
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
-      buildTopRightLabels(
-        client.reasoningLevel(),
-        client.latestInputTokens(),
-        client.modelInfo()?.contextLength,
-        theme,
-        { debugMode: props.debugMode, context: Option.getOrUndefined(client.contextMetrics()) },
-      ),
+      buildTopRightLabels(client.reasoningLevel(), theme, { debugMode: props.debugMode }),
     )
   }
+
+  /**
+   * The labels anchored to the right edge: the context gauge and the running
+   * total. Both are numbers a reader checks at a glance without reading the
+   * row, so they hold their place and the left group truncates instead.
+   */
+  const rightAnchoredLabels = (): BorderLabelItem[] =>
+    buildContextLabels(
+      client.latestInputTokens(),
+      client.modelInfo()?.contextLength,
+      theme,
+      Option.getOrUndefined(client.contextMetrics()),
+    ).concat(costLabels())
 
   const bottomLeftLabels = (): BorderLabelItem[] => {
     const a = controller.activity()
@@ -280,8 +292,9 @@ export function Session(props: SessionProps) {
               ...topLeftLabels(),
               ...topRightLabels(),
               ...bottomRightLabels(),
-              ...costLabels(),
+              ...rightAnchoredLabels(),
             ]}
+            rightLabels={rightAnchoredLabels().length}
           >
             <Composer>
               <Composer.Autocomplete />

@@ -31,34 +31,54 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
   return { text: `ctx ${pct}%`, color: pressureColor(pct, theme) }
 }
 
-export function buildTopRightLabels(
-  // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
-  reasoningLevel: string | undefined,
+/**
+ * The context gauge alone, for the labels anchored to the right edge.
+ *
+ * It is split from {@link buildTopRightLabels} because the two halves sit at
+ * opposite ends of the row: effort belongs beside the model name, while the
+ * gauge belongs with the running total a reader checks at a glance.
+ */
+export function buildContextLabels(
   tokens: number,
   // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
   contextLength: number | undefined,
   theme: ThemeColors,
+  // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
+  context?: ModelContextMetrics,
+): BorderLabelItem[] {
+  const projection = Option.fromNullishOr(context)
+  if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
+    // The projection is what the model saw; it beats the provider's last usage report.
+    return [projectionLabel(projection.value, theme)]
+  }
+  const limit = Option.fromNullishOr(contextLength)
+  if (tokens > 0 && Option.isSome(limit) && limit.value > 0) {
+    const pct = Math.min(100, Math.round((tokens / limit.value) * 100))
+    return [{ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, theme) }]
+  }
+  return []
+}
+
+/**
+ * The labels that sit beside the model name: its effort, and the debug mark.
+ *
+ * The context gauge used to be here too. It moved to {@link buildContextLabels}
+ * when the row grew a right-anchored group — effort names how the model is
+ * configured, the gauge reports what the session has spent, and the two
+ * belong at opposite ends.
+ */
+export function buildTopRightLabels(
+  // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
+  reasoningLevel: string | undefined,
+  theme: ThemeColors,
   // eslint-disable-next-line effect/noNullish -- Solid component options are optional at this boundary.
-  options?: { debugMode?: boolean; context?: ModelContextMetrics },
+  options?: { debugMode?: boolean },
 ): BorderLabelItem[] {
   const items: BorderLabelItem[] = []
   const reasoning = Option.fromNullishOr(reasoningLevel)
-  const context = Option.fromNullishOr(contextLength)
-  const projection = Option.fromNullishOr(options?.context)
 
-  // Effort reads as part of the model's identity — which model, at what
-  // setting — so it sits directly after the name the caller prepends, ahead
-  // of the context gauge that belongs with the running total instead.
   if (Option.isSome(reasoning)) {
     items.push({ text: reasoning.value, color: theme.info })
-  }
-
-  if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
-    // The projection is what the model saw; it beats the provider's last usage report.
-    items.push(projectionLabel(projection.value, theme))
-  } else if (tokens > 0 && Option.isSome(context) && context.value > 0) {
-    const pct = Math.min(100, Math.round((tokens / context.value) * 100))
-    items.push({ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, theme) })
   }
 
   const debug = Option.fromNullishOr(options)
