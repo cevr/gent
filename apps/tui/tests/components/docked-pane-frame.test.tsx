@@ -14,7 +14,14 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
-import { BranchId, Model, ModelId, ProviderId, SessionId, dateFromMillis } from "@gent/core/protocol"
+import {
+  BranchId,
+  Model,
+  ModelId,
+  ProviderId,
+  SessionId,
+  dateFromMillis,
+} from "@gent/core/protocol"
 import { BranchPicker } from "../../src/components/branch-picker"
 import { modelRows, SettingsPicker } from "../../src/components/settings-picker"
 import { pickerHeight, pickerLines, usePickerGeometry } from "../../src/components/picker-frame"
@@ -307,7 +314,8 @@ describe("docked pane column budget", () => {
             height: 30,
             client: createMockClient({
               branch: {
-                getTree: () => Effect.succeed([{ branch: wideBranch, messageCount: 4, children: [] }]),
+                getTree: () =>
+                  Effect.succeed([{ branch: wideBranch, messageCount: 4, children: [] }]),
               },
             }),
           },

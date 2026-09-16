@@ -27,13 +27,12 @@ import { useTheme } from "../theme/index"
 
 // ── Root ──────────────────────────────────────────────────────────
 
-export interface ChromePanelRootProps {
+interface ChromePanelRootProps {
   title?: string
   width: number
   height: number
   left: number
   top?: number
-  bottom?: number
   children: JSX.Element
 }
 
@@ -58,7 +57,6 @@ function ChromePanelRoot(props: ChromePanelRootProps) {
         position="absolute"
         left={props.left}
         top={props.top}
-        bottom={props.bottom}
         width={props.width}
         height={props.height}
         backgroundColor={theme.backgroundMenu}
@@ -76,7 +74,7 @@ function ChromePanelRoot(props: ChromePanelRootProps) {
 
 // ── Body ──────────────────────────────────────────────────────────
 
-export interface ChromePanelBodyProps {
+interface ChromePanelBodyProps {
   ref?: (el: ScrollBoxRenderable) => void
   paddingLeft?: number
   paddingRight?: number
@@ -100,7 +98,7 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
 
 // ── Footer ────────────────────────────────────────────────────────
 
-export interface ChromePanelFooterProps {
+interface ChromePanelFooterProps {
   children: JSX.Element
 }
 
@@ -116,7 +114,7 @@ function ChromePanelFooter(props: ChromePanelFooterProps) {
 
 // ── Section ───────────────────────────────────────────────────────
 
-export interface ChromePanelSectionProps {
+interface ChromePanelSectionProps {
   children: JSX.Element
 }
 
@@ -130,7 +128,7 @@ function ChromePanelSection(props: ChromePanelSectionProps) {
 
 // ── Error ─────────────────────────────────────────────────────────
 
-export interface ChromePanelErrorProps {
+interface ChromePanelErrorProps {
   error?: string
 }
 
@@ -150,7 +148,7 @@ function ChromePanelError(props: ChromePanelErrorProps) {
 
 // ── Success ───────────────────────────────────────────────────────
 
-export interface ChromePanelSuccessProps {
+interface ChromePanelSuccessProps {
   message?: string
 }
 
