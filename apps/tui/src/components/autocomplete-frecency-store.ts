@@ -70,7 +70,18 @@ export const writeFrecencyStore = (
     const fs = yield* FileSystem.FileSystem
     const paths = yield* frecencyPaths(home)
     yield* fs.makeDirectory(paths.directory, { recursive: true })
-    yield* fs.writeFileString(paths.file, encodeStore(store))
+    // Write beside the target, then rename onto it. `rename` within one
+    // directory is atomic on every filesystem the TUI runs on, so a reader
+    // opening the file sees either the whole previous store or the whole new
+    // one — never the half-written JSON that a direct overwrite exposes. The
+    // pid names the temp file because a second `gent` may be writing its own
+    // at the same instant, and two writers sharing one temp path would
+    // corrupt each other rather than merely race.
+    const temp = `${paths.file}.${process.pid}.tmp`
+    yield* fs.writeFileString(temp, encodeStore(store))
+    yield* Effect.onError(fs.rename(temp, paths.file), () =>
+      fs.remove(temp, { force: true }).pipe(Effect.ignoreCause),
+    )
   }).pipe(Effect.ignoreCause)
 
 /**
@@ -115,6 +126,29 @@ export const frecencySnapshot = (): FrecencyStoreValue => snapshot
 export const setFrecencySnapshot = (value: FrecencyStoreValue): void => {
   snapshot = value
 }
+
+/**
+ * Forgets every pick, on disk and in memory.
+ *
+ * Ranking has no other escape hatch: a store that learned the wrong row keeps
+ * offering it, and the weights only halve every two weeks. Deleting the file
+ * by hand works but leaves this process ranking from the snapshot it already
+ * holds, so the clear has to happen on both sides of the gate — inside it, so
+ * a concurrent pick cannot interleave and re-create what was just removed.
+ *
+ * Removing the file rather than writing an empty store keeps "never picked
+ * anything" and "picked then cleared" the same state, which is what the read
+ * path already degrades to.
+ */
+export const clearFrecencyStore = (
+  home: string,
+): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const paths = yield* frecencyPaths(home)
+    yield* fs.remove(paths.file, { force: true })
+    snapshot = emptyFrecencyStore()
+  }).pipe(Effect.ignoreCause, writeGate.withPermits(1))
 
 /**
  * Records a pick against the file, folding it into whatever is on disk.

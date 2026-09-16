@@ -512,6 +512,7 @@ export function createSessionController(props: {
     cast,
     frecency: () => frecency.lookup(),
     recordPick: (id: string) => frecency.record("/", id),
+    resetFrecency: () => frecency.reset(),
     openForkPicker,
     openModelPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" })),

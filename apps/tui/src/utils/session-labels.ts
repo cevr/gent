@@ -46,6 +46,13 @@ export function buildTopRightLabels(
   const context = Option.fromNullishOr(contextLength)
   const projection = Option.fromNullishOr(options?.context)
 
+  // Effort reads as part of the model's identity — which model, at what
+  // setting — so it sits directly after the name the caller prepends, ahead
+  // of the context gauge that belongs with the running total instead.
+  if (Option.isSome(reasoning)) {
+    items.push({ text: reasoning.value, color: theme.info })
+  }
+
   if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
     // The projection is what the model saw; it beats the provider's last usage report.
     items.push(projectionLabel(projection.value, theme))
@@ -57,10 +64,6 @@ export function buildTopRightLabels(
   const debug = Option.fromNullishOr(options)
   if (Option.isSome(debug) && debug.value.debugMode === true) {
     items.push({ text: "debug", color: theme.warning })
-  }
-
-  if (Option.isSome(reasoning)) {
-    items.push({ text: reasoning.value, color: theme.info })
   }
 
   return items

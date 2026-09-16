@@ -86,11 +86,13 @@ describe("buildTopRightLabels", () => {
     expect(labels[0]?.text).toBe("ctx 1%")
   })
 
-  test("full layout: context + thinking", () => {
+  test("full layout: thinking then context", () => {
+    // Effort sits beside the model name the caller prepends; the context
+    // gauge follows, next to the running total at the end of the row.
     const labels = buildTopRightLabels("high", 10_000, 200_000, theme)
     expect(labels.length).toBe(2)
-    expect(labels[0]!.text).toBe("10k (5%)")
-    expect(labels[1]!.text).toBe("high")
+    expect(labels[0]!.text).toBe("high")
+    expect(labels[1]!.text).toBe("10k (5%)")
   })
 
   test("skips context when tokens are 0", () => {

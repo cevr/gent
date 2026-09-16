@@ -24,6 +24,8 @@ interface SessionCommandRegistryProps {
   readonly frecency: () => FrecencyLookup
   /** Records that the reader chose a command from the `/` popup. */
   readonly recordPick: (id: string) => void
+  /** Forgets every recorded pick, so ranking starts over. */
+  readonly resetFrecency: () => void
   readonly openForkPicker: () => void
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
@@ -91,6 +93,15 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     aliases: ["clear"],
     slashPriority: 0,
     onSelect: () => props.client.createSession(),
+  },
+  {
+    id: "session.frecency-reset",
+    title: "Reset Autocomplete Ranking",
+    description: "Forget which commands and skills you pick most (/frecency-reset)",
+    category: "Session",
+    slash: "frecency-reset",
+    slashPriority: 0,
+    onSelect: props.resetFrecency,
   },
   {
     id: "session.sessions",

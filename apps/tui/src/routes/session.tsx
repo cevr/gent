@@ -124,10 +124,21 @@ export function Session(props: SessionProps) {
       }
     }
 
-    // Core chrome: cost
-    const c = client.cost()
-    if (c > 0) items.push({ text: `$${c.toFixed(2)}`, color: theme.textMuted })
     return items
+  }
+
+  /**
+   * The running total, rendered last of everything.
+   *
+   * Cost used to sit in the top-left group, which put it between the
+   * connection state and the model. It is the one number a reader glances at
+   * without reading the rest of the row, so it belongs at the far end where
+   * its position is fixed and nothing before it can shift it.
+   */
+  const costLabels = (): BorderLabelItem[] => {
+    const c = client.cost()
+    if (c <= 0) return []
+    return [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }]
   }
 
   const topRightLabels = (): BorderLabelItem[] => {
@@ -160,6 +171,19 @@ export function Session(props: SessionProps) {
       items.push({ text: controller.phaseLabel(), color: theme.textMuted })
     }
 
+    // Where the session is rooted, beside the phase word rather than behind a
+    // debug flag. A reader running several sessions at once cannot tell them
+    // apart from the model and cost alone, and the cwd is the thing that
+    // distinguishes them.
+    items.push({
+      text: formatCwdGit(
+        workspace.cwd,
+        Option.fromNullishOr(workspace.gitRoot()),
+        Option.fromNullishOr(workspace.gitStatus()?.branch),
+      ),
+      color: theme.textMuted,
+    })
+
     // Extension-contributed labels
     for (const label of ext.borderLabels()) {
       if (label.position === "bottom-left") {
@@ -174,12 +198,6 @@ export function Session(props: SessionProps) {
 
   const bottomRightLabels = (): BorderLabelItem[] => {
     const items: BorderLabelItem[] = []
-    const label = formatCwdGit(
-      workspace.cwd,
-      Option.fromNullishOr(workspace.gitRoot()),
-      Option.fromNullishOr(workspace.gitStatus()?.branch),
-    )
-    if (props.debugMode) items.push({ text: label, color: theme.textMuted })
 
     // Extension-contributed labels
     for (const bl of ext.borderLabels()) {
@@ -262,6 +280,7 @@ export function Session(props: SessionProps) {
               ...topLeftLabels(),
               ...topRightLabels(),
               ...bottomRightLabels(),
+              ...costLabels(),
             ]}
           >
             <Composer>

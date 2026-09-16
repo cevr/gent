@@ -86,6 +86,22 @@ const FRECENCY_MAX = 8
  * bury everything else.
  */
 const FRECENCY_GROWTH = 1.6
+/**
+ * The shortest filter that may be reordered by pick history.
+ *
+ * At one or two characters the matcher's own separation is already thinner
+ * than its tie-breaks — `$t` splits `tdd` from `test` by 0.08, one character
+ * of length charge — so a single past pick decides the row under the cursor
+ * for a filter that names almost nothing. That is the wrong moment to be
+ * confident: the reader who types `t` has not said which `t` they mean, and a
+ * favourite that jumps to the top there is harder to get past than a
+ * mis-ranked list, because the ghost line offers it too.
+ *
+ * Three characters is where the subsequence score starts carrying real
+ * signal, and it is the length at which ranking was verified live. Below it
+ * rows rank purely on match quality, exactly as they did before frecency.
+ */
+const FRECENCY_MIN_FILTER = 3
 
 /**
  * The score bonus for a row with decayed pick weight `weight`.
@@ -182,7 +198,12 @@ export const rankAutocompleteItems = (
   if (filter.length === 0) return items
 
   const prefix = Option.getOrElse(Option.fromNullishOr(options.prefix), () => "")
-  const lookup = Option.getOrElse(Option.fromNullishOr(options.frecency), () => noFrecency)
+  // Short filters rank on match quality alone — see FRECENCY_MIN_FILTER.
+  const supplied = Option.getOrElse(Option.fromNullishOr(options.frecency), () => noFrecency)
+  const lookup = Option.getOrElse(
+    Option.liftPredicate(supplied, () => filter.length >= FRECENCY_MIN_FILTER),
+    () => noFrecency,
+  )
 
   const scored: Array<{
     readonly item: AutocompleteItem

@@ -28,6 +28,7 @@ import { createSignal } from "solid-js"
 import { DateTime, Effect, Option } from "effect"
 import { frecencyLookup, type FrecencyLookup } from "../components/autocomplete-frecency"
 import {
+  clearFrecencyStore,
   frecencySnapshot,
   readFrecencyStore,
   recordFrecencyPick,
@@ -44,6 +45,8 @@ export interface AutocompleteFrecency {
   readonly lookup: () => FrecencyLookup
   /** Records that the reader chose `id` from the `prefix` popup. */
   readonly record: (prefix: string, id: string) => void
+  /** Forgets every pick, so ranking falls back to match quality alone. */
+  readonly reset: () => void
 }
 
 /**
@@ -93,6 +96,15 @@ export function useAutocompleteFrecency(): AutocompleteFrecency {
     record: (prefix: string, id: string) => {
       cast(
         Effect.tap(recordFrecencyPick(workspace.home, prefix, id, currentMillis()), () =>
+          Effect.sync(() => {
+            cell.bump((value) => value + 1)
+          }),
+        ),
+      )
+    },
+    reset: () => {
+      cast(
+        Effect.tap(clearFrecencyStore(workspace.home), () =>
           Effect.sync(() => {
             cell.bump((value) => value + 1)
           }),

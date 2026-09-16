@@ -144,27 +144,48 @@ describe("ranking with pick history", () => {
     )
   })
 
-  test("reaches test from $t after the reader picks it once", () => {
-    // The headline weakness. `tdd` scores 12.760 and `test` 12.680 — a gap of
-    // exactly one character of length charge — so one real pick settles it.
-    expect(ids(rankAutocompleteItems(skills, "t"))[0]).toBe("tdd")
+  test("reaches test from $tes after the reader picks it once", () => {
+    // `tdd` scores 12.760 and `test` 12.680 — a gap of exactly one character
+    // of length charge — so one real pick settles it, from three characters on.
+    expect(ids(rankAutocompleteItems(skills, "tes"))[0]).toBe("test")
     const store = recordPick(emptyFrecencyStore(), "$", "test", NOW)
     expect(
       ids(
-        rankAutocompleteItems(skills, "t", { prefix: "$", frecency: frecencyLookup(store, NOW) }),
+        rankAutocompleteItems(skills, "tes", { prefix: "$", frecency: frecencyLookup(store, NOW) }),
       )[0],
     ).toBe("test")
   })
 
-  test("reaches thread from /t and /th after a pick", () => {
-    expect(ids(rankAutocompleteItems(commands, "t"))[0]).toBe("think")
+  test("leaves $t alone however often test was picked", () => {
+    // The deliberate limit. One and two characters name almost nothing, so a
+    // single past pick must not decide the row under the cursor — and the
+    // ghost line offers that row, which makes a wrong guess there costly.
+    let store = emptyFrecencyStore()
+    for (let index = 0; index < 50; index++) store = recordPick(store, "$", "test", NOW)
+    const lookup = frecencyLookup(store, NOW)
+    expect(ids(rankAutocompleteItems(skills, "t", { prefix: "$", frecency: lookup }))[0]).toBe(
+      "tdd",
+    )
+    expect(ids(rankAutocompleteItems(skills, "td", { prefix: "$", frecency: lookup }))[0]).toBe(
+      "tdd",
+    )
+  })
+
+  test("reaches thread from /thr and /thre after a pick", () => {
+    // `/t` and `/th` are below FRECENCY_MIN_FILTER and keep answering `think`
+    // by match quality alone; the tie only becomes history's to break once
+    // the reader has typed enough to mean something.
+    expect(ids(rankAutocompleteItems(commands, "thr"))[0]).toBe("thread")
     const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
     const lookup = frecencyLookup(store, NOW)
-    expect(ids(rankAutocompleteItems(commands, "t", { prefix: "/", frecency: lookup }))[0]).toBe(
+    expect(ids(rankAutocompleteItems(commands, "thr", { prefix: "/", frecency: lookup }))[0]).toBe(
       "thread",
     )
-    expect(ids(rankAutocompleteItems(commands, "th", { prefix: "/", frecency: lookup }))[0]).toBe(
+    expect(ids(rankAutocompleteItems(commands, "thre", { prefix: "/", frecency: lookup }))[0]).toBe(
       "thread",
+    )
+    expect(ids(rankAutocompleteItems(commands, "t", { prefix: "/", frecency: lookup }))[0]).toBe(
+      "think",
     )
   })
 
@@ -214,7 +235,7 @@ describe("ranking with pick history", () => {
     store = recordPick(store, "$", "test", NOW)
     expect(
       ids(
-        rankAutocompleteItems(skills, "t", { prefix: "$", frecency: frecencyLookup(store, NOW) }),
+        rankAutocompleteItems(skills, "tes", { prefix: "$", frecency: frecencyLookup(store, NOW) }),
       )[0],
     ).toBe("test")
   })

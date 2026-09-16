@@ -55,11 +55,18 @@ describe("slash autocomplete reads pick history", () => {
     expect(ids(slashAutocompleteItems(commands, "t"))[0]).toBe("think")
   })
 
-  test("answers /t with thread once the reader has picked it", () => {
+  test("answers /thr with thread once the reader has picked it", () => {
     // The seam: the contribution has to pass the history through to the
     // ranker. A build that drops the third argument still answers `think`.
+    //
+    // Three characters, not one: ranking ignores pick history below
+    // FRECENCY_MIN_FILTER, so a one-character filter would pass this test for
+    // the wrong reason — it would answer `think` whether or not the history
+    // reached the ranker at all.
     const store = recordPick(emptyFrecencyStore(), "/", "thread", NOW)
-    expect(ids(slashAutocompleteItems(commands, "t", frecencyLookup(store, NOW)))[0]).toBe("thread")
+    expect(ids(slashAutocompleteItems(commands, "thr", frecencyLookup(store, NOW)))[0]).toBe(
+      "thread",
+    )
   })
 
   test("keeps a picked command out of a filter it does not match", () => {
