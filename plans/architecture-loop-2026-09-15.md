@@ -692,3 +692,35 @@ Separately, a `--lines 6` window over a tall open picker returned an empty captu
 ## Open, not oversight (2026-09-16)
 
 **Cmd/Meta+Enter over an open popup now submits**, where before it silently did nothing. `5d39e8a7` removed two guards from `handleTextareaKeyDown`: the interject branch's own `Option.isSome(autocompleteOption())` bail and a separate blanket swallow below it. Nothing binds Cmd+Enter to a row — `SelectList` claims plain `return`, never the meta variant — so a Cmd+Enter reaching the composer is one no popup was going to consume, and the old bail made interject a dead key whenever a `/` popup happened to be open. The edge worth naming: `/mod` + Cmd+Enter now submits the raw draft and reports `Unknown command: /mod` rather than resolving to `/model`. Untested either way, left for the user to decide.
+
+## Ghost completion and ranked autocomplete (2026-09-16, `34ff5e26`)
+
+User ask: "add autocomplete to the composer, so for skills, slash commands, file paths etc, add a little muted autocomplete you can press tab to complete - using FFF for each."
+
+**"FFF for each" could not be taken literally, and the measurement is why.** `@ff-labs/fff-bun@0.10.6` (latest; no upgrade exists) exports `binaryExists`, `findBinary`, `FileFinder` and types only. `src/fff-api.ts` is file-shaped throughout — glob prefiltering, `accessFrecencyScore`, `modificationFrecencyScore`, filename-match bonuses. There is no arbitrary-string matcher, and slash commands and skills have no files to index. So `@` keeps FFF untouched; `/` and `$` needed a different matcher.
+
+**`match-sorter` was the obvious candidate and lost on measurement.** It already ships and already ranks the command palette, so it was the no-new-dependency default. The user pushed back that it is slow; benchmarking agreed, per keystroke, one query against the whole corpus, warmed:
+
+| corpus              | match-sorter | subsequence scorer |
+| ------------------- | ------------ | ------------------ |
+| 30 slash commands   | 18.52 µs     | **2.25 µs**        |
+| 62 skills           | 35.63 µs     | **4.20 µs**        |
+| 2000 items (stress) | 959.10 µs    | **95.59 µs**       |
+
+~8-10x at every size. Quality decided it more firmly than speed: ranking `ag` over the real command set, `match-sorter` answered `/agents /goal /config /new` because it matches inside _descriptions_ ("Fork from Mess**ag**e", "Man**ag**e API Keys"), while the subsequence scorer answered `/agents` alone. For ghost text that is decisive — the ghost shows the top candidate, so a matcher that pads the list surfaces a wrong ghost. Shipped as `components/autocomplete-ranking.ts`, no new dependency. The benchmark's weights were a sketch; the agent tuned its own against tests over the real corpora.
+
+Ranking, before and after: `/ag` was `/fork /auth /agents` (registration order, `includes` on name _or_ title) and is now `/agents` with `/fork` and `/auth` dropped entirely. `$te` puts `test` first. `@` is byte-identical — FFF already ranks it well.
+
+**The inline ghost was not delivered, and the reason is a hard limit, not a shortcut.** `TextareaRenderable.placeholder` is empty-buffer-only with a private `applyPlaceholder` and no offset, so it cannot draw a suffix after typed text. Virtual extmarks were the only other inline mechanism and failed two empirical probes against a real renderable: marks created with `virtual: true` are stored and returned by `getVirtual()` but **never reach the screen** in `@opentui/core` 0.5.11 — tried with zero-width and non-empty ranges, with a `styleId`, and with three data key spellings — and holding a mark across an edit **breaks undo** (`/ag` + `X` + Ctrl+Z left `/agX`, the mark silently migrating from offset 3 to 4). A grep for render-side use of `getVirtual()` in the compiled core found none, and 0.5.11 is the latest published version, so upstream offers no escape today. Drawing beside the textarea failed differently: a shrink-to-fit input hands the ghost whatever columns remain on each wrapped row, splitting it mid-word on a long draft.
+
+What shipped is a muted row of its own under the input (`composer.tsx`, `theme.textMuted`, trailing `⇥`). It survives wrapping at every width, and it has a property the inline version would not: **the ghost is never in the buffer, so no submit path can carry it.** Inline ghost text needs an upstream `@opentui/core` change to render virtual extmarks.
+
+**A disclosed weakness, verified rather than taken on trust.** The scorer's shortest-name-wins bias makes one- and two-character filters unreliable: `$t` ranks `tdd` above `test`, `/t` and `/th` reach `think` and never `thread`, `$p` prefers `pr` over `prototype`. Confirmed live at `$t`. It becomes reliable at three characters. The mitigation is that the ghost appears only when the top row _extends_ what was typed, so a scattered subsequence match never produces one.
+
+Probe counts (baseline 13 pass / 0 fail on the two prior regression files): A (registry stops ranking) 8/3; B (ghost row stops rendering) 2/2; C (skills stop ranking) 10/1; D (scorer returns everything unranked) 11/9 and seam 4/7. The agent's first probe run proved nothing for two of three fixes — the tests called the scorer directly and so could not detect a _caller_ that stopped calling it; seam tests were added and it re-probed. Final: seam 11/0, scorer 20/0, ghost 4/0, prior regressions 13/0 unchanged.
+
+## Pane receipts, ghost completion (2026-09-16, `wZ:p18`)
+
+Binary rebuilt 01:13 from gated main at `34ff5e26`, `GATE EXIT 0` at log line 679. Nine checks, all PASS.
+
+`/ag` → popup lists `/agents` first (was `/fork`) and a muted `agents ⇥` row renders under the composer; ANSI confirms it is genuinely muted at `138;138;138` against the selected row's `238;238;238`. Tab → draft becomes `/agents `, nothing runs, ghost clears. `/agzz` → "No matches", **no ghost row**. `/agents` fully typed → no ghost, nothing left to offer. Plain prose `hello wor` → no ghost row, and Enter sent exactly `hello wor`. `/agents` + one Enter → agents pane opens, so the first-Enter dispatch survives the ranking change. `$te` → skills popup with `test` first and ghost `test ⇥`. `$t` → `tdd` above `test`, the disclosed limit, reproduced. `@gam` → FFF order unchanged, `gamut.ts` first, ghost `gamut.ts ⇥`.
