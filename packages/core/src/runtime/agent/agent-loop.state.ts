@@ -544,6 +544,19 @@ export const buildInitialAgentLoopState = (params: {
 export const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState =>
   runtimeStateFromLoopState(s.state, s.queue)
 
+/**
+ * Whether a caller may take a turn for this branch right now.
+ *
+ * Idle is not enough on its own. `startingState` holds an item another caller
+ * already reserved but has not started yet: it has left the queue and has not
+ * reached `state`, so a plain idle test cannot see it. A caller that takes a
+ * turn past that reservation leaves the reserving caller to find the loop
+ * `Running` when it finally starts, with its item in neither the queue nor the
+ * transcript. Both admission paths ask this one question.
+ */
+export const canStartTurnNow = (s: AgentLoopState): boolean =>
+  s.state._tag === "Idle" && Predicate.isUndefined(s.startingState)
+
 /** How many failures this branch had recorded, or 0 if it has had none. */
 export const turnFailureEpoch = (state: AgentLoopState): number =>
   Option.getOrElse(

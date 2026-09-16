@@ -42,14 +42,21 @@ export type MessageRole = typeof MessageRole.Type
 
 /**
  * Custom types of the user-role messages the runtime writes for the model:
- * a continuation prompt inside a turn, a context-window handoff marker, and
- * the model-change notice. None of them is a turn a person asked for, so
- * recovery never answers one on its own.
+ * a continuation prompt inside a turn, a context-window handoff marker, the
+ * model-change notice, and steering that joined a turn already running. None
+ * of them is a turn a person asked for on its own, so recovery never answers
+ * one by itself.
+ *
+ * `steering` marks only an interjection delivered at a step boundary: the
+ * turn it joined already answers it, and it never gets a `TurnCompleted` of
+ * its own. An interjection that woke an idle branch is a turn in its own
+ * right, carries no marker, and still recovers after a restart.
  */
 export const RuntimeUserMessageType = Schema.Literals([
   "continuation",
   "context-window",
   "model-change",
+  "steering",
 ])
 export type RuntimeUserMessageType = typeof RuntimeUserMessageType.Type
 const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)

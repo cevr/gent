@@ -72,6 +72,7 @@ import {
   appendSteeringItem,
   buildIdleState,
   buildRunningState,
+  canStartTurnNow,
   clearInFlightQueuedTurn,
   countQueuedFollowUps,
   drainVisibleQueueItems,
@@ -281,19 +282,8 @@ const makeAgentLoopQueue = (
               }
             }
 
-            if (!Predicate.isUndefined(current.startingState)) {
-              return {
-                value: Option.none(),
-                next: {
-                  ...current,
-                  queue: nextQueue,
-                },
-                persist: true,
-              }
-            }
-
             const projectedState = projectRuntimeState(current)
-            if (projectedState._tag !== "Idle" || current.state._tag !== "Idle") {
+            if (projectedState._tag !== "Idle" || !canStartTurnNow(current)) {
               return {
                 value: Option.none(),
                 next: { ...current, queue: nextQueue },
@@ -331,7 +321,7 @@ const makeAgentLoopQueue = (
       function* (options: { readonly onlyIfIdle: boolean }) {
         const queuedCreatedAt = yield* DateTime.nowAsDate
         return yield* commitQueueTransaction("dequeued turn", (s) => {
-          if (options.onlyIfIdle && s.state._tag !== "Idle") {
+          if (options.onlyIfIdle && !canStartTurnNow(s)) {
             return { value: Option.none(), next: s, persist: false }
           }
           const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)

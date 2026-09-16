@@ -1023,8 +1023,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       for (const item of items) {
         // The message joins the transcript now. Its admission time could sort it
         // between a tool call and its result, which the projection rejects.
+        //
+        // `steering` marks it as answered by the turn it joined. Without the
+        // mark it is a user-role message with no `TurnCompleted` of its own,
+        // and a restart reads that as an unanswered turn and answers it twice.
+        // Only delivery stamps it: an interjection that woke an idle branch
+        // never reaches this boundary and must still recover.
         yield* persistMessageReceived({
-          message: { ...item.message, createdAt: yield* DateTime.nowAsDate },
+          message: {
+            ...item.message,
+            createdAt: yield* DateTime.nowAsDate,
+            metadata: { ...item.message.metadata, customType: "steering" },
+          },
         })
       }
       // Dropped only once the transcript holds them. The queue write and the

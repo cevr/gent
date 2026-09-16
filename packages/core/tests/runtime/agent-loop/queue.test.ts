@@ -38,6 +38,10 @@ import {
 import { MessageStorage } from "../../../src/storage/message-storage"
 import {
   appendFollowUpQueueState,
+  buildIdleState,
+  buildInitialAgentLoopState,
+  buildRunningState,
+  canStartTurnNow,
   emptyLoopQueueState,
   LoopQueueState,
   queueRequestsWake,
@@ -51,6 +55,42 @@ import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
+
+describe("turn admission", () => {
+  const item = (id: string) => ({
+    message: Message.cases.regular.make({
+      id: MessageId.make(id),
+      sessionId: SessionId.make("admit-session"),
+      branchId: BranchId.make("admit-branch"),
+      role: "user",
+      parts: [Prompt.textPart({ text: id })],
+      createdAt: dateFromMillis(1_767_225_600_000),
+    }),
+  })
+
+  test("an idle branch with nothing reserved may start a turn", () => {
+    expect(canStartTurnNow(buildInitialAgentLoopState({ state: buildIdleState() }))).toBe(true)
+  })
+
+  test("a running branch may not start another turn", () => {
+    const running = buildRunningState({}, item("running"), { startedAtMs: 0 })
+    expect(canStartTurnNow(buildInitialAgentLoopState({ state: running }))).toBe(false)
+  })
+
+  // The reserving caller has taken the item out of the queue and has not yet
+  // reached `startTurn`, so `state` is still Idle. A second caller that reads
+  // only `state` would take a turn past the reservation, and the reserved item
+  // would then be in neither the queue nor the transcript.
+  test("an idle branch holding a reservation may not start a turn", () => {
+    const reserved = buildRunningState({}, item("reserved"), { startedAtMs: 0 })
+    const state = {
+      ...buildInitialAgentLoopState({ state: buildIdleState() }),
+      startingState: reserved,
+    }
+    expect(state.state._tag).toBe("Idle")
+    expect(canStartTurnNow(state)).toBe(false)
+  })
+})
 
 describe("wake admission", () => {
   const queuedMessage = (id: string, text: string) =>
@@ -563,6 +603,95 @@ describe("queue drain regression", () => {
             yield* eventStorage.appendEvent(MessageReceived.make({ message }))
             yield* eventStorage.appendEvent(MessageReceived.make({ message: reply }))
             yield* eventStorage.appendEvent(MessageReceived.make({ message: marker }))
+            yield* eventStorage.appendEvent(
+              TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const state = yield* agentLoop.getState({ sessionId, branchId })
+            expect(state._tag).toBe("Idle")
+            const called = yield* Deferred.await(providerCalled).pipe(
+              Effect.timeout("500 millis"),
+              Effect.option,
+            )
+            expect(Option.isNone(called)).toBe(true)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "startup does not answer delivered steering as a user turn",
+    () =>
+      Effect.gen(function* () {
+        // Steering delivered at a step boundary joins the turn already running
+        // and never gets a `TurnCompleted` of its own. Without a runtime
+        // marker, recovery reads that as an unanswered user turn and answers
+        // it a second time after a restart.
+        const sessionId = SessionId.make("session-loop-steering-replay")
+        const branchId = BranchId.make("branch-loop-steering-replay")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("replayed"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          providerLayer,
+          ModelResolver.fromLanguageModel(providerLayer),
+          makeExtRegistry(),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          ConfigService.Test(),
+          EventStore.Memory,
+          ToolRunner.Test(),
+          ApprovalService.Test(),
+          BunServices.layer,
+          ModelRegistry.Test(),
+          GentPlatform.Test(),
+          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
+        )
+        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
+          ),
+        )
+        const messageId = MessageId.make("msg-steering-replay")
+        const message = Message.cases.regular.make({
+          id: messageId,
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: "answer me" })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        })
+        // The shape `deliverSteeringAtStepBoundary` writes: a user-role
+        // interjection carrying the runtime marker, with no completion of
+        // its own.
+        const delivered = Message.cases.regular.make({
+          id: MessageId.make("msg-steering-replay-interject"),
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [Prompt.textPart({ text: "also do this" })],
+          createdAt: dateFromMillis(1_767_225_600_001),
+          metadata: { customType: "steering" },
+        })
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: delivered }))
             yield* eventStorage.appendEvent(
               TurnCompleted.make({ sessionId, branchId, messageId, durationMs: 1 }),
             )

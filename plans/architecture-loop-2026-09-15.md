@@ -940,7 +940,7 @@ on `gpt-6-astra high`, reading this repo at `7ae39d16` and openai/codex at
 pending-singleton index — `idx_interaction_requests_pending_singleton`
 (`schema.ts:190`) — as the reason a question blocks the turn. It is a symptom.
 The wait is a stored continuation built from three stacked layers: the approval
-service raises `InteractionPendingError` *after* it saves the row
+service raises `InteractionPendingError` _after_ it saves the row
 (`interaction-request.ts:265`), the loop parks in `WaitingForInteraction` with
 a single `pendingRequestId` and `pendingToolCallId` (`agent-loop.state.ts:329`),
 and the response RPC accepts only the branch's current id
@@ -953,7 +953,7 @@ choices; that is the finding worth keeping.
 idle"; the body only called `appendSteering`. Compare `admitTurn`, one screen
 above, which calls `reserveAndStart(..., { queueOnly: false })`.
 
-My first fix started a turn for *every* interject, and the gate said no: two
+My first fix started a turn for _every_ interject, and the gate said no: two
 tests in `session-idempotency.test.ts` (`:416`, `:460`) steer an idle branch
 and then read the queue, and both went red while passing on clean main. Their
 subjects are requestId idempotency and drain-replay; parked steering is only
