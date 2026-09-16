@@ -2,7 +2,7 @@
 /**
  * The ruled frame the docked panes share.
  *
- * `/model`, `/think` and `/thread` draw the same `PickerFrame` the
+ * `/model`, `/think`, `/thread` and the resume-branch pane draw the same `PickerFrame` the
  * slash-command popup does: ruled off top and bottom under the composer, not
  * a bordered box. These pin the two things that framing decides — the rows a
  * pane keeps to the height rule, and the columns a row may spend.
@@ -14,11 +14,13 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
-import { BranchId, Model, ModelId, ProviderId, SessionId } from "@gent/core/protocol"
+import { BranchId, Model, ModelId, ProviderId, SessionId, dateFromMillis } from "@gent/core/protocol"
+import { BranchPicker } from "../../src/components/branch-picker"
 import { modelRows, SettingsPicker } from "../../src/components/settings-picker"
 import { pickerHeight, pickerLines, usePickerGeometry } from "../../src/components/picker-frame"
 import { ThreadPane, type ThreadWindow } from "../../src/extensions/builtins/thread-view.client"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import type { Branch } from "@gent/sdk"
+import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 
 const sessionId = SessionId.make("s1")
@@ -61,6 +63,24 @@ const agedWindow = (updatedAt: number): ThreadWindow => ({
   preview: "P".repeat(300),
   updatedAt,
 })
+
+const branch = (id: string, name: string): Branch => ({
+  id: BranchId.make(id),
+  sessionId,
+  name,
+  createdAt: dateFromMillis(0),
+})
+
+/**
+ * A branch whose label cannot fit any terminal.
+ *
+ * Unlike a thread or a settings row, a branch row has nothing anchored to the
+ * right edge: `formatBranchLabel` draws one left-aligned `name (count)` and
+ * stops. So a branch row can be cut short but can never wrap a tail onto a
+ * line of its own, and the rendered frame cannot witness an overspent budget
+ * on its own — which is why the budget itself is pinned below.
+ */
+const wideBranch = branch("branch-wide", "L".repeat(400))
 
 const wideModel = new Model({
   id: ModelId.make("D".repeat(150)),
@@ -137,6 +157,33 @@ describe("docked panes", () => {
       )
       // One row plus the query row above it.
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(pickerLines(1, 1), 40))
+    }),
+  )
+
+  it.live("the resume-branch pane keeps the picker's height rule", () =>
+    Effect.gen(function* () {
+      // A flat list: no heading opens a group and no detail line follows it,
+      // so the pane draws exactly the branches it holds and budgets items
+      // rather than lines. It used to cap itself at sixteen rows of its own.
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <BranchPicker
+              open={true}
+              sessionId={sessionId}
+              sessionName="Test Session"
+              branches={[branch("b1", "main"), branch("b2", "side-quest")]}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("side-quest"), "branch pane"),
+      )
+      expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(2, 40))
     }),
   )
 })
@@ -223,6 +270,60 @@ describe("docked pane column budget", () => {
       const rowLines = lines.filter((line) => line.includes("NNN"))
       // The name and its detail share one line rather than wrapping.
       expect(rowLines.length).toBe(1)
+      expect(rowLines[0]?.trimEnd().length).toBe(ruleWidth(lines) - 1)
+    }),
+  )
+
+  it.live("a branch row spends the picker's columns, not a bordered pane's", () =>
+    Effect.gen(function* () {
+      // The pane budgeted `width - 8` while it drew its own border and
+      // margins. Ruled, it spends three: the body pads one each side and the
+      // row pads one more on the left. The drawn row cannot witness the
+      // difference — a row budgeted too wide is clamped by its own box — so
+      // the budget is pinned here and the cut row is checked against the rule.
+      const seen: Array<{ row: number; section: number }> = []
+      const Probe = () => {
+        const { rowWidth, sectionWidth } = usePickerGeometry()
+        seen.push({ row: rowWidth(), section: sectionWidth() })
+        return <text>probe</text>
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <Probe />
+              <BranchPicker
+                open={true}
+                sessionId={sessionId}
+                sessionName="Test Session"
+                branches={[wideBranch]}
+                onSelect={() => {}}
+                onClose={() => {}}
+              />
+            </>
+          ),
+          {
+            width: 58,
+            height: 30,
+            client: createMockClient({
+              branch: {
+                getTree: () => Effect.succeed([{ branch: wideBranch, messageCount: 4, children: [] }]),
+              },
+            }),
+          },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("LLL"), "branch row"),
+      )
+      // A row pads itself one column inside a body that pads one each side.
+      expect(seen[0]).toEqual({ row: 55, section: 56 })
+
+      const lines = renderFrame(setup).split("\n")
+      const rowLines = lines.filter((line) => line.includes("LLL"))
+      // The label is cut, not wrapped onto a second line.
+      expect(rowLines.length).toBe(1)
+      // A cut row ends one column inside the rule, at every width measured.
       expect(rowLines[0]?.trimEnd().length).toBe(ruleWidth(lines) - 1)
     }),
   )

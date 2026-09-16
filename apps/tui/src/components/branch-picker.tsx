@@ -14,6 +14,10 @@
  * open the startup prompt waits, so a reader never sends a `-p` prompt into a
  * branch they did not choose.
  *
+ * It draws the `PickerFrame` every docked pane draws — ruled off top and
+ * bottom under the composer, not a bordered box — so its height and its
+ * columns come from the picker's budget rather than a dialect of its own.
+ *
  * @module
  */
 
@@ -24,6 +28,7 @@ import { useTerminalDimensions } from "../terminal-dimensions"
 import { useClient } from "../client/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { ChromePanel } from "./chrome-panel"
+import { PickerFrame, pickerHeight, usePickerGeometry } from "./picker-frame"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 import type { Branch, BranchTreeNode } from "@gent/sdk"
 import type { BranchId, SessionId } from "@gent/core/protocol"
@@ -87,8 +92,11 @@ export function BranchPicker(props: BranchPickerProps) {
     )
   })
 
-  const paneHeight = () => Math.min(16, Math.max(6, dimensions().height - 8))
-  const rowWidth = () => Math.max(8, dimensions().width - 8)
+  const { rowWidth } = usePickerGeometry()
+
+  // One line per branch: no heading opens a group and no detail line follows
+  // the list, so the pane draws exactly the items it holds.
+  const paneHeight = () => pickerHeight(props.branches.length, dimensions().height)
 
   const rows = (): ReadonlyArray<SelectListRow<Branch>> =>
     props.branches.map((branch) =>
@@ -119,17 +127,10 @@ export function BranchPicker(props: BranchPickerProps) {
 
   return (
     <Show when={props.open}>
-      <box
+      <PickerFrame
         height={paneHeight()}
-        alignSelf="stretch"
-        marginLeft={1}
-        marginRight={1}
-        backgroundColor={theme.backgroundMenu}
-        border
-        borderStyle="rounded"
-        borderColor={theme.borderSubtle}
-        flexDirection="column"
         title={`Resume: ${props.sessionName}`}
+        footer={"↑↓ move   ↵ resume branch   esc close"}
       >
         <SelectList
           id="branch-picker"
@@ -140,8 +141,7 @@ export function BranchPicker(props: BranchPickerProps) {
         />
 
         <ChromePanel.Error error={Option.getOrUndefined(error())} />
-        <ChromePanel.Footer>{"↑↓ move   ↵ resume branch   esc close"}</ChromePanel.Footer>
-      </box>
+      </PickerFrame>
     </Show>
   )
 }

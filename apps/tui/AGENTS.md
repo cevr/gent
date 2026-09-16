@@ -90,7 +90,7 @@ Views (only 1):
 - `src/routes/session-controller.ts` — `createSessionController()` + context
 
 The branch picker is a docked pane (`components/branch-picker.tsx`), not a
-view. The boot flow opens it over the mounted session when the resumed session
+view. It draws `PickerFrame` like every other docked pane. The boot flow opens it over the mounted session when the resumed session
 has more than one branch; escape quits, because no branch was chosen yet. The
 command palette's "Branches" level switches branches after that.
 

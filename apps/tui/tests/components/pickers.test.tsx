@@ -2,7 +2,8 @@
 /**
  * The two centred pickers: fork-from-message and resume-branch.
  *
- * Both are `SelectList` in `ChromePanel` chrome. Escape is the interesting
+ * The message picker is `SelectList` in `ChromePanel` chrome; the branch
+ * picker is a docked pane and draws `PickerFrame`. Escape is the interesting
  * key: the message picker closes itself, while the branch picker leaves the
  * route, so it has to claim escape before the list treats it as a dismissal.
  */
