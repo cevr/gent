@@ -774,3 +774,27 @@ Five existing tests asserted the superseded contract and were rewritten, not rel
 **The status row reads phase, cwd, model, effort, context, cost.** Cost moved out of the top-left group to the far end, effort moved ahead of the context gauge to sit beside the model name, and the cwd came out from behind `props.debugMode` — several concurrent sessions were otherwise indistinguishable.
 
 Four deletion probes, each run against its own fix: the floor removed → 1 fail; effort-before-ctx reverted → 2 fail; the reset's snapshot clear removed → 1 fail; the atomic write reverted → **0 fail**, which is what condemned that test. Gate `GATE EXIT 0` on the rift and again on main.
+
+## The status row drops what it cannot fit (2026-09-16, `cef8a706`)
+
+Shipping the reordered row at `8400fd25` broke it, and the pane check caught it: the live row read `idle · gent-gamut (main) · Claude Sonnet 5` with the effort, the context gauge and the running total simply gone.
+
+`ComposerFrame` spent one left-to-right width budget and `break`ed at the first label that did not fit. Every label after that vanished with no ellipsis and no indication — so adding the cwd near the front silently deleted the three labels at the end. The arithmetic, reproduced: at 58 columns the old order dropped `$12.34`; the same row without the cwd fit everything.
+
+The row now has two groups. The right group — the context gauge and the cost — is laid out first from the right edge inward and keeps its columns; the left group spends what remains and truncates. The user chose this over shortening the cwd, because the anchored labels are the ones a reader checks without reading the row.
+
+The gauge also moved out of `buildTopRightLabels` into its own `buildContextLabels`. Effort names how the model is configured and belongs beside the model name; the gauge reports what the session has spent and belongs beside the total. One helper emitting both could not put them at opposite ends.
+
+Deletion probe: with the right group unreserved, the anchor test fails with `$12.34` absent — the exact silent drop. Eight ctx cases moved from the `buildTopRightLabels` suite to a new `buildContextLabels` suite rather than being deleted.
+
+## A scroll bug I could not reproduce, and three theories that died (2026-09-16)
+
+The user reported that scrolling up in gent was stuck. **Nothing shipped for it**, because every mechanism I proposed failed its own test.
+
+First: commits only happen when the live transcript overflows the viewport, so a short session has genuinely nothing in terminal scrollback. True, and it explains a _short_ session — but the user confirmed a long one, so it is not their bug.
+
+Second: that a committed item's own late fields break the prefix check. `committed` was keyed by a JSON fingerprint of each item, and a tool call gains `durationMs`, a summary, an output and a terminal `status` after its message commits — so the fingerprint of a settled item changes under it, `prefixMatches` fails, `requestReplay` clears `committed`, and scrollback never accumulates. The story is coherent and it is **wrong**: instrumenting the check under both keyings showed `prefixMatches` stayed true on every pass and `committedLen` climbed 1→2→3 either way. The test I wrote for it passed with the fix reverted, which is the same worthless shape as the atomicity test earlier this session. Both the change and its test were reverted rather than merged on a story.
+
+Third: that an overlay or pane leaves `renderer.useMouse` true, swallowing the wheel. `overlayOpen` and `transcriptExpanded` are both read reactively inside the effect that owns `useMouse`, so closing either re-runs it and restores `false`; a docked pane is not an overlay at all and never touches it. There are exactly four `useMouse` writers, all in one file.
+
+The user scrolls with the **mouse wheel**, which depends on gent leaving mouse tracking off so the terminal receives it. That is where the next attempt should start, and it should start from an observation of the live terminal rather than another reading of the code — three readings produced three refuted theories.
