@@ -152,9 +152,7 @@ const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSyste
   Layer.unwrap(
     Effect.gen(function* () {
       const logFile = buildLogPaths(cwd).log
-      // Don't truncate when running as subprocess — parent is writing to same file
-      const isSubprocess = Option.isSome(yield* Config.option(Config.string("GENT_TRACE_ID")))
-      if (!isSubprocess) yield* clearLogFile(logFile)
+      yield* clearLogFile(logFile)
       const jsonLogger = yield* makeJsonFileLogger(logFile)
       return Logger.layer([jsonLogger])
     }).pipe(Effect.orElseSucceed(() => Layer.empty)),

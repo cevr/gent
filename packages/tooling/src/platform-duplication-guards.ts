@@ -81,6 +81,11 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
     message: "The SdkBoundary brand is deleted; keep Promise edges in a *-boundary.ts file",
   },
   {
+    pattern: /\bGENT_(?:TRACE_ID|PARENT_SPAN_ID)\b/,
+    message:
+      "The subprocess trace handoff is deleted with its supervisor; nothing sets these variables",
+  },
+  {
     pattern: /\b(?:Any)?(?:Query|Capability)Contribution\b/,
     message:
       "Query/Capability contribution authoring is deleted; extensions contribute tools and requests",
