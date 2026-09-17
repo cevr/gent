@@ -140,7 +140,6 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 `
               const cascadedIds = descendantRows.map((row) => row.id)
               if (cascadedIds.length === 0) return cascadedIds
-              yield* sql`DELETE FROM messages_fts WHERE session_id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM agent_loop_queues WHERE session_id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`

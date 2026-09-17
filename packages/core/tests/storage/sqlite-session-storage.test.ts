@@ -224,6 +224,7 @@ describe("Sessions", () => {
           "session_model",
           "turn_records",
           "session_thread",
+          "drop_message_search_index",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -254,6 +255,7 @@ describe("Sessions", () => {
           "session_model",
           "turn_records",
           "session_thread",
+          "drop_message_search_index",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -703,16 +705,12 @@ describe("Sessions", () => {
       const chunks = yield* sql<{
         count: number
       }>`SELECT COUNT(*) as count FROM content_chunks`
-      const fts = yield* sql<{
-        count: number
-      }>`SELECT COUNT(*) as count FROM messages_fts`
       expect(sessionsResult[0]?.count).toBe(0)
       expect(branchesResult[0]?.count).toBe(0)
       expect(messagesResult[0]?.count).toBe(0)
       expect(eventsResult[0]?.count).toBe(0)
       expect(refs[0]?.count).toBe(0)
       expect(chunks[0]?.count).toBe(0)
-      expect(fts[0]?.count).toBe(0)
       expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )

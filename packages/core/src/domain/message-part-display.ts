@@ -378,41 +378,6 @@ export const messagePartsDisplayText = (
   return chunks.join("\n")
 }
 
-const stringifySearchValue = (value: JsonEncoderInput): string => {
-  if (Predicate.isString(value)) return value
-  if (Predicate.isUndefined(value)) return ""
-  const encoded = Result.try(() => encodeToolOutput(value))
-  if (Result.isFailure(encoded)) return ""
-  return encoded.success
-}
-
-const messagePartSearchText = (part: MessagePart): string => {
-  const text = messagePartText(part)
-  if (!Predicate.isUndefined(text)) return text
-
-  const reasoning = messagePartReasoning(part)
-  if (!Predicate.isUndefined(reasoning)) return reasoning
-
-  const image = messagePartImage(part)
-  if (!Predicate.isUndefined(image)) return image.mediaType
-
-  const toolCall = messagePartToolCall(part)
-  if (!Predicate.isUndefined(toolCall)) {
-    return [toolCall.toolName, stringifySearchValue(toolCall.input)]
-      .filter((value) => value !== "")
-      .join(" ")
-  }
-
-  const toolResult = messagePartToolResult(part)
-  if (!Predicate.isUndefined(toolResult)) {
-    return [toolResult.toolName, stringifySearchValue(toolResult.value)]
-      .filter((value) => value !== "")
-      .join(" ")
-  }
-
-  return ""
-}
-
 /** One durable message part as text for a model; `context.read` and summary prompts share it. */
 export const partToText = (part: MessagePart): string => {
   switch (part.type) {
@@ -435,9 +400,3 @@ export const partToText = (part: MessagePart): string => {
     }
   }
 }
-
-export const messagePartsSearchText = (parts: ReadonlyArray<MessagePart>): string =>
-  parts
-    .map(messagePartSearchText)
-    .filter((text) => text.length > 0)
-    .join("\n")

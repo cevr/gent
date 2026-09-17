@@ -108,7 +108,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     getSession: dieStub("session.getSession"),
     getDetail: dieStub("session.getDetail"),
     renameCurrent: dieStub("session.renameCurrent"),
-    search: dieStub("session.search"),
     queueFollowUp: dieStub("session.queueFollowUp"),
     dequeueFollowUp: dieStub("session.dequeueFollowUp"),
     listBranches: dieEffect("session.listBranches"),

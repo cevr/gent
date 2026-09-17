@@ -39,7 +39,6 @@ const defaultSession = (): ExtensionSessionService => ({
   getSession: () => die("Session.getSession"),
   getDetail: () => die("Session.getDetail"),
   renameCurrent: () => die("Session.renameCurrent"),
-  search: () => die("Session.search"),
   queueFollowUp: () => die("Session.queueFollowUp"),
   dequeueFollowUp: () => die("Session.dequeueFollowUp"),
   listBranches: die("Session.listBranches"),
