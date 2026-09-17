@@ -278,16 +278,36 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         ),
       )
 
-    const writeTurnRecord = (messageId: RunningState["message"]["id"], record: TurnRecord) =>
-      turnRecordStorage
-        .put(turnRecordKey(messageId), record)
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("turn.record-write-failed").pipe(
-              Effect.annotateLogs({ error: String(cause) }),
+    /**
+     * The turn's only write path: change the fields `change` names and carry
+     * the rest forward. A field a writer does not mention keeps its value
+     * instead of being restated, so a forgotten restatement can no longer
+     * reset a turn's position.
+     *
+     * `base` is the record a caller has already read; `Option.none()` reads
+     * the current record here.
+     */
+    const updateTurnRecord = (
+      messageId: RunningState["message"]["id"],
+      change: (current: TurnRecord) => Partial<TurnRecord>,
+      base: Option.Option<TurnRecord> = Option.none(),
+    ) =>
+      Effect.gen(function* () {
+        const current = yield* Option.match(base, {
+          onNone: () => readTurnRecord(messageId),
+          onSome: Effect.succeed,
+        })
+        const record = turnRecordAtStep({ ...current, ...change(current) })
+        yield* turnRecordStorage
+          .put(turnRecordKey(messageId), record)
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("turn.record-write-failed").pipe(
+                Effect.annotateLogs({ error: String(cause) }),
+              ),
             ),
-          ),
-        )
+          )
+      })
 
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
@@ -299,15 +319,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         id: toolCall.id,
         name: toolCall.name,
       }))
-      const current = yield* readTurnRecord(params.messageId)
-      yield* writeTurnRecord(
-        params.messageId,
-        turnRecordAtStep({
-          step: params.step - 1,
-          continuations: current.continuations,
-          pendingToolCalls,
-        }),
-      )
+      yield* updateTurnRecord(params.messageId, () => ({
+        step: params.step - 1,
+        pendingToolCalls,
+      }))
     })
 
     /** The step closed: every message it owns has committed. */
@@ -315,15 +330,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly messageId: RunningState["message"]["id"]
       readonly step: number
     }) {
-      const current = yield* readTurnRecord(params.messageId)
-      yield* writeTurnRecord(
-        params.messageId,
-        turnRecordAtStep({
-          step: Math.max(current.step, params.step),
-          continuations: current.continuations,
-          pendingToolCalls: [],
-        }),
-      )
+      yield* updateTurnRecord(params.messageId, (current) => ({
+        step: Math.max(current.step, params.step),
+        pendingToolCalls: [],
+      }))
     })
 
     /**
@@ -941,13 +951,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         id: toolCall.id,
         name: toolCall.name,
       }))
-      yield* writeTurnRecord(
+      yield* updateTurnRecord(
         messageId,
-        turnRecordAtStep({
-          step: lastCompletedStep,
-          continuations: record.continuations,
-          pendingToolCalls: derivedPending,
-        }),
+        () => ({ step: lastCompletedStep, pendingToolCalls: derivedPending }),
+        Option.some(record),
       )
       return { step: lastCompletedStep, pendingAssistant, pendingToolCalls }
     })
@@ -1130,13 +1137,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           metadata: { customType: "continuation", details: { step: params.step } },
         }),
       })
-      yield* writeTurnRecord(
+      yield* updateTurnRecord(
         params.messageId,
-        turnRecordAtStep({
-          step: record.step,
-          continuations: used + 1,
-          pendingToolCalls: record.pendingToolCalls,
-        }),
+        () => ({ continuations: used + 1 }),
+        Option.some(record),
       )
       yield* Effect.logInfo("turn.continue-within-turn").pipe(
         Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
