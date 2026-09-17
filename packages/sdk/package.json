@@ -7,7 +7,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots tests"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --parallel=3 tests"
   },
   "dependencies": {
     "@effect/opentelemetry": "4.0.0-rc.112",
