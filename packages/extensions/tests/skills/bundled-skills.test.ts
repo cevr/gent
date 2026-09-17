@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Option, Path } from "effect"
+import { Effect, FileSystem, Path } from "effect"
 import { installBundledSkills } from "../../src/skills/bundled-skills.js"
 import { bundledSkillFiles } from "../../src/skills/bundled-sources.js"
 import { Skills } from "../../src/skills/skills.js"
@@ -43,13 +43,11 @@ describe("bundled skills", () => {
         )
         yield* Effect.gen(function* () {
           const skills = yield* Skills
-          const local = yield* skills.get("principles", Option.none())
-          const global = yield* skills.get("$principles:global", Option.none())
-          expect(Option.getOrThrow(local).content).toContain("LOCAL-PRINCIPLES")
-          expect(Option.getOrThrow(global).content).toContain("GLOBAL-PRINCIPLES")
-          expect((yield* skills.list).filter((skill) => skill.name === "principles")).toHaveLength(
-            2,
-          )
+          const principles = (yield* skills.list).filter((skill) => skill.name === "principles")
+          // Both levels stay listed, local first, so the model can address either.
+          expect(principles.map((skill) => skill.level)).toEqual(["local", "global"])
+          expect(principles[0]?.content).toContain("LOCAL-PRINCIPLES")
+          expect(principles[1]?.content).toContain("GLOBAL-PRINCIPLES")
           // oxlint-disable-next-line effect/noInlineProvide -- This test constructs the real service after acquiring its scoped fixture directories.
         }).pipe(Effect.provide(Skills.Live({ home, cwd })))
       }).pipe(Effect.provide(BunServices.layer)),
