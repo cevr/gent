@@ -14,7 +14,6 @@
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore --check",
     "build": "turbo run build",
     "test": "turbo run test --ui=stream",
-    "test:diagnose": "bun packages/tooling/src/test-diagnose.ts --slow-ms=5000 -- bun run test",
     "test:e2e": "turbo run test:e2e",
     "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" && bun run test",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",

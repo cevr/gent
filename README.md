@@ -88,7 +88,6 @@ Data lives under `~/.gent/`:
 
 ```bash
 bun run test       # ~2-4s product behavior tests
-bun run test:diagnose # print slowest test chunks without failing on duration
 bun run test:e2e   # ~60-120s PTY + supervisor + worker-http
 bun run gate       # full pre-commit gate
 ```

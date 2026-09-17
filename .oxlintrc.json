@@ -182,12 +182,6 @@
       }
     },
     {
-      "files": ["packages/tooling/src/test-diagnose.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       "files": ["packages/tooling/tests/fixtures.test.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
