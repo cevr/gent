@@ -39,12 +39,12 @@ the code proves it.
 
 | #   | Finding                                                                                                                                                                                                                                         | Status                                                                                                   |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| G1  | Reasoning text renders raw `**Title**`; `message-list.tsx:386` prints it as plain italic                                                                                                                                                        | open, after the TUI branch merges                                                                        |
+| G1  | Reasoning text renders raw `**Title**`; `message-list.tsx:386` prints it as plain italic                                                                                                                                                        | done `7d2d1e08`; not yet checked live                                                                    |
 | G2  | An interrupt during a foreground `delegate` leaves its children running with no owner: the next turn cannot await them and falls back to a file monitor                                                                                         | done: each tool call races the turn's interrupt latch; a foreground child is interrupted with its caller |
 | G3  | Interrupt during a tool, then a new message: the next turn ran (L5 path holds live)                                                                                                                                                             | verified                                                                                                 |
-| G4  | The terminal keeps no scrollback: with a live view taller than the screen the footer owns every row, each commit is written at row 1 and the same frame's footer paint erases it (raw pty bytes: 23 commits, all at `ESC[1;1H`, 0 history rows) | agent on rift `arch-scrollback`                                                                          |
+| G4  | The terminal keeps no scrollback: with a live view taller than the screen the footer owns every row, each commit is written at row 1 and the same frame's footer paint erases it (raw pty bytes: 23 commits, all at `ESC[1;1H`, 0 history rows) | done `c38e5232`, merged `ff185983`                                                                       |
 | G5  | `gent resume` opened a child session (the Task 6 worker), not the root the user ran                                                                                                                                                             | done: `apps/tui/src/app-bootstrap.ts` skips delegate children on resume                                  |
-| G6  | `apps/tui/scripts/build.ts:59` re-points the global `gent` symlink at whichever checkout ran the gate                                                                                                                                           | with G4                                                                                                  |
+| G6  | `apps/tui/scripts/build.ts:59` re-points the global `gent` symlink at whichever checkout ran the gate                                                                                                                                           | done `619b0213`: the link needs `GENT_LINK=1`                                                            |
 | G7  | The orchestrator cannot message a running child (user request 2026-09-17)                                                                                                                                                                       | done: `agent-child` `send` steers the child; steering at an answered step joins the turn                 |
 | G8  | Second gamut: `send` reached the Task 2 child live (it added the requested test; 18 pass). The orchestrator set alarms to wait for background children, and one fired stale after they finished                                                 | done: the `delegate` description says a background result starts a turn by itself                        |
 | G4  | Scrollback fix verified live after the merge (`ff185983`): pane history went from 5 rows to 150 on `gent resume`                                                                                                                                | verified                                                                                                 |
@@ -70,19 +70,19 @@ queue, unbounded steps, whole-log replay, text-blob compaction.
 
 | #   | Candidate                                                                                         | Status                                         |
 | --- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| C1  | `ProcessRunner` is a pass-through Tag over `runProcess`; every union already names the spawner    | agent `arch-core2`                             |
-| C2  | Server identity declared three times (`server-identity.ts`, `server-routes.ts`, `rpcs.ts`)        | agent `arch-core2`                             |
-| C3  | `packages/core/src/test-utils/` is outside the dead-export guard; three dead names                | agent `arch-core2`                             |
-| E1  | Two cell output buffers with different tail policy; an error at the end of long output is dropped | agent `arch-apps2`                             |
-| E2  | `anthropic/oauth.ts` is a re-export barrel                                                        | agent `arch-apps2`                             |
+| C1  | `ProcessRunner` is a pass-through Tag over `runProcess`; every union already names the spawner    | done `3ad19c77`                                |
+| C2  | Server identity declared three times (`server-identity.ts`, `server-routes.ts`, `rpcs.ts`)        | done `ba3d8fbd`                                |
+| C3  | `packages/core/src/test-utils/` is outside the dead-export guard; three dead names                | done `65ab099d`                                |
+| E1  | Two cell output buffers with different tail policy; an error at the end of long output is dropped | done `ade4f8f8`, `b90a9054`                    |
+| E2  | `anthropic/oauth.ts` is a re-export barrel                                                        | done `97b52a8a`                                |
 | E3  | Goal store `optional` to `Option` wrapper                                                         | rejected: changes the on-disk goal file format |
-| E4  | `handoff-tool.ts` has one importer                                                                | agent `arch-apps2`                             |
-| T1  | Two owners for the branch picker's visibility                                                     | agent `arch-apps2`, probe first                |
-| T2  | `latestInputTokens` and `contextMetrics` are one value in two signals                             | agent `arch-apps2`                             |
-| T3  | `main.tsx` holds five admin subcommands; HOME read written five times                             | agent `arch-apps2`                             |
-| T4  | `agents-view.client.tsx` holds the tray and the pane                                              | agent `arch-apps2`                             |
-| S1  | `spawnIdleServer` and `spawnServerOnPort` differ by three lines                                   | agent `arch-apps2`                             |
-| S2  | The dead-export guard scans nothing under `apps/`; 92 file-local exports in `apps/tui/src/`       | agent `arch-apps2`                             |
+| E4  | `handoff-tool.ts` has one importer                                                                | done `0ac83dcb`                                |
+| T1  | Two owners for the branch picker's visibility                                                     | done `2bcf94ac`                                |
+| T2  | `latestInputTokens` and `contextMetrics` are one value in two signals                             | done `7d029865`                                |
+| T3  | `main.tsx` holds five admin subcommands; HOME read written five times                             | done `32f9dc54`                                |
+| T4  | `agents-view.client.tsx` holds the tray and the pane                                              | done `6c58e874`                                |
+| S1  | `spawnIdleServer` and `spawnServerOnPort` differ by three lines                                   | done `340a0bed`                                |
+| S2  | The dead-export guard scans nothing under `apps/`; 92 file-local exports in `apps/tui/src/`       | done `c552b21c`, `a639f4c5`                    |
 
 Cleared with receipts in pass 2: storage sub-tags, RPC handlers, `dependencies.ts`
 wiring, one-adapter seams (all guarded), SDK wrappers, tooling guards, e2e fixtures.
@@ -92,13 +92,18 @@ compositions reach the core default.
 
 ### Pass 2, the loop (`plans/loop-review-pass2-2026-09-17.md`)
 
-Candidates P1 to P11 (step address, duplicate `resolveTurnContext` call, actor
-lifecycle as one tagged Ref, `Object.assign` field building, a one-caller
-wrapper, eight error-mapping blocks, history comments, single-caller exports,
-`ToolRunner.Test`, the tri-state `interactive`) are with the agent on
-`arch-loop2`. P12 (one `LoopInbox` module for about 715 lines of queue code
-spread over four files; opencode `inbox.ts` and codex `input_queue.rs` both have
-this shape) waits until P1 to P11 land.
+| #         | Candidate                                                                 | Status                                                                                                                             |
+| --------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| P1, P2    | Step address built in several places; duplicate `resolveTurnContext` call | done `94e00f2f` (`stepAddress`, `resolveForState`)                                                                                 |
+| P3        | Actor lifecycle held in several refs                                      | done `085987a6`: one `Ref<LoopLifecycle>`                                                                                          |
+| P4        | `Object.assign` field building for optional receipt fields                | done `94e00f2f` (`omitUndefined`)                                                                                                  |
+| P5        | `executeToolsWithInteraction` has one caller                              | done `6d891cbd`                                                                                                                    |
+| P6, P7    | Eight error-mapping blocks; comments that tell history                    | done `bb2fbf2e` (`asAgentLoopError`)                                                                                               |
+| P8 to P11 | Single-caller exports, `ToolRunner.Test`, the tri-state `interactive`     | skipped with receipts `ca2fc5fe`                                                                                                   |
+| P12       | About 715 lines of queue code spread over four files                      | done `deaa3d32`, format test `0b3bbe4d`: `loop-inbox.ts` owns the queue; one commit, the move could not be split and still compile |
+
+opencode `inbox.ts` and codex `input_queue.rs` have the P12 shape. After P12:
+`agent-loop.behavior.ts` 814 to 452 lines, `agent-loop.state.ts` 558 to 218.
 
 Owner decision, not taken: no prior art persists a step position or replays
 in-flight tool calls. Dropping exact mid-turn resume for "replay the transcript
