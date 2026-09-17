@@ -17,17 +17,17 @@ import { InProcessRunner } from "../runtime/agent/agent-runner.js"
 import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
 import { AgentLoopLiveActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
-import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import {
+  type BranchToolFeature,
+  CurrentBranchToolFeature,
+  ToolRunner,
+} from "../runtime/agent/tools.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { SqliteStorage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
-import {
-  CurrentBranchToolFeature,
-  type BranchToolFeature,
-} from "../runtime/agent/branch-tool-feature.js"
 import {
   decodeInteractionDecision,
   decodeInteractionParams,

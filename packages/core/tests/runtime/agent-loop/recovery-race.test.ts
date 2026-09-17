@@ -53,7 +53,7 @@ import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
-import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
@@ -64,7 +64,6 @@ import {
 import { StorageError } from "../../../src/domain/storage-error"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"
-import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })

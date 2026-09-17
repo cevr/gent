@@ -36,21 +36,20 @@ import {
   persistAssistantPartsWithBindings,
   ToolResultReplayError,
 } from "../../../src/runtime/agent/turn-persistence"
-import { ToolRunner, type ResolvedToolCapability } from "../../../src/runtime/agent/tool-runner"
-import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
-import {
-  ProcessLocalToolReplay,
-  processLocalReplayBindingKey,
-} from "../../../src/runtime/agent/process-local-tool-replay"
-import { EventStorage } from "../../../src/storage/event-storage"
-import { encodeToolOutput } from "../../../src/domain/tool-output"
 import {
   captureCurrentToolBinding,
   innerOperationBindingIdentity,
+  processLocalReplayBindingKey,
+  ProcessLocalToolReplay,
+  type ResolvedToolCapability,
   resolveReplayToolBinding,
   resolveStoredToolBinding,
-} from "../../../src/runtime/agent/tool-binding-resolution"
+  ToolRunner,
+} from "../../../src/runtime/agent/tools"
+import { GentPlatform } from "../../../src/runtime/gent-platform"
+import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
+import { EventStorage } from "../../../src/storage/event-storage"
+import { encodeToolOutput } from "../../../src/domain/tool-output"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"

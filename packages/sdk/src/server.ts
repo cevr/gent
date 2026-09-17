@@ -26,7 +26,7 @@ import { resolve as pathResolve } from "node:path"
 import { dataPaths } from "./data-paths.js"
 
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import type { BranchToolFeature } from "@gent/core-internal/runtime/agent/branch-tool-feature.js"
+import type { BranchToolFeature } from "@gent/core-internal/runtime/agent/tools.js"
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "./debug-session.js"

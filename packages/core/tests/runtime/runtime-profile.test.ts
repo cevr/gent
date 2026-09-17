@@ -19,7 +19,7 @@ import {
   loadRuntimeProfileDeclarations,
   type RuntimeProfileInputs,
 } from "../../src/runtime/profile"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 

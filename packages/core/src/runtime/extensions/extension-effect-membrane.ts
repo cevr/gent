@@ -3,7 +3,7 @@ import type { Exit, Schema } from "effect"
 import type { ExtensionId, ToolCallId } from "../../domain/ids.js"
 import type { ExtensionTurnContext } from "../../domain/extension.js"
 import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
-import { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
+import { CurrentExtensionHostContext } from "../agent/tools.js"
 import { provideExtensionCapabilityContext } from "./extension-capability-context.js"
 
 type ErasedValue = Schema.Schema.Type<typeof Schema.Unknown>

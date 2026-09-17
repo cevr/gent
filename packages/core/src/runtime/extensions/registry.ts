@@ -18,7 +18,7 @@ import {
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
 } from "../../domain/capability.js"
 import { provideExtensionLeaf, sealErasedEffect } from "./extension-effect-membrane.js"
-import type { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
+import type { CurrentExtensionHostContext } from "../agent/tools.js"
 import {
   sortExtensionsByScope,
   type ExtensionStatusInfo,

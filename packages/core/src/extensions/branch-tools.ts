@@ -37,7 +37,7 @@ export {
   type BranchToolFeature,
   type BranchToolLayerFactory,
   BranchToolWork,
-} from "../runtime/agent/branch-tool-feature.js"
+} from "../runtime/agent/tools.js"
 export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
 
 // Storage the feature contributes and reads.
@@ -62,13 +62,10 @@ export {
 
 // Identifying and resolving the calls a feature dispatches.
 export { ToolBindingIdentity } from "../domain/tool-binding.js"
-export {
-  innerOperationBindingIdentity,
-  resolveStoredToolBinding,
-} from "../runtime/agent/tool-binding-resolution.js"
-export { CurrentDispatchingCall } from "../runtime/agent/current-dispatching-call.js"
-export { CurrentToolCall } from "../runtime/agent/current-tool-call.js"
-export { type ResolvedToolCapability, ToolRunner } from "../runtime/agent/tool-runner.js"
+export { innerOperationBindingIdentity, resolveStoredToolBinding } from "../runtime/agent/tools.js"
+export { CurrentDispatchingCall } from "../runtime/agent/tools.js"
+export { CurrentToolCall } from "../runtime/agent/tools.js"
+export { type ResolvedToolCapability, ToolRunner } from "../runtime/agent/tools.js"
 export { getToolMetadata } from "../domain/capability/tool.js"
 export { summarizeOutput } from "../domain/tool-output.js"
 

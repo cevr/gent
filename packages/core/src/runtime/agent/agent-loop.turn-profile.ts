@@ -5,7 +5,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { provideCurrentCapabilityContext } from "../extensions/extension-capability-context.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { provideCurrentHostCtx } from "./current-extension-host-context.js"
+import { provideCurrentHostCtx } from "./tools.js"
 
 export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService

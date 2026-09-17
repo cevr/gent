@@ -50,7 +50,7 @@ import {
 import { InteractionPendingError } from "../../src/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { noBranchTools, ToolRunner } from "../../src/runtime/agent/tools"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
@@ -62,7 +62,6 @@ import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
-import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,

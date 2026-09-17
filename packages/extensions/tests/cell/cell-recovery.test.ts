@@ -45,8 +45,10 @@ import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { AgentLoopQueueStorage } from "@gent/core-internal/storage/agent-loop-queue-storage.js"
 import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage.js"
 import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
-import { captureCurrentToolBinding } from "@gent/core-internal/runtime/agent/tool-binding-resolution.js"
-import { CurrentToolCall } from "@gent/core-internal/runtime/agent/current-tool-call.js"
+import {
+  captureCurrentToolBinding,
+  CurrentToolCall,
+} from "@gent/core-internal/runtime/agent/tools.js"
 import { toolResultMessageIdForTurn } from "@gent/core-internal/runtime/agent/agent-loop.utils.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"

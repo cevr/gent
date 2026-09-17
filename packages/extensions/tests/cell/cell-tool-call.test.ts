@@ -12,11 +12,11 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids.js"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request.js"
-import { provideCurrentHostCtx } from "@gent/core-internal/runtime/agent/current-extension-host-context.js"
 import {
-  ToolRunner,
+  provideCurrentHostCtx,
   type ResolvedToolCapability,
-} from "@gent/core-internal/runtime/agent/tool-runner.js"
+  ToolRunner,
+} from "@gent/core-internal/runtime/agent/tools.js"
 import { executeBoundCellTool, cellToolResultValue } from "../../src/cell/cell-tool-call.js"
 import { CellResponse } from "../../src/cell/cell-protocol.js"
 import * as Prompt from "effect/unstable/ai/Prompt"

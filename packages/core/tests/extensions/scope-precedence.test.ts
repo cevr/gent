@@ -18,7 +18,7 @@ import { ExtensionId } from "../../src/domain/ids"
 
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { runToolWithCtx, testExtensionHostContext, testToolContext } from "../../src/test-utils"
 import { AgentDefinition } from "../../src/domain/agent"

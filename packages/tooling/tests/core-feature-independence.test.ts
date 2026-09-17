@@ -50,7 +50,7 @@ describe("core feature independence guard", () => {
 
   test("ignores a mention that is not an import", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/agent/tool-runner.ts",
+      "packages/core/src/runtime/agent/tools.ts",
       "// the cell feature dispatches inner tool calls",
     )
     expect(findings).toEqual([])

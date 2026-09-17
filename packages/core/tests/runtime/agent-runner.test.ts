@@ -60,7 +60,13 @@ import { BranchStorage } from "../../src/storage/branch-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { EventStorage } from "../../src/storage/event-storage"
 import { RelationshipStorage } from "../../src/storage/relationship-storage"
-import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import {
+  type BranchToolFeature,
+  BranchToolWork,
+  CurrentBranchToolFeature,
+  noBranchTools,
+  ToolRunner,
+} from "../../src/runtime/agent/tools"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import {
   defineExtension,
@@ -86,12 +92,6 @@ import {
   type SessionRuntimeState,
 } from "../../src/runtime/agent/agent-loop.state"
 import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import {
-  BranchToolWork,
-  CurrentBranchToolFeature,
-  noBranchTools,
-  type BranchToolFeature,
-} from "../../src/runtime/agent/branch-tool-feature"
 import { eraseResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
 const bashStubTool = tool({
   id: "bash",

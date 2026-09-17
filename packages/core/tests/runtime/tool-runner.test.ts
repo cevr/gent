@@ -4,15 +4,18 @@ import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction-request"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool, ExtensionContext } from "@gent/core/extensions/api"
-import { ToolRunner, type ResolvedToolCapability } from "../../src/runtime/agent/tool-runner"
-import { executeToolCalls } from "../../src/runtime/agent/turn-tool-execution"
+import {
+  executeToolCalls,
+  provideCurrentHostCtx,
+  type ResolvedToolCapability,
+  ToolRunner,
+} from "../../src/runtime/agent/tools"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventPublisher } from "../../src/domain/event-publisher"
 import { testToolContext } from "../../src/test-utils/extension-harness"
-import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import {
   BranchId,

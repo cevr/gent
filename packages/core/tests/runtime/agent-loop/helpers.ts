@@ -20,7 +20,7 @@ import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/exten
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
-import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import {
   AgentDefinition,
   AgentName,
@@ -55,7 +55,6 @@ import type { BranchId, InteractionRequestId, SessionId } from "../../../src/dom
 import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
 import type { TurnStreamPart } from "../../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
-import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 // ============================================================================
 // Shared helpers
 // ============================================================================

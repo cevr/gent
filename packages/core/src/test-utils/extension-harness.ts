@@ -13,7 +13,7 @@ import {
 } from "../domain/extension-services.js"
 import { getToolMetadata } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
-import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/agent/tools.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { LanguageModelLayers } from "./language-model.js"
 import {
@@ -30,7 +30,6 @@ import {
   testEnvironment,
   testOverrides,
 } from "./test-root.js"
-import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 export interface ToolTestLayerConfig {
   /**

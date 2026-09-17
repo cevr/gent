@@ -43,9 +43,11 @@ import { InteractionStorage } from "@gent/core-internal/storage/interaction-stor
 import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import { captureCurrentToolBinding } from "@gent/core-internal/runtime/agent/tool-binding-resolution.js"
+import {
+  captureCurrentToolBinding,
+  type ResolvedToolCapability,
+} from "@gent/core-internal/runtime/agent/tools.js"
 import { runAgentLoopTurnProfile } from "@gent/core-internal/runtime/agent/agent-loop.turn-profile.js"
-import type { ResolvedToolCapability } from "@gent/core-internal/runtime/agent/tool-runner.js"
 import { testHostFacts } from "@gent/core-internal/test-utils"
 
 const cell = {

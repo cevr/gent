@@ -19,11 +19,16 @@ import {
 } from "./turn-response.js"
 import { persistMessageParts, persistMessageReceived } from "./turn-persistence.js"
 import { type ResolvedTurnContext } from "./turn-resolve.js"
-import { convertTools, ToolRunner } from "./tool-runner.js"
+import {
+  convertTools,
+  CurrentExtensionHostContext,
+  CurrentToolCall,
+  provideCurrentHostCtx,
+  ToolRunner,
+} from "./tools.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
-import { CurrentToolCall } from "./current-tool-call.js"
 import { ProviderError } from "../../domain/provider-error.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
@@ -44,10 +49,6 @@ import {
 import { ModelContextLedger } from "../model-context-ledger.js"
 import { currentHandoffId, messagesInCurrentWindow } from "../model-context-window.js"
 import { driverRetryPolicy, retryProviderCall } from "../retry.js"
-import {
-  CurrentExtensionHostContext,
-  provideCurrentHostCtx,
-} from "./current-extension-host-context.js"
 import { causeMessage } from "../../domain/guards.js"
 import { projectContextWindow } from "./turn-window.js"
 

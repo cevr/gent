@@ -20,7 +20,7 @@ import { EventStorage } from "../../storage/event-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { makeStorageTransaction, type StorageTransaction } from "../../storage/sqlite-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
-import type { ResolvedToolCapability } from "./tool-runner.js"
+import type { ResolvedToolCapability } from "./tools.js"
 
 type ToolTerminalEvent = Extract<
   AgentEvent,

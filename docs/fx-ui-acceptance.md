@@ -1559,7 +1559,7 @@ Herdr review workflow also shows one completed call after saving in vi.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/tool-runner.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/tools.ts`
 - `/tmp/gent-fx-ui-resumed-tool-red.log`: duplicate entry before repair.
 - `/tmp/gent-fx-ui-resumed-tool-green.log`: four feed tests pass.
 - `/tmp/gent-fx-ui-resumed-tool-herdr.ansi`: one completed prompt call.

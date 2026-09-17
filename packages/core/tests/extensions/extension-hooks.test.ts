@@ -14,7 +14,7 @@ import { testExtensionHostContext } from "../../src/test-utils"
 import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
+import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
 import { AgentName } from "../../src/domain/agent"
 import { ExtensionContext } from "../../src/domain/extension-services.js"
 

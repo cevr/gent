@@ -28,12 +28,11 @@ import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
-import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content

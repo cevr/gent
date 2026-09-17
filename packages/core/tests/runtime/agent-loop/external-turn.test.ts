@@ -21,7 +21,7 @@ import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loo
 import { resolveExtensions, ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
-import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
@@ -70,7 +70,6 @@ import { ensureStorageParents } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
-import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 // ── Helpers ──
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")

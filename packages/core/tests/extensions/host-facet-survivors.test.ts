@@ -14,7 +14,7 @@ import { makeExtensionHostContextProvider } from "../../src/runtime/make-extensi
 import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
 import { SessionStorage } from "../../src/storage/session-storage.js"
 import { BranchStorage } from "../../src/storage/branch-storage.js"
-import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature.js"
+import { noBranchTools } from "../../src/runtime/agent/tools.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
 import { requireCurrentAgent, ExtensionServiceError } from "@gent/core/extensions/api"

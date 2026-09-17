@@ -5,7 +5,7 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { request, type RequestCapability, type ToolCapability } from "@gent/core/extensions/api"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { ProcessLocalToolReplay } from "../../../src/runtime/agent/process-local-tool-replay"
+import { noBranchTools, ProcessLocalToolReplay, ToolRunner } from "../../../src/runtime/agent/tools"
 import { narrowR } from "../../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
@@ -24,7 +24,6 @@ import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loo
 import { ActorCommandId, BranchId, ExtensionId, SessionId } from "../../../src/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
-import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
@@ -36,7 +35,6 @@ import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-lo
 import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
-import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 
 const makeTestExtensions = (
   tools: ReadonlyArray<ToolCapability> = [],

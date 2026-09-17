@@ -122,7 +122,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off test entry point",
   },
   {
-    file: "packages/core/src/runtime/agent/tool-runner.ts",
+    file: "packages/core/src/runtime/agent/tools.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off",
   },

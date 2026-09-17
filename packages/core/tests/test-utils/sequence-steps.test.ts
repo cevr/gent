@@ -7,7 +7,7 @@ import {
   multiToolCallStep,
 } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers, type SequenceStep } from "../../src/test-utils/language-model"
-import { convertTools } from "../../src/runtime/agent/tool-runner"
+import { convertTools } from "../../src/runtime/agent/tools"
 import { LanguageModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import { tool } from "@gent/core/extensions/api"

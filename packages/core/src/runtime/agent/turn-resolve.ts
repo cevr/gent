@@ -26,9 +26,12 @@ import { ExtensionRegistry } from "../extensions/registry.js"
 import { compileToolPolicy } from "../extensions/tool-policy.js"
 import type { ResolvedTurn } from "./agent-loop.state.js"
 import { buildTurnPromptSections } from "./agent-loop.utils.js"
-import { CurrentExtensionHostContext } from "./current-extension-host-context.js"
-import { staticToolEntries, type ResolvedToolCapability } from "./tool-runner.js"
-import { attachToolBindingIdentity } from "./tool-binding-replay.js"
+import {
+  attachToolBindingIdentity,
+  CurrentExtensionHostContext,
+  type ResolvedToolCapability,
+  staticToolEntries,
+} from "./tools.js"
 
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition

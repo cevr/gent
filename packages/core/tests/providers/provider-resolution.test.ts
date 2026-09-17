@@ -11,7 +11,7 @@ import {
 import { Auth, AuthError, type AuthInfo, type AuthService } from "../../src/domain/auth"
 import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
 import { ModelResolver } from "../../src/providers/model-resolver"
-import { convertTools } from "../../src/runtime/agent/tool-runner"
+import { convertTools } from "../../src/runtime/agent/tools"
 import { ProviderAuthError } from "../../src/domain/driver"
 import { toPrompt } from "../../src/providers/ai-transcript"
 import { dateFromMillis, Message } from "../../src/domain/message"

@@ -27,7 +27,12 @@ import {
   type Path,
 } from "effect"
 import { Entity, Sharding } from "effect/unstable/cluster"
-import { BranchToolWork, CurrentBranchToolFeature } from "./branch-tool-feature.js"
+import {
+  BranchToolWork,
+  CurrentBranchToolFeature,
+  type ProcessLocalToolReplay,
+  ToolRunner,
+} from "./tools.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentEvent } from "../../domain/event.js"
@@ -55,7 +60,6 @@ import { ExtensionRegistry } from "../extensions/registry.js"
 import { buildResourceLayer } from "../extensions/resource-host/resource-layer.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
-import { ToolRunner } from "./tool-runner.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { resolveTurnProfile as resolveSessionTurnProfile } from "../session-runtime-context.js"
@@ -80,7 +84,6 @@ import {
 import type { ActiveStreamHandle } from "./turn-response.js"
 import { makeTurnLedger } from "./turn-ledger.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
-import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"

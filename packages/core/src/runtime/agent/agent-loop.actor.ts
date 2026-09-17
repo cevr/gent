@@ -85,10 +85,9 @@ import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
-import { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
+import { type CurrentExtensionHostContext, ProcessLocalToolReplay } from "./tools.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
-import type { CurrentExtensionHostContext } from "./current-extension-host-context.js"
 import {
   AgentLoop,
   type BranchCommandInput,

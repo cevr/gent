@@ -16,7 +16,7 @@ import {
   sealErasedEffect,
   provideExtensionLeaf,
 } from "./extension-effect-membrane.js"
-import type { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
+import type { CurrentExtensionHostContext } from "../agent/tools.js"
 
 export interface CompiledExtensionHooks {
   readonly resolveSystemPrompt: (

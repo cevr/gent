@@ -18,7 +18,7 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { provideCurrentHostCtx } from "../../src/runtime/agent/current-extension-host-context"
+import { provideCurrentHostCtx } from "../../src/runtime/agent/tools"
 import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import { testExtensionHostContext } from "../../src/test-utils"
 

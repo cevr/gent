@@ -14,7 +14,7 @@ import {
   noBranchTools,
   CurrentBranchToolFeature,
   type BranchToolFeature,
-} from "../../src/runtime/agent/branch-tool-feature"
+} from "../../src/runtime/agent/tools"
 import { emptyErasedResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
 
 const tableNames = Effect.gen(function* () {

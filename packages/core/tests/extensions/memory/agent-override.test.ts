@@ -14,7 +14,7 @@ import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { AgentEvent } from "../../../src/domain/event"
 import { SessionMutations } from "../../../src/domain/session-mutations"
 import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
-import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ConfigService } from "../../../src/runtime/config-service"
@@ -30,7 +30,6 @@ import { MessageStorage } from "../../../src/storage/message-storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
-import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,

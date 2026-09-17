@@ -27,7 +27,7 @@ import { makeCollectingExtensionHost, registerContributions } from "../domain/ex
 import { testHostFacts } from "./index.js"
 import { buildServerRoot } from "../server/server-root.js"
 import { StateLocation } from "../server/dependencies.js"
-import { ToolRunner } from "../runtime/agent/tool-runner.js"
+import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/agent/tools.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import {
   stubAgentRunnerLayer,
@@ -35,7 +35,6 @@ import {
   testEnvironment,
   testIdentity,
 } from "./test-root.js"
-import { noBranchTools, type BranchToolFeature } from "../runtime/agent/branch-tool-feature.js"
 
 export interface E2ELayerConfig {
   /**
