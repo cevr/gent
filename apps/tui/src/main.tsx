@@ -1,13 +1,11 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
-import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import {
   Cause,
   Config,
   Console,
   Context,
-  DateTime,
   Effect,
   Exit,
   Fiber,
@@ -50,32 +48,20 @@ import {
 } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { DEFAULT_HEADLESS_TOOL_RENDERERS } from "./headless-tool-renderers"
-import {
-  Gent,
-  GentConnectionError,
-  getLocalHostname,
-  isPidAlive,
-  probeServerLockEntryIdentity,
-  readServerLock,
-  removeServerLock,
-  signalIfIdentityOwned,
-  validateServerLockEntry,
-  type GentClientBundle,
-  type ServerLockEntry,
-} from "@gent/sdk"
+import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"
 import { makeClientRuntime } from "./extensions/client-runtime"
 import type { ClientRuntime } from "./extensions/client-facets.js"
 import {
-  extensionHealthError,
-  extensionHealthFromSnapshot,
-  extensionHealthUnavailable,
-  formatDoctorReport,
-  makeDoctorReport,
-  resetStorage,
-  type ExtensionDoctorHealth,
-} from "./ops/local-health"
+  CliStartupError,
+  doctor,
+  readHome,
+  resolveClientBundle,
+  server,
+  sessions,
+  storage,
+} from "./ops/commands"
 
 // Clear client log on startup
 clearClientLog()
@@ -105,11 +91,6 @@ const waitForRendererDestroy = (renderer: CliRenderer) =>
       renderer.destroy()
     })
   })
-
-class CliStartupError extends Schema.TaggedError<CliStartupError>()("CliStartupError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
 
 // Platform layer — `BunPlatformLive` bundles `BunServices.layer`
 // (FileSystem, Path, ChildProcessSpawner, …) with `BunGentPlatformLive`
@@ -278,7 +259,7 @@ const runGent = ({
 }) =>
   Effect.gen(function* () {
     const cwd = process.cwd()
-    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
+    const home = yield* readHome
     const scope = yield* Effect.scope
     const builtUiServices = yield* Layer.buildWithScope(makeUiLayer(), scope)
     const uiServices = Context.makeUnsafe<unknown>(builtUiServices.mapUnsafe)
@@ -307,26 +288,17 @@ const runGent = ({
       }
     }
 
-    const resolveBundle = () => {
-      if (Option.isSome(connect)) return Gent.client(connect.value)
-      let serverState = Gent.state.sqlite()
-      if (debug || isolate || mockEmpty) serverState = Gent.state.memory()
-      let serverProvider = Gent.provider.live()
-      if (debug) serverProvider = Gent.provider.mock()
-      if (mockEmpty) serverProvider = Gent.provider.mock({ empty: true })
-      const serverOptions = {
-        cwd,
-        state: serverState,
-        provider: serverProvider,
-        debug,
-      }
-      const configuredOptions = Option.match(authDirectoryOpt, {
-        onNone: () => serverOptions,
-        onSome: (authDirectory) => ({ ...serverOptions, authDirectory }),
-      })
-      return Effect.flatMap(Gent.server(configuredOptions), Gent.client)
-    }
-    const bundle = yield* resolveBundle()
+    let mock = Option.none<{ readonly empty: boolean }>()
+    if (debug) mock = Option.some({ empty: false })
+    if (mockEmpty) mock = Option.some({ empty: true })
+    const bundle = yield* resolveClientBundle({
+      cwd,
+      connect,
+      inMemory: debug || isolate || mockEmpty,
+      debug,
+      mock,
+      authDirectory: authDirectoryOpt,
+    })
     const requestedAgent = Option.match(agent, {
       onNone: () => Option.none<AgentName>(),
       onSome: (value) => {
@@ -507,194 +479,6 @@ const resume = Command.make(
       agent: Option.none(),
       runSpec: Option.none(),
     }),
-)
-
-// Sessions subcommand
-const sessions = Command.make(
-  "sessions",
-  {
-    connect: Flag.string("connect").pipe(
-      Flag.withDescription("Connect to an existing gent server"),
-      Flag.optional,
-    ),
-    isolate: Flag.boolean("isolate").pipe(
-      Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
-      Flag.withDefault(false),
-    ),
-  },
-  ({ connect, isolate }) =>
-    Effect.gen(function* () {
-      const cwd = process.cwd()
-      const resolveBundle = () => {
-        if (Option.isSome(connect)) return Gent.client(connect.value)
-        let serverState = Gent.state.sqlite()
-        if (isolate) serverState = Gent.state.memory()
-        return Effect.flatMap(Gent.server({ cwd, state: serverState }), Gent.client)
-      }
-      const bundle = yield* resolveBundle()
-      yield* bundle.runtime.lifecycle.waitForReady
-      const allSessions = yield* bundle.client.session.list()
-
-      if (allSessions.length === 0) {
-        yield* Console.log("No sessions found.")
-        return
-      }
-
-      yield* Console.log("Sessions:")
-      for (const s of allSessions) {
-        const date = DateTime.make(s.updatedAt).pipe(
-          Option.match({
-            onNone: () => "unknown",
-            onSome: DateTime.formatIso,
-          }),
-        )
-        const name = Option.getOrElse(Option.fromNullishOr(s.name), () => "Unnamed")
-        yield* Console.log(`  ${s.id} - ${name} (${date})`)
-      }
-    }),
-)
-
-// Server status subcommand
-const serverStatus = Command.make("status", {}, () =>
-  Effect.gen(function* () {
-    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entry = Option.fromNullishOr(yield* readServerLock(home))
-
-    if (Option.isNone(entry)) {
-      yield* Console.log("No shared server.")
-      return
-    }
-
-    yield* Console.log("Shared server:\n")
-    yield* Console.log(
-      `${"PID".padEnd(8)} ${"STATUS".padEnd(10)} ${"SERVER ID".padEnd(40)} ${"DB PATH".padEnd(40)} ${"URL"}`,
-    )
-    yield* Console.log("─".repeat(120))
-
-    const validation = yield* validateServerLockEntry(entry.value)
-    let status = "alive"
-    if (!validation.valid) status = `dead (${validation.reason})`
-    yield* Console.log(
-      `${String(entry.value.pid).padEnd(8)} ${status.padEnd(10)} ${entry.value.serverId.padEnd(40)} ${entry.value.dbPath.padEnd(40)} ${entry.value.rpcUrl}`,
-    )
-  }),
-)
-
-// Server stop subcommand
-const serverStop = Command.make(
-  "stop",
-  {
-    all: Flag.boolean("all").pipe(
-      Flag.withDescription("Stop all registered servers"),
-      Flag.withDefault(false),
-    ),
-  },
-  ({ all }) =>
-    Effect.gen(function* () {
-      const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-      const thisHost = yield* getLocalHostname
-      const entry = Option.fromNullishOr(yield* readServerLock(home))
-
-      if (Option.isNone(entry)) {
-        yield* Console.log("No shared server.")
-        return
-      }
-
-      if (entry.value.hostname !== thisHost || (!all && !(yield* isPidAlive(entry.value.pid)))) {
-        yield* Console.log("No live shared server to stop on this host.")
-        return
-      }
-
-      // Signal target — identity-probe before SIGTERM so PID reuse after a
-      // crash never kills an unrelated process (same boundary as SDK attach).
-      const outcome = yield* signalIfIdentityOwned(entry.value, probeServerLockEntryIdentity)
-      if (outcome === "signaled") {
-        yield* Console.log(`Sent SIGTERM to PID ${entry.value.pid} (${entry.value.serverId})`)
-      } else {
-        yield* Console.log(
-          `Skipped PID ${entry.value.pid} (${entry.value.serverId}): identity probe failed`,
-        )
-      }
-
-      // Wait for the process to exit, then cleanup the server lock.
-      yield* Effect.sleep("2 seconds")
-
-      if (yield* isPidAlive(entry.value.pid)) {
-        yield* Console.log("\nShared server is still running after SIGTERM.")
-      } else {
-        yield* removeServerLock(home, entry.value.serverId)
-        yield* Console.log("\nShared server stopped and cleaned up.")
-      }
-    }),
-)
-
-// Server subcommand group
-const server = Command.make("server", {}, () =>
-  Console.log("Usage: gent server <status|stop>"),
-).pipe(Command.withSubcommands([serverStatus, serverStop]))
-
-const readDoctorExtensionHealth = (
-  entry: ServerLockEntry,
-): Effect.Effect<ExtensionDoctorHealth, never, GentPlatform> =>
-  Effect.gen(function* () {
-    const validation = yield* validateServerLockEntry(entry)
-    if (!validation.valid) {
-      let reason = "Shared server is not local to this host."
-      if (validation.reason === "dead-pid") reason = "Shared server lock is stale."
-      return extensionHealthUnavailable(reason)
-    }
-
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
-        yield* bundle.runtime.lifecycle.waitForReady
-        const snapshot = yield* bundle.client.extension.listStatus({})
-        return extensionHealthFromSnapshot(snapshot)
-      }),
-    ).pipe(Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))))
-  })
-
-const doctor = Command.make("doctor", {}, () =>
-  Effect.gen(function* () {
-    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entry = Option.fromNullishOr(yield* readServerLock(home))
-    const extensions = yield* Option.match(entry, {
-      onNone: () => Effect.succeed(extensionHealthUnavailable("No shared server.")),
-      onSome: readDoctorExtensionHealth,
-    })
-    const report = yield* makeDoctorReport(home, entry, extensions)
-    yield* Console.log(formatDoctorReport(report))
-  }),
-)
-
-const storageReset = Command.make("reset", {}, () =>
-  Effect.gen(function* () {
-    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
-    const entry = Option.fromNullishOr(yield* readServerLock(home))
-    if (Option.isSome(entry) && (yield* validateServerLockEntry(entry.value)).valid) {
-      yield* Console.error(
-        "Error: shared server is running. Stop it with `gent server stop` first.",
-      )
-      return yield* new CliStartupError({
-        message: "shared server is running; refusing to reset storage",
-      })
-    }
-
-    const result = yield* resetStorage(home)
-    if (result.archived.length === 0) {
-      yield* Console.log("No storage files found.")
-      return
-    }
-
-    yield* Console.log(`Archived storage files to ${result.archiveDir}`)
-    for (const file of result.archived) {
-      yield* Console.log(`  ${file}`)
-    }
-  }),
-)
-
-const storage = Command.make("storage", {}, () => Console.log("Usage: gent storage <reset>")).pipe(
-  Command.withSubcommands([storageReset]),
 )
 
 // Root command with subcommands
