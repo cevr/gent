@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
-import { Effect, Exit, FileSystem, Layer, Path } from "effect"
+import { Effect, Exit, FileSystem, Layer, Path, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -452,6 +452,54 @@ describe("Sessions", () => {
       `
       expect(queueRows[0]?.count).toBe(0)
       expect(operationRows[0]?.count).toBe(0)
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
+  )
+  /**
+   * `session.create` receipts once carried an `agentOverride` the input no
+   * longer has. Those rows are still on disk, so the receipt must decode with
+   * the stale key present: a retry that fails to read its own receipt would
+   * create a second session.
+   */
+  it.live("a stored session.create receipt decodes with a retired key present", () =>
+    Effect.gen(function* () {
+      const operations = yield* SessionOperationStorage
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sql = yield* SqlClient.SqlClient
+      const sessionId = SessionId.make("stale-receipt-session")
+      const branchId = BranchId.make("stale-receipt-branch")
+      const requestId = RequestId.make("stale-receipt-request")
+
+      yield* sessions.createSession(
+        new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: branchId, sessionId, name: "main", createdAt: FIXED_NOW }),
+      )
+
+      // The shape an earlier build wrote, including the retired key.
+      const StaleReceipt = Schema.fromJsonString(
+        Schema.Struct({
+          sessionId: Schema.String,
+          branchId: Schema.String,
+          name: Schema.String,
+          initialPrompt: Schema.String,
+          agentOverride: Schema.String,
+        }),
+      )
+      const staleJson = yield* Schema.encodeEffect(StaleReceipt)({
+        sessionId,
+        branchId,
+        name: "Stale receipt",
+        initialPrompt: "seed",
+        agentOverride: "memory:reflect",
+      })
+      yield* sql`INSERT INTO durable_operations (workspace_id, operation, request_id, result_json, subject_session_id, subject_branch_id, created_at) VALUES (${"0".repeat(64)}, ${"session.create"}, ${requestId}, ${staleJson}, ${sessionId}, ${branchId}, ${FIXED_NOW_MILLIS})`
+
+      const receipt = yield* operations.getReceipt(DurableOperations.createSession, requestId)
+      expect(receipt?.sessionId).toBe(sessionId)
+      expect(receipt?.name).toBe("Stale receipt")
+      expect(receipt?.initialPrompt).toBe("seed")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
   it.live("rejects invalid session parent and active branch relationships", () =>

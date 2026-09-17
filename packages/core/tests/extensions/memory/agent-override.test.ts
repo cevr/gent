@@ -152,41 +152,6 @@ describe("agent override behavior", () => {
         }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
       }).pipe(Effect.provide(BunCrypto.layer)),
   )
-  it.scopedLive(
-    "createSession with initialPrompt uses the override for the first turn without persisting an agent switch",
-    () =>
-      Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          {
-            ...textStep("seeded reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/override")
-            },
-          },
-        ])
-        yield* Effect.gen(function* () {
-          const mutations = yield* SessionMutations
-          const messageStorage = yield* MessageStorage
-          const recorder = yield* SequenceRecorder
-          const session = yield* mutations.createSession({
-            name: "Initial Prompt Override",
-            initialPrompt: "seed the session",
-            agentOverride: AgentName.make("memory:reflect"),
-          })
-          const messages = yield* waitFor(
-            messageStorage.listMessages(session.branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 1,
-            5000,
-            "initial prompt assistant reply",
-          )
-          const calls = yield* recorder.getCalls
-          expect(messages.map((message) => message.role)).toEqual(["user", "assistant"])
-          expect(eventTags(calls)).not.toContain("AgentSwitched")
-          yield* controls.assertDone
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
-      }).pipe(Effect.provide(BunCrypto.layer)),
-  )
   it.scopedLive("createSession skips dispatch when initialPrompt is missing or empty", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
