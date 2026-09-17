@@ -8,8 +8,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "turbo run typecheck",
-    "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,guards \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore\" \"bun packages/tooling/src/check-guardrails.ts\"",
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,guards \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore\" \"bun run guards\"",
     "lint:fix": "env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore --fix",
+    "guards": "bun packages/tooling/src/check-guardrails.ts",
     "fmt": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore",
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore --check",
     "build": "turbo run build",

@@ -34,6 +34,8 @@
     "gent/no-die-in-test-helpers": "error",
     // Custom — no `withX(innerCall(...))`; pipe the inner call through the adapter
     "gent/no-with-wrapper-call": "error",
+    // Custom — a bare `it(...)` from effect-bun-test registers no test; use `test(...)` or `it.live`
+    "gent/no-inert-it": "error",
 
     // Effect — complete recommended preset
     "effect/maxCognitiveComplexity": ["error", { "max": 21 }],

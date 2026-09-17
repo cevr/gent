@@ -1,6 +1,16 @@
 pre-commit:
   parallel: false
   jobs:
+    # First, and alone: the guards read the tree and finish in about two
+    # seconds, so their verdict heads the output instead of sitting after the
+    # minutes the later jobs take. Every job still runs -- lefthook does not
+    # stop at the first failure -- so this buys the reader the answer early,
+    # not a shorter run. The formatter runs after, so nothing the guards read
+    # has been rewritten under them.
+    - name: guards
+      run: bun run guards
+    # `lint:fix` is oxlint alone; the guards above are the other half of
+    # `bun run lint`, which the gate runs as one command.
     - name: lint+fmt
       run: bun run lint:fix && bun run fmt
       stage_fixed: true
