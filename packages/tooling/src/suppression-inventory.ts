@@ -183,6 +183,17 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
 ]
 
+/**
+ * The guards that write the marker out to recognise it. Each spells
+ * `@effect-diagnostics` in a pattern, a table entry or a message, so scanning
+ * them reports the description of a suppression instead of a suppression.
+ */
+const DESCRIBES_THE_MARKER = new Set([
+  "packages/tooling/src/suppression-inventory.ts",
+  "packages/tooling/src/diagnostic-suppression-anchor.ts",
+  "packages/tooling/tests/diagnostic-suppression-anchor.test.ts",
+])
+
 const approvedSuppression = (file: string, text: string): boolean =>
   approvedSuppressionEntries.some(
     (entry) => entry.file === file && approvedComment(entry) === text.trim(),
@@ -193,7 +204,7 @@ export const findSuppressionInventoryFindings = (
   text: string,
 ): ReadonlyArray<SuppressionInventoryFinding> => {
   const findings: SuppressionInventoryFinding[] = []
-  if (file === "packages/tooling/src/suppression-inventory.ts") return findings
+  if (DESCRIBES_THE_MARKER.has(file)) return findings
 
   for (const [index, line] of text.split("\n").entries()) {
     if (line.includes(directiveMarker) && !approvedSuppression(file, line)) {

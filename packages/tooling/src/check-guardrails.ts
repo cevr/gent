@@ -4,6 +4,7 @@ import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "./blan
 import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
 import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
 import { findCoreVendorModelPins } from "./core-vendor-model-pins"
+import { findDiagnosticSuppressionAnchors } from "./diagnostic-suppression-anchor"
 import { findAliasTestLayers } from "./core-alias-test-layers"
 import { findUnadmittedChildSessionWriters } from "./core-child-session-depth"
 import { findIdentityEncodes } from "./core-identity-encode"
@@ -91,6 +92,7 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
     ...findIdentityEncodes(file, text),
     ...findProcessRunnerFindings(file, text),
     ...findTuiSessionIdentityReads(file, text),
+    ...findDiagnosticSuppressionAnchors(file, text),
   ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
   return [...blanket, ...suppressions, ...sourceOnly]
 }
