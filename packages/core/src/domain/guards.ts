@@ -15,6 +15,26 @@ export const causeMessage = (cause: unknown): string => {
   return String(cause)
 }
 
+const hasCause = Schema.is(Schema.Struct({ cause: Schema.Unknown }))
+
+/**
+ * The messages down a failure's `cause` chain, outermost first. It is what a
+ * reader needs from a wrapped failure: the outer message says what was being
+ * done, the innermost says why it failed. Stack frames belong in the log.
+ */
+export const causeChainMessage = (cause: unknown): string => {
+  const messages: Array<string> = []
+  let current = cause
+  // A cycle would be a bug in the thrower; the bound keeps it from hanging the reader.
+  for (let depth = 0; depth < 8; depth += 1) {
+    const message = causeMessage(current)
+    if (!messages.includes(message)) messages.push(message)
+    if (!hasCause(current) || Predicate.isNullish(current.cause)) break
+    current = current.cause
+  }
+  return messages.join(": ")
+}
+
 /** Narrow an unknown value to a readonly array of records. */
 export const isRecordArray = Schema.is(Schema.Array(JsonRecord))
 

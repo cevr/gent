@@ -1,6 +1,7 @@
 import { Cause, Clock, Effect, Option, Predicate, Ref, TxQueue, type Semaphore } from "effect"
 import { DEFAULT_AGENT_NAME } from "../../domain/agent.js"
 import { ErrorOccurred, type AgentEvent } from "../../domain/event.js"
+import { causeChainMessage } from "../../domain/guards.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
   buildIdleState,
@@ -65,14 +66,22 @@ export const interruptActiveStream = Effect.fn("AgentLoop.interruptActiveStream"
 })
 
 export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) => {
+  // The event is what the transcript prints, so it carries the messages down
+  // the cause chain. The frames go to the log: one storage failure printed
+  // 150 rows of them into a live session.
   const publishPhaseFailure = (cause: Cause.Cause<unknown>) =>
-    scope
-      .publishEvent(
-        ErrorOccurred.make({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          error: Cause.pretty(cause),
-        }),
+    Effect.logWarning("turn.phase-failed")
+      .pipe(
+        Effect.annotateLogs({ error: Cause.pretty(cause) }),
+        Effect.andThen(
+          scope.publishEvent(
+            ErrorOccurred.make({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              error: causeChainMessage(Cause.squash(cause)),
+            }),
+          ),
+        ),
       )
       .pipe(
         Effect.catchEager((error) =>
