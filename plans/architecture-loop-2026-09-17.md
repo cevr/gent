@@ -65,3 +65,27 @@ the code proves it.
 
 Rejected from fx: LLM permission reviewer, static tool table, mutex event
 queue, unbounded steps, whole-log replay, text-blob compaction.
+
+## Pass 2 (read-only sweeps, then agents on `arch-core2` and `arch-apps2`)
+
+| #   | Candidate                                                                                         | Status                                         |
+| --- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| C1  | `ProcessRunner` is a pass-through Tag over `runProcess`; every union already names the spawner    | agent `arch-core2`                             |
+| C2  | Server identity declared three times (`server-identity.ts`, `server-routes.ts`, `rpcs.ts`)        | agent `arch-core2`                             |
+| C3  | `packages/core/src/test-utils/` is outside the dead-export guard; three dead names                | agent `arch-core2`                             |
+| E1  | Two cell output buffers with different tail policy; an error at the end of long output is dropped | agent `arch-apps2`                             |
+| E2  | `anthropic/oauth.ts` is a re-export barrel                                                        | agent `arch-apps2`                             |
+| E3  | Goal store `optional` to `Option` wrapper                                                         | rejected: changes the on-disk goal file format |
+| E4  | `handoff-tool.ts` has one importer                                                                | agent `arch-apps2`                             |
+| T1  | Two owners for the branch picker's visibility                                                     | agent `arch-apps2`, probe first                |
+| T2  | `latestInputTokens` and `contextMetrics` are one value in two signals                             | agent `arch-apps2`                             |
+| T3  | `main.tsx` holds five admin subcommands; HOME read written five times                             | agent `arch-apps2`                             |
+| T4  | `agents-view.client.tsx` holds the tray and the pane                                              | agent `arch-apps2`                             |
+| S1  | `spawnIdleServer` and `spawnServerOnPort` differ by three lines                                   | agent `arch-apps2`                             |
+| S2  | The dead-export guard scans nothing under `apps/`; 92 file-local exports in `apps/tui/src/`       | agent `arch-apps2`                             |
+
+Cleared with receipts in pass 2: storage sub-tags, RPC handlers, `dependencies.ts`
+wiring, one-adapter seams (all guarded), SDK wrappers, tooling guards, e2e fixtures.
+Noted, not changed: `dbPath` has two defaults (`packages/sdk/src/server.ts:263`
+absolute, `packages/core/src/server/dependencies.ts:126` relative); only test
+compositions reach the core default.
