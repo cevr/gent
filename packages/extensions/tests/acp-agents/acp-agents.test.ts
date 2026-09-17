@@ -14,7 +14,6 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Predicate } from "effect"
 import { setupExtensions } from "@gent/core-internal/runtime/extensions/activation.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { ProcessRunnerLive } from "@gent/core-internal/runtime/run-process.js"
 import {
   acpDisposerRelease,
   AcpAgentsExtension,
@@ -28,7 +27,7 @@ const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
 )
 
 const fsLayer = Layer.provideMerge(
-  Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
   childProcessSpawnerLive,
 )
 

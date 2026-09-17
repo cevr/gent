@@ -20,7 +20,6 @@ import { Effect, Layer, Option, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
-import { ProcessRunnerLive } from "./run-process.js"
 
 declare const __GENT_COMPILED__: boolean
 
@@ -98,16 +97,11 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 /**
  * The complete Bun-runtime platform stack: `@effect/platform-bun`
  * (FileSystem, Path, ChildProcessSpawner, …) bundled with the gent-owned
- * `BunGentPlatformLive` and `ProcessRunnerLive`. Production wiring and test
- * harnesses both yield
+ * `BunGentPlatformLive`. Production wiring and test harnesses both yield
  * this single Layer so they can't drift on which BunService stack they
  * pull in.
  *
  * Note: this is an output-context bundle (`Layer.merge`), not a dependency
  * wiring — each member either has no requirements or is given its own.
  */
-export const BunPlatformLive = Layer.mergeAll(
-  BunServices.layer,
-  BunGentPlatformLive,
-  ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
-)
+export const BunPlatformLive = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)

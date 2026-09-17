@@ -39,7 +39,6 @@ import {
   collectResourceEntries,
 } from "./extensions/resource-host/resource-layer.js"
 import { ConfigService, type UserConfig } from "./config-service.js"
-import { ProcessRunner } from "./run-process.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   buildSessionProfile,
@@ -149,7 +148,6 @@ export class SessionProfileCache extends Context.Service<
     | ConfigService
     | ScopeType.Scope
     | GentPlatform
-    | ProcessRunner
   > =>
     Layer.effect(
       SessionProfileCache,
@@ -159,7 +157,6 @@ export class SessionProfileCache extends Context.Service<
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
         const platform = yield* GentPlatform
-        const processRunner = yield* ProcessRunner
         // Every profile's resources close with this server scope.
         const serverScope = yield* Scope.Scope
         const generationId = ProcessGenerationId.make(yield* platform.randomId)
@@ -172,7 +169,6 @@ export class SessionProfileCache extends Context.Service<
           Context.add(ChildProcessSpawner, spawner),
           Context.add(ConfigService, configService),
           Context.add(GentPlatform, platform),
-          Context.add(ProcessRunner, processRunner),
         )
 
         const profiles = new Map<string, SessionProfile>()

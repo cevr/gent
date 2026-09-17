@@ -19,7 +19,6 @@ import {
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
 import { environmentSection } from "../domain/prompt.js"
-import type { ProcessRunner } from "./run-process.js"
 import type { ProcessGenerationId } from "../domain/process-generation.js"
 
 /**
@@ -80,7 +79,7 @@ export const loadRuntimeProfileDeclarations = (
 ): Effect.Effect<
   RuntimeProfileDeclarations,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform | ProcessRunner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
 > =>
   Effect.gen(function* () {
     const path = yield* Path.Path

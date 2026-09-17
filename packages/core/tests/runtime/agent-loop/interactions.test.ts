@@ -67,7 +67,6 @@ import {
   waitForPhase,
 } from "./helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")
@@ -152,7 +151,6 @@ describe("interaction", () => {
       BunServices.layer,
       ModelRegistry.Test(),
       GentPlatform.Test(),
-      ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       recorderLayer,
       eventStoreLayer,
     )
@@ -485,7 +483,6 @@ describe("interaction", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
-        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const loopLayer = AgentLoopTestActor({ baseSections: [] }).pipe(

@@ -23,11 +23,8 @@ import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { ProcessRunnerLive } from "../../src/runtime/run-process"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { ExtensionId } from "../../src/domain/ids"
-
-const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
 class SessionProfileResourceMarker extends Context.Service<
   SessionProfileResourceMarker,
@@ -69,7 +66,6 @@ const makeCacheLayer = (params: {
     Layer.provide(
       Layer.mergeAll(
         BunServices.layer,
-        processRunnerLive,
         configServiceLive,
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),

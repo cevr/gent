@@ -31,7 +31,6 @@ import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,
@@ -78,7 +77,6 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
-    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )

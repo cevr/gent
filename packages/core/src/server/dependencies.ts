@@ -38,7 +38,6 @@ import { SessionMutationsLive } from "./session-mutations-live.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { ProcessRunnerLive } from "../runtime/run-process.js"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "./workspace-rpc.js"
 
 interface DependencyOverrides {
@@ -113,7 +112,6 @@ const platformServicesLive = Layer.provideMerge(
   Layer.mergeAll(
     Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
     Layer.effect(Path.Path, Effect.service(Path.Path)),
-    ProcessRunnerLive,
     Layer.effect(GentPlatform, Effect.service(GentPlatform)),
   ),
   childProcessSpawnerLive,

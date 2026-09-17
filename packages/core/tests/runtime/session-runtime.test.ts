@@ -63,7 +63,6 @@ import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { noBranchTools } from "../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../src/runtime/run-process"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,
@@ -123,7 +122,6 @@ const makeRuntimeLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
-    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     AgentLoopSessionGovernance.Live,
   )
   let baseDeps = baseDepsWithoutProfile
@@ -167,7 +165,6 @@ const makeLiveToolRuntimeLayer = (
     BunServices.layer,
     ModelRegistry.Test(),
     GentPlatform.Test(),
-    ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
     AgentLoopSessionGovernance.Live,
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))

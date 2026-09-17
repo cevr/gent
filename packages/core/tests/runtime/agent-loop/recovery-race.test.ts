@@ -65,7 +65,6 @@ import { StorageError } from "../../../src/domain/storage-error"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
@@ -144,7 +143,6 @@ describe("agent-loop recovery race", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -254,7 +252,6 @@ describe("agent-loop recovery race", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(

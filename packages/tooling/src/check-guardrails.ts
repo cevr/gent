@@ -7,6 +7,7 @@ import { findCoreVendorModelPins } from "./core-vendor-model-pins"
 import { findAliasTestLayers } from "./core-alias-test-layers"
 import { findUnadmittedChildSessionWriters } from "./core-child-session-depth"
 import { findIdentityEncodes } from "./core-identity-encode"
+import { findProcessRunnerFindings } from "./core-process-runner"
 import {
   collectExportFacts,
   findPackageSurfaceFindings,
@@ -85,6 +86,7 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
     ...findE2eFixtureImportFindings(file, text),
     ...findUnadmittedChildSessionWriters(file, text),
     ...findIdentityEncodes(file, text),
+    ...findProcessRunnerFindings(file, text),
   ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
   return [...blanket, ...suppressions, ...sourceOnly]
 }
