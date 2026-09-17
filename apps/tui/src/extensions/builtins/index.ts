@@ -63,10 +63,10 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
       // whose name happened to contain those letters rather than the closest
       // one. Ranking puts the nearest name first, which is also the completion
       // the composer's ghost line offers.
-      // The store is re-read per request rather than cached in the setup. A
-      // popup opens on a keystroke and the file is a few KB, so the read is
-      // cheap; caching it would mean a pick made this session never affects
-      // ranking until the TUI restarts, which is the opposite of the point.
+      // The store is read from disk per request rather than from the shared
+      // in-memory snapshot. This runs in an extension setup's Effect, which
+      // may await, and the file is a few KB opened on a keystroke, so the read
+      // is cheap and picks written by another `gent` process are seen too.
       items: (filter: string) =>
         Effect.gen(function* () {
           const transport = yield* ClientTransport

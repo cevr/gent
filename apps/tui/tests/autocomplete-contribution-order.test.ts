@@ -16,7 +16,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { slashAutocompleteItems } from "../src/routes/session-command-registry"
 import { builtinClientModules } from "../src/extensions/builtins/index"
-import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
+import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { Command } from "../src/command/types"
 import type {
@@ -126,8 +126,16 @@ const skillItemsFor = (
         onSome: (entry) => Effect.succeed(entry satisfies AutocompleteContribution),
       },
     )
-    const items = yield* Effect.promise(() => runAutocompleteItems(contribution, filter, runtime))
+    const failures: Array<string> = []
+    const items = yield* Effect.promise(() =>
+      runAutocompleteContributions([contribution], filter, runtime, (prefix, reason) => {
+        failures.push(`${prefix}: ${reason}`)
+      }),
+    )
     yield* Effect.promise(() => runtime.dispose())
+    // A failing contribution answers with no rows, which would read as a
+    // ranking result rather than the breakage it is.
+    if (failures.length > 0) return yield* Effect.die(failures.join("; "))
     return ids(items)
   })
 

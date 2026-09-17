@@ -14,17 +14,17 @@
  * pick into what is actually on disk under a single-permit gate.
  *
  * Ranking stays synchronous. It runs inside the popup's resource callback,
- * which cannot await a file read while the reader is typing, so it reads the
- * snapshot as a plain map lookup. Until the first load lands the lookup
- * answers zero, which is the same thing it answers for a reader with no
- * history: the popup ranks by match quality and nothing waits.
+ * which Solid runs under `untrack`, so nothing read there can make the popup
+ * re-rank. The lookup is therefore a plain map read of the shared snapshot,
+ * re-done on the next keystroke, which is when a new ranking is wanted anyway.
+ * Until the first load lands it answers zero, which is the same thing it
+ * answers for a reader with no history: the popup ranks by match quality and
+ * nothing waits.
  *
  * Writes never block the keystroke path either. `cast` forks the write onto
- * the client runtime and returns immediately, and the Solid signal is bumped
- * when the write lands so the next keystroke ranks with the new pick.
+ * the client runtime and returns immediately.
  */
 
-import { createSignal } from "solid-js"
 import { DateTime, Effect, Option } from "effect"
 import { frecencyLookup, type FrecencyLookup } from "../components/autocomplete-frecency"
 import {
@@ -49,67 +49,32 @@ export interface AutocompleteFrecency {
   readonly reset: () => void
 }
 
-/**
- * Tracks that the shared snapshot changed, so Solid re-runs a ranking that
- * read it. The counter is the reactive handle; the value itself lives in the
- * store module, which is the only thing both writers can reach.
- */
-type FrecencyStoreCell = {
-  revision: ReturnType<typeof createSignal<number>>[0]
-  bump: ReturnType<typeof createSignal<number>>[1]
-  loaded: boolean
-}
-
-let singleton: Option.Option<FrecencyStoreCell> = Option.none()
-
-const getCell = (): FrecencyStoreCell => {
-  if (Option.isSome(singleton)) return singleton.value
-  const [revision, bump] = createSignal<number>(0)
-  const cell: FrecencyStoreCell = { revision, bump, loaded: false }
-  singleton = Option.some(cell)
-  return cell
-}
+/** Whether the store has been read from disk yet, once per process. */
+let loaded = false
 
 export function useAutocompleteFrecency(): AutocompleteFrecency {
-  const cell = getCell()
   const workspace = useWorkspace()
   const { cast } = useRuntime()
 
-  if (!cell.loaded) {
-    cell.loaded = true
+  if (!loaded) {
+    loaded = true
     cast(
-      Effect.tap(readFrecencyStore(workspace.home), (loaded) =>
+      Effect.tap(readFrecencyStore(workspace.home), (snapshot) =>
         Effect.sync(() => {
-          if (Option.isNone(loaded)) return
-          setFrecencySnapshot(loaded.value)
-          cell.bump((value) => value + 1)
+          if (Option.isNone(snapshot)) return
+          setFrecencySnapshot(snapshot.value)
         }),
       ),
     )
   }
 
   return {
-    lookup: () => {
-      cell.revision()
-      return frecencyLookup(frecencySnapshot(), currentMillis())
-    },
+    lookup: () => frecencyLookup(frecencySnapshot(), currentMillis()),
     record: (prefix: string, id: string) => {
-      cast(
-        Effect.tap(recordFrecencyPick(workspace.home, prefix, id, currentMillis()), () =>
-          Effect.sync(() => {
-            cell.bump((value) => value + 1)
-          }),
-        ),
-      )
+      cast(recordFrecencyPick(workspace.home, prefix, id, currentMillis()))
     },
     reset: () => {
-      cast(
-        Effect.tap(clearFrecencyStore(workspace.home), () =>
-          Effect.sync(() => {
-            cell.bump((value) => value + 1)
-          }),
-        ),
-      )
+      cast(clearFrecencyStore(workspace.home))
     },
   }
 }

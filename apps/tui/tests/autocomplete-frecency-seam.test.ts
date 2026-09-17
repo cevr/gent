@@ -20,7 +20,7 @@ import { DateTime, Effect, FileSystem, Option, Schedule } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { slashAutocompleteItems } from "../src/routes/session-command-registry"
 import { builtinClientModules } from "../src/extensions/builtins/index"
-import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
+import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   emptyFrecencyStore,
@@ -120,10 +120,18 @@ const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
       },
     )
     const rank = (filter: string) =>
-      Effect.map(
-        Effect.promise(() => runAutocompleteItems(contribution, filter, runtime)),
-        ids,
-      )
+      Effect.gen(function* () {
+        const failures: Array<string> = []
+        const items = yield* Effect.promise(() =>
+          runAutocompleteContributions([contribution], filter, runtime, (prefix, reason) => {
+            failures.push(`${prefix}: ${reason}`)
+          }),
+        )
+        // A failing contribution answers with no rows, which would read as a
+        // ranking result rather than the breakage it is.
+        if (failures.length > 0) return yield* Effect.die(failures.join("; "))
+        return ids(items)
+      })
     return { contribution, rank, dispose: () => Effect.promise(() => runtime.dispose()) }
   })
 
