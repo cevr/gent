@@ -1080,7 +1080,7 @@ on `StreamEnded.outcome`, so the boundary event carries the classification.
 There is nothing to copy back.
 
 **What the comparison did find: our step bound reports a lie.** opencode-v2
-handles its step ceiling by *re-prompting* — at `llm.ts:221` a reached limit
+handles its step ceiling by _re-prompting_ — at `llm.ts:221` a reached limit
 appends `MAX_STEPS_PROMPT` and sets `toolChoice: "none"`, forcing the model to
 produce a text answer. Ours, at `agent-loop.turn-execution.ts:1273`, logged a
 warning and `break`. That exit left `interrupted`, `streamFailed` and
