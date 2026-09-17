@@ -157,6 +157,12 @@ interface ExtensionAgentService {
   >
   readonly list: () => Effect.Effect<ReadonlyArray<ChildAgentRegistryEntry>, AgentRunError>
   readonly cancel: (params: { readonly requestId: RequestId }) => Effect.Effect<void, AgentRunError>
+  /** Message a child that is still running. `sendId` makes a replayed call deliver once. */
+  readonly send: (params: {
+    readonly requestId: RequestId
+    readonly message: string
+    readonly sendId: RequestId
+  }) => Effect.Effect<void, AgentRunError>
   readonly run: (
     params: ExtensionAgentRunParams,
   ) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>

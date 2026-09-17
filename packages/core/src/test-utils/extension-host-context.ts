@@ -32,6 +32,7 @@ const defaultAgent = (): ExtensionHostAgentService => ({
   inspect: () => die("Agent.inspect"),
   list: () => die("Agent.list"),
   cancel: () => die("Agent.cancel"),
+  send: () => die("Agent.send"),
   run: () => die("Agent.run"),
 })
 

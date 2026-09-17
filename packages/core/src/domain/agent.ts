@@ -369,6 +369,18 @@ export interface AgentRunner {
   readonly cancel: (
     params: Parameters<AgentRunner["inspect"]>[0],
   ) => EffectNs.Effect<void, AgentRunError>
+  /**
+   * Put a message into the child's running turn; it reads it at its next
+   * step. A finished child takes no more messages: one start owes the parent
+   * one completion, and a second turn would have no one to report to.
+   * `sendId` makes a replayed call deliver once.
+   */
+  readonly send: (
+    params: Parameters<AgentRunner["inspect"]>[0] & {
+      readonly message: string
+      readonly sendId: RequestId
+    },
+  ) => EffectNs.Effect<void, AgentRunError>
   readonly run: (params: {
     agent: AgentDefinition
     prompt: string

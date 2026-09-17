@@ -74,6 +74,7 @@ export const stubAgentRunnerLayer = (
       inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
       list: () => Effect.die("AgentRunner.list not configured in test"),
       cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
+      send: () => Effect.die("AgentRunner.send not configured in test"),
       ...runner,
     }),
   )

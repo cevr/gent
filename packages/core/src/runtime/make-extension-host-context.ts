@@ -320,6 +320,14 @@ export const makeExtensionHostContextProvider = (
               parentBranchId: runInfo.branchId,
             }),
           ),
+        send: (params) =>
+          agents((runner) =>
+            runner.send({
+              ...params,
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+            }),
+          ),
         run: (params) =>
           agents((runner) =>
             runner.run({

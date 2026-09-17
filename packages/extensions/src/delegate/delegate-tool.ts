@@ -73,7 +73,7 @@ export const DelegateTool = tool({
     "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
     "Each todo prompt must be self-contained — children have no conversation history",
     "Run independent delegations concurrently from one cell with Promise.all; chain dependent ones with sequential awaits and pass earlier output in the next prompt",
-    "Background delegations never return output here. Do not poll; a message on this branch reports the result. agent-child inspects or cancels one by requestId; agent-children lists them.",
+    "Background delegations never return output here. Do not poll; a message on this branch reports the result. agent-child inspects, messages, or cancels one by requestId; agent-children lists them.",
     "A new call starts new work. Do not repeat a delegation to recover an unknown outcome; inspect it with agent-child using its toolCallId as the requestId.",
     "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions",
     "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role",
@@ -139,7 +139,7 @@ export const DelegateTool = tool({
   }),
 })
 
-/** Child admission and control for cells: one admission call plus inspect, cancel, and list. */
+/** Child admission and control for cells: one admission call plus inspect, send, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
   setup: Effect.gen(function* () {

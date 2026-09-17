@@ -468,6 +468,11 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   are omitted from the JSON result. For a recovered Unknown delegate operation,
   its inner toolCallId is the child requestId. The parent can inspect or cancel
   that start without rerunning cell source or issuing another delegation.
+  The parent can also message a child that is still running (`agent-child`
+  with `send`): the text is steering on the child's branch, so the child reads
+  it at its next step. Steering that arrives while a step writes its answer
+  joins the same turn, so the one completion the parent receives carries the
+  answer given after the message. A finished child refuses the message.
   Parents read child output through the existing `read_session` tool using the
   returned session and branch IDs. Omitting its extraction goal avoids another
   model call. This reads the session tree, not an exact-turn result snapshot.

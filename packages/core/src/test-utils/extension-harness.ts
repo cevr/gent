@@ -102,6 +102,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     inspect: dieStub("agent.inspect"),
     list: dieStub("agent.list"),
     cancel: dieStub("agent.cancel"),
+    send: dieStub("agent.send"),
     run: dieStub("agent.run"),
   }
   const Session: ExtensionContextService["Session"] = {

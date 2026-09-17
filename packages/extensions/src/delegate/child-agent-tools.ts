@@ -1,5 +1,6 @@
 import { Effect, Option, Predicate, Record, Schema } from "effect"
 import {
+  AgentRunError,
   BranchId,
   ChildAgentRegistryEntry,
   ExtensionContext,
@@ -28,20 +29,37 @@ const ChildObservation = Schema.TaggedUnion({
 export const ControlChildAgent = tool({
   id: "agent-child",
   description:
-    "Inspect or cancel a child started with delegate background: true. Pending is not proof that work is running; completed is a turn receipt, not task success.",
+    "Inspect, message, or cancel a child started with delegate background: true. Pending is not proof that work is running; completed is a turn receipt, not task success.",
   promptGuidelines: [
     "Completion arrives as a message on this branch; inspect is for a point-in-time check, not a wait.",
     "After completion, use read_session with the returned sessionId and branchId to read the child output. Omit goal to avoid another model call.",
     "Read the output before treating completion as task success. Interrupted or failed turns can have partial output.",
+    "send puts a message into the child's running turn: a correction, a new fact, a narrower scope. The child reads it at its next step. A finished child takes no messages; delegate a new task instead.",
   ],
   params: Schema.Struct({
-    action: Schema.Literals(["inspect", "cancel"]),
+    action: Schema.Literals(["inspect", "send", "cancel"]),
     requestId: RequestId,
+    message: Schema.optionalKey(
+      Schema.String.annotate({ description: "The text the child reads. Required for send." }),
+    ),
   }),
   output: ChildObservation,
   execute: Effect.fn("ControlChildAgent.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     if (params.action === "cancel") yield* ctx.Agent.cancel({ requestId: params.requestId })
+    if (params.action === "send") {
+      const message = params.message ?? ""
+      if (message.trim().length === 0 || Predicate.isUndefined(ctx.toolCallId)) {
+        return yield* new AgentRunError({
+          message: "send needs a message and a host-owned tool call",
+        })
+      }
+      yield* ctx.Agent.send({
+        requestId: params.requestId,
+        message,
+        sendId: RequestId.make(`agent-send:${ctx.toolCallId}`),
+      })
+    }
     const observation = yield* ctx.Agent.inspect({ requestId: params.requestId })
     const handle = {
       requestId: params.requestId,

@@ -1065,7 +1065,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     /**
      * A safe step boundary: tool results are stored and no stream is open.
      * Steering admitted while the step ran joins the transcript here, so the
-     * next model call reads it without an interrupted stream.
+     * next model call reads it without an interrupted stream. Reports whether
+     * anything joined: an answer written while steering waited is not the
+     * turn's last word.
      */
     const deliverSteeringAtStepBoundary = Effect.fn("AgentLoop.deliverSteering")(function* () {
       const items = yield* scope.peekSteeringForStep
@@ -1092,6 +1094,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // `persistMessageReceived` already treats as a no-op, the other way
       // loses input the branch accepted.
       yield* scope.dropSteeringDelivered(items)
+      return items.length > 0
     })
 
     /**
@@ -1269,7 +1272,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           // output limit lost what it was writing. Re-prompt rather than report
           // the fragment as the reply; once continuations are spent, say so.
           Answered: ({ empty, truncated }) => {
-            if (!empty && !truncated) return Effect.succeed(stop({}))
+            if (!empty && !truncated) {
+              // Steering that arrived while the answer streamed joins this
+              // turn. Left for the next one, it would be answered in a turn
+              // whose receipt nobody waits for: a parent hears a child once.
+              return deliverSteeringAtStepBoundary().pipe(
+                Effect.map((joined) => {
+                  if (joined) return proceed
+                  return stop({})
+                }),
+              )
+            }
             let instruction = EMPTY_RESPONSE_INSTRUCTION
             if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
             return continueOr(instruction, stop({ unanswered: empty }))

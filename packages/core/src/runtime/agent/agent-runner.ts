@@ -402,6 +402,28 @@ export const InProcessRunner: Layer.Layer<
         // An unstarted child still needs its message admitted so the cancel lands as a receipt.
         yield* submitChildMessage(params.requestId)
       }, asAgentRunError),
+      send: Effect.fn("AgentRunner.send")(function* (params) {
+        const child = yield* inspect(params)
+        if (Option.isSome(child.completion)) {
+          return yield* new AgentRunError({
+            message:
+              "The child already finished and takes no more messages. Read its output, or delegate a new task.",
+          })
+        }
+        yield* sessionRuntime
+          .steer({
+            _tag: "Interject",
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            requestId: params.sendId,
+            message: params.message,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) => new AgentRunError({ message: "Cannot message the child", cause }),
+            ),
+          )
+      }, asAgentRunError),
       run: Effect.fn("AgentRunner.run")(function* (params) {
         const runSpec = params.runSpec
         const toolCallId = runSpec?.parentToolCallId
