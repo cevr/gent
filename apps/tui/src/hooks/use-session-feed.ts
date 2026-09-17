@@ -467,7 +467,8 @@ export function useSessionFeed(
   client: SessionFeedClient,
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
   callbacks: SessionFeedCallbacks,
-  initialPrompt?: string,
+  /** Read at send time, so the owner decides whether the prompt is still unsent. */
+  takeInitialPrompt?: () => Option.Option<string>,
   canSendPrompt?: () => boolean,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
@@ -616,7 +617,7 @@ export function useSessionFeed(
 
   // Track the active key to guard against stale async writes and reset prompt state
   let currentKey = Option.none<string>()
-  const initialPromptValue = Option.fromNullishOr(initialPrompt)
+  const takeInitialPromptValue = Option.fromNullishOr(takeInitialPrompt)
   const canSendPromptValue = Option.fromNullishOr(canSendPrompt)
 
   const resetProjection = () => {
@@ -654,8 +655,6 @@ export function useSessionFeed(
     { equals: Equal.equals },
   )
 
-  // Track which prompts have been sent (keyed by feedKey to handle re-navigation)
-  const sentPrompts = new Set<string>()
   const canSendPromptNow = () =>
     Option.getOrElse(
       Option.map(canSendPromptValue, (check) => check()),
@@ -666,14 +665,13 @@ export function useSessionFeed(
     on(
       [activeSessionKey, feedKey, streamReadyKey, canSendPromptNow],
       ([active, key, readyKey, canSend]) => {
-        if (Option.isNone(initialPromptValue) || initialPromptValue.value === "") return
         if (Option.isNone(active) || active.value !== key) return
         if (Option.isNone(readyKey) || readyKey.value !== key || !canSend) return
-        if (sentPrompts.has(key)) return
+        const initialPromptValue = Option.flatMap(takeInitialPromptValue, (take) => take())
+        if (Option.isNone(initialPromptValue) || initialPromptValue.value === "") return
 
         const session = sessionId()
         const branch = branchId()
-        sentPrompts.add(key)
         client.log.info("feed.sendInitialPrompt", {
           sessionId: session,
           branchId: branch,

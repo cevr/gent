@@ -27,8 +27,11 @@ import type { SessionId } from "@gent/core/protocol"
 import { useRequiredContext } from "./utils/solid-context"
 
 interface SessionShellValue {
-  /** The `-p` prompt, if this is the session the startup flags named. */
-  readonly promptFor: (sessionId: SessionId) => Option.Option<string>
+  /**
+   * The `-p` prompt, if this is the session the startup flags named. It is
+   * handed out once: a session view that mounts again must not send it again.
+   */
+  readonly takePrompt: (sessionId: SessionId) => Option.Option<string>
 }
 
 const SessionShellContext = createContext<SessionShellValue>()
@@ -40,10 +43,12 @@ interface SessionShellProviderProps {
 }
 
 export function SessionShellProvider(props: ParentProps<SessionShellProviderProps>) {
+  let taken = false
   const value: SessionShellValue = {
-    promptFor: (sessionId) => {
+    takePrompt: (sessionId) => {
       const owns = Option.exists(props.initialSessionId, (boot) => boot === sessionId)
-      if (!owns) return Option.none()
+      if (!owns || taken) return Option.none()
+      taken = true
       return props.initialPrompt
     },
   }

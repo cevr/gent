@@ -401,7 +401,7 @@ export function createSessionController(props: {
       },
       onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
     },
-    Option.getOrUndefined(shell.promptFor(props.sessionId)),
+    () => shell.takePrompt(props.sessionId),
     // Gate prompt send on auth resolution and on the branch picker — the feed
     // waits for the stream plus this signal.
     () => !authGatePending() && !branchPickerOpen(),

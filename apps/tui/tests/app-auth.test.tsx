@@ -1042,4 +1042,58 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
+  it.live("a renamed session keeps its view and does not send the startup prompt again", () =>
+    Effect.gen(function* () {
+      let ctx: Option.Option<ClientContextValue> = Option.none()
+      const sentMessages: Array<{ readonly content: string }> = []
+      const initialPrompt = "send me once"
+      const client = createMockClient({
+        message: {
+          send: (input: { readonly content: string }) =>
+            Effect.sync(() => {
+              sentMessages.push(input)
+            }),
+        },
+      })
+      const runtime = createMockRuntime()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime,
+            initialAgent: AgentName.make("cowork"),
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+            initialPrompt: Option.some(initialPrompt),
+          },
+        ),
+      )
+      const clientContext = yield* requireClient(ctx)
+      yield* Effect.promise(() => waitForMessage(setup, sentMessages, initialPrompt))
+      // The server names the session after the first turn. The record is new;
+      // the session is the same one.
+      clientContext.switchSession(
+        SessionId.make("session-a"),
+        BranchId.make("branch-a"),
+        "A better name",
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      // gent/no-sleep: allow real-clock gap so a second send, if one starts, lands before the assertion
+      yield* Effect.sleep("50 millis")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
+      setup.renderer.destroy()
+    }),
+  )
 })
