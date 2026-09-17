@@ -70,7 +70,8 @@ export type LogPaths = { readonly dir: string }
   })
 
   test("a file in an unscanned package declares nothing", () => {
-    expect(declaredNames("apps/tui/src/app.tsx", `export const AppHelper = 1\n`)).toEqual([])
+    // `apps/server/` has no surface row; `apps/tui/src/` does.
+    expect(declaredNames("apps/server/src/main.ts", `export const ServerHelper = 1\n`)).toEqual([])
   })
 
   test("a bare export block is a surface, so its names are declared", () => {
@@ -163,6 +164,51 @@ export { WakeExtension }
         `export { ToolRunner, type BranchToolWork } from "../x.js"\n`,
       ),
     ).toEqual(["ToolRunner", "BranchToolWork"])
+  })
+})
+
+describe("the TUI app surface", () => {
+  const TUI_FILE = "apps/tui/src/utils/format-tool.ts"
+  const TUI_CONSUMER = "apps/tui/src/routes/session.tsx"
+
+  test("a TUI export another TUI file imports is live", () => {
+    expect(
+      findingsFor([
+        { file: TUI_FILE, text: `export const formatTokens = 1\n` },
+        { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils/format-tool"\n` },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a TUI export nothing reaches is reported", () => {
+    const findings = findingsFor([
+      { file: TUI_FILE, text: `export const formatTokens = 1\nexport const orphan = 2\n` },
+      { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils/format-tool"\n` },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([2])
+    expect(findings[0]?.message).toContain("`orphan`")
+  })
+
+  test("the declaring file reading its own name does not keep it alive", () => {
+    // `ownFileCounts: false`: a TUI module that only talks to itself has no
+    // reason to export the name at all.
+    expect(
+      findingsFor([
+        { file: TUI_FILE, text: `export const orphan = 1\nconst near = orphan + 1\nvoid near\n` },
+      ]).map((finding) => finding.line),
+    ).toEqual([1])
+  })
+
+  test("a TUI test file keeps a name alive", () => {
+    expect(
+      findingsFor([
+        { file: TUI_FILE, text: `export const orphan = 1\n` },
+        {
+          file: "apps/tui/tests/format-tool.test.ts",
+          text: `import { orphan } from "../src/utils/format-tool"\nvoid orphan\n`,
+        },
+      ]),
+    ).toEqual([])
   })
 })
 
