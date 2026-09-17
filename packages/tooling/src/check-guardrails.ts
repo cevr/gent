@@ -24,6 +24,7 @@ import {
   OxlintConfigSchema,
 } from "./lint-config-guards"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
+import { findHookGuardOrder, HOOK_FILE } from "./hook-guard-order"
 import { findSteeringFilePaths, isSteeringFile } from "./steering-file-paths"
 import {
   findSuppressionInventoryFindings,
@@ -94,6 +95,20 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
   return [...blanket, ...suppressions, ...sourceOnly]
 }
 
+/**
+ * The findings on the files that describe the project rather than run it: the
+ * steering documents and the pre-commit hook. Each answers from one file, but
+ * the path scan needs the tracked list to resolve what a document names.
+ */
+const projectFileFailures = (
+  file: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<string> =>
+  [...findSteeringFilePaths(file, text, trackedFiles), ...findHookGuardOrder(file, text)].map(
+    (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
+  )
+
 /** The findings that read the package manifests and the root tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* () {
   const packageJsonPaths = [
@@ -116,8 +131,12 @@ const program = Effect.gen(function* () {
   const trackedFiles = yield* trackedFileNames
   const textFiles = yield* Effect.forEach(
     trackedFiles
-      // The steering files are Markdown; they join the pass for the path scan.
-      .filter((file) => /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file))
+      // The steering files are Markdown and the hook is YAML; both join the
+      // pass so their own scans get the text.
+      .filter(
+        (file) =>
+          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
+      )
       .filter((file) => !file.includes("/dist/")),
     readTrackedFile,
     { concurrency: 32 },
@@ -151,11 +170,7 @@ const program = Effect.gen(function* () {
     if (Option.isNone(maybeEntry)) continue
     const { file, text } = maybeEntry.value
     for (const failure of singleFileFailures(file, text)) pushFailure(failure)
-    // A steering file's paths are checked against the tracked list, which the
-    // single-file scans do not receive.
-    for (const finding of findSteeringFilePaths(file, text, trackedFiles)) {
-      pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-    }
+    for (const failure of projectFileFailures(file, text, trackedFiles)) pushFailure(failure)
     if (/\.[cm]?[jt]sx?$/.test(file)) collectWholeTreeFacts(file, text)
   }
 
