@@ -22,14 +22,13 @@ import {
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/current-extension-host-context"
 import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
-import { ProcessRunnerLive } from "../../src/runtime/run-process"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
 )
 
 const fsLayer = Layer.provideMerge(
-  Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
   childProcessSpawnerLive,
 )
 

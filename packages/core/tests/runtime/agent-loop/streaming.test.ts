@@ -51,7 +51,6 @@ import {
   waitForPhase,
 } from "./helpers"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 describe("run completion", () => {
   it.live("run returns after a fast turn completes before the caller awaits idle", () =>
@@ -252,7 +251,6 @@ describe("streaming", () => {
         BunServices.layer,
         ModelRegistry.Test(),
         GentPlatform.Test(),
-        ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
       )
       const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
       const layer = AgentLoopTestActor({ baseSections: [] }).pipe(

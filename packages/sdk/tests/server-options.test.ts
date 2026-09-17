@@ -17,11 +17,16 @@ const ServerIdentity = Schema.Struct({
   buildFingerprint: Schema.String,
 })
 
-const fetchIdentity = (baseUrl: string) =>
+/** The served keys, as data: decoding preserves whatever the route sent. */
+const IdentityKeys = Schema.Record(Schema.String, Schema.Unknown)
+
+const fetchIdentityJson = (baseUrl: string) =>
   Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`)).pipe(
     Effect.andThen((response) => Effect.promise(() => response.json())),
-    Effect.andThen(Schema.decodeUnknownEffect(ServerIdentity)),
   )
+
+const fetchIdentity = (baseUrl: string) =>
+  fetchIdentityJson(baseUrl).pipe(Effect.andThen(Schema.decodeUnknownEffect(ServerIdentity)))
 
 describe("Gent.server options", () => {
   it.live(
@@ -43,6 +48,19 @@ describe("Gent.server options", () => {
 
           const identity = yield* fetchIdentity(`http://127.0.0.1:${port}`)
           expect(identity.serverId).toBe("launcher-owned-id")
+
+          // Registry validation compares the stable identity. A restart-varying
+          // field on this route would make every comparison a mismatch.
+          const keys = yield* fetchIdentityJson(`http://127.0.0.1:${port}`).pipe(
+            Effect.andThen(Schema.decodeUnknownEffect(IdentityKeys)),
+          )
+          expect(Object.keys(keys).sort()).toEqual([
+            "buildFingerprint",
+            "dbPath",
+            "hostname",
+            "pid",
+            "serverId",
+          ])
         }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,

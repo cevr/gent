@@ -1,14 +1,5 @@
-import {
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-  Stream,
-  type Duration,
-  type PlatformError,
-} from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { Effect, Option, Schema, Stream, type Duration, type PlatformError } from "effect"
+import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 import { causeMessage } from "../domain/guards.js"
 
 export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessError", {
@@ -24,14 +15,6 @@ interface ProcessResult {
   readonly stderr: string
 }
 
-interface ProcessRunnerService {
-  readonly run: (
-    command: string,
-    args: ReadonlyArray<string>,
-    options?: RunProcessOptions,
-  ) => Effect.Effect<ProcessResult, ProcessError>
-}
-
 export interface RunProcessOptions {
   readonly cwd?: string
   // oxlint-disable-next-line effect/noNullish -- Child-process environments use undefined to remove inherited variables.
@@ -42,17 +25,6 @@ export interface RunProcessOptions {
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
 
-/**
- * Running a child process.
- *
- * A plain service, not a defaulted reference: there is one implementation and
- * every caller needs it, so a deployment that forgets to provide it should
- * fail to compile rather than die on the first command it runs.
- */
-export class ProcessRunner extends Context.Service<ProcessRunner, ProcessRunnerService>()(
-  "@gent/core/src/runtime/run-process/ProcessRunner",
-) {}
-
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()
   let out = ""
@@ -60,6 +32,14 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   return out
 }
 
+/**
+ * Run a child process to completion and collect its output.
+ *
+ * A free function over `ChildProcessSpawner`, not a service: there is one
+ * implementation and nothing swaps it. Every caller already names the spawner
+ * in its requirement union, so a deployment that forgets the platform stack
+ * still fails to compile.
+ */
 export const runProcess = (
   command: string,
   args: ReadonlyArray<string>,
@@ -138,19 +118,3 @@ export const runProcess = (
     }),
   )
 }
-
-const makeProcessRunner: Effect.Effect<
-  ProcessRunnerService,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  return {
-    run: (command, args, options) =>
-      runProcess(command, args, options).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      ),
-  }
-})
-
-export const ProcessRunnerLive = Layer.effect(ProcessRunner, makeProcessRunner)

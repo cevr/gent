@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../../domain/extension.js"
-import { ProcessRunner } from "../../runtime/run-process.js"
+import { runProcess } from "../../runtime/run-process.js"
 import { GentPlatform } from "../gent-platform.js"
 import { causeMessage } from "../../domain/guards.js"
 
@@ -23,10 +24,11 @@ const toHostProcessError =
 export const makeExtensionHostPlatform: Effect.Effect<
   ExtensionHostPlatform,
   never,
-  GentPlatform | ProcessRunner
+  GentPlatform | ChildProcessSpawner.ChildProcessSpawner
 > = Effect.gen(function* () {
   const platform = yield* GentPlatform
-  const processRunner = yield* ProcessRunner
+  // Captured once so the facade's runProcess keeps a `never` R channel.
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const osInfo = yield* platform.osInfo
   const execPath = yield* platform.execPath
   const homeDirectory = yield* platform.homeDirectory
@@ -40,6 +42,9 @@ export const makeExtensionHostPlatform: Effect.Effect<
     randomId: platform.randomId,
     pathListSeparator,
     runProcess: (command, args, options) =>
-      processRunner.run(command, args, options).pipe(Effect.mapError(toHostProcessError(command))),
+      runProcess(command, args, options).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.mapError(toHostProcessError(command)),
+      ),
   }
 })

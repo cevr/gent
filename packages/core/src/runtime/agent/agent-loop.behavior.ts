@@ -94,7 +94,6 @@ import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"
-import type { ProcessRunner } from "../../runtime/run-process.js"
 
 /**
  * The loop's durable queue: admission, steering, follow-ups, and the
@@ -562,7 +561,6 @@ export const makeAgentLoopBehavior = (
   | ModelRegistry
   | ChildProcessSpawner
   | GentPlatform
-  | ProcessRunner
   | FileSystem.FileSystem
   | Path.Path
 > =>

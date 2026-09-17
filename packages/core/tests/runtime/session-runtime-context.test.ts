@@ -26,10 +26,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SqliteStorage, StorageError } from "../../src/storage/sqlite-storage"
 import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
 import type { ExternalDriverContribution } from "../../src/domain/driver"
-import { ProcessRunnerLive } from "../../src/runtime/run-process"
 import { testHostFacts } from "../../src/test-utils"
-
-const processRunnerLive = ProcessRunnerLive.pipe(Layer.provide(BunServices.layer))
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -69,7 +66,6 @@ describe("resolveTurnProfile", () => {
         Layer.provide(
           Layer.mergeAll(
             BunServices.layer,
-            processRunnerLive,
             configServiceLive,
             SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
           ),

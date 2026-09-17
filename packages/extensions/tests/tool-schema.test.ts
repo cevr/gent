@@ -8,7 +8,6 @@ import { getToolId } from "@gent/core/extensions/api"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { GentPlatform } from "../../core/src/runtime/gent-platform"
 import { setupExtension } from "../../core/src/runtime/extensions/loader"
-import { ProcessRunnerLive } from "../../core/src/runtime/run-process"
 
 describe("builtin tool schemas", () => {
   it.live("are compatible with Anthropic tool structured output", () => {
@@ -54,7 +53,6 @@ describe("builtin tool schemas", () => {
           Layer.mergeAll(
             BunServices.layer,
             BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
-            ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
             GentPlatform.Test(),
           ),
         ),

@@ -51,10 +51,12 @@ export const buildServerRoot = (
       Layer.provide(ServerRootPlatformLayer),
       Layer.provide(config.observability),
     )
-    const startedAt = config.identity.startedAt ?? (yield* Clock.currentTimeMillis)
+    // `startedAt` varies per restart, so the identity route must not serve it:
+    // registry validation compares the stable half. Split it off once here.
+    const { startedAt: configuredStartedAt, ...stableIdentity } = config.identity
     const identity = {
-      ...config.identity,
-      startedAt,
+      ...stableIdentity,
+      startedAt: configuredStartedAt ?? (yield* Clock.currentTimeMillis),
     }
 
     const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
@@ -66,15 +68,7 @@ export const buildServerRoot = (
       serverIdentityCtx,
     )
     const coreServicesLive = Layer.succeedContext(allServices)
-    const httpRoutes = buildServerRoutes(coreServicesLive, {
-      identity: {
-        serverId: identity.serverId,
-        pid: identity.pid,
-        hostname: identity.hostname,
-        dbPath: identity.dbPath,
-        buildFingerprint: identity.buildFingerprint,
-      },
-    })
+    const httpRoutes = buildServerRoutes(coreServicesLive, { identity: stableIdentity })
     const rpcHandlersContext = yield* Layer.buildWithScope(
       Layer.provide(RpcHandlersLive, coreServicesLive),
       scope,

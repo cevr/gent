@@ -11,6 +11,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
 import { GentRpcs } from "./rpcs.js"
+import type { ServerIdentityApi } from "./server-identity.js"
 
 // ── WebSocket lifecycle tracing ──
 
@@ -73,13 +74,12 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
 // ── Route Assembly ──
 
 interface ServerRoutesConfig {
-  readonly identity: {
-    readonly serverId: string
-    readonly pid: number
-    readonly hostname: string
-    readonly dbPath: string
-    readonly buildFingerprint: string
-  }
+  /**
+   * The identity `/_gent/identity` serves, verbatim. `startedAt` is excluded:
+   * registry validation compares a stable identity, and a restart-varying
+   * field would make every comparison a mismatch.
+   */
+  readonly identity: Omit<ServerIdentityApi, "startedAt">
 }
 
 /**

@@ -25,7 +25,7 @@ type LanguageModelToolMap = Record<string, AiTool.Any>
 export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = LanguageModelToolMap> =
   Response.StreamPart<Tools>
 
-export interface SignalLanguageModelControls {
+interface SignalLanguageModelControls {
   readonly emitNext: Effect.Effect<void>
   readonly emitAll: Effect.Effect<void>
   readonly waitForStreamStart: Effect.Effect<void>
@@ -47,8 +47,6 @@ interface SequenceLanguageModelControls {
   readonly callCount: Effect.Effect<number>
   readonly assertDone: Effect.Effect<void>
 }
-
-export const DebugSlowLanguageModelDelayMs = 250
 
 let _streamPartIdCounter = 0
 const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`

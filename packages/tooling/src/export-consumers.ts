@@ -21,8 +21,9 @@
  *   a type under one name, so a reference inside the declaring file counts
  *   -- except the declaration's own self-references (`Schema.Class<X>`, the
  *   `_tag` string, a doc comment), which are not consumption. The tooling and
- *   e2e packages are read the same way: a guard's finding type and a fixture's
- *   context type sit beside the function that returns them.
+ *   e2e packages are read the same way, and so is `packages/core/src/test-utils/`,
+ *   which is its own surface: a guard's finding type, a fixture's context type
+ *   and a test layer's config sit beside the function that returns them.
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
  *   `packages/sdk/src/index.ts`, `packages/extensions/src/client.ts`) exposes names with `export { X } from "..."`. Consumption is read from the import
@@ -95,12 +96,20 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     enforced: true,
   },
   {
+    // Its own surface, listed before `packages/core/src/` so the prefix scan
+    // reaches it first. Read with the Schema-aware rule: a layer's config type
+    // and a control handle's type sit beside the builder that returns them.
+    prefix: "packages/core/src/test-utils/",
+    exempt: [],
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: true,
+    specifier: Option.none(),
+    enforced: true,
+  },
+  {
     prefix: "packages/core/src/",
-    exempt: [
-      "packages/core/src/extensions/",
-      "packages/core/src/protocol.ts",
-      "packages/core/src/test-utils/",
-    ],
+    exempt: ["packages/core/src/extensions/", "packages/core/src/protocol.ts"],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,

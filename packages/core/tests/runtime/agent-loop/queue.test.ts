@@ -51,7 +51,6 @@ import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-sto
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
-import { ProcessRunnerLive } from "../../../src/runtime/run-process"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })
@@ -184,7 +183,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -321,7 +319,6 @@ describe("queue drain regression", () => {
             BunServices.layer,
             ModelRegistry.Test(),
             GentPlatform.Test(),
-            ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
           )
           const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
           return AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -409,7 +406,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -477,7 +473,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -563,7 +558,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -656,7 +650,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -780,7 +773,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
@@ -878,7 +870,6 @@ describe("queue drain regression", () => {
           BunServices.layer,
           ModelRegistry.Test(),
           GentPlatform.Test(),
-          ProcessRunnerLive.pipe(Layer.provide(BunServices.layer)),
         )
         const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
         const layer = AgentLoopTestActor({ baseSections: [] }).pipe(

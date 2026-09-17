@@ -18,14 +18,13 @@ import { ConfigService } from "../../src/runtime/config-service"
 import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
 import { ExtensionId } from "../../src/domain/ids"
 import type { PromptSection } from "../../src/domain/prompt"
-import { ProcessRunnerLive } from "../../src/runtime/run-process"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
 )
 
 const fsLayer = Layer.provideMerge(
-  Layer.mergeAll(BunFileSystem.layer, Path.layer, ProcessRunnerLive, BunGentPlatformLive),
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
   childProcessSpawnerLive,
 )
 

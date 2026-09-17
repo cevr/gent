@@ -60,7 +60,6 @@ import type { SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { resolveExistingSessionBranch } from "./session-runtime-context.js"
 import { AgentLoopError } from "./agent/agent-loop.state.js"
 import type { SessionRuntimeState } from "./agent/agent-loop.state.js"
-import type { ProcessRunner } from "./run-process.js"
 
 export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
   "SessionRuntimeError",
@@ -163,7 +162,6 @@ type SessionRuntimeLayerRequirements =
   | ConfigService
   | AgentLoopSessionGovernance
   | ChildProcessSpawner
-  | ProcessRunner
   | FileSystem.FileSystem
   | Path.Path
   | Scope.Scope
