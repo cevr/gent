@@ -73,6 +73,46 @@ export type LogPaths = { readonly dir: string }
     expect(declaredNames("apps/tui/src/app.tsx", `export const AppHelper = 1\n`)).toEqual([])
   })
 
+  test("a bare export block is a surface, so its names are declared", () => {
+    // 26 names hid in one such block in packages/sdk/src/client.ts because
+    // only `export const|type|...` was read.
+    const source = `type Local = { readonly a: number }
+export type { Local }
+`
+    expect(declaredNames(SDK_FILE, source)).toEqual(["Local"])
+  })
+
+  test("a bare block names a file already declares are not counted twice", () => {
+    const source = `export const buildLogPaths = 1
+export { buildLogPaths }
+`
+    expect(declaredNames(SDK_FILE, source)).toEqual(["buildLogPaths"])
+  })
+
+  test("a bare block re-exporting an imported name declares nothing", () => {
+    // The name belongs to the file that declared it. Counting the pass-through
+    // here would make this file a declaring site and hide the real consumer.
+    const source = `import { WakeExtension } from "./wake/index.js"
+export { WakeExtension }
+`
+    expect(declaredNames("packages/extensions/src/index.ts", source)).toEqual([])
+  })
+
+  test("a block with a from clause stays a pass-through, not a declaration", () => {
+    const source = `export { ToolRunner } from "../runtime/agent/tool-runner.js"\n`
+    expect(declaredNames(SDK_FILE, source)).toEqual([])
+  })
+
+  test("a name only a bare block exposes, that nothing imports, is reported", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `const orphan = 1\nconst used = 2\nexport { orphan, used }\n` },
+      { file: SDK_CONSUMER, text: `import { used } from "./log-paths.js"\nvoid used\n` },
+    ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`orphan` is exported but"),
+    ])
+  })
+
   test("core's exempt entry points declare nothing as a module", () => {
     const source = `export const tool = 1\n`
     expect(declaredNames(API_FILE, source)).toEqual([])

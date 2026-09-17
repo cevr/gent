@@ -13,16 +13,17 @@ export type {
   BranchTreeNode,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
+  GentClientRpcError,
+  Message,
+  MessageSegment,
+  ProjectedMessage,
   SteerCommand,
+  ToolInteraction,
 } from "@gent/core/protocol"
 
 // Client constructors
-export {
-  Gent,
-  type IdleShutdownSpec,
-  type GentClientRpcError,
-  type GentClientBundle,
-} from "./client.js"
+export { Gent, type GentClientBundle } from "./client.js"
+export type { IdleShutdownSpec } from "./server.js"
 
 // Namespaced client + runtime types
 export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
@@ -45,9 +46,6 @@ export {
 // The log paths a client shares with its server, and the JSON line format both write
 export { buildLogPaths, classifyLogFile, ensureLogDir, LOG_DIR } from "./log-paths.js"
 export { makeJsonFileLogger } from "./logger.js"
-
-// Part types (re-exported from @gent/core)
-export type { Message, MessageSegment, ProjectedMessage, ToolInteraction } from "./client.js"
 
 // Utility functions
 export { extractText, extractReasoning, extractImages, type ImageInfo } from "./client.js"

@@ -11,7 +11,8 @@
  *
  * - A module surface (`packages/core/src/`, `packages/sdk/src/`,
  *   `packages/extensions/src/`) declares names with
- *   `export const|class|function|interface|type|enum`. A name is consumed
+ *   `export const|class|function|interface|type|enum`, or exposes names it
+ *   owns through a bare `export { X }` with no `from` clause. A name is consumed
  *   once some file that does not itself declare it mentions the name. Core
  *   and the SDK are held to the strict reading: a name only its own module
  *   uses should drop the `export` keyword. The extensions package is read
@@ -180,7 +181,19 @@ export interface Declaration {
 const DECLARATION =
   /^export\s+(?:declare\s+)?(?:const|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/
 
-/** `(name, line)` for every `export const|class|...` in a module surface file. */
+/**
+ * `(name, line)` for every export a module surface file declares.
+ *
+ * Two shapes reach the same place. `export const Foo` names the value on the
+ * spot. A bare `export { Foo, Bar }` with no `from` clause exposes names this
+ * file owns, so it is a surface too -- 26 dead names hid in one such block in
+ * `packages/sdk/src/client.ts` because only the first shape was read.
+ *
+ * Two kinds of name in such a block are not this file's own, and counting
+ * either would hide a real consumer: one it imported, and one it declares
+ * elsewhere in the file. A block carrying `from` is a pass-through and belongs
+ * to the entry-point path.
+ */
 const declaredNames = (
   text: string,
 ): ReadonlyArray<{ readonly name: string; readonly line: number }> => {
@@ -190,6 +203,82 @@ const declaredNames = (
       Option.fromNullishOr(match[1]),
     )
     if (Option.isSome(name)) found.push({ name: name.value, line: index + 1 })
+  }
+  // A bare block exposes names; only the ones this file also imports are its
+  // own surface. A name it imported is another file's declaration being passed
+  // through, and counting it here would hide that file's real consumer.
+  const declared = new Set(found.map((entry) => entry.name))
+  const imported = importedNames(text)
+  const bare = bareExportedNames(text).filter(
+    (entry) => !declared.has(entry.name) && !imported.has(entry.name),
+  )
+  return [...found, ...bare]
+}
+
+/** Every name this file binds with an `import { ... }` or `import X` statement. */
+const importedNames = (text: string): ReadonlySet<string> => {
+  const names = new Set<string>()
+  for (const match of text.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}/gm)) {
+    const inner = Option.getOrElse(Option.fromNullishOr(match[1]), () => "")
+    for (const part of inner.split(",")) {
+      const bound = part
+        .trim()
+        .replace(/^type\s+/, "")
+        .split(/\s+as\s+/)
+      const last = Option.fromNullishOr(bound[bound.length - 1])
+      if (Option.exists(last, (name) => /^[A-Za-z_$][\w$]*$/.test(name))) {
+        names.add(Option.getOrElse(last, () => ""))
+      }
+    }
+  }
+  for (const match of text.matchAll(/^import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from/gm)) {
+    const bound = Option.fromNullishOr(match[1])
+    if (Option.isSome(bound)) names.add(bound.value)
+  }
+  return names
+}
+
+/**
+ * The names every `export { ... }` block without a `from` clause exposes.
+ *
+ * The block is collected whole before the `from` test, because a block broken
+ * across lines carries its `from` on the closing line.
+ */
+const bareExportedNames = (
+  text: string,
+): ReadonlyArray<{ readonly name: string; readonly line: number }> => {
+  const found: Array<{ name: string; line: number }> = []
+  const lines = text.split("\n")
+  let block: Option.Option<{ start: number; text: string }> = Option.none()
+  for (const [index, line] of lines.entries()) {
+    if (Option.isNone(block)) {
+      if (!/^export\s+(?:type\s+)?\{/.test(line)) continue
+      block = Option.some({ start: index, text: line })
+    } else {
+      block = Option.map(block, (open) => ({ ...open, text: `${open.text}\n${line}` }))
+    }
+    if (!line.includes("}")) continue
+    const closed = block
+    block = Option.none()
+    if (Option.isNone(closed)) continue
+    const open = closed.value
+    // `} from "./x.js"` makes the block a pass-through, not a declaration.
+    if (/\}\s*from\s*["']/.test(open.text)) continue
+    for (const match of open.text.matchAll(
+      /(?:^|[{,])\s*(?:type\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?/g,
+    )) {
+      const exposed = Option.orElse(Option.fromNullishOr(match[2]), () =>
+        Option.fromNullishOr(match[1]),
+      )
+      Option.match(exposed, {
+        onNone: () => {},
+        onSome: (name) => {
+          if (name !== "export" && name !== "type" && name !== "from") {
+            found.push({ name, line: open.start + 1 })
+          }
+        },
+      })
+    }
   }
   return found
 }
