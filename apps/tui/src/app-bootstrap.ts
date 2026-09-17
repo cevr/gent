@@ -331,17 +331,22 @@ export const resolveInitialState = (input: {
     }
 
     if (continue_) {
-      const existing = yield* client.session
-        .list()
-        .pipe(
-          Effect.map((sessions) =>
-            Option.fromNullishOr(
-              sessions
-                .filter((candidate) => candidate.cwd === cwd)
-                .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0],
-            ),
+      const existing = yield* client.session.list().pipe(
+        Effect.map((sessions) =>
+          Option.fromNullishOr(
+            sessions
+              .filter((candidate) => candidate.cwd === cwd)
+              // A delegate or `/btw` child has a parent and its own thread.
+              // It is the agent's work, not a conversation the user left.
+              .filter(
+                (candidate) =>
+                  Predicate.isUndefined(candidate.parentSessionId) ||
+                  candidate.threadId !== candidate.id,
+              )
+              .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0],
           ),
-        )
+        ),
+      )
       if (Option.isSome(existing)) {
         const existingSession = existing.value
         const promptText = Option.getOrUndefined(prompt)

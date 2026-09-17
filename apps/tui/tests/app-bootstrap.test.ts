@@ -5,6 +5,7 @@ import {
   BranchId,
   DEFAULT_AGENT_NAME,
   ProviderId,
+  Session,
   SessionId,
   dateFromMillis,
 } from "@gent/core/protocol"
@@ -311,6 +312,48 @@ describe("resolveInitialState", () => {
       )
       expect(error.reason).toBe("session-not-found")
       expect(error.sessionId).toBe(SessionId.make("missing-session"))
+    }),
+  )
+  it.live("resume opens the user's last session, not a child a delegate spawned later", () =>
+    Effect.gen(function* () {
+      const at = (ms: number) => dateFromMillis(1_767_225_600_000 + ms)
+      const root = new Session({
+        id: SessionId.make("root"),
+        cwd: "/work",
+        threadId: SessionId.make("root"),
+        createdAt: at(0),
+        updatedAt: at(10),
+      })
+      // A handoff continues the user's thread, so it is the session to reopen.
+      const handoff = new Session({
+        id: SessionId.make("handoff"),
+        cwd: "/work",
+        parentSessionId: root.id,
+        threadId: root.id,
+        createdAt: at(20),
+        updatedAt: at(30),
+      })
+      // A delegate child starts its own thread and finishes last.
+      const child = new Session({
+        id: SessionId.make("child"),
+        cwd: "/work",
+        parentSessionId: handoff.id,
+        threadId: SessionId.make("child"),
+        createdAt: at(40),
+        updatedAt: at(50),
+      })
+      const state = yield* resolveInitialState({
+        client: createMockClient({
+          session: { list: () => Effect.succeed([child, root, handoff]) },
+        }),
+        cwd: "/work",
+        session: Option.none(),
+        continue_: true,
+        headless: false,
+        prompt: Option.none(),
+        promptArg: Option.none(),
+      })
+      expect(state).toMatchObject({ _tag: "session", session: { id: "handoff" } })
     }),
   )
 })

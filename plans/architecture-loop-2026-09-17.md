@@ -43,20 +43,20 @@ the code proves it.
 | G2  | An interrupt during a foreground `delegate` leaves its children running with no owner: the next turn cannot await them and falls back to a file monitor                                                                                         | done: each tool call races the turn's interrupt latch; a foreground child is interrupted with its caller |
 | G3  | Interrupt during a tool, then a new message: the next turn ran (L5 path holds live)                                                                                                                                                             | verified                                                                                                 |
 | G4  | The terminal keeps no scrollback: with a live view taller than the screen the footer owns every row, each commit is written at row 1 and the same frame's footer paint erases it (raw pty bytes: 23 commits, all at `ESC[1;1H`, 0 history rows) | agent on rift `arch-scrollback`                                                                          |
-| G5  | `gent resume` opened a child session (the Task 6 worker), not the root the user ran                                                                                                                                                             | open                                                                                                     |
+| G5  | `gent resume` opened a child session (the Task 6 worker), not the root the user ran                                                                                                                                                             | done: `apps/tui/src/app-bootstrap.ts` skips delegate children on resume                                  |
 | G6  | `apps/tui/scripts/build.ts:59` re-points the global `gent` symlink at whichever checkout ran the gate                                                                                                                                           | with G4                                                                                                  |
 | G7  | The orchestrator cannot message a running child (user request 2026-09-17)                                                                                                                                                                       | done: `agent-child` `send` steers the child; steering at an answered step joins the turn                 |
 
 ## fx survey (vercel-labs/fx), adopt list
 
-| #   | Candidate                                                                        | Status                                  |
-| --- | -------------------------------------------------------------------------------- | --------------------------------------- |
-| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | open                                    |
-| F2  | Scrollback-ownership invariants on top of F1                                     | open                                    |
-| F3  | Byte tape (stdout, stdin, resize) with replay                                    | parked: new capability, not a reduction |
-| F4  | `MAX_TURN_STEPS` and `maximumModelToolResultChars` on `UserConfig`               | open                                    |
-| F5  | Palette folded into `SessionOverlayState` (`session.tsx:237` has a second owner) | open                                    |
-| F6  | Byte cap on the retained TUI feed (`use-session-feed.ts:248,279`)                | open                                    |
+| #   | Candidate                                                                        | Status                                                  |
+| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | open                                                    |
+| F2  | Scrollback-ownership invariants on top of F1                                     | open                                                    |
+| F3  | Byte tape (stdout, stdin, resize) with replay                                    | parked: new capability, not a reduction                 |
+| F4  | `MAX_TURN_STEPS` and `maximumModelToolResultChars` on `UserConfig`               | done (steps): `AgentDefinition.maxSteps` + run override |
+| F5  | Palette folded into `SessionOverlayState` (`session.tsx:237` has a second owner) | open                                                    |
+| F6  | Byte cap on the retained TUI feed (`use-session-feed.ts:248,279`)                | open                                                    |
 
 Rejected from fx: LLM permission reviewer, static tool table, mutex event
 queue, unbounded steps, whole-log replay, text-blob compaction.
