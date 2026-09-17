@@ -337,103 +337,116 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       )
     })
 
-    const executeTools = Effect.fn("AgentLoop.executeTools")(function* (params: {
-      messageId: RunningState["message"]["id"]
-      step: number
-      toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-      currentTurnAgent: AgentNameType
-      toolBindings: ResolvedTurnContext["toolBindings"]
-      hostToolBindings: ResolvedTurnContext["toolBindings"]
-      recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
-    }) {
-      if (params.toolCalls.length === 0) return
+    /**
+     * Run the step's tool calls and commit their results.
+     *
+     * Answers with the interaction a tool parked on, if one did: a tool that
+     * asks the user is not a failure, so it leaves as a value the step's
+     * policy can match rather than as an error every caller must re-catch.
+     */
+    const executeTools = Effect.fn("AgentLoop.executeTools")(
+      function* (params: {
+        messageId: RunningState["message"]["id"]
+        step: number
+        toolCalls: ReadonlyArray<Prompt.ToolCallPart>
+        currentTurnAgent: AgentNameType
+        toolBindings: ResolvedTurnContext["toolBindings"]
+        hostToolBindings: ResolvedTurnContext["toolBindings"]
+        recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
+      }) {
+        if (params.toolCalls.length === 0) return Option.none<ToolInteractionPending>()
 
-      const address = stepAddress(params.messageId, params.step)
-      const resultKey = processLocalReplayResultKey({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        toolResultMessageId: address.toolResult,
-      })
-      const existing = yield* messageStorage.getMessage(address.toolResult)
-      if (!Predicate.isUndefined(existing)) {
+        const address = stepAddress(params.messageId, params.step)
+        const resultKey = processLocalReplayResultKey({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+        })
+        const existing = yield* messageStorage.getMessage(address.toolResult)
+        if (!Predicate.isUndefined(existing)) {
+          yield* processLocalReplay.removeResults(resultKey)
+          yield* closeTurnStep({ messageId: params.messageId, step: params.step })
+          return Option.none<ToolInteractionPending>()
+        }
+
+        const persistedResults = yield* findPersistedToolResults({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          assistantMessageId: address.assistant,
+          toolCalls: params.toolCalls,
+        }).pipe(
+          Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
+            Effect.gen(function* () {
+              const failureParts = params.toolCalls.map((toolCall) =>
+                Prompt.toolResultPart({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  isFailure: true,
+                  providerExecuted: false,
+                  result: {
+                    error: error.message,
+                    reason: "CorruptResult",
+                  },
+                }),
+              )
+              yield* recordToolOutcome({
+                sessionId: scope.sessionId,
+                branchId: scope.branchId,
+                toolResultMessageId: address.toolResult,
+                assistantMessageId: address.assistant,
+                parts: failureParts,
+              }).pipe(Effect.orDie)
+              return yield* error
+            }),
+          ),
+        )
+        const localResults = yield* processLocalReplay.getResults(resultKey)
+        const knownResults = new Map(localResults)
+        for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
+        for (const [toolCallId, result] of persistedResults) {
+          knownResults.set(toolCallId, result)
+        }
+        const pendingToolCalls = params.toolCalls.filter(
+          (toolCall) => !knownResults.has(toolCall.id),
+        )
+        const executedResults = yield* executeToolCalls({
+          interruption: scope.turnInterruption.awaitInterrupt,
+          hostToolBindings: params.hostToolBindings,
+          assistantMessageId: address.assistant,
+          toolCalls: pendingToolCalls,
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          currentTurnAgent: params.currentTurnAgent,
+          toolBindings: params.toolBindings,
+        }).pipe(
+          Effect.tapError((error) => {
+            if (error.completedResults.length === 0) return Effect.void
+            const partial = new Map(localResults)
+            for (const result of error.completedResults) partial.set(result.id, result)
+            return processLocalReplay.setResults(resultKey, partial)
+          }),
+        )
+        const executedById = new Map(executedResults.map((part) => [part.id, part]))
+        const toolResults = params.toolCalls.flatMap((toolCall) => {
+          const persisted = knownResults.get(toolCall.id)
+          if (Predicate.isNotUndefined(persisted)) return [persisted]
+          const executed = executedById.get(toolCall.id)
+          if (Predicate.isNotUndefined(executed)) return [executed]
+          return []
+        })
+        yield* recordToolOutcome({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+          assistantMessageId: address.assistant,
+          parts: toolResults,
+        })
         yield* processLocalReplay.removeResults(resultKey)
         yield* closeTurnStep({ messageId: params.messageId, step: params.step })
-        return
-      }
-
-      const persistedResults = yield* findPersistedToolResults({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        assistantMessageId: address.assistant,
-        toolCalls: params.toolCalls,
-      }).pipe(
-        Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
-          Effect.gen(function* () {
-            const failureParts = params.toolCalls.map((toolCall) =>
-              Prompt.toolResultPart({
-                id: toolCall.id,
-                name: toolCall.name,
-                isFailure: true,
-                providerExecuted: false,
-                result: {
-                  error: error.message,
-                  reason: "CorruptResult",
-                },
-              }),
-            )
-            yield* recordToolOutcome({
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
-              toolResultMessageId: address.toolResult,
-              assistantMessageId: address.assistant,
-              parts: failureParts,
-            }).pipe(Effect.orDie)
-            return yield* error
-          }),
-        ),
-      )
-      const localResults = yield* processLocalReplay.getResults(resultKey)
-      const knownResults = new Map(localResults)
-      for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
-      for (const [toolCallId, result] of persistedResults) {
-        knownResults.set(toolCallId, result)
-      }
-      const pendingToolCalls = params.toolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
-      const executedResults = yield* executeToolCalls({
-        interruption: scope.turnInterruption.awaitInterrupt,
-        hostToolBindings: params.hostToolBindings,
-        assistantMessageId: address.assistant,
-        toolCalls: pendingToolCalls,
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        currentTurnAgent: params.currentTurnAgent,
-        toolBindings: params.toolBindings,
-      }).pipe(
-        Effect.tapError((error) => {
-          if (error.completedResults.length === 0) return Effect.void
-          const partial = new Map(localResults)
-          for (const result of error.completedResults) partial.set(result.id, result)
-          return processLocalReplay.setResults(resultKey, partial)
-        }),
-      )
-      const executedById = new Map(executedResults.map((part) => [part.id, part]))
-      const toolResults = params.toolCalls.flatMap((toolCall) => {
-        const persisted = knownResults.get(toolCall.id)
-        if (Predicate.isNotUndefined(persisted)) return [persisted]
-        const executed = executedById.get(toolCall.id)
-        if (Predicate.isNotUndefined(executed)) return [executed]
-        return []
-      })
-      yield* recordToolOutcome({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        toolResultMessageId: address.toolResult,
-        assistantMessageId: address.assistant,
-        parts: toolResults,
-      })
-      yield* processLocalReplay.removeResults(resultKey)
-      yield* closeTurnStep({ messageId: params.messageId, step: params.step })
-    })
+        return Option.none<ToolInteractionPending>()
+      },
+      Effect.catchIf(Schema.is(ToolInteractionPending), (pending) => Effect.succeedSome(pending)),
+    )
 
     const collectTurnStream = Effect.fn("AgentLoop.collectTurnStream")(function* (params: {
       messageId: RunningState["message"]["id"]
@@ -729,20 +742,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return { collected, outcome }
     })
-
-    const executeToolsWithInteraction = (params: {
-      messageId: RunningState["message"]["id"]
-      step: number
-      toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-      currentTurnAgent: AgentNameType
-      toolBindings: ResolvedTurnContext["toolBindings"]
-      hostToolBindings: ResolvedTurnContext["toolBindings"]
-      recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
-    }) =>
-      executeTools(params).pipe(
-        Effect.as(Option.none<ToolInteractionPending>()),
-        Effect.catchIf(Schema.is(ToolInteractionPending), (pending) => Effect.succeedSome(pending)),
-      )
 
     const interactionOutcome = (pending: ToolInteractionPending, currentTurnAgent: AgentNameType) =>
       StepResult.cases.Interaction.make({
@@ -1078,7 +1077,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         nativeToolCalls,
         toolBindings,
       })
-      const interactionSignal = yield* executeToolsWithInteraction({
+      const interactionSignal = yield* executeTools({
         hostToolBindings,
         messageId: params.messageId,
         step: pendingStep,
@@ -1278,7 +1277,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
       const runTools = Effect.gen(function* () {
-        const interactionSignal = yield* executeToolsWithInteraction({
+        const interactionSignal = yield* executeTools({
           hostToolBindings: resolved.hostToolBindings,
           messageId: params.state.message.id,
           step: params.step,
