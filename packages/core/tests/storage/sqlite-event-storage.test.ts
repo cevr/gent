@@ -7,14 +7,13 @@ import { BranchStorage } from "../../src/storage/branch-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import {
-  AgentSwitched,
+  ErrorOccurred,
   MessageReceived,
   SessionStarted,
   ToolCallStarted,
   ToolCallSucceeded,
 } from "../../src/domain/event"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { AgentName } from "../../src/domain/agent"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
@@ -38,29 +37,27 @@ describe("Events", () => {
       yield* sessions.createSession(session)
       yield* branches.createBranch(branch)
       yield* events.appendEvent(
-        AgentSwitched.make({
+        ErrorOccurred.make({
           sessionId: session.id,
           branchId: branch.id,
-          fromAgent: AgentName.make("cowork"),
-          toAgent: AgentName.make("deepwork"),
+          error: "first",
         }),
       )
       yield* events.appendEvent(
-        AgentSwitched.make({
+        ErrorOccurred.make({
           sessionId: session.id,
           branchId: branch.id,
-          fromAgent: AgentName.make("deepwork"),
-          toAgent: AgentName.make("cowork"),
+          error: "second",
         }),
       )
       const latest = yield* events.getLatestEvent({
         sessionId: session.id,
         branchId: branch.id,
-        tags: ["AgentSwitched"],
+        tags: ["ErrorOccurred"],
       })
-      expect(latest?._tag).toBe("AgentSwitched")
-      if (latest && latest._tag === "AgentSwitched") {
-        expect(latest.toAgent).toBe(AgentName.make("cowork"))
+      expect(latest?._tag).toBe("ErrorOccurred")
+      if (latest && latest._tag === "ErrorOccurred") {
+        expect(latest.error).toBe("second")
       }
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )

@@ -38,7 +38,6 @@ import { createClientEventHub } from "./event-hub"
 
 export interface AgentLifecycleUpdate {
   readonly status?: AgentStatus
-  readonly preferredAgent?: AgentName
 }
 
 export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate => {
@@ -49,8 +48,6 @@ export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate =>
       return { status: AgentStatus.cases.Idle.make({}) }
     case "ErrorOccurred":
       return { status: AgentStatus.cases.Error.make({ error: event.error }) }
-    case "AgentSwitched":
-      return { preferredAgent: event.toAgent }
     case "MessageReceived":
       if (event.message.role === "user") {
         return { status: AgentStatus.cases.Streaming.make({}) }
@@ -96,11 +93,9 @@ const isReconnectingState = (state: ConnectionState): boolean =>
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
  *
- * `SwitchAgent` is absent for a different reason. The domain carries it and
- * the loop honours it, but no path in this UI ever sent one: choosing an agent
- * here changes which agent the next turn starts with, which is local state,
- * not an instruction to a turn already running. `selectAgent` does that
- * directly.
+ * Choosing an agent here is local state, not an instruction to a running
+ * turn: it picks the agent the next turn starts with, and `selectAgent`
+ * does that directly.
  */
 export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
@@ -596,14 +591,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
     const lifecycle = reduceAgentLifecycle(event)
-    const preferredAgent = Option.fromNullishOr(lifecycle.preferredAgent)
-    if (Option.isSome(preferredAgent)) {
-      if (Schema.is(AgentNameSchema)(preferredAgent.value)) {
-        setAgentStore({ agent: preferredAgent })
-      } else {
-        setAgentStore({ agent: Option.none() })
-      }
-    }
     const status = Option.fromNullishOr(lifecycle.status)
     if (Option.isSome(status)) setAgentStore({ status: status.value })
   }

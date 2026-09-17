@@ -35,6 +35,5 @@ export const SteerCommand = Schema.Union([
      */
     wake: Schema.optional(Schema.Boolean),
   }),
-  Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
 ])
 export type SteerCommand = typeof SteerCommand.Type

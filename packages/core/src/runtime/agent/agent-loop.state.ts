@@ -284,12 +284,7 @@ export const clearInFlightQueuedTurn = (
 
 // ── Shared field groups ──
 
-const LoopStateBaseFields = {
-  currentAgent: Schema.optional(AgentName),
-}
-
 const RunningTurnFields = {
-  ...LoopStateBaseFields,
   message: Message,
   startedAtMs: Schema.Finite,
   agentOverride: Schema.optional(AgentName),
@@ -322,7 +317,7 @@ export type ResolvedTurn = {
 
 export const LoopState = Schema.TaggedUnion({
   /** No turn in progress. */
-  Idle: LoopStateBaseFields,
+  Idle: {},
   /** Agentic loop running: resolve → stream → tools → repeat. */
   Running: RunningTurnFields,
   /** Cold state: a tool requested human approval. No turn fiber. */
@@ -437,18 +432,13 @@ export const foldSessionMetrics = (
   })
 }
 
-export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleState =>
-  LoopState.cases.Idle.make({
-    currentAgent: params?.currentAgent,
-  })
+export const buildIdleState = (): IdleState => LoopState.cases.Idle.make({})
 
 export const buildRunningState = (
-  base: { currentAgent?: AgentNameType },
   item: QueuedTurnItem,
   options: { startedAtMs: number },
 ): RunningState =>
   LoopState.cases.Running.make({
-    currentAgent: base.currentAgent,
     message: item.message,
     startedAtMs: options.startedAtMs,
     agentOverride: item.agentOverride,
@@ -463,7 +453,6 @@ export const toWaitingForInteractionState = (params: {
   pendingToolCallId: string
 }): WaitingForInteractionState =>
   LoopState.cases.WaitingForInteraction.make({
-    currentAgent: params.state.currentAgent,
     message: params.state.message,
     startedAtMs: params.state.startedAtMs,
     agentOverride: params.state.agentOverride,
@@ -474,19 +463,6 @@ export const toWaitingForInteractionState = (params: {
     pendingToolCallId: params.pendingToolCallId,
   })
 
-export const updateCurrentAgentOnState = (
-  state: LoopState,
-  currentAgent: AgentNameType,
-): LoopState =>
-  Match.type<LoopState>().pipe(
-    Match.tagsExhaustive({
-      Idle: (value) => LoopState.cases.Idle.make({ ...value, currentAgent }),
-      Running: (value) => LoopState.cases.Running.make({ ...value, currentAgent }),
-      WaitingForInteraction: (value) =>
-        LoopState.cases.WaitingForInteraction.make({ ...value, currentAgent }),
-    }),
-  )(state)
-
 export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
   toQueueSnapshot(queue.steering, queue.followUp)
 
@@ -496,10 +472,9 @@ const runtimeStateFromLoopState = (
   state: LoopState,
   queue: LoopQueueState,
 ): SessionRuntimeState => {
-  const agent = Option.getOrElse(
-    Option.fromUndefinedOr(state.currentAgent),
-    () => DEFAULT_AGENT_NAME,
-  )
+  // One shipped agent. A run narrows it per turn through `agentOverride`; the
+  // branch itself never holds another, so the projection names the default.
+  const agent = DEFAULT_AGENT_NAME
   const queueSnapshot = queueSnapshotFromQueueState(queue)
 
   return Match.type<LoopState>().pipe(

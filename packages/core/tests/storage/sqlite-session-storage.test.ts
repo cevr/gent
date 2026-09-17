@@ -16,8 +16,7 @@ import {
   SessionOperationStorage,
 } from "../../src/storage/session-operation-storage"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
-import { AgentSwitched } from "../../src/domain/event"
-import { AgentName } from "../../src/domain/agent"
+import { ErrorOccurred } from "../../src/domain/event"
 import { BranchId, MessageId, RequestId, SessionId } from "../../src/domain/ids"
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
@@ -727,11 +726,10 @@ describe("Sessions", () => {
         }),
       )
       yield* events.appendEvent(
-        AgentSwitched.make({
+        ErrorOccurred.make({
           sessionId,
           branchId,
-          fromAgent: AgentName.make("cowork"),
-          toAgent: AgentName.make("deepwork"),
+          error: "cascade projection",
         }),
       )
       const cascadedIds = yield* sessions.deleteSession(sessionId)

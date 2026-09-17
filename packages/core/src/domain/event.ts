@@ -234,12 +234,6 @@ export const AgentEvent = Schema.TaggedUnion({
     fromBranchId: BranchId,
     toBranchId: BranchId,
   },
-  AgentSwitched: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    fromAgent: AgentName,
-    toAgent: AgentName,
-  },
   AgentRunSpawned: {
     parentSessionId: SessionId,
     childSessionId: SessionId,
@@ -348,8 +342,6 @@ export const BranchCreated = AgentEvent.cases.BranchCreated
 export type BranchCreated = typeof AgentEvent.cases.BranchCreated.Type
 export const BranchSwitched = AgentEvent.cases.BranchSwitched
 export type BranchSwitched = typeof AgentEvent.cases.BranchSwitched.Type
-export const AgentSwitched = AgentEvent.cases.AgentSwitched
-export type AgentSwitched = typeof AgentEvent.cases.AgentSwitched.Type
 export const AgentRunSpawned = AgentEvent.cases.AgentRunSpawned
 export type AgentRunSpawned = typeof AgentEvent.cases.AgentRunSpawned.Type
 export const AgentRunSucceeded = AgentEvent.cases.AgentRunSucceeded

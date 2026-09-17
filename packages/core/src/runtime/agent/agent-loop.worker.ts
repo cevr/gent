@@ -1,5 +1,5 @@
 import { Cause, Clock, Effect, Option, Predicate, Ref, TxQueue, type Semaphore } from "effect"
-import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
+import { DEFAULT_AGENT_NAME } from "../../domain/agent.js"
 import { ErrorOccurred, type AgentEvent } from "../../domain/event.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
@@ -36,7 +36,6 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly recordTurnFailure: (cause: Cause.Cause<unknown>) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
-  readonly switchAgentOnState: (state: LoopState, next: AgentNameType) => Effect.Effect<LoopState>
 }
 
 /**
@@ -89,13 +88,12 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
   /** Start the next admitted turn on this loop, or park it idle. */
   const advanceOrIdle = (
-    base: { currentAgent?: AgentNameType },
     nextItem: Option.Option<QueuedTurnItem>,
   ): Effect.Effect<void, AgentLoopError> =>
     Effect.gen(function* () {
-      if (Option.isNone(nextItem)) return yield* scope.saveCheckpoint(buildIdleState(base))
+      if (Option.isNone(nextItem)) return yield* scope.saveCheckpoint(buildIdleState())
       const startedAtMs = yield* Clock.currentTimeMillis
-      const nextRunning = buildRunningState(base, nextItem.value, { startedAtMs })
+      const nextRunning = buildRunningState(nextItem.value, { startedAtMs })
       yield* scope.saveCheckpoint(nextRunning)
       yield* enqueueTurnWorker(nextRunning)
     })
@@ -103,7 +101,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   /** Resume a turn parked on an interaction under its original admission. */
   const resumeWaiting = (state: WaitingForInteractionState): Effect.Effect<void, AgentLoopError> =>
     Effect.gen(function* () {
-      const resumed = buildRunningState(state, state, { startedAtMs: state.startedAtMs })
+      const resumed = buildRunningState(state, { startedAtMs: state.startedAtMs })
       yield* scope.saveCheckpoint(resumed)
       yield* enqueueTurnWorker(resumed)
     })
@@ -126,23 +124,16 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
       const nextItem = yield* scope.takeNextQueuedTurn
       yield* scope.turnInterruption.beginTurn
-      yield* advanceOrIdle(startState, nextItem)
+      yield* advanceOrIdle(nextItem)
     })
 
-  const failTurnWorker = (
-    startState: RunningState,
-    cause: Cause.Cause<unknown>,
-  ): Effect.Effect<void, AgentLoopError> =>
+  const failTurnWorker = (cause: Cause.Cause<unknown>): Effect.Effect<void, AgentLoopError> =>
     Effect.gen(function* () {
       yield* scope.recordTurnFailure(cause)
       yield* publishPhaseFailure(cause)
       const nextItem = yield* scope.takeNextQueuedTurn
-      const current = yield* scope.currentLoopState
       yield* scope.turnInterruption.beginTurn
-      yield* advanceOrIdle(
-        { currentAgent: current.currentAgent ?? startState.currentAgent },
-        nextItem,
-      )
+      yield* advanceOrIdle(nextItem)
     })
 
   /** Claims the admission for this worker; false when it was withdrawn before the claim. */
@@ -169,12 +160,11 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           turnBoundary(
             scope.sessionId,
             scope.branchId,
-            startState.currentAgent ?? DEFAULT_AGENT_NAME,
+            startState.agentOverride ?? DEFAULT_AGENT_NAME,
           ),
         ),
         Effect.matchCauseEffect({
-          onFailure: (cause) =>
-            failTurnWorker(startState, cause).pipe(scope.interruptSemaphore.withPermits(1)),
+          onFailure: (cause) => failTurnWorker(cause).pipe(scope.interruptSemaphore.withPermits(1)),
           onSuccess: (outcome) =>
             finishTurnWorker(startState, outcome).pipe(scope.interruptSemaphore.withPermits(1)),
         }),
@@ -212,7 +202,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         yield* Ref.update(scope.admissionGateRef, (gate) => ({ ...gate, withdrawn: Option.none() }))
         return false
       }
-      yield* advanceOrIdle(state, yield* scope.takeNextQueuedTurn)
+      yield* advanceOrIdle(yield* scope.takeNextQueuedTurn)
       return true
     }),
   )
@@ -249,16 +239,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       const state = yield* scope.currentLoopState
       if (state._tag !== "Idle") return
       yield* scope.turnInterruption.beginTurn
-      yield* advanceOrIdle(state, Option.some(item))
-    }).pipe(scope.sideMutationSemaphore.withPermits(1)),
-  )
-
-  const switchAgent = Effect.fn("AgentLoop.switchAgent")((agent: AgentNameType) =>
-    Effect.gen(function* () {
-      const state = yield* scope.currentLoopState
-      const next = yield* scope.switchAgentOnState(state, agent)
-      if (next === state) return
-      yield* scope.saveCheckpoint(next)
+      yield* advanceOrIdle(Option.some(item))
     }).pipe(scope.sideMutationSemaphore.withPermits(1)),
   )
 
@@ -290,7 +271,6 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     startTurn,
     interruptActiveStream: interruptActiveStream(scope.activeStreamRef),
     interrupt,
-    switchAgent,
     respondInteraction,
     withdrawAdmittedTurn,
     withSideMutation: <A, E, R2>(effect: Effect.Effect<A, E, R2>): Effect.Effect<A, E, R2> =>

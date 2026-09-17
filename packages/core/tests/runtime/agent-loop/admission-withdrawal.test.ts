@@ -38,7 +38,7 @@ const queuedItem = (id: string): QueuedTurnItem => ({
 
 /** The admitted item sits in `inFlight` and names the Running checkpoint; the turn has not started. */
 const admitted = (item: QueuedTurnItem, rest: ReadonlyArray<QueuedTurnItem>) => ({
-  state: buildRunningState({}, item, { startedAtMs: 1 }),
+  state: buildRunningState(item, { startedAtMs: 1 }),
   queue: { ...emptyLoopQueueState(), followUp: [...rest], inFlight: item },
 })
 
@@ -79,7 +79,6 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
         Ref.update(ranTurns, (ids) => [...ids, String(state.message.id)]).pipe(
           Effect.as(TurnOutcome.cases.Done.make({})),
         ),
-      switchAgentOnState: (state) => Effect.succeed(state),
     })
     return { worker, stateRef, queueRef, ranTurns, turnWorkerQueue, gateRef }
   })
@@ -146,7 +145,7 @@ describe("admitted turn withdrawal", () => {
     Effect.gen(function* () {
       const first = queuedItem("first")
       const harness = yield* makeHarness({
-        state: buildRunningState({}, first, { startedAtMs: 1 }),
+        state: buildRunningState(first, { startedAtMs: 1 }),
         queue: emptyLoopQueueState(),
       })
       const withdrawn = yield* harness.worker.withdrawAdmittedTurn(first.message.id)

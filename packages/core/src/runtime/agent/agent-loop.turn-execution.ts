@@ -734,7 +734,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       turnInterrupted: boolean
       streamFailed: boolean
       unanswered: boolean
-      currentAgent: AgentNameType
+      turnAgent: AgentNameType
     }) {
       const extensionRegistry = yield* ExtensionRegistry
       const existingMessage = yield* messageStorage.getMessage(params.messageId)
@@ -787,7 +787,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         durationMs: Number(turnDurationMs),
-        agentName: params.currentAgent,
+        agentName: params.turnAgent,
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
         usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
@@ -844,7 +844,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const resolved = yield* resolveTurnContext({
           agentOverride: params.state.agentOverride,
           runSpec: params.state.runSpec,
-          currentAgent: params.state.currentAgent,
           branchId: scope.branchId,
           sessionId: scope.sessionId,
           baseSections: params.turnProfile.turnBaseSections,
@@ -1149,7 +1148,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const resolved = yield* resolveTurnContext({
         agentOverride: params.state.agentOverride,
         runSpec: params.state.runSpec,
-        currentAgent: params.state.currentAgent,
         branchId: scope.branchId,
         sessionId: scope.sessionId,
         baseSections: params.turnProfile.turnBaseSections,
@@ -1358,10 +1356,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         let interrupted = yield* scope.turnInterruption.interrupted
         let streamFailed = false
         let unanswered = false
-        let currentTurnAgent: AgentNameType = Option.getOrElse(
-          Option.fromUndefinedOr(state.currentAgent),
-          () => DEFAULT_AGENT_NAME,
-        )
+        let currentTurnAgent: AgentNameType = state.agentOverride ?? DEFAULT_AGENT_NAME
 
         const resumed = yield* resumeTurn({
           state,
@@ -1410,7 +1405,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           turnInterrupted: interrupted,
           streamFailed,
           unanswered,
-          currentAgent: currentTurnAgent,
+          turnAgent: currentTurnAgent,
         })
         return TurnOutcome.cases.Done.make({})
       })

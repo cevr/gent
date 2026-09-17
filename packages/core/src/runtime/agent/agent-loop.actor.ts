@@ -756,10 +756,6 @@ const buildAgentLoopActorHandlers = (config: {
       const projectedState = yield* handle.runtimeState
 
       switch (command._tag) {
-        case "SwitchAgent":
-          yield* handle.switchAgent(command.agent).pipe(orCleanup(handle))
-          return
-
         case "Cancel":
         case "Interrupt":
           // The projection can lag the machine by a step; the snapshot is authoritative.

@@ -4,7 +4,7 @@ import {
   AgentRunFailed,
   AgentRunSpawned,
   AgentRunSucceeded,
-  AgentSwitched,
+  BranchCreated,
   BranchSwitched,
   getEventBranchId,
   getEventSessionId,
@@ -82,25 +82,10 @@ describe("event branch routing", () => {
   })
 
   test("standard variants surface the branch field", () => {
-    const event = AgentSwitched.make({
+    const event = BranchCreated.make({
       sessionId: session,
       branchId: branch,
-      fromAgent: AgentName.make("cowork"),
-      toAgent: AgentName.make("research"),
     })
     expect(getEventBranchId(event)).toBe(branch)
-  })
-})
-
-describe("agent switch event branding", () => {
-  test("fromAgent/toAgent reject unbranded raw strings at construction", () => {
-    expect(() =>
-      AgentSwitched.make({
-        sessionId: session,
-        branchId: branch,
-        fromAgent: AgentName.make("cowork"),
-        toAgent: AgentName.make("research"),
-      }),
-    ).not.toThrow()
   })
 })

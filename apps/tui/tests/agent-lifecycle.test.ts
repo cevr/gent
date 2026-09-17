@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import {
-  AgentSwitched,
   ErrorOccurred,
   MessageReceived,
   StreamEnded,
@@ -10,14 +9,7 @@ import {
 } from "@gent/core-internal/domain/event"
 import { reduceAgentLifecycle } from "../src/client/context"
 import { AgentStatus } from "../src/client/agent-state"
-import {
-  AgentName,
-  BranchId,
-  Message,
-  MessageId,
-  SessionId,
-  dateFromMillis,
-} from "@gent/core/protocol"
+import { BranchId, Message, MessageId, SessionId, dateFromMillis } from "@gent/core/protocol"
 
 const makeMessage = (role: "user" | "assistant") =>
   Message.cases.regular.make({
@@ -77,22 +69,13 @@ describe("reduceAgentLifecycle", () => {
     )
   })
 
-  test("surfaces agent switches and errors", () => {
-    const switched = AgentSwitched.make({
-      sessionId: SessionId.make("s1"),
-      branchId: BranchId.make("b1"),
-      fromAgent: AgentName.make("cowork"),
-      toAgent: AgentName.make("deepwork"),
-    })
+  test("surfaces errors", () => {
     const errored = ErrorOccurred.make({
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
       error: "boom",
     })
 
-    expect(reduceAgentLifecycle(switched)).toEqual({
-      preferredAgent: AgentName.make("deepwork"),
-    })
     expect(reduceAgentLifecycle(errored)).toEqual({
       status: { _tag: "Error", error: "boom" },
     })

@@ -113,7 +113,6 @@ export const resolveSessionSettings = (
 export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
   agentOverride?: AgentNameType
   runSpec?: RunSpec
-  currentAgent?: AgentNameType
   branchId: BranchId
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
@@ -124,9 +123,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const sessionStorage = yield* SessionStorage
   const eventPublisher = yield* EventPublisher
   const hostCtx = yield* CurrentExtensionHostContext
-  const currentAgent = Option.getOrElse(Option.fromUndefinedOr(params.agentOverride), () =>
-    Option.getOrElse(Option.fromUndefinedOr(params.currentAgent), () => DEFAULT_AGENT_NAME),
-  )
+  const currentAgent = params.agentOverride ?? DEFAULT_AGENT_NAME
   const rawMessages = yield* messageStorage
     .listMessages(params.branchId)
     .pipe(Effect.map((items) => [...items]))
