@@ -223,26 +223,6 @@ const collectValidationFailures = (
     "prompt section",
   )
 
-  // Model tools MUST declare a non-empty description — the
-  // string is sent to the LLM as part of the tool schema, so empty/missing
-  // becomes "why is the model dumb?" rot later.
-  for (const ext of extensions) {
-    for (const cap of ext.contributions.tools ?? []) {
-      if (!isToolCapability(cap)) {
-        addFailure(ext, "Tool must be created with `tool({...})` so Gent metadata is attached.")
-        continue
-      }
-      const metadata = getToolMetadata(cap)
-      const trimmed = (cap.description ?? "").trim()
-      if (trimmed.length === 0) {
-        addFailure(
-          ext,
-          `Tool "${metadata.id}" is missing a non-empty description (the LLM tool schema requires one).`,
-        )
-      }
-    }
-  }
-
   return failures
 }
 

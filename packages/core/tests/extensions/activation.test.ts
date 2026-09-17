@@ -11,7 +11,13 @@ import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import type { DiscoveredExtension } from "../../src/runtime/extensions/loader"
 import { setupExtensions, validateLoadedExtensions } from "../../src/runtime/extensions/activation"
 import type { ExtensionContributions } from "../../src/domain/contribution"
-import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionHost,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
 import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
@@ -181,13 +187,9 @@ describe("extension activation isolation", () => {
       }),
   )
 
-  //  BLOCK: validation must catch cross-bucket capability collisions in
-  // addition to tool/tool. The resolver overwrites silently in last-write-wins
-  // order without this check.
-
-  // Validation still owns semantic tool checks after authoring has produced a
-  // native Effect tool. Description checks live here because runtime-loaded
-  // extensions can pass schema-valid but model-hostile tool metadata.
+  // Activation must catch cross-bucket capability collisions in addition to
+  // tool/tool. The resolver overwrites silently in last-write-wins order
+  // without this check.
   const rawToolLeaf = (id: string, description?: string) => {
     let normalizedDescription = ""
     if (!Predicate.isUndefined(description)) normalizedDescription = description
@@ -199,13 +201,6 @@ describe("extension activation isolation", () => {
       execute: () => Effect.void,
     })
   }
-
-  const rawNativeToolLeaf = (id: string): never =>
-    // oxlint-disable-next-line effect/noAs -- This invalid native tool is a runtime validation fixture.
-    AiTool.dynamic(id, {
-      description: "native but missing Gent metadata",
-      parameters: Schema.Unknown,
-    }) as never
 
   const metadataSpoofedToolLeaf = (
     id: string,
@@ -283,132 +278,140 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.live("validation rejects model tool with empty description", () =>
+  it.live("a tool with a blank description keeps its extension out of the active set", () =>
     Effect.gen(function* () {
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("missing-desc", { tools: [rawToolLeaf("describeless")] }),
-      ])
+      const result = yield* setupExtensions({
+        extensions: [
+          makeBuiltin(
+            "healthy-ext",
+            Effect.succeed({
+              tools: [
+                tool({
+                  id: "healthy_tool",
+                  description: "healthy",
+                  params: Schema.Unknown,
+                  output: Schema.Void,
+                  execute: () => Effect.void,
+                }),
+              ],
+            }),
+          ),
+          makeBuiltin("blank-desc", Effect.succeed({ tools: [rawToolLeaf("blanky", "   \t\n")] })),
+        ].map(builtin),
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
-      expect(result.active).toEqual([])
-      expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("missing-desc"))
-      expect(result.failed[0]?.error).toBe(
-        'Tool "describeless" is missing a non-empty description (the LLM tool schema requires one).',
-      )
-    }),
-  )
-
-  it.live("validation rejects model tool with whitespace-only description", () =>
-    Effect.gen(function* () {
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("blank-desc", { tools: [rawToolLeaf("blanky", "   \t\n")] }),
-      ])
-
-      expect(result.active).toEqual([])
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("blank-desc"))
-    }),
-  )
-
-  it.live("validation rejects native Effect tools without Gent metadata", () =>
-    Effect.gen(function* () {
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("raw-native-tool", { tools: [rawNativeToolLeaf("raw_tool")] }),
-      ])
-
-      expect(result.active).toEqual([])
-      expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("raw-native-tool"))
-      expect(result.failed[0]?.error).toBe(
-        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      expect(result.failed[0]?.error).toContain(
+        "tools[0] (blanky): tool requires a non-empty `description`",
       )
-    }),
+    }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("validation rejects metadata-spoofed native Effect tools", () =>
+  it.live("a metadata-spoofed tool never collides with a healthy tool of the same id", () =>
     Effect.gen(function* () {
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("metadata-spoof", { tools: [metadataSpoofedToolLeaf("spoofed_tool")] }),
-      ])
-
-      expect(result.active).toEqual([])
-      expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
-      expect(result.failed[0]?.error).toBe(
-        "Tool must be created with `tool({...})` so Gent metadata is attached.",
-      )
-    }),
-  )
-
-  it.live("validation ignores metadata-spoofed tools when checking tool collisions", () =>
-    Effect.gen(function* () {
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("healthy-ext", {
-          tools: [
-            tool({
-              id: "shared_cap",
-              description: "healthy",
-              params: Schema.Unknown,
-              output: Schema.Void,
-              execute: () => Effect.void,
+      const result = yield* setupExtensions({
+        extensions: [
+          makeBuiltin(
+            "healthy-ext",
+            Effect.succeed({
+              tools: [
+                tool({
+                  id: "shared_cap",
+                  description: "healthy",
+                  params: Schema.Unknown,
+                  output: Schema.Void,
+                  execute: () => Effect.void,
+                }),
+              ],
             }),
-          ],
-        }),
-        makeLoaded("metadata-spoof", {
-          tools: [metadataSpoofedToolLeaf("spoofed_native", { id: "shared_cap" })],
-        }),
-      ])
+          ),
+          makeBuiltin(
+            "metadata-spoof",
+            Effect.succeed({
+              tools: [metadataSpoofedToolLeaf("spoofed_native", { id: "shared_cap" })],
+            }),
+          ),
+        ].map(builtin),
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
       expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
-      expect(result.failed[0]?.error).toBe(
-        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      expect(result.failed[0]?.error).toContain(
+        "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
       )
-    }),
+    }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("validation ignores metadata-spoofed tools when checking prompt collisions", () =>
+  it.live("a metadata-spoofed tool never collides on a copied prompt section", () =>
     Effect.gen(function* () {
       const prompt = { id: "shared_prompt", content: "rules", priority: 50 }
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("healthy-ext", {
-          tools: [
-            tool({
-              id: "healthy_tool",
-              description: "healthy",
-              params: Schema.Unknown,
-              output: Schema.Void,
-              prompt,
-              execute: () => Effect.void,
+      const result = yield* setupExtensions({
+        extensions: [
+          makeBuiltin(
+            "healthy-ext",
+            Effect.succeed({
+              tools: [
+                tool({
+                  id: "healthy_tool",
+                  description: "healthy",
+                  params: Schema.Unknown,
+                  output: Schema.Void,
+                  prompt,
+                  execute: () => Effect.void,
+                }),
+              ],
             }),
-          ],
-        }),
-        makeLoaded("metadata-spoof", {
-          tools: [metadataSpoofedToolLeaf("spoofed_native", { prompt })],
-        }),
-      ])
+          ),
+          makeBuiltin(
+            "metadata-spoof",
+            Effect.succeed({ tools: [metadataSpoofedToolLeaf("spoofed_native", { prompt })] }),
+          ),
+        ].map(builtin),
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
       expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
-      expect(result.failed[0]?.error).toBe(
-        "Tool must be created with `tool({...})` so Gent metadata is attached.",
+      expect(result.failed[0]?.error).toContain(
+        "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
       )
-    }),
+    }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("validation accepts non-model capability without description", () =>
+  it.live("a request capability without a description stays active", () =>
     Effect.gen(function* () {
-      // RPC requests don't ship to the LLM as tools, so empty description is
-      // fine. Only model-callable tool leaves require a description.
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("rpc-no-desc", { requests: [rawRpcLeaf("internal")] }),
-      ])
+      // Requests never ship to the LLM as a tool schema, so the description
+      // rule does not reach them.
+      const undescribedRequest = request({
+        id: "internal",
+        input: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("ok"),
+      })
+      const result = yield* setupExtensions({
+        extensions: [
+          builtin(makeBuiltin("rpc-no-desc", Effect.succeed({ requests: [undescribedRequest] }))),
+        ],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
       expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("rpc-no-desc")])
       expect(result.failed).toEqual([])
-    }),
+    }).pipe(Effect.provide(fsLayer)),
   )
 
   it.scopedLive("live Profile isolates setup and scheduler failures", () =>

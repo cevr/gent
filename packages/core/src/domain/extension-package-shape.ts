@@ -45,7 +45,9 @@ const checkToolDescriptions = (tools: ReadonlyArray<ToolCapability>): Option.Opt
       )
     }
     const metadata = getToolMetadata(cap)
-    if (Predicate.isUndefined(cap.description) || cap.description === "") {
+    // The description is sent to the model as part of the tool schema, so a
+    // blank one is as useless as a missing one.
+    if (Predicate.isUndefined(cap.description) || cap.description.trim() === "") {
       return Option.some(
         `tools[${i}] (${metadata.id}): tool requires a non-empty \`description\` (the model sees it as the tool description)`,
       )

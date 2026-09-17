@@ -349,6 +349,82 @@ describe("defineExtension", () => {
       }
     }))
 
+  test("a model tool with a whitespace-only description is rejected at package validation", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        validateExtensionPackage(
+          { id: ExtensionId.make("blank-desc") },
+          {
+            tools: [
+              tool({
+                id: "blanky",
+                description: "   \t\n",
+                params: Schema.Unknown,
+                output: Schema.Void,
+                execute: () => Effect.void,
+              }),
+            ],
+          },
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain("tools[0] (blanky): tool requires a non-empty `description`")
+      }
+    }))
+
+  test("a model tool with an empty description is rejected at package validation", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        validateExtensionPackage(
+          { id: ExtensionId.make("missing-desc") },
+          {
+            tools: [
+              tool({
+                id: "describeless",
+                description: "",
+                params: Schema.Unknown,
+                output: Schema.Void,
+                execute: () => Effect.void,
+              }),
+            ],
+          },
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain(
+          "tools[0] (describeless): tool requires a non-empty `description`",
+        )
+      }
+    }))
+
+  test("a request capability needs no description", () =>
+    Effect.gen(function* () {
+      // Requests never reach the LLM as a tool schema, so the description rule
+      // does not apply to them.
+      const exit = yield* Effect.exit(
+        validateExtensionPackage(
+          { id: ExtensionId.make("rpc-no-desc") },
+          {
+            requests: [
+              request({
+                id: "internal",
+                input: Schema.Struct({}),
+                output: Schema.String,
+                execute: () => Effect.succeed("ok"),
+              }),
+            ],
+          },
+        ),
+      )
+      expect(exit._tag).toBe("Success")
+    }))
+
   test("an old bucket key on defineExtension fails setup with a migration message", () =>
     Effect.gen(function* () {
       const extension = defineExtension<never>(
