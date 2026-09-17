@@ -132,17 +132,17 @@ describe("ClientProvider session metrics", () => {
         snapshotOf(FIRST, { costUsd: 4.2, lastInputTokens: 9_000, context: busyContext }),
       )
       yield* Effect.promise(() => setup.renderOnce())
-      expect(Option.isSome(clientContext.contextMetrics())).toBe(true)
+      expect(Option.isSome(clientContext.sessionMetrics().context)).toBe(true)
       expect(clientContext.cost()).toBe(4.2)
-      expect(clientContext.latestInputTokens()).toBe(9_000)
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(9_000)
 
       clientContext.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       yield* Effect.promise(() => setup.renderOnce())
 
       // Every metric goes, not just the two that always did.
       expect(clientContext.cost()).toBe(0)
-      expect(clientContext.latestInputTokens()).toBe(0)
-      expect(Option.isNone(clientContext.contextMetrics())).toBe(true)
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
+      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
 
       setup.renderer.destroy()
     }),
@@ -168,13 +168,13 @@ describe("ClientProvider session metrics", () => {
         snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 5_000, context: busyContext }),
       )
       yield* Effect.promise(() => setup.renderOnce())
-      expect(Option.isSome(clientContext.contextMetrics())).toBe(true)
+      expect(Option.isSome(clientContext.sessionMetrics().context)).toBe(true)
 
       clientContext.clearSession()
       yield* Effect.promise(() => setup.renderOnce())
 
-      expect(Option.isNone(clientContext.contextMetrics())).toBe(true)
-      expect(clientContext.latestInputTokens()).toBe(0)
+      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
 
       setup.renderer.destroy()
     }),
@@ -230,7 +230,7 @@ describe("ClientProvider session metrics", () => {
       clientContext.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
       yield* Effect.promise(() => setup.renderOnce())
       expect(clientContext.cost()).toBe(0)
-      expect(Option.isNone(clientContext.contextMetrics())).toBe(true)
+      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
 
       // The first session's reply lands now, naming a session nobody is on.
       yield* Deferred.succeed(
@@ -242,8 +242,8 @@ describe("ClientProvider session metrics", () => {
 
       // None of the first session's numbers come back.
       expect(clientContext.cost()).toBe(0)
-      expect(clientContext.latestInputTokens()).toBe(0)
-      expect(Option.isNone(clientContext.contextMetrics())).toBe(true)
+      expect(clientContext.sessionMetrics().latestInputTokens).toBe(0)
+      expect(Option.isNone(clientContext.sessionMetrics().context)).toBe(true)
 
       setup.renderer.destroy()
     }),

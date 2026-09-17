@@ -196,6 +196,20 @@ interface ClientSessionValue {
   switchBranch: (branchId: BranchId) => void
 }
 
+/**
+ * The context gauge's whole input.
+ *
+ * The two halves are one value because `buildContextLabels` prefers the
+ * projection over the live token count whenever it carries a limit. Held apart,
+ * a projection left from the previous session outranks the fresh token count of
+ * the new one and renders the old percentage.
+ */
+export interface SessionMetrics {
+  readonly latestInputTokens: number
+  /** The last turn's model-context projection, absent until a turn has run. */
+  readonly context: Option.Option<ModelContextMetrics>
+}
+
 interface ClientAgentValue {
   // Agent state (derived from events)
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
@@ -213,9 +227,8 @@ interface ClientAgentValue {
   isError: () => boolean
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
   error: () => string | null
-  latestInputTokens: () => number
-  /** The last turn's model-context projection, absent until a turn has run. */
-  contextMetrics: () => Option.Option<ModelContextMetrics>
+  /** What the last turn spent: the provider's token count and the model-context projection. */
+  sessionMetrics: () => SessionMetrics
   // eslint-disable-next-line effect/noNullish -- model metadata is absent until the model registry loads.
   modelInfo: () => Model | undefined
   /** The models a registered driver can run, in registry order; empty until both load. */
@@ -264,6 +277,16 @@ const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   _tag: "Healthy",
   extensions: [],
 }
+
+const EMPTY_SESSION_METRICS: SessionMetrics = {
+  latestInputTokens: 0,
+  context: Option.none(),
+}
+
+const metricsOf = (snapshot: SessionSnapshot): SessionMetrics => ({
+  latestInputTokens: snapshot.metrics.lastInputTokens,
+  context: Option.fromUndefinedOr(snapshot.metrics.context),
+})
 
 /** The client. One value, provided once, read the same way everywhere. */
 export function useClient(): ClientContextValue {
@@ -364,10 +387,7 @@ export function ClientProvider(props: ClientProviderProps) {
     resolvedModelId: Option.none(),
     resolvedReasoningLevel: Option.none(),
   })
-  const [latestInputTokens, setLatestInputTokens] = createSignal(0)
-  const [contextMetrics, setContextMetrics] = createSignal<Option.Option<ModelContextMetrics>>(
-    Option.none(),
-  )
+  const [sessionMetrics, setSessionMetrics] = createSignal<SessionMetrics>(EMPTY_SESSION_METRICS)
 
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
@@ -390,11 +410,9 @@ export function ClientProvider(props: ClientProviderProps) {
   /**
    * Drop everything the previous session left behind.
    *
-   * All three session changes go through here so none can reset a subset. The
-   * context gauge is the reason this is one function: `buildContextLabels`
-   * prefers the projection over the live token count whenever it carries a
-   * limit, so a `contextMetrics` left from the previous session outranks the
-   * fresh `latestInputTokens` of the new one and renders the old percentage.
+   * All three session changes go through here so none can reset a subset.
+   * {@link SessionMetrics} is one value for the same reason: its two halves
+   * cannot be cleared apart.
    *
    * `switchSession` is the one caller that can land back on the session it is
    * already on, and extension health belongs to the session rather than the
@@ -411,8 +429,7 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedModelId: Option.none(),
       resolvedReasoningLevel: Option.none(),
     })
-    setLatestInputTokens(0)
-    setContextMetrics(Option.none())
+    setSessionMetrics(EMPTY_SESSION_METRICS)
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
   }
@@ -555,8 +572,7 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedModelId: Option.some(snapshot.resolvedModelId),
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
-    setLatestInputTokens(snapshot.metrics.lastInputTokens)
-    setContextMetrics(Option.fromUndefinedOr(snapshot.metrics.context))
+    setSessionMetrics(metricsOf(snapshot))
   }
 
   const refreshSessionMetrics = (): void => {
@@ -580,8 +596,7 @@ export function ClientProvider(props: ClientProviderProps) {
               resolvedModelId: Option.some(snapshot.resolvedModelId),
               resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
             })
-            setLatestInputTokens(snapshot.metrics.lastInputTokens)
-            setContextMetrics(Option.fromUndefinedOr(snapshot.metrics.context))
+            setSessionMetrics(metricsOf(snapshot))
           }),
         ),
         Effect.catchEager(() => Effect.void),
@@ -923,8 +938,7 @@ export function ClientProvider(props: ClientProviderProps) {
       if (agentStore.status._tag === "Error") return agentStore.status.error
       return Option.getOrNull(Option.none<string>())
     },
-    latestInputTokens,
-    contextMetrics,
+    sessionMetrics,
     modelInfo: () => modelStore.modelsById[agentValue.model()],
     models: () =>
       Object.values(modelStore.modelsById).filter((model) =>

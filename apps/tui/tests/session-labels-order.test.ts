@@ -9,8 +9,10 @@
  * rather than its configuration.
  */
 import { describe, expect, test } from "bun:test"
+import { Option } from "effect"
 import { RGBA } from "@opentui/core"
 import { buildContextLabels, buildTopRightLabels } from "../src/utils/session-labels"
+import type { ModelContextMetrics } from "@gent/core/protocol"
 
 const theme = {
   textMuted: RGBA.fromInts(138, 138, 138, 255),
@@ -31,6 +33,18 @@ const NO_EFFORT: string | undefined = undefined
 // eslint-disable-next-line effect/noNullish -- matches the helper's optional parameters.
 const NO_CONTEXT: undefined = undefined
 
+const contextLabels = (
+  latestInputTokens: number,
+  // eslint-disable-next-line effect/noNullish -- matches the helper's optional parameter.
+  contextLength: number | undefined,
+  context?: ModelContextMetrics,
+) =>
+  buildContextLabels({
+    metrics: { latestInputTokens, context: Option.fromNullishOr(context) },
+    contextLength,
+    theme,
+  })
+
 describe("effort sits with the model and the gauge anchors right", () => {
   test("reports the effort without the context gauge", () => {
     const labels = buildTopRightLabels("medium", theme, {})
@@ -43,7 +57,7 @@ describe("effort sits with the model and the gauge anchors right", () => {
   })
 
   test("reports a projected context percentage on its own", () => {
-    const labels = buildContextLabels(0, NO_CONTEXT_LENGTH, theme, {
+    const labels = contextLabels(0, NO_CONTEXT_LENGTH, {
       estimatedTokens: 2_000,
       availableInputTokens: 8_000,
       contextLimitTokens: 10_000,
@@ -54,11 +68,11 @@ describe("effort sits with the model and the gauge anchors right", () => {
   })
 
   test("falls back to a usage-derived percentage", () => {
-    const labels = buildContextLabels(5_000, 10_000, theme, NO_CONTEXT)
+    const labels = contextLabels(5_000, 10_000, NO_CONTEXT)
     expect(texts(labels)[0]).toContain("50%")
   })
 
   test("reports nothing when there is no context to report", () => {
-    expect(texts(buildContextLabels(0, NO_CONTEXT_LENGTH, theme, NO_CONTEXT))).toEqual([])
+    expect(texts(contextLabels(0, NO_CONTEXT_LENGTH, NO_CONTEXT))).toEqual([])
   })
 })

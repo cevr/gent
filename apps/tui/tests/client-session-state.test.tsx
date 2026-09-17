@@ -366,7 +366,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.agent()).toBe(AgentName.make("deepwork"))
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
       expect(client.cost()).toBe(0)
-      expect(client.latestInputTokens()).toBe(0)
+      expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
   )
   it.live("applySessionSnapshot ignores stale snapshots for a previous branch", () =>
@@ -430,7 +430,7 @@ describe("ClientProvider session lifecycle", () => {
       })
       expect(client.agent()).toBe(AgentName.make("deepwork"))
       expect(client.cost()).toBe(0)
-      expect(client.latestInputTokens()).toBe(0)
+      expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
   )
   it.live("switchSession clears the stale resolved model before re-hydration", () =>

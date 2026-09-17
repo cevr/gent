@@ -161,12 +161,11 @@ export function Session(props: SessionProps) {
    * row, so they hold their place and the left group truncates instead.
    */
   const rightAnchoredLabels = (): BorderLabelItem[] =>
-    buildContextLabels(
-      client.latestInputTokens(),
-      client.modelInfo()?.contextLength,
+    buildContextLabels({
+      metrics: client.sessionMetrics(),
+      contextLength: client.modelInfo()?.contextLength,
       theme,
-      Option.getOrUndefined(client.contextMetrics()),
-    ).concat(costLabels())
+    }).concat(costLabels())
 
   const bottomLeftLabels = (): BorderLabelItem[] => {
     const a = controller.activity()

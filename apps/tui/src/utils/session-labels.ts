@@ -2,6 +2,7 @@ import { Option } from "effect"
 import type { RGBA } from "@opentui/core"
 import { formatTokens } from "./format-tool"
 import type { ModelContextMetrics } from "@gent/core/protocol"
+import type { SessionMetrics } from "../client/context"
 
 /** One colored label on the composer frame rule. */
 export interface BorderLabelItem {
@@ -38,23 +39,22 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
  * opposite ends of the row: effort belongs beside the model name, while the
  * gauge belongs with the running total a reader checks at a glance.
  */
-export function buildContextLabels(
-  tokens: number,
-  // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
-  contextLength: number | undefined,
-  theme: ThemeColors,
-  // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
-  context?: ModelContextMetrics,
-): BorderLabelItem[] {
-  const projection = Option.fromNullishOr(context)
+export function buildContextLabels(input: {
+  readonly metrics: SessionMetrics
+  // eslint-disable-next-line effect/noNullish -- this mirrors the optional client snapshot field.
+  readonly contextLength: number | undefined
+  readonly theme: ThemeColors
+}): BorderLabelItem[] {
+  const projection = input.metrics.context
   if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
     // The projection is what the model saw; it beats the provider's last usage report.
-    return [projectionLabel(projection.value, theme)]
+    return [projectionLabel(projection.value, input.theme)]
   }
-  const limit = Option.fromNullishOr(contextLength)
+  const tokens = input.metrics.latestInputTokens
+  const limit = Option.fromNullishOr(input.contextLength)
   if (tokens > 0 && Option.isSome(limit) && limit.value > 0) {
     const pct = Math.min(100, Math.round((tokens / limit.value) * 100))
-    return [{ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, theme) }]
+    return [{ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, input.theme) }]
   }
   return []
 }
