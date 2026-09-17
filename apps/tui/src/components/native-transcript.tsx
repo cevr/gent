@@ -21,6 +21,7 @@ import type { SessionItem } from "./message-list"
 import type { DisclosureLevel } from "../routes/session-ui-state"
 import { captureTranscriptDisplay, projectTranscriptDisplay } from "./transcript-display"
 import { transcriptFingerprint } from "./transcript-fingerprint"
+import { splitFooterHeight } from "./split-footer-height"
 
 interface NativeTranscriptProps {
   items: SessionItem[]
@@ -148,15 +149,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * while the surface settles takes the screen back, and scrollback rejects a
    * commit from the alternate screen. An item that did not commit stays in the
    * live view, so closing the overlay still shows it.
+   *
+   * The footer is left exactly as it is. Changing it here would run OpenTUI's
+   * `applyScreenMode` in the middle of the commit, and that path rewrites the
+   * screen with `ESC[nS`, which drops the rows instead of scrolling them into
+   * scrollback. `splitFooterHeight` keeps the output region large enough
+   * instead, so the commit needs no footer of its own.
    */
-  const commitItems = (items: SessionItem[], footerHeight: number): Effect.Effect<boolean> =>
+  const commitItems = (items: SessionItem[]): Effect.Effect<boolean> =>
     Effect.suspend(() => {
       const generation = displayGeneration
       const stillCurrent = () => displayGeneration === generation && canCommitNatively()
       if (!stillCurrent()) return Effect.succeed(false)
-      // Native history takes complete transcript items. Reserve only the composer while committing it.
-      const previousFooterHeight = renderer.footerHeight
-      renderer.footerHeight = footerHeight
       const surface: ScrollbackSurface = renderer.createScrollbackSurface()
       const surfaceRenderer = Object.create(surface.renderContext)
       Object.defineProperties(surfaceRenderer, {
@@ -204,8 +208,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
           Effect.sync(() => {
             if (Option.isSome(disposeSnapshot)) disposeSnapshot.value()
             if (!surface.isDestroyed) surface.destroy()
-            // Restoring the surface also flushes the queued snapshot before it grows.
-            renderer.footerHeight = previousFooterHeight
           }),
         ),
       )
@@ -224,7 +226,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    */
   const write = (item: SessionItem, fingerprintValue: string) => {
     enqueueNative(
-      commitItems([item], props.footerHeight).pipe(
+      commitItems([item]).pipe(
         Effect.andThen((landed) =>
           Effect.sync(() => {
             if (!landed) return rewind()
@@ -282,9 +284,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       return
     }
     const returning = renderer.screenMode === "alternate-screen"
-    renderer.footerHeight = Math.min(
+    renderer.footerHeight = splitFooterHeight(
       dimensions().height,
-      Math.max(1, props.footerHeight + Math.max(1, liveHeight())),
+      props.footerHeight + Math.max(1, liveHeight()),
     )
     renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
