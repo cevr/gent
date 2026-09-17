@@ -17,7 +17,6 @@ import type { GentPlatform } from "@gent/core/extensions/branch-tools"
 import { Generated } from "@effect/ai-anthropic"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
-export { SYSTEM_IDENTITY_PREFIX } from "./oauth/anthropic-headers.js"
 import { SYSTEM_IDENTITY_PREFIX, getBillingHeaderInputs } from "./oauth/anthropic-headers.js"
 import { AnthropicPlatform } from "./platform-adapter.js"
 import { buildBillingHeaderValue } from "./signing.js"

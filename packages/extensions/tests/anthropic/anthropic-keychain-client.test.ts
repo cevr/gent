@@ -8,8 +8,8 @@ import {
   transformPayload as transformPayloadEffect,
   transformResponseContent,
   transformStreamEvent,
-  SYSTEM_IDENTITY_PREFIX,
 } from "../../src/anthropic/keychain-client.js"
+import { SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth/anthropic-headers.js"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 
 const testPlatformLayer = Layer.succeed(

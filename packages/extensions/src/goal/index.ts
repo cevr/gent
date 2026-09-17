@@ -27,7 +27,6 @@ import {
 } from "./goal-prompts.js"
 
 export { GOAL_EXTENSION_ID, GOAL_CONTEXT_MESSAGE_TYPE, GoalState } from "./goal-protocol.js"
-export { GoalRpc } from "./goal-rpc.js"
 
 // ── Errors ──
 

@@ -1,11 +1,11 @@
-import { Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Predicate, Result, Schema } from "effect"
 import type {
   ExtensionScope,
   GentExtension,
   LoadedExtension,
   ExtensionSetupServices,
 } from "../../domain/extension.js"
-import { ExtensionLoadError } from "../../domain/extension.js"
+import { ExtensionLoadError, isClientFile } from "../../domain/extension.js"
 import { ExtensionHost, makeCollectingExtensionHost } from "../../domain/extension-host.js"
 import { bindRequestCapabilityExtension } from "../../domain/capability/request.js"
 import { ExtensionId } from "../../domain/ids.js"
@@ -17,23 +17,9 @@ import { isProjectExtensionDirectoryTrusted } from "./project-trust.js"
 
 type LoadedUserExtension = GentExtension<ExtensionSetupServices>
 
-interface LoadSuccess {
-  readonly _tag: "Success"
-  readonly extension: LoadedUserExtension
-}
-
-interface LoadFailure {
-  readonly _tag: "Failure"
-  readonly error: string
-}
-
 // Discovery — scan directories for extension files
 
 const EXTENSION_GLOBS = ["*.ts", "*.js", "*.mjs"]
-
-/** TUI extension files — co-located *.client.{tsx,ts,js,mjs} or client.{tsx,ts,js,mjs} in subdirs */
-export const isClientFile = (entry: string): boolean =>
-  /\.client\.(?:[tj]sx?|mjs)$/.test(entry) || /^client\.(?:[tj]sx?|mjs)$/.test(entry)
 
 const isExtensionFile = (entry: string): boolean =>
   !isClientFile(entry) &&
@@ -195,45 +181,37 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
   const loaded: DiscoveredExtension[] = []
   const skipped: SkippedExtension[] = []
 
-  for (const filePath of userPaths) {
-    const result = yield* loadExtensionFile(filePath).pipe(
-      Effect.map((extension) => ({ _tag: "Success", extension }) satisfies LoadSuccess),
-      Effect.catchEager((error) =>
-        Effect.succeed({ _tag: "Failure", error: error.message } satisfies LoadFailure),
-      ),
-    )
-    if (result._tag === "Success") {
-      loaded.push({ extension: result.extension, scope: "user", sourcePath: filePath })
-    } else {
-      skipped.push({ path: filePath, scope: "user", error: result.error })
+  /** Load one scope's files; a broken file is skipped, its siblings still load. */
+  const loadScope = Effect.fn("ExtensionLoader.loadScope")(function* (
+    paths: ReadonlyArray<string>,
+    scope: ExtensionScope,
+  ) {
+    for (const filePath of paths) {
+      const result = yield* loadExtensionFile(filePath).pipe(Effect.result)
+      if (Result.isSuccess(result)) {
+        loaded.push({ extension: result.success, scope, sourcePath: filePath })
+        continue
+      }
+      const error = result.failure.message
+      skipped.push({ path: filePath, scope, error })
       yield* Effect.logWarning("extension.load.skipped").pipe(
-        Effect.annotateLogs({ path: filePath, scope: "user", error: result.error }),
+        Effect.annotateLogs({ path: filePath, scope, error }),
       )
     }
-  }
+  })
 
-  for (const filePath of projectPaths) {
-    if (!projectTrusted) {
-      const error =
-        "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
+  yield* loadScope(userPaths, "user")
+
+  // The trust check guards the whole project scope, so it sits ahead of the loop.
+  if (projectTrusted) {
+    yield* loadScope(projectPaths, "project")
+  } else {
+    const error =
+      "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
+    for (const filePath of projectPaths) {
       skipped.push({ path: filePath, scope: "project", error })
       yield* Effect.logWarning("extension.load.untrusted").pipe(
         Effect.annotateLogs({ path: filePath, error }),
-      )
-      continue
-    }
-    const result = yield* loadExtensionFile(filePath).pipe(
-      Effect.map((extension) => ({ _tag: "Success", extension }) satisfies LoadSuccess),
-      Effect.catchEager((error) =>
-        Effect.succeed({ _tag: "Failure", error: error.message } satisfies LoadFailure),
-      ),
-    )
-    if (result._tag === "Success") {
-      loaded.push({ extension: result.extension, scope: "project", sourcePath: filePath })
-    } else {
-      skipped.push({ path: filePath, scope: "project", error: result.error })
-      yield* Effect.logWarning("extension.load.skipped").pipe(
-        Effect.annotateLogs({ path: filePath, scope: "project", error: result.error }),
       )
     }
   }

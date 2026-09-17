@@ -29,14 +29,7 @@ import {
   type SideTurn,
 } from "./btw-protocol.js"
 
-export {
-  BTW_EXTENSION_ID,
-  SideQuestionInput,
-  SideQuestionOutput,
-  SideQuestionProgress,
-  SideQuestionRun,
-  SideTurn,
-} from "./btw-protocol.js"
+export { SideQuestionProgress } from "./btw-protocol.js"
 
 export class SideQuestionError extends Schema.TaggedError<SideQuestionError>()(
   "SideQuestionError",

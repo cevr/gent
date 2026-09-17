@@ -15,8 +15,6 @@ import { Effect } from "effect"
 import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
 import { AGENTS_VIEW_EXTENSION_ID, AgentsViewRpc } from "./protocol.js"
 
-export * from "./protocol.js"
-
 export const AgentsViewExtension = defineExtension({
   id: AGENTS_VIEW_EXTENSION_ID,
   setup: Effect.gen(function* () {

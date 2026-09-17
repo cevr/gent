@@ -19,7 +19,12 @@ export {
   type QuestionOption,
   QuestionSchema,
 } from "./domain/event.js"
-export { type ExtensionScope, SCOPE_PRECEDENCE } from "./domain/extension.js"
+export {
+  type ExtensionScope,
+  isClientEntrypoint,
+  isClientFile,
+  SCOPE_PRECEDENCE,
+} from "./domain/extension.js"
 export { BranchId, MessageId, SessionId, ToolCallId } from "./domain/ids.js"
 export {
   Branch,

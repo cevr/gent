@@ -12,11 +12,11 @@ import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../helpers/test-preset"
 import {
-  BTW_EXTENSION_ID,
   SIDE_QUESTION_INSTRUCTION,
   SideQuestionProgress,
   sideQuestionPrompt,
 } from "../../src/btw/index.js"
+import { BTW_EXTENSION_ID } from "../../src/btw/btw-protocol.js"
 
 const promptTexts = (options: ProviderOptions): ReadonlyArray<string> =>
   [...Prompt.make(options.prompt).content].flatMap((message) => {

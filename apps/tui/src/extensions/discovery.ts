@@ -9,21 +9,13 @@
  */
 
 import { Effect, FileSystem, Option, Path } from "effect"
+import { isClientEntrypoint, isClientFile } from "@gent/core/protocol"
 import { isProjectExtensionDirectoryTrusted } from "@gent/core-internal/runtime/extensions/project-trust"
 
 export interface DiscoveredTuiExtension {
   readonly filePath: string
   readonly scope: "user" | "project"
 }
-
-/** Match *.client.{tsx,ts,js,jsx,mjs} */
-const CLIENT_FILE_PATTERN = /\.client\.(?:[tj]sx?|mjs)$/
-
-/** Match client.{tsx,ts,js,jsx,mjs} */
-const CLIENT_INDEX_PATTERN = /^client\.(?:[tj]sx?|mjs)$/
-
-const isClientFile = (entry: string): boolean =>
-  CLIENT_FILE_PATTERN.test(entry) || CLIENT_INDEX_PATTERN.test(entry)
 
 const discoverDir = (
   dir: string,
@@ -60,7 +52,7 @@ const discoverDir = (
         // oxlint-disable-next-line no-await-in-loop -- sequential: directory scan recurses through nested scopes
         const subEntries = yield* fs.readDirectory(filePath).pipe(Effect.orElseSucceed(() => []))
         const clientFiles = subEntries
-          .filter((e) => CLIENT_INDEX_PATTERN.test(e))
+          .filter((e) => isClientEntrypoint(e))
           .slice()
           .sort()
         if (clientFiles.length > 1) {

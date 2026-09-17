@@ -73,6 +73,27 @@ export type ExtensionStatusInfo =
 export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 }
 export type ExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
+/**
+ * Whether a discovered file belongs to the client rather than the host.
+ *
+ * The host loader and the TUI discoverer scan the same directories and must
+ * agree on which files each one owns: a file both claim is loaded twice, and a
+ * file neither claims is never loaded. One predicate, read by both.
+ *
+ * Matches `*.client.{ts,tsx,js,jsx,mjs}` and a directory's `client.*` entry.
+ */
+export const isClientFile = (entry: string): boolean =>
+  /\.client\.(?:[tj]sx?|mjs)$/.test(entry) || isClientEntrypoint(entry)
+
+/**
+ * Whether a directory entry is that directory's client entrypoint.
+ *
+ * A directory extension names its client half `client.*`. More than one match
+ * is ambiguous, so the discoverer picks the first by name and says so.
+ */
+export const isClientEntrypoint = (entry: string): boolean =>
+  /^client\.(?:[tj]sx?|mjs)$/.test(entry)
+
 /** Resolution order: scope precedence, then id. Later extensions win service conflicts. */
 export const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,

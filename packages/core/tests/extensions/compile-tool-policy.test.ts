@@ -11,7 +11,7 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { compileToolPolicy } from "../../src/runtime/extensions/registry"
+import { compileToolPolicy } from "../../src/runtime/extensions/tool-policy"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
