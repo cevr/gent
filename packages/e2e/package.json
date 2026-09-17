@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --max-concurrency=1 --timeout=30000 tests/e2e.test.ts tests/server-lifecycle.test.ts"
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --max-concurrency=1 --timeout=120000 tests/e2e.test.ts tests/server-lifecycle.test.ts tests/scrollback.test.ts"
   },
   "dependencies": {
     "@gent/core-internal": "workspace:*",
     "@gent/sdk": "workspace:*"
   },
   "devDependencies": {
+    "@xterm/headless": "^6.0.0",
     "zigpty": "^0.2.1"
   },
   "peerDependencies": {
