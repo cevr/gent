@@ -1246,7 +1246,7 @@ renderer question, not a failed result decode.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/debug/session.ts`: corrected samples.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools/search-sessions.ts`: search result schema.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools/read-session.ts`: extraction result schema.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools.ts`: extraction result schema.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/delegate/delegate-tool.ts`: valid delegate output field.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/search-sessions.tsx`: result decode and match presentation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/read-session.tsx`: extraction summary.

@@ -6,7 +6,7 @@ import { ExtensionHost, defineExtension, tool } from "@gent/core/extensions/api"
 import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent.js"
 import { ChildAgentHandle } from "../../src/delegate/child-agent-tools.js"
 import { DelegateExtension } from "../../src/delegate/delegate-tool.js"
-import { ReadSessionTool } from "../../src/session-tools/read-session.js"
+import { ReadSessionTool } from "../../src/session-tools.js"
 import {
   LoadedArtifactIdentity,
   type LoadedExtension,

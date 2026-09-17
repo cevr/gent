@@ -1,13 +1,11 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   defineResource,
   type GentExtension,
   defineExtension,
-  ExtensionContext,
   ExtensionHost,
   ExtensionId,
-  tool,
 } from "@gent/core/extensions/api"
 import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import { CellExtension } from "./cell/cell-extension.js"
@@ -33,38 +31,9 @@ import { EditTool } from "./fs-tools/edit.js"
 import { GrepTool } from "./fs-tools/grep.js"
 import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
 import { NetworkToolsExtension } from "./network-tools.js"
-import { ReadSessionTool } from "./session-tools/read-session.js"
+import { SessionToolsExtension } from "./session-tools.js"
 import { AskUserTool } from "./interaction-tools/ask-user.js"
 import { PromptTool } from "./interaction-tools/prompt.js"
-
-const NAMING_INSTRUCTION = `
-## Session naming
-Call rename_session with a specific 3-5 word lowercase title once you understand what the user needs. If the conversation topic shifts significantly, rename again.`
-
-const RenameSessionParams = Schema.Struct({
-  name: Schema.String.annotate({
-    description: "Short session title, 3-5 lowercase words describing the current task",
-  }),
-})
-
-const RenameSessionResult = Schema.Struct({
-  renamed: Schema.Boolean,
-  name: Schema.optional(Schema.String),
-})
-
-const RenameSessionTool = tool({
-  id: "rename_session",
-  description:
-    "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",
-  params: RenameSessionParams,
-  output: RenameSessionResult,
-  execute: Effect.fn("RenameSessionTool.execute")(function* (
-    params: typeof RenameSessionParams.Type,
-  ) {
-    const ctx = yield* ExtensionContext
-    return yield* ctx.Session.renameCurrent(params.name)
-  }),
-})
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
@@ -80,20 +49,6 @@ export const FsToolsExtension = defineExtension({
         layer: FileIndexLive({ home: host.home }),
       }),
     )
-  }),
-})
-
-export const SessionToolsExtension = defineExtension({
-  id: "@gent/session-tools",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", ReadSessionTool, RenameSessionTool)
-    yield* host.on("systemPrompt", (input) => {
-      if (input.interactive === false) {
-        return Effect.succeed(input.basePrompt)
-      }
-      return Effect.succeed(input.basePrompt + NAMING_INSTRUCTION)
-    })
   }),
 })
 
@@ -121,6 +76,7 @@ export {
   WakeExtension,
   BtwExtension,
   AgentsViewExtension,
+  SessionToolsExtension,
 }
 
 /**
