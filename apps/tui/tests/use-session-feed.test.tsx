@@ -122,6 +122,10 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
   reasoningLevel: Option.getOrUndefined(Option.none()),
 })
 
+/** The feed reads only which session is active, so the probe supplies only that. */
+const identityOf = (active: () => Session) => () =>
+  Option.some({ sessionId: active().sessionId, branchId: active().branchId })
+
 const isSessionEvent = Predicate.or(
   Predicate.isTagged("turn-ended"),
   Predicate.or(Predicate.isTagged("retrying"), Predicate.isTagged("error")),
@@ -139,7 +143,7 @@ describe("useSessionFeed", () => {
         const [active, setActive] = createSignal(makeSession(sessionId, branchId))
         const runtime = createMockRuntime()
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
@@ -297,7 +301,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
@@ -467,7 +471,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
@@ -554,7 +558,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, 3)),
@@ -704,7 +708,7 @@ describe("useSessionFeed", () => {
         const dispose = createRoot((disposeRoot) => {
           const [active] = createSignal(makeSession(sessionId, branchId))
           const client = {
-            session: active,
+            sessionIdentity: identityOf(active),
             client: createMockClient({
               session: {
                 getSnapshot: () => Effect.succeed(snapshot),
@@ -810,7 +814,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
@@ -902,7 +906,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
@@ -990,7 +994,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
@@ -1079,7 +1083,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
         const client = {
-          session: active,
+          sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
               getSnapshot: () =>

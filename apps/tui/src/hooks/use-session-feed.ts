@@ -96,7 +96,7 @@ interface SessionFeed {
 
 type SessionFeedClient = Pick<
   ClientContextValue,
-  | "session"
+  | "sessionIdentity"
   | "client"
   | "runtime"
   | "log"
@@ -647,11 +647,11 @@ export function useSessionFeed(
 
   // Wait for session to become active before subscribing
   const activeSessionKey = createMemo(
-    (): Option.Option<string> => {
-      const session = Option.fromNullishOr(client.session())
-      if (Option.isNone(session)) return Option.none()
-      return Option.some(`${session.value.sessionId}:${session.value.branchId}`)
-    },
+    (): Option.Option<string> =>
+      Option.map(
+        client.sessionIdentity(),
+        (identity) => `${identity.sessionId}:${identity.branchId}`,
+      ),
     Option.none(),
     { equals: Equal.equals },
   )

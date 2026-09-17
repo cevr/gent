@@ -194,8 +194,9 @@ export const makeClientSessionQuery = <A, Q, K extends SessionKey>(opts: {
 }
 
 export const makeClientSessionResource = <A>(opts: {
-  readonly transport: ClientTransportDefinition
-  readonly lifecycle: ClientLifecycleDefinition
+  /** Only the active identity: the resource asks which session, never what it is called. */
+  readonly transport: Pick<ClientTransportDefinition, "currentSession">
+  readonly lifecycle: Pick<ClientLifecycleDefinition, "addCleanup">
   readonly cast: <B, E>(effect: Effect.Effect<B, E, never>) => void
   readonly label: string
   readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
@@ -269,6 +270,10 @@ export const makeClientSessionResource = <A>(opts: {
       const [state, set] = createSignal<Option.Option<Keyed>>(Option.none())
       getState = state
       setState = set
+      // `currentSession` is the client's identity accessor, so this fires only
+      // when the session or the branch actually moves — never for a rename or
+      // a model change. Blanking on every fire is therefore blanking on every
+      // real move, which is what the pane should draw while the new key loads.
       createEffect(() => {
         const session = Option.fromNullishOr(opts.transport.currentSession())
         setState(Option.none())

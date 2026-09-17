@@ -154,11 +154,29 @@ interface ClientTransportValue {
   applyBufferedSessionEvent: (envelope: EventEnvelope) => void
 }
 
+/**
+ * Which session the shell is on, and nothing else about it.
+ *
+ * A rename or a `/model` change makes a new {@link Session} record carrying the
+ * same ids, so anything that reacts to the record restarts for a change it does
+ * not care about. This is the value that changes only when the shell actually
+ * moves to another session or branch, and every consumer that needs the
+ * identity rather than the record reads it.
+ */
+export interface SessionIdentity {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
 interface ClientSessionValue {
   // Session state (union)
   sessionState: () => SessionState
   // eslint-disable-next-line effect/noNullish -- UI session accessors expose null while no session is active.
   session: () => Session | null
+  /** The active session's ids; a new record with the same ids is the same value. */
+  sessionIdentity: () => Option.Option<SessionIdentity>
+  /** The active session's id alone, for consumers that never read the branch. */
+  activeSessionId: () => Option.Option<SessionId>
   isActive: () => boolean
   isLoading: () => boolean
 
@@ -343,6 +361,28 @@ export function ClientProvider(props: ClientProviderProps) {
   }
   // eslint-disable-next-line effect/noNullish -- UI session accessors use null for inactive state.
   const session = (): Session | null => Option.getOrNull(sessionOption())
+  // The one place the session's identity is derived. Held as a memo with an
+  // equivalence on the ids so a rename or a settings change — both of which
+  // rebuild the record — leaves this value untouched, and the effects keyed on
+  // it keep running.
+  const sessionIdentity = createMemo(
+    () =>
+      Option.map(sessionOption(), (active) => ({
+        sessionId: active.sessionId,
+        branchId: active.branchId,
+      })),
+    Option.none<SessionIdentity>(),
+    {
+      equals: Option.makeEquivalence<SessionIdentity>(
+        (left, right) => left.sessionId === right.sessionId && left.branchId === right.branchId,
+      ),
+    },
+  )
+  const activeSessionId = createMemo(
+    () => Option.map(sessionIdentity(), (identity) => identity.sessionId),
+    Option.none<SessionId>(),
+    { equals: Option.makeEquivalence<SessionId>((left, right) => left === right) },
+  )
   const isActive = () => sessionState().status === "active"
   const isLoading = () => sessionState().status === "creating"
 
@@ -738,6 +778,8 @@ export function ClientProvider(props: ClientProviderProps) {
     // Session state
     sessionState,
     session,
+    sessionIdentity,
+    activeSessionId,
     isActive,
     isLoading,
 

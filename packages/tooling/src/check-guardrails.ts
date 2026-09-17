@@ -8,6 +8,7 @@ import { findAliasTestLayers } from "./core-alias-test-layers"
 import { findUnadmittedChildSessionWriters } from "./core-child-session-depth"
 import { findIdentityEncodes } from "./core-identity-encode"
 import { findProcessRunnerFindings } from "./core-process-runner"
+import { findTuiSessionIdentityReads } from "./tui-session-identity"
 import {
   collectExportFacts,
   findPackageSurfaceFindings,
@@ -87,6 +88,7 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
     ...findUnadmittedChildSessionWriters(file, text),
     ...findIdentityEncodes(file, text),
     ...findProcessRunnerFindings(file, text),
+    ...findTuiSessionIdentityReads(file, text),
   ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
   return [...blanket, ...suppressions, ...sourceOnly]
 }

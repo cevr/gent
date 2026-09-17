@@ -1156,4 +1156,59 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
+  it.live("a renamed session does not refetch the extension slash commands", () =>
+    Effect.gen(function* () {
+      let ctx: Option.Option<ClientContextValue> = Option.none()
+      let slashCommandCalls = 0
+      const client = createMockClient({
+        extension: {
+          listSlashCommands: () =>
+            Effect.sync(() => {
+              slashCommandCalls += 1
+              return []
+            }),
+        },
+      })
+      const runtime = createMockRuntime()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime,
+            initialAgent: AgentName.make("cowork"),
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const clientContext = yield* requireClient(ctx)
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => slashCommandCalls >= 1, "slash commands fetched"),
+      )
+      const before = slashCommandCalls
+      // The extension-contributed rows belong to the session, not to its name.
+      clientContext.switchSession(
+        SessionId.make("session-a"),
+        BranchId.make("branch-a"),
+        "A better name",
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      // gent/no-sleep: allow real-clock gap so a refetch, if one starts, lands before the assertion
+      yield* Effect.sleep("50 millis")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(slashCommandCalls).toBe(before)
+      setup.renderer.destroy()
+    }),
+  )
 })

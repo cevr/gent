@@ -22,7 +22,7 @@ interface UseChildSessionsReturn {
   getChildren: (toolCallId: string) => ChildSessionEntry[]
 }
 
-type ChildSessionClient = Pick<ClientContextValue, "session" | "runtime" | "client">
+type ChildSessionClient = Pick<ClientContextValue, "sessionIdentity" | "runtime" | "client">
 
 export function useChildSessions(client: ChildSessionClient): UseChildSessionsReturn {
   const [store, setStore] = createStore<{ entries: Record<string, ChildSessionEntry> }>({
@@ -70,17 +70,19 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
     )
   }
 
-  // React to session changes
+  // React to session changes. The source is the identity, not the record: a
+  // rename or a model change rebuilds the record, and restarting here would
+  // interrupt the tracker fiber and drop every child row it has projected,
+  // with no refetch behind it.
   createEffect(
     on(
-      () => client.session(),
-      (session) => {
-        const current = Option.fromNullishOr(session)
-        if (Option.isNone(current)) {
+      () => client.sessionIdentity(),
+      (identity) => {
+        if (Option.isNone(identity)) {
           stopAll()
           return
         }
-        startTracking(current.value.sessionId, current.value.branchId)
+        startTracking(identity.value.sessionId, identity.value.branchId)
       },
     ),
   )

@@ -1,6 +1,6 @@
-import { createMemo, createSignal, Show, ErrorBoundary } from "solid-js"
+import { createSignal, Show, ErrorBoundary } from "solid-js"
 import { Option, Schema } from "effect"
-import type { Branch, BranchId, SessionId } from "@gent/core/protocol"
+import type { Branch } from "@gent/core/protocol"
 import { CommandPalette } from "./components/command-palette"
 import { ThemeProvider } from "./theme/index"
 import { CommandProvider } from "./command/context"
@@ -38,21 +38,9 @@ function AppContent(props: AppProps) {
   //
   // The key is the identity, not the session record: a new name or a new model
   // makes a new record, and a mount keyed on the record would tear the whole
-  // session view down for it.
-  const identity = createMemo(
-    () =>
-      Option.map(Option.fromNullishOr(sessionClient.session()), (session) => ({
-        sessionId: session.sessionId,
-        branchId: session.branchId,
-      })),
-    Option.none(),
-    {
-      equals: Option.makeEquivalence<{ sessionId: SessionId; branchId: BranchId }>(
-        (left, right) => left.sessionId === right.sessionId && left.branchId === right.branchId,
-      ),
-    },
-  )
-  const active = () => Option.getOrUndefined(identity())
+  // session view down for it. `sessionIdentity` is the client's one answer to
+  // "which session"; every consumer that does not read the name shares it.
+  const active = () => Option.getOrUndefined(sessionClient.sessionIdentity())
 
   // The boot picker belongs to the first session this process mounts. A later
   // switch is a session the reader already chose, so it docks nothing.

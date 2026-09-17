@@ -145,11 +145,10 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     transport: {
       client: client.client,
       runtime: client.runtime,
-      currentSession: () => {
-        const current = Option.fromNullishOr(client.session())
-        if (Option.isNone(current)) return Option.getOrUndefined(Option.none())
-        return { sessionId: current.value.sessionId, branchId: current.value.branchId }
-      },
+      // The client's identity memo, read straight through: the reference is
+      // stable across a rename, so an effect tracking this accessor stays put
+      // while the session and the branch do.
+      currentSession: () => Option.getOrUndefined(client.sessionIdentity()),
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
     },
@@ -199,8 +198,10 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       .finally(() => setLoading(false))
   })
 
+  // The contributed rows belong to the session, not to its name: track the id
+  // alone so a rename leaves the list up instead of clearing it for a round trip.
   createEffect(() => {
-    const current = Option.fromNullishOr(client.session())
+    const current = client.activeSessionId()
     if (Option.isNone(current)) {
       setServerCommands([])
       return
@@ -213,7 +214,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     })
 
     client.runtime.cast(
-      client.client.extension.listSlashCommands({ sessionId: current.value.sessionId }).pipe(
+      client.client.extension.listSlashCommands({ sessionId: current.value }).pipe(
         Effect.tap((cmds) =>
           Effect.sync(() => {
             if (!active) return
@@ -290,13 +291,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         setOverlayDispatch,
         setSwitchSessionDispatch,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
+        // Widgets key their own signals on these, so they read the identity
+        // memo: a rename must not invalidate a widget's cached state.
         sessionId: () =>
           Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(client.session()), (value) => value.sessionId),
+            Option.map(client.sessionIdentity(), (identity) => identity.sessionId),
           ),
         branchId: () =>
           Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(client.session()), (value) => value.branchId),
+            Option.map(client.sessionIdentity(), (identity) => identity.branchId),
           ),
         clientRuntime,
       }}
