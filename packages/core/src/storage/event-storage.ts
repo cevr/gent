@@ -69,6 +69,43 @@ const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(func
   )
 })
 
+/**
+ * Turn raw event rows into envelopes, dropping rows whose tag no longer
+ * exists. Both replay reads share this: the only difference between them is
+ * which operation a decode failure reports.
+ */
+const rowsToEnvelopes = Effect.fn("EventStorage.rowsToEnvelopes")(function* (
+  rawRows: ReadonlyArray<unknown>,
+  operation: EventDecodeOperation,
+) {
+  const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
+  const envelopes = yield* Effect.forEach(rows, (row) =>
+    Effect.gen(function* () {
+      if (!isKnownEventTag(row.event_tag)) {
+        yield* Effect.logWarning("event.retired-tag-skipped").pipe(
+          Effect.annotateLogs({ event_id: row.id, event_tag: row.event_tag }),
+        )
+        return Option.none<EventEnvelope>()
+      }
+      const decoded = yield* decodePersistedEvent({
+        eventId: row.id,
+        eventJson: row.event_json,
+        operation,
+      })
+      const fields = {
+        id: row.id,
+        event: decoded,
+        createdAt: row.created_at,
+      }
+      if (!Predicate.isNull(row.trace_id)) {
+        Object.assign(fields, { traceId: row.trace_id })
+      }
+      return Option.some(EventEnvelope.make(fields))
+    }),
+  )
+  return Arr.getSomes(envelopes)
+})
+
 interface EventStorageService {
   readonly appendEvent: (
     event: AgentEvent,
@@ -180,32 +217,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                       AND e.id > ${sinceId}
                     ORDER BY e.id ASC`,
             })
-            const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
-            const envelopes = yield* Effect.forEach(rows, (row) =>
-              Effect.gen(function* () {
-                if (!isKnownEventTag(row.event_tag)) {
-                  yield* Effect.logWarning("event.retired-tag-skipped").pipe(
-                    Effect.annotateLogs({ event_id: row.id, event_tag: row.event_tag }),
-                  )
-                  return Option.none<EventEnvelope>()
-                }
-                const decoded = yield* decodePersistedEvent({
-                  eventId: row.id,
-                  eventJson: row.event_json,
-                  operation: "listEvents",
-                })
-                const fields = {
-                  id: row.id,
-                  event: decoded,
-                  createdAt: row.created_at,
-                }
-                if (!Predicate.isNull(row.trace_id)) {
-                  Object.assign(fields, { traceId: row.trace_id })
-                }
-                return Option.some(EventEnvelope.make(fields))
-              }),
-            )
-            return Arr.getSomes(envelopes)
+            return yield* rowsToEnvelopes(rawRows, "listEvents")
           },
           Effect.mapError(mapEventStorageError("Failed to list events")),
         ),
@@ -310,32 +322,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                         AND e.id > ${anchor.id}
                       ORDER BY e.id ASC`,
             })
-            const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
-            const envelopes = yield* Effect.forEach(rows, (row) =>
-              Effect.gen(function* () {
-                if (!isKnownEventTag(row.event_tag)) {
-                  yield* Effect.logWarning("event.retired-tag-skipped").pipe(
-                    Effect.annotateLogs({ event_id: row.id, event_tag: row.event_tag }),
-                  )
-                  return Option.none<EventEnvelope>()
-                }
-                const decoded = yield* decodePersistedEvent({
-                  eventId: row.id,
-                  eventJson: row.event_json,
-                  operation: "listToolResultWindow",
-                })
-                const fields = {
-                  id: row.id,
-                  event: decoded,
-                  createdAt: row.created_at,
-                }
-                if (!Predicate.isNull(row.trace_id)) {
-                  Object.assign(fields, { traceId: row.trace_id })
-                }
-                return Option.some(EventEnvelope.make(fields))
-              }),
-            )
-            return Arr.getSomes(envelopes)
+            return yield* rowsToEnvelopes(rawRows, "listToolResultWindow")
           },
           Effect.mapError(mapEventStorageError("Failed to list tool result window")),
         ),
