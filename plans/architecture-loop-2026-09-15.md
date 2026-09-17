@@ -1508,3 +1508,95 @@ what it knows. A config written by a newer gent therefore loses its unknown
 fields on a downgrade. That is a separate data-loss path from the fallback, it
 needs a policy decision (preserve unknown keys, reject them, or add a versioned
 migration), and it does not belong in the same commit as the write guard.
+
+## The gate runs on bun's parallel workers (2026-09-17)
+
+The gate took 28.5s. The test stage was 22.1s of that, and four packages each
+carried a hand-rolled scheduler: core ran two dedicated lanes beside an
+`xargs -n 2 -P 4` fan-out, extensions ran one process for 81 files, tui batched
+with `xargs -n 10 -P 2`, sdk ran one process.
+
+Bun 1.4 runs test files in worker processes. `--parallel` replaces all four
+schedulers with one flag, and `--isolate` (which it implies) gives each file a
+fresh global.
+
+### The worker count is the whole result
+
+`--parallel` defaults to the core count, and the workspace runner starts every
+package at once. On a twelve-core machine that asks for twelve workers per
+package. Under that load `agent-loop-max-steps` took 5062ms against a 5000ms
+budget, and two cell worker tests failed; the same tests pass in 1070ms alone.
+The failures moved between runs, which is starvation, not coupling.
+
+`--parallel=3` holds the total near the core count. Measured under full
+contention, two repetitions each: `=2` 15911ms, `=3` 14003ms, `=4` 15978ms.
+Seven further repetitions at `=3` produced no failure.
+
+`--no-isolate` is documented as the faster mode. It is much slower here:
+extensions 19366ms against 6823ms, core 15873ms against 5553ms. The suites
+leak handles that serialize the workers, so the fresh-global mode wins.
+
+### Two findings from counsel, both acted on
+
+**Turbo's typecheck cache needs the dependency edge.** Dropping
+`dependsOn: ["^typecheck"]` cut a cold typecheck from 10511ms to 4240ms, and
+the tasks do not need the ordering: nothing uses project references or
+composite builds. The edge is still load-bearing for the _hash_. Without it
+`turbo run typecheck --dry-run=json` reports `dependencies: []` and
+`hashOfInternalDependencies: null` for `@gent/sdk` and `@gent/tui`, so a core
+API change leaves their task hash unchanged and turbo replays an old success.
+The gate would miss a downstream type error. Reverted; the 5.9s stays spent.
+
+**Parallel workers exposed a shared production path.** `LOG_DIR` is
+`/tmp/gent/logs` (`packages/sdk/src/log-paths.ts:13`), the directory a live
+gent writes to. `client-trace-logger.test.ts` removed it recursively to prove
+the scoped logger recreates it, while `inspect-logs.test.ts` wrote fixtures
+into it. One process serialized them. Three workers did not: two failures in
+ten repetitions, in both directions.
+
+Bun's isolation unit is the file, and tests inside one file run in one worker,
+so the two files became `apps/tui/tests/client-logs.test.ts` with every
+assertion carried over. Twenty repetitions produced no failure. The removal
+proof still holds: dropping `ensureLogDir` from `clientTraceLogger` fails both
+client trace logger tests.
+
+### Result
+
+28546ms to 22314ms, `GATE EXIT 0`, 2398 tests passing before and after.
+
+### The floor, and why five seconds is not reachable by scheduling
+
+Each package alone: extensions 10860ms, core 7292ms, tui 7193ms, sdk 4007ms,
+tooling 336ms. A perfect scheduler cannot beat the slowest package, so the test
+stage floors near 10.9s; it measures 14.4s concurrent. The longest parallel
+stage is lint and fmt at 5.9s, of which oxlint is 4.8s.
+
+The cost is real work, not waiting. Three `Effect.sleep` calls remain in the
+gate's tests (`wake-store.test.ts:117` 500ms, `cell-process.test.ts:254` 900ms,
+and one in a file the tui suite excludes), so converting every one of them to
+`TestClock` would return about 1.4s. The rest is process spawns, HTTP servers,
+and SQLite. Reaching five seconds needs the product to do less real I/O under
+test, not a better scheduler.
+
+### Rejected: overlapping the test stage with the others
+
+Running typecheck, lint, build, and test as four concurrent lanes gave 16982ms
+and 17210ms against 22314ms. It also failed one run in two, on
+`cell worker process > runs a compiled worker`, the same starvation signature.
+Three and a half seconds is not worth a gate that fails half the time.
+
+### Open: the cell host cannot promise cross-pipe order
+
+Counsel confirmed a pre-existing defect. The worker writes its end-of-cell
+marker to stdout and stderr with `concurrency: "unbounded"`
+(`packages/extensions/src/cell/main.ts:50`), and the host combines the two
+pipes with `Stream.merge` (`packages/extensions/src/cell/cell-process.ts:184`).
+Merge keeps order inside each stream and cannot keep it between them, yet the
+comment at `cell-process.ts:119` and the assertion at
+`packages/extensions/tests/cell/cell-process.test.ts:65` both promise one
+ordered transcript. Under load the observed output was `via stdout`,
+`from child`, `via stderr`, `value`.
+
+The fix is one pipe for both streams, or one serialized worker output channel.
+It is a product change with its own test, so it is not in this commit. It is
+also what blocks the overlapped gate above.

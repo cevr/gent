@@ -4,6 +4,7 @@
   "globalDependencies": ["tsconfig.json"],
   "tasks": {
     "typecheck": {
+      "dependsOn": ["^typecheck"],
       "inputs": [
         "src/**/*.ts",
         "src/**/*.tsx",
