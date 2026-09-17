@@ -53,14 +53,14 @@ the code proves it.
 
 ## fx survey (vercel-labs/fx), adopt list
 
-| #   | Candidate                                                                        | Status                                                  |
-| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | open                                                    |
-| F2  | Scrollback-ownership invariants on top of F1                                     | open                                                    |
-| F3  | Byte tape (stdout, stdin, resize) with replay                                    | parked: new capability, not a reduction                 |
-| F4  | `MAX_TURN_STEPS` and `maximumModelToolResultChars` on `UserConfig`               | done (steps): `AgentDefinition.maxSteps` + run override |
-| F5  | Palette folded into `SessionOverlayState` (`session.tsx:237` has a second owner) | open                                                    |
-| F6  | Byte cap on the retained TUI feed (`use-session-feed.ts:248,279`)                | open                                                    |
+| #   | Candidate                                                                        | Status                                                                                                                                            |
+| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | open                                                                                                                                              |
+| F2  | Scrollback-ownership invariants on top of F1                                     | open                                                                                                                                              |
+| F3  | Byte tape (stdout, stdin, resize) with replay                                    | parked: new capability, not a reduction                                                                                                           |
+| F4  | `MAX_TURN_STEPS` and `maximumModelToolResultChars` on `UserConfig`               | done (steps): `AgentDefinition.maxSteps` + run override                                                                                           |
+| F5  | Palette folded into `SessionOverlayState` (`session.tsx:237` has a second owner) | rejected: the palette is app-level. `apps/tui/src/app.tsx:54` renders it with no session, so the session overlay cannot own it                    |
+| F6  | Byte cap on the retained TUI feed (`use-session-feed.ts:248,279`)                | rejected: the feed is the source for the resize replay (`requestReplay`); a cap would shorten replayed history, and no growth problem is measured |
 
 Rejected from fx: LLM permission reviewer, static tool table, mutex event
 queue, unbounded steps, whole-log replay, text-blob compaction.
