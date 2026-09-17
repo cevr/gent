@@ -6,19 +6,25 @@ import {
   DEFAULT_AGENT_NAME,
 } from "../../domain/agent.js"
 import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
+import { omitUndefined } from "../../domain/guards.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { type BranchId, InteractionRequestId, type SessionId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { TurnError } from "../../domain/driver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
-import { assistantMessageIdForTurn, Message } from "../../domain/message.js"
+import { Message } from "../../domain/message.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
-import { AgentLoopError, type QueuedTurnItem, type RunningState } from "./agent-loop.state.js"
+import {
+  AgentLoopError,
+  asAgentLoopError,
+  type QueuedTurnItem,
+  type RunningState,
+} from "./agent-loop.state.js"
 import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
@@ -26,8 +32,9 @@ import {
 import {
   continuationMessageIdForTurn,
   finalStepMessageIdForTurn,
+  type StepAddress,
+  stepAddress,
   toolCallsFromMessage,
-  toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
 import {
   type ActiveStreamHandle,
@@ -145,6 +152,16 @@ export const TurnOutcome = Schema.TaggedUnion({
   },
 })
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
+
+/**
+ * A flag a receipt carries only when it happened. A present `false` would read
+ * as a receipt that the turn was not interrupted, which historical receipts
+ * cannot make, so `false` becomes absent instead.
+ */
+const flagWhenTrue = (value: boolean): Option.Option<true> => {
+  if (value) return Option.some(true)
+  return Option.none()
+}
 
 /** What the turn loop does after one step. */
 const StepResult = Schema.TaggedUnion({
@@ -320,104 +337,116 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       )
     })
 
-    const executeTools = Effect.fn("AgentLoop.executeTools")(function* (params: {
-      messageId: RunningState["message"]["id"]
-      step: number
-      toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-      currentTurnAgent: AgentNameType
-      toolBindings: ResolvedTurnContext["toolBindings"]
-      hostToolBindings: ResolvedTurnContext["toolBindings"]
-      recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
-    }) {
-      if (params.toolCalls.length === 0) return
+    /**
+     * Run the step's tool calls and commit their results.
+     *
+     * Answers with the interaction a tool parked on, if one did: a tool that
+     * asks the user is not a failure, so it leaves as a value the step's
+     * policy can match rather than as an error every caller must re-catch.
+     */
+    const executeTools = Effect.fn("AgentLoop.executeTools")(
+      function* (params: {
+        messageId: RunningState["message"]["id"]
+        step: number
+        toolCalls: ReadonlyArray<Prompt.ToolCallPart>
+        currentTurnAgent: AgentNameType
+        toolBindings: ResolvedTurnContext["toolBindings"]
+        hostToolBindings: ResolvedTurnContext["toolBindings"]
+        recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
+      }) {
+        if (params.toolCalls.length === 0) return Option.none<ToolInteractionPending>()
 
-      const toolResultMessageId = toolResultMessageIdForTurn(params.messageId, params.step)
-      const assistantMessageId = assistantMessageIdForTurn(params.messageId, params.step)
-      const resultKey = processLocalReplayResultKey({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        toolResultMessageId,
-      })
-      const existing = yield* messageStorage.getMessage(toolResultMessageId)
-      if (!Predicate.isUndefined(existing)) {
+        const address = stepAddress(params.messageId, params.step)
+        const resultKey = processLocalReplayResultKey({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+        })
+        const existing = yield* messageStorage.getMessage(address.toolResult)
+        if (!Predicate.isUndefined(existing)) {
+          yield* processLocalReplay.removeResults(resultKey)
+          yield* closeTurnStep({ messageId: params.messageId, step: params.step })
+          return Option.none<ToolInteractionPending>()
+        }
+
+        const persistedResults = yield* findPersistedToolResults({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          assistantMessageId: address.assistant,
+          toolCalls: params.toolCalls,
+        }).pipe(
+          Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
+            Effect.gen(function* () {
+              const failureParts = params.toolCalls.map((toolCall) =>
+                Prompt.toolResultPart({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  isFailure: true,
+                  providerExecuted: false,
+                  result: {
+                    error: error.message,
+                    reason: "CorruptResult",
+                  },
+                }),
+              )
+              yield* recordToolOutcome({
+                sessionId: scope.sessionId,
+                branchId: scope.branchId,
+                toolResultMessageId: address.toolResult,
+                assistantMessageId: address.assistant,
+                parts: failureParts,
+              }).pipe(Effect.orDie)
+              return yield* error
+            }),
+          ),
+        )
+        const localResults = yield* processLocalReplay.getResults(resultKey)
+        const knownResults = new Map(localResults)
+        for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
+        for (const [toolCallId, result] of persistedResults) {
+          knownResults.set(toolCallId, result)
+        }
+        const pendingToolCalls = params.toolCalls.filter(
+          (toolCall) => !knownResults.has(toolCall.id),
+        )
+        const executedResults = yield* executeToolCalls({
+          interruption: scope.turnInterruption.awaitInterrupt,
+          hostToolBindings: params.hostToolBindings,
+          assistantMessageId: address.assistant,
+          toolCalls: pendingToolCalls,
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          currentTurnAgent: params.currentTurnAgent,
+          toolBindings: params.toolBindings,
+        }).pipe(
+          Effect.tapError((error) => {
+            if (error.completedResults.length === 0) return Effect.void
+            const partial = new Map(localResults)
+            for (const result of error.completedResults) partial.set(result.id, result)
+            return processLocalReplay.setResults(resultKey, partial)
+          }),
+        )
+        const executedById = new Map(executedResults.map((part) => [part.id, part]))
+        const toolResults = params.toolCalls.flatMap((toolCall) => {
+          const persisted = knownResults.get(toolCall.id)
+          if (Predicate.isNotUndefined(persisted)) return [persisted]
+          const executed = executedById.get(toolCall.id)
+          if (Predicate.isNotUndefined(executed)) return [executed]
+          return []
+        })
+        yield* recordToolOutcome({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+          assistantMessageId: address.assistant,
+          parts: toolResults,
+        })
         yield* processLocalReplay.removeResults(resultKey)
         yield* closeTurnStep({ messageId: params.messageId, step: params.step })
-        return
-      }
-
-      const persistedResults = yield* findPersistedToolResults({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        assistantMessageId,
-        toolCalls: params.toolCalls,
-      }).pipe(
-        Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
-          Effect.gen(function* () {
-            const failureParts = params.toolCalls.map((toolCall) =>
-              Prompt.toolResultPart({
-                id: toolCall.id,
-                name: toolCall.name,
-                isFailure: true,
-                providerExecuted: false,
-                result: {
-                  error: error.message,
-                  reason: "CorruptResult",
-                },
-              }),
-            )
-            yield* recordToolOutcome({
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
-              toolResultMessageId,
-              assistantMessageId,
-              parts: failureParts,
-            }).pipe(Effect.orDie)
-            return yield* error
-          }),
-        ),
-      )
-      const localResults = yield* processLocalReplay.getResults(resultKey)
-      const knownResults = new Map(localResults)
-      for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
-      for (const [toolCallId, result] of persistedResults) {
-        knownResults.set(toolCallId, result)
-      }
-      const pendingToolCalls = params.toolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
-      const executedResults = yield* executeToolCalls({
-        interruption: scope.turnInterruption.awaitInterrupt,
-        hostToolBindings: params.hostToolBindings,
-        assistantMessageId,
-        toolCalls: pendingToolCalls,
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        currentTurnAgent: params.currentTurnAgent,
-        toolBindings: params.toolBindings,
-      }).pipe(
-        Effect.tapError((error) => {
-          if (error.completedResults.length === 0) return Effect.void
-          const partial = new Map(localResults)
-          for (const result of error.completedResults) partial.set(result.id, result)
-          return processLocalReplay.setResults(resultKey, partial)
-        }),
-      )
-      const executedById = new Map(executedResults.map((part) => [part.id, part]))
-      const toolResults = params.toolCalls.flatMap((toolCall) => {
-        const persisted = knownResults.get(toolCall.id)
-        if (Predicate.isNotUndefined(persisted)) return [persisted]
-        const executed = executedById.get(toolCall.id)
-        if (Predicate.isNotUndefined(executed)) return [executed]
-        return []
-      })
-      yield* recordToolOutcome({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        toolResultMessageId,
-        assistantMessageId,
-        parts: toolResults,
-      })
-      yield* processLocalReplay.removeResults(resultKey)
-      yield* closeTurnStep({ messageId: params.messageId, step: params.step })
-    })
+        return Option.none<ToolInteractionPending>()
+      },
+      Effect.catchIf(Schema.is(ToolInteractionPending), (pending) => Effect.succeedSome(pending)),
+    )
 
     const collectTurnStream = Effect.fn("AgentLoop.collectTurnStream")(function* (params: {
       messageId: RunningState["message"]["id"]
@@ -428,7 +457,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       activeStream: ActiveStreamHandle
     }) {
       const persistAssistantPartsLocal = (
-        step: number,
+        at: StepAddress,
         parts: ReadonlyArray<AssistantResponsePart>,
         createdAt?: Date,
       ) =>
@@ -436,20 +465,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           role: "assistant",
           sessionId: scope.sessionId,
           branchId: scope.branchId,
-          messageId: assistantMessageIdForTurn(params.messageId, step),
+          messageId: at.assistant,
           parts,
           createdAt,
         })
 
       const persistAssistantPartsWithBindingsAt = (
-        step: number,
+        at: StepAddress,
         parts: ReadonlyArray<AssistantResponsePart>,
         createdAt?: Date,
       ) =>
         persistAssistantPartsWithBindings({
           sessionId: scope.sessionId,
           branchId: scope.branchId,
-          messageId: assistantMessageIdForTurn(params.messageId, step),
+          messageId: at.assistant,
           parts,
           toolBindings: params.resolved.toolBindings,
           storageTransaction,
@@ -466,7 +495,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                     processLocalReplayBindingKey({
                       sessionId: scope.sessionId,
                       branchId: scope.branchId,
-                      assistantMessageId: assistantMessageIdForTurn(params.messageId, step),
+                      assistantMessageId: at.assistant,
                       toolCallId: part.id,
                     }),
                     { entry },
@@ -478,7 +507,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
 
       const persistToolPartsLocal = (
-        step: number,
+        at: StepAddress,
         parts: ReadonlyArray<ToolResponsePart>,
         createdAt?: Date,
       ) =>
@@ -486,7 +515,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           role: "tool",
           sessionId: scope.sessionId,
           branchId: scope.branchId,
-          messageId: toolResultMessageIdForTurn(params.messageId, step),
+          messageId: at.toolResult,
           parts,
           createdAt,
         })
@@ -512,10 +541,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             )
           }
           nextExternalStep += 1
-          return persistAssistantPartsWithBindingsAt(step, [toolCall]).pipe(
+          const at = stepAddress(params.messageId, step)
+          return persistAssistantPartsWithBindingsAt(at, [toolCall]).pipe(
             Effect.as({
-              assistantMessageId: assistantMessageIdForTurn(params.messageId, step),
-              toolResultMessageId: toolResultMessageIdForTurn(params.messageId, step),
+              assistantMessageId: at.assistant,
+              toolResultMessageId: at.toolResult,
             } satisfies ExternalToolPersistence),
             Effect.orDie,
           )
@@ -576,7 +606,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         collected = yield* source.collect(
           collectExternalTurnResponse({
             messageId: params.messageId,
-            assistantMessageId: assistantMessageIdForTurn(params.messageId, params.step),
+            assistantMessageId: stepAddress(params.messageId, params.step).assistant,
             step: params.step,
             turnStream: source.stream,
             sessionId: scope.sessionId,
@@ -590,6 +620,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const outcome = classifyStep(collected)
       let responseStep = params.step
       if (source.driverKind === "external") responseStep = nextExternalStep
+      // The step whose messages carry this response. An external driver settles
+      // its own tool steps as it goes, so its response lands past `params.step`.
+      const responseAddress = stepAddress(params.messageId, responseStep)
       const assistantParts = collected.messageProjection.assistant
       const toolParts = collected.messageProjection.tool
 
@@ -633,7 +666,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           usage,
           toolCallCount,
         })
-        yield* persistAssistantPartsWithBindingsAt(responseStep, assistantParts)
+        yield* persistAssistantPartsWithBindingsAt(responseAddress, assistantParts)
         const stepToolCalls = assistantParts.filter(
           (part): part is Prompt.ToolCallPart => part.type === "tool-call",
         )
@@ -642,7 +675,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           step: responseStep,
           toolCalls: stepToolCalls,
         })
-        yield* persistToolPartsLocal(responseStep, toolParts)
+        yield* persistToolPartsLocal(responseAddress, toolParts)
         // A step the model answered owns no unsettled call; a tool step is
         // closed by `executeTools` once its results commit.
         if (stepToolCalls.length === 0) {
@@ -657,7 +690,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
        */
       const persistCutStep = (reason: "Interrupted" | "StreamFailed") =>
         Effect.gen(function* () {
-          yield* persistAssistantPartsLocal(responseStep, assistantParts)
+          yield* persistAssistantPartsLocal(responseAddress, assistantParts)
           const settled = new Set(
             toolParts.filter((part) => part.type === "tool-result").map((part) => part.id),
           )
@@ -676,8 +709,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           yield* recordToolOutcome({
             sessionId: scope.sessionId,
             branchId: scope.branchId,
-            toolResultMessageId: toolResultMessageIdForTurn(params.messageId, responseStep),
-            assistantMessageId: assistantMessageIdForTurn(params.messageId, responseStep),
+            toolResultMessageId: responseAddress.toolResult,
+            assistantMessageId: responseAddress.assistant,
             parts: [...toolParts, ...unrun],
           })
           yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
@@ -709,20 +742,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return { collected, outcome }
     })
-
-    const executeToolsWithInteraction = (params: {
-      messageId: RunningState["message"]["id"]
-      step: number
-      toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-      currentTurnAgent: AgentNameType
-      toolBindings: ResolvedTurnContext["toolBindings"]
-      hostToolBindings: ResolvedTurnContext["toolBindings"]
-      recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
-    }) =>
-      executeTools(params).pipe(
-        Effect.as(Option.none<ToolInteractionPending>()),
-        Effect.catchIf(Schema.is(ToolInteractionPending), (pending) => Effect.succeedSome(pending)),
-      )
 
     const interactionOutcome = (pending: ToolInteractionPending, currentTurnAgent: AgentNameType) =>
       StepResult.cases.Interaction.make({
@@ -764,25 +783,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
-          const completionFields = {
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            messageId: params.messageId,
-            durationMs: Number(turnDurationMs),
-            streamFailed: params.streamFailed,
-          }
-          if (params.turnInterrupted) {
-            Object.assign(completionFields, { interrupted: true })
-          }
-          if (params.unanswered) {
-            Object.assign(completionFields, { unanswered: true })
-          }
-          if (metrics.steps > 0 && metrics.usageKnown) {
-            Object.assign(completionFields, {
-              usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
-            })
-          }
-          return yield* eventPublisher.append(TurnCompleted.make(completionFields))
+          // Token totals are a receipt only when every step reported usable
+          // counts; a partial sum would read as the turn's true total.
+          const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
+            inputTokens: metrics.inputTokens,
+            outputTokens: metrics.outputTokens,
+          }))
+          return yield* eventPublisher.append(
+            TurnCompleted.make({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              messageId: params.messageId,
+              durationMs: Number(turnDurationMs),
+              streamFailed: params.streamFailed,
+              ...omitUndefined({
+                interrupted: Option.getOrUndefined(flagWhenTrue(params.turnInterrupted)),
+                unanswered: Option.getOrUndefined(flagWhenTrue(params.unanswered)),
+                usage: Option.getOrUndefined(usage),
+              }),
+            }),
+          )
         }),
       )
       yield* eventPublisher.deliver(envelope)
@@ -812,22 +832,31 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
       }
 
-      const wideEventFields = {
+      const failedWithoutInterrupt = params.streamFailed && !params.turnInterrupted
+      yield* WideEvent.set({
         actor: metrics.agent,
         model: metrics.model,
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
         toolCallCount: metrics.toolCallCount,
         interrupted: params.turnInterrupted,
-      }
-      if (params.streamFailed && !params.turnInterrupted) {
-        Object.assign(wideEventFields, { streamFailed: true })
-      }
-      if (params.unanswered) {
-        Object.assign(wideEventFields, { unanswered: true })
-      }
-      yield* WideEvent.set(wideEventFields)
+        ...omitUndefined({
+          streamFailed: Option.getOrUndefined(flagWhenTrue(failedWithoutInterrupt)),
+          unanswered: Option.getOrUndefined(flagWhenTrue(params.unanswered)),
+        }),
+      })
     })
+
+    /** The turn context for a running turn: agent, prompt, model, and bindings. */
+    const resolveForState = (state: RunningState, turnProfile: AgentLoopTurnProfile) =>
+      resolveTurnContext({
+        agentOverride: state.agentOverride,
+        runSpec: state.runSpec,
+        branchId: scope.branchId,
+        sessionId: scope.sessionId,
+        baseSections: turnProfile.turnBaseSections,
+        interactive: state.interactive,
+      })
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(
       function* (params: {
@@ -846,14 +875,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
         if (dispatching.length === 0) return params.toolBindings
-        const resolved = yield* resolveTurnContext({
-          agentOverride: params.state.agentOverride,
-          runSpec: params.state.runSpec,
-          branchId: scope.branchId,
-          sessionId: scope.sessionId,
-          baseSections: params.turnProfile.turnBaseSections,
-          interactive: params.state.interactive,
-        })
+        const resolved = yield* resolveForState(params.state, params.turnProfile)
         if (Predicate.isUndefined(resolved)) {
           return yield* new AgentLoopError({ message: "Recovery requires a selected agent" })
         }
@@ -891,7 +913,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (record.pendingToolCalls.length > 0) {
         const pendingStep = record.step + 1
         const assistant = yield* messageStorage.getMessage(
-          assistantMessageIdForTurn(messageId, pendingStep),
+          stepAddress(messageId, pendingStep).assistant,
         )
         // A row naming a step whose assistant message is gone is stale: the
         // messages, never the row, decide what actually happened.
@@ -911,7 +933,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // does — otherwise the probe is skipped and the turn re-issues a step
         // whose tool calls are already on disk and will never be answered.
         const nextAssistant = yield* messageStorage.getMessage(
-          assistantMessageIdForTurn(messageId, record.step + 1),
+          stepAddress(messageId, record.step + 1).assistant,
         )
         if (Predicate.isUndefined(nextAssistant)) {
           return { ...noPendingStep, step: record.step }
@@ -924,18 +946,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       let pendingAssistant = Option.none<Message>()
       let pendingToolCalls: ReadonlyArray<Prompt.ToolCallPart> = []
       for (let step = 1; step <= MAX_TURN_STEPS; step++) {
-        const existingAssistant = yield* messageStorage.getMessage(
-          assistantMessageIdForTurn(messageId, step),
-        )
+        const at = stepAddress(messageId, step)
+        const existingAssistant = yield* messageStorage.getMessage(at.assistant)
         if (Predicate.isUndefined(existingAssistant)) break
         const toolCalls = toolCallsFromMessage(existingAssistant)
         if (toolCalls.length === 0) {
           lastCompletedStep = step
           continue
         }
-        const existingResults = yield* messageStorage.getMessage(
-          toolResultMessageIdForTurn(messageId, step),
-        )
+        const existingResults = yield* messageStorage.getMessage(at.toolResult)
         if (Predicate.isUndefined(existingResults)) {
           pendingAssistant = Option.some(existingAssistant)
           pendingToolCalls = toolCalls
@@ -1003,9 +1022,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               })
               .pipe(
                 runAgentLoopTurnProfile(params.turnProfile),
-                Effect.mapError(
-                  (cause) => new AgentLoopError({ message: "Tool call recovery failed", cause }),
-                ),
+                asAgentLoopError("Tool call recovery failed"),
               ),
         })
         if (outcome._tag === "Suspended") {
@@ -1046,7 +1063,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             yield* recordToolOutcome({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
-              toolResultMessageId: toolResultMessageIdForTurn(params.messageId, pendingStep),
+              toolResultMessageId: stepAddress(params.messageId, pendingStep).toolResult,
               assistantMessageId: pendingAssistant.value.id,
               parts,
             }).pipe(Effect.orDie)
@@ -1060,7 +1077,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         nativeToolCalls,
         toolBindings,
       })
-      const interactionSignal = yield* executeToolsWithInteraction({
+      const interactionSignal = yield* executeTools({
         hostToolBindings,
         messageId: params.messageId,
         step: pendingStep,
@@ -1162,14 +1179,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
-      const resolved = yield* resolveTurnContext({
-        agentOverride: params.state.agentOverride,
-        runSpec: params.state.runSpec,
-        branchId: scope.branchId,
-        sessionId: scope.sessionId,
-        baseSections: params.turnProfile.turnBaseSections,
-        interactive: params.state.interactive,
-      })
+      const resolved = yield* resolveForState(params.state, params.turnProfile)
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.
@@ -1267,7 +1277,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
       const runTools = Effect.gen(function* () {
-        const interactionSignal = yield* executeToolsWithInteraction({
+        const interactionSignal = yield* executeTools({
           hostToolBindings: resolved.hostToolBindings,
           messageId: params.state.message.id,
           step: params.step,
@@ -1279,7 +1289,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return interactionOutcome(interactionSignal.value, currentTurnAgent)
         }
         yield* clearProcessLocalReplayBindings(
-          assistantMessageIdForTurn(params.state.message.id, params.step),
+          stepAddress(params.state.message.id, params.step).assistant,
         )
         yield* deliverSteeringAtStepBoundary()
         return proceed
@@ -1333,15 +1343,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           messageId: state.message.id,
         })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: "Cannot read targeted cancellation",
-                cause,
-              }),
-          ),
-        )
+        .pipe(asAgentLoopError("Cannot read targeted cancellation"))
       if (cancelled) yield* scope.turnInterruption.interrupt
 
       const turnProfile = yield* scope.resolveTurnProfile

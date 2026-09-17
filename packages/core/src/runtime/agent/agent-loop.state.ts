@@ -1,4 +1,4 @@
-import { Match, Option, Predicate, Schema } from "effect"
+import { Effect, Match, Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ToolCapability } from "../../domain/capability/tool.js"
 import {
@@ -32,12 +32,30 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
+/**
+ * A storage or transport fault becomes the loop's one caller-facing error at
+ * the call that raised it, keeping what actually went wrong as the cause.
+ * Mirrors `asAgentRunError` in `agent-runner.ts`.
+ */
+export const asAgentLoopError = (message: string) =>
+  Effect.mapError((cause: unknown) => new AgentLoopError({ message, cause }))
+
 // ── Queue ──
 
 const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
   agentOverride: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
+  /**
+   * `false` withholds the tools that ask the user, which a child turn has no
+   * one to answer. Only `false` is read, so absent and `true` mean the same
+   * thing, and only `agent-runner.ts` writes it.
+   *
+   * It stays optional under this name because a queue row on disk may predate
+   * any change: a required field rejects a row whose key is absent, and a
+   * renamed one drops a stored `false` and hands the child the tools it was
+   * denied. Both were measured, not assumed.
+   */
   interactive: Schema.optional(Schema.Boolean),
   /** The admitter asked for a turn even when the branch has no prior history. */
   wake: Schema.optional(Schema.Boolean),
@@ -310,10 +328,8 @@ export type ResolvedTurn = {
 
 // ── Phase-tagged loop state (flat, actor-owned) ──
 //
-// Replaces the `effect-machine` `State()` / `Machine` driver from
-// pre-. The loop is a single fiber + Phase Ref now; this enum is
-// the source of truth for "where is the loop?" while the actor entity is
-// materialized.
+// The loop is one fiber plus this Ref. While the actor entity is
+// materialized, this enum is the source of truth for "where is the loop?".
 
 export const LoopState = Schema.TaggedUnion({
   /** No turn in progress. */
@@ -496,11 +512,9 @@ const runtimeStateFromLoopState = (
 
 // ── Aggregate (single-Ref shape) ──
 //
-// Replaces the stateRef / queueRef / runtimeStateRef projection mirror set
-// with one source of truth. The FSM driver still owns the LoopState
-// transition table; this aggregate is the per-session memory the loop
-// reads/writes through a single SubscriptionRef. `runtimeState` derives
-// from `state` + `queue` at the watchState boundary — never stored.
+// The per-branch memory the loop reads and writes through one
+// SubscriptionRef. `runtimeState` derives from `state` + `queue` at the
+// watchState boundary and is never stored, so the projection cannot lag.
 
 export interface AgentLoopState {
   readonly state: LoopState

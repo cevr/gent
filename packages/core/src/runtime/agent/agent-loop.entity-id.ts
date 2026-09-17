@@ -7,7 +7,7 @@
  *   - Be parseable from `CurrentAddress.entityId` inside the actor handler
  *
  * `SessionId` and `BranchId` are unconstrained branded strings, so a plain
- * `${sessionId}:${branchId}` join collides on `:` (counsel finding C5.4.4.a):
+ * `${sessionId}:${branchId}` join collides on `:`:
  *
  *     encodeRaw("a:", "x")  === "a::x"
  *     encodeRaw("a", ":x")  === "a::x"  // collision
@@ -22,7 +22,7 @@
 import { Effect, Option, Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
-import { AgentLoopError } from "./agent-loop.state.js"
+import { AgentLoopError, asAgentLoopError } from "./agent-loop.state.js"
 
 /** Encode `(workspaceId, sessionId, branchId)` into a unique reversible string. */
 export const entityIdOf = (
@@ -78,13 +78,7 @@ const decodeComponent =
     }).pipe(
       Effect.flatMap((decoded) =>
         Schema.decodeEffect(schema)(decoded).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: `Invalid entity id (${label} schema): ${entityId}`,
-                cause,
-              }),
-          ),
+          asAgentLoopError(`Invalid entity id (${label} schema): ${entityId}`),
         ),
       ),
     )
