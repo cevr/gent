@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
 
-import { AskUserTool } from "../../src/interaction-tools/ask-user.js"
+import { AskUserTool } from "../../src/interaction-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"

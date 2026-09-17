@@ -5,7 +5,6 @@ import {
   type GentExtension,
   defineExtension,
   ExtensionHost,
-  ExtensionId,
 } from "@gent/core/extensions/api"
 import { BuiltinArtifactIdentity } from "./artifact-identity.js"
 import { CellExtension } from "./cell/cell-extension.js"
@@ -32,8 +31,7 @@ import { GrepTool } from "./fs-tools/grep.js"
 import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
 import { NetworkToolsExtension } from "./network-tools.js"
 import { SessionToolsExtension } from "./session-tools.js"
-import { AskUserTool } from "./interaction-tools/ask-user.js"
-import { PromptTool } from "./interaction-tools/prompt.js"
+import { InteractionToolsExtension } from "./interaction-tools.js"
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
@@ -49,16 +47,6 @@ export const FsToolsExtension = defineExtension({
         layer: FileIndexLive({ home: host.home }),
       }),
     )
-  }),
-})
-
-const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
-
-export const InteractionToolsExtension = defineExtension({
-  id: INTERACTION_TOOLS_EXTENSION_ID,
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", AskUserTool, PromptTool)
   }),
 })
 
