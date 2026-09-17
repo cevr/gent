@@ -87,7 +87,8 @@ import {
   turnFailureEpoch,
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
-import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
+import type { ActiveStreamHandle } from "./turn-response.js"
+import { makeTurnLedger } from "./turn-ledger.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
@@ -645,7 +646,7 @@ export const makeAgentLoopBehavior = (
     ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
-    const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
+    const turnLedger = yield* makeTurnLedger
     // A tool holding branch-scoped work exposes how to cancel it. A branch
     // whose tools are all stateless has nothing to cancel.
     const branchWork = Context.getOption(branchContext, BranchToolWork)
@@ -700,7 +701,7 @@ export const makeAgentLoopBehavior = (
       branchId,
       resolveTurnProfile,
       activeStreamRef,
-      turnMetricsRef,
+      turnLedger,
       turnInterruption,
       clearInFlightTurn,
       peekSteeringForStep,

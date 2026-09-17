@@ -34,10 +34,8 @@ import {
   type CollectedTurnResponse,
   collectExternalTurnResponse,
   collectModelTurnResponse,
-  emptyTurnMetrics,
   isObservableModelOutputPart,
   makeActiveStreamHandle,
-  type TurnMetrics,
 } from "./turn-response.js"
 import {
   type AssistantResponsePart,
@@ -70,6 +68,7 @@ import {
 import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { resolveReplayToolBinding } from "./tool-binding-resolution.js"
 import type { TurnInterruption } from "./turn-interruption.js"
+import type { TurnLedger } from "./turn-ledger.js"
 import {
   computeStreamEndedCost,
   type ExternalToolPersistence,
@@ -186,7 +185,7 @@ type AgentLoopTurnExecutionContext = {
   readonly branchId: BranchId
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
-  readonly turnMetricsRef: Ref.Ref<TurnMetrics>
+  readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
@@ -627,26 +626,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             toolCallCount,
           }),
         )
-        const usableCount = (count: number) => Number.isSafeInteger(count) && count >= 0
-        yield* Ref.update(scope.turnMetricsRef, (m) => {
-          const totalInput = m.inputTokens + inputTokens
-          const totalOutput = m.outputTokens + outputTokens
-          return {
-            ...m,
-            agent: params.resolved.currentTurnAgent,
-            model: params.resolved.modelId,
-            inputTokens: totalInput,
-            outputTokens: totalOutput,
-            toolCallCount: m.toolCallCount + toolCallCount,
-            steps: m.steps + 1,
-            usageKnown:
-              m.usageKnown &&
-              Option.isSome(usage) &&
-              usableCount(inputTokens) &&
-              usableCount(outputTokens) &&
-              usableCount(totalInput) &&
-              usableCount(totalOutput),
-          }
+        yield* scope.turnLedger.noteStep({
+          agent: params.resolved.currentTurnAgent,
+          model: params.resolved.modelId,
+          usage,
+          toolCallCount,
         })
         yield* persistAssistantPartsWithBindingsAt(responseStep, assistantParts)
         const stepToolCalls = assistantParts.filter(
@@ -774,7 +758,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
-      const metrics = yield* Ref.get(scope.turnMetricsRef)
+      const metrics = yield* scope.turnLedger.total
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
@@ -1222,11 +1206,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
       }
       if (params.step === 1) {
-        yield* Ref.update(scope.turnMetricsRef, (m) => ({
-          ...m,
-          agent: currentTurnAgent,
-          model: resolved.modelId,
-        }))
+        yield* scope.turnLedger.noteModel({ agent: currentTurnAgent, model: resolved.modelId })
       }
       if (yield* scope.turnInterruption.interrupted) {
         return stop({ interrupted: true })
@@ -1333,7 +1313,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
-      yield* Ref.set(scope.turnMetricsRef, emptyTurnMetrics())
+      yield* scope.turnLedger.beginTurn
       const cancelled = yield* operations
         .isTurnCancelled({
           sessionId: scope.sessionId,
