@@ -1,6 +1,6 @@
 import type { AgentDefinition } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
-import type { Message } from "../../domain/message.js"
+import { assistantMessageIdForTurn, type Message } from "../../domain/message.js"
 import { messagePartsToolCallParts } from "../../domain/message-part-display.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Predicate } from "effect"
@@ -73,6 +73,24 @@ export const buildTurnPromptSections = (
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)
+
+/**
+ * The two message ids one step of a turn owns.
+ *
+ * Both ids are derived from the same `(messageId, step)` pair, so they travel
+ * as one value. A caller that addresses a different step than the one it is
+ * running says so by building a second address, which reads as the difference
+ * it is.
+ */
+export interface StepAddress {
+  readonly assistant: MessageId
+  readonly toolResult: MessageId
+}
+
+export const stepAddress = (messageId: MessageId, step: number): StepAddress => ({
+  assistant: assistantMessageIdForTurn(messageId, step),
+  toolResult: toolResultMessageIdForTurn(messageId, step),
+})
 /** The durable instruction that follows a step whose stream failed after partial output. */
 export const continuationMessageIdForTurn = (messageId: MessageId, step: number): MessageId =>
   MessageId.make(`${messageId}:continuation:${step}`)
