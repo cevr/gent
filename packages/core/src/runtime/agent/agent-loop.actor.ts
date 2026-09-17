@@ -831,12 +831,16 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            if ((yield* handle.inbox.phase)._tag === "WaitingForInteraction") {
+            // One read decides all three cases. The mailbox is unbounded, so a
+            // second read could observe a turn that started in between and take
+            // a branch the first read did not test.
+            const phase = yield* handle.inbox.phase
+            if (phase._tag === "WaitingForInteraction") {
               return yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
             }
             // A reply to a loop that lost its turn (a restart mid-interaction)
             // resumes that turn instead; the interaction is answered inside it.
-            if ((yield* handle.inbox.phase)._tag !== "Idle") return
+            if (phase._tag !== "Idle") return
             const message = yield* handle.incompleteUserTurn
             if (Option.isNone(message)) return
             const baseline = yield* turnFailureBaseline(handle)

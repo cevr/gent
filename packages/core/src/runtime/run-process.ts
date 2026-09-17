@@ -9,7 +9,7 @@ export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessErr
   timedOut: Schema.optional(Schema.Boolean),
 }) {}
 
-interface ProcessResult {
+export interface ProcessResult {
   readonly exitCode: number
   readonly stdout: string
   readonly stderr: string

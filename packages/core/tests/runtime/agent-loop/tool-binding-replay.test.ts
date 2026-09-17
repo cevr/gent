@@ -12,7 +12,7 @@ import {
 } from "../../../src/domain/ids"
 import { Message, dateFromMillis } from "../../../src/domain/message"
 import {
-  makeToolBindingIdentity,
+  ToolBindingIdentity,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
@@ -124,7 +124,7 @@ const makeExtension = (toolCapability: ToolCapability): LoadedExtension => ({
 })
 
 const makeBinding = () =>
-  makeToolBindingIdentity({
+  ToolBindingIdentity.make({
     toolId: ToolId.make("@test/replay-tool"),
     extensionId: ExtensionId.make("@test/replay-extension"),
     source: ToolBindingSource.cases.Static.make({
@@ -160,7 +160,7 @@ describe("tool binding replay", () => {
           expect(resolved.capability).toBe(capability)
           const changed = yield* resolveStoredToolBinding({
             ...address,
-            binding: makeToolBindingIdentity({
+            binding: ToolBindingIdentity.make({
               ...binding,
               source: ToolBindingSource.cases.Static.make({
                 sourceRevision: ToolSourceRevision.make("changed-source"),
@@ -247,7 +247,7 @@ describe("tool binding replay", () => {
             if (Predicate.isUndefined(binding))
               return yield* Effect.die("Expected durable identity")
             if (scenario.changed)
-              binding = makeToolBindingIdentity({
+              binding = ToolBindingIdentity.make({
                 ...binding,
                 source: ToolBindingSource.cases.Static.make({
                   sourceRevision: ToolSourceRevision.make("old-source"),
@@ -327,7 +327,7 @@ describe("tool binding replay", () => {
 
         const retired = yield* resolveStoredToolBinding({
           ...address,
-          binding: makeToolBindingIdentity({
+          binding: ToolBindingIdentity.make({
             ...identity.value,
             source: ToolBindingSource.cases.ProcessLocal.make({
               sourceRevision: ToolSourceRevision.make("process:retired-process"),

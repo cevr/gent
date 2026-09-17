@@ -36,7 +36,7 @@
 
 import { Predicate, Context, Effect, Layer, Ref, Schema } from "effect"
 
-interface GentPlatformOsInfo {
+export interface GentPlatformOsInfo {
   readonly platform: string
   readonly arch: string
   readonly release: string

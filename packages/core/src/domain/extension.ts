@@ -1,7 +1,7 @@
 import type { Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { GentPlatform } from "../runtime/gent-platform.js"
+import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { ToolCapability } from "./capability/tool.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids"
@@ -241,17 +241,9 @@ export type {
   ProviderAuthContribution,
   ProviderAuthorizationResult,
 } from "./driver.js"
-import type { RunProcessOptions } from "../runtime/run-process.js"
+import type { ProcessResult, RunProcessOptions } from "../runtime/run-process.js"
 
 // Extension — the core primitive
-
-interface ExtensionHostOsInfo {
-  readonly platform: string
-  readonly arch: string
-  readonly release: string
-  readonly hostname: string
-  readonly type: string
-}
 
 export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostProcessError>()(
   "ExtensionHostProcessError",
@@ -263,14 +255,8 @@ export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostP
   },
 ) {}
 
-export interface ExtensionHostProcessResult {
-  readonly exitCode: number
-  readonly stdout: string
-  readonly stderr: string
-}
-
 export interface ExtensionHostFacts {
-  readonly osInfo: ExtensionHostOsInfo
+  readonly osInfo: GentPlatformOsInfo
   readonly execPath: string
   readonly homeDirectory: string
   readonly pathListSeparator: string
@@ -284,7 +270,7 @@ export interface ExtensionHostPlatform extends ExtensionHostFacts {
     command: string,
     args: ReadonlyArray<string>,
     options?: RunProcessOptions,
-  ) => Effect.Effect<ExtensionHostProcessResult, ExtensionHostProcessError>
+  ) => Effect.Effect<ProcessResult, ExtensionHostProcessError>
 }
 
 /** Platform services the loader itself runs against. */

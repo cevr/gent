@@ -71,7 +71,7 @@ const configUpdates = {
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
  *     map directly to `record[name] = ref` / `delete record[name]`.
  */
-const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig =>
+const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
   new UserConfig({
     disabledExtensions: nonEmpty([
       ...(user.disabledExtensions ?? []),
@@ -154,9 +154,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // writes refuse: `saveUserConfig` would persist that empty config over
       // the user's file and discard every setting it holds.
       const userLoadFailureRef = yield* Ref.make<Option.Option<ConfigLoadError>>(Option.none())
-
-      const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
-        mergeConfigsImpl(user, project)
 
       const ensureUserConfig = Effect.gen(function* () {
         const exists = yield* fs.exists(userConfigPath)
@@ -330,12 +327,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           get: () =>
             Effect.gen(function* () {
               const user = yield* Ref.get(userConfigRef)
-              return mergeConfigsImpl(user, emptyProjectConfig)
+              return mergeConfigs(user, emptyProjectConfig)
             }),
           getFresh: () =>
             Effect.gen(function* () {
               const user = yield* Ref.get(userConfigRef)
-              return mergeConfigsImpl(user, emptyProjectConfig)
+              return mergeConfigs(user, emptyProjectConfig)
             }),
           setDriverOverride: (agent, driver) =>
             Ref.update(userConfigRef, (current) =>

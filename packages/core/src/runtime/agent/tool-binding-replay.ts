@@ -4,11 +4,10 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import type { LoadedExtension } from "../../domain/extension.js"
 import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import {
-  makeToolBindingIdentity,
+  ToolBindingIdentity,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
-  type ToolBindingIdentity,
 } from "../../domain/tool-binding.js"
 import type { MessageId, ToolCallId, ToolId } from "../../domain/ids.js"
 import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
@@ -79,7 +78,7 @@ export const attachToolBindingIdentity = Effect.fn("ToolBinding.attachIdentity")
   if (Option.isNone(sourceRevision)) return entry
 
   const source = ToolBindingSource.cases.Static.make({ sourceRevision: sourceRevision.value })
-  const binding = makeToolBindingIdentity({
+  const binding = ToolBindingIdentity.make({
     toolId: getToolId(entry.capability),
     extensionId: entry.extensionId,
     source,
@@ -93,7 +92,7 @@ export const processLocalToolBindingIdentity = Effect.fn("ToolBinding.processLoc
   function* (entry: ResolvedToolCapability, generationId: ProcessGenerationId) {
     if (Predicate.isNotUndefined(entry.binding)) return Option.none<ToolBindingIdentity>()
     return Option.some(
-      makeToolBindingIdentity({
+      ToolBindingIdentity.make({
         toolId: getToolId(entry.capability),
         extensionId: entry.extensionId,
         source: ToolBindingSource.cases.ProcessLocal.make({

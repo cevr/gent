@@ -51,7 +51,7 @@ import {
 } from "./server-lock.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { buildServerRoot } from "@gent/core-internal/server/server-root.js"
+import { buildServerRoot, StateLocation } from "@gent/core-internal/server/server-root.js"
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
@@ -370,14 +370,11 @@ const buildOwnedServer = (
           platform: osInfo.platform,
           osVersion: osInfo.release,
           shell: options.shell,
-          dbPath: Option.getOrUndefined(dbPath),
           authDirectory: options.authDirectory,
-          persistenceMode: Match.value(stateSpec).pipe(
-            Match.tagsExhaustive({
-              Memory: (): "memory" => "memory",
-              Sqlite: (): "disk" => "disk",
-            }),
-          ),
+          state: Option.match(dbPath, {
+            onNone: () => StateLocation.cases.Memory.make({}),
+            onSome: (path) => StateLocation.cases.Disk.make({ dbPath: path }),
+          }),
           extensions: options.extensions ?? BuiltinExtensions,
           branchTools: options.branchTools ?? CellBranchTools,
           languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),

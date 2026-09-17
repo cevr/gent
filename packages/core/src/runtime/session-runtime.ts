@@ -69,8 +69,6 @@ export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>
   },
 ) {}
 
-export const SessionRuntimeErrorSchema = SessionRuntimeError
-
 const SessionRuntimeTarget = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,

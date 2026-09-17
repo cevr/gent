@@ -8,7 +8,7 @@ import {
   ToolCallBindingConflictError,
   ToolSchemaRevision,
   ToolSourceRevision,
-  makeToolBindingIdentity,
+  ToolBindingIdentity,
 } from "../../src/domain/tool-binding"
 import {
   BranchId,
@@ -31,7 +31,7 @@ const WORKSPACE_A = WorkspaceId.make("a".repeat(64))
 const WORKSPACE_B = WorkspaceId.make("b".repeat(64))
 
 const makeBinding = (schemaRevision = "schema/1") =>
-  makeToolBindingIdentity({
+  ToolBindingIdentity.make({
     toolId: ToolId.make("@test/tool"),
     extensionId: ExtensionId.make("@test/extension"),
     source: ToolBindingSource.cases.Static.make({
@@ -181,7 +181,7 @@ describe("ToolCallBindingStorage", () => {
         .save(
           saveParams(
             fixture,
-            makeToolBindingIdentity({
+            ToolBindingIdentity.make({
               ...binding,
               toolId: ToolId.make("@test/other-tool"),
             }),

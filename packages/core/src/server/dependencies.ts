@@ -72,19 +72,33 @@ class BootstrapError extends Schema.TaggedError<BootstrapError>()("BootstrapErro
   }
 }
 
+/**
+ * Where a composition root keeps its state. `Disk` names the SQLite file it
+ * writes, so choosing disk persistence and naming the file are one decision.
+ */
+export const StateLocation = Schema.TaggedUnion({
+  Disk: { dbPath: Schema.String },
+  Memory: {},
+})
+export type StateLocation = typeof StateLocation.Type
+
 export interface DependenciesConfig {
   cwd: string
   home: string
   platform: string
   shell?: string
   osVersion?: string
-  dbPath?: string
   /**
    * Directory for the on-disk auth store. One URL-encoded file per
    * provider. Defaults to `${home}/.gent/auth`.
    */
   authDirectory?: string
-  persistenceMode?: "disk" | "memory"
+  /**
+   * Where this deployment keeps its state. `Disk` carries the database file
+   * it writes; the path travels with the mode so no root can pick disk
+   * persistence and leave the location to a default.
+   */
+  state: StateLocation
   disabledExtensions?: ReadonlyArray<string>
   /** Language model layer override. When set, replaces the auth-backed live resolver.
    *  Must be a fully-provided layer (no requirements, no errors). */
@@ -117,17 +131,16 @@ const platformServicesLive = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
-const makeStorageLayer = (config: DependenciesConfig, persistenceMode: "disk" | "memory") => {
+const makeStorageLayer = (config: DependenciesConfig) => {
   const branchTools = config.branchTools
-  if (persistenceMode === "memory")
+  if (config.state._tag === "Memory")
     return SqliteStorage.MemoryWithSql(branchTools.storage, branchTools.migrations)
-  const dbPath = Option.getOrElse(Option.fromUndefinedOr(config.dbPath), () => ".gent/data.db")
-  return SqliteStorage.LiveWithSql(dbPath, branchTools.storage, branchTools.migrations)
+  return SqliteStorage.LiveWithSql(config.state.dbPath, branchTools.storage, branchTools.migrations)
 }
 
-const makeClusterRunnerLayer = (persistenceMode: "disk" | "memory") => {
+const makeClusterRunnerLayer = (state: StateLocation) => {
   let runnerStorage: "memory" | "sql" = "sql"
-  if (persistenceMode === "memory") runnerStorage = "memory"
+  if (state._tag === "Memory") runnerStorage = "memory"
   return SingleRunner.layer({ runnerStorage })
 }
 
@@ -148,13 +161,8 @@ export const createDependencies = (config: DependenciesConfig) => {
     platform: config.platform,
   })
 
-  const persistenceMode: NonNullable<DependenciesConfig["persistenceMode"]> = Option.getOrElse(
-    Option.fromUndefinedOr(config.persistenceMode),
-    () => "disk",
-  )
-
-  const storageLive = makeStorageLayer(config, persistenceMode)
-  const clusterRunnerLive = makeClusterRunnerLayer(persistenceMode)
+  const storageLive = makeStorageLayer(config)
+  const clusterRunnerLive = makeClusterRunnerLayer(config.state)
   // Snapshots and event replay must share a cursor, including in-memory SQLite.
   const baseEventStoreLive = EventStoreLive
 

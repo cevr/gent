@@ -7,8 +7,6 @@ import type { SessionId } from "../domain/ids.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 
-export { ProviderAuthError } from "../domain/driver.js"
-
 const authValue = (auth: Parameters<PersistAuth>[0]): AuthApi | AuthOauth => {
   if (auth.type === "api") return AuthApi.make({ type: "api", key: auth.key })
   return AuthOauth.make({

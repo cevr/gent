@@ -22,7 +22,7 @@ import {
 import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
 import { StorageError } from "@gent/core-internal/domain/storage-error.js"
 import {
-  makeToolBindingIdentity,
+  ToolBindingIdentity,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
@@ -48,7 +48,7 @@ const cell = {
   toolCallId: ToolCallId.make("cell-outer-call"),
 }
 const key = { cell, operationId: "1" }
-const binding = makeToolBindingIdentity({
+const binding = ToolBindingIdentity.make({
   toolId: ToolId.make("write"),
   extensionId: ExtensionId.make("files"),
   source: ToolBindingSource.cases.Static.make({
@@ -117,7 +117,7 @@ it.live("admits an operation once and preserves its original input, binding, and
         yield* storage
           .admit({
             ...params,
-            binding: makeToolBindingIdentity({
+            binding: ToolBindingIdentity.make({
               ...binding,
               schemaRevision: ToolSchemaRevision.make("schema-2"),
             }),

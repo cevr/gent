@@ -46,10 +46,6 @@ const ToolBindingIdentityJson = Schema.fromJsonString(ToolBindingIdentity)
 export const encodeToolBindingIdentity = Schema.encodeEffect(ToolBindingIdentityJson)
 export const decodeToolBindingIdentity = Schema.decodeUnknownEffect(ToolBindingIdentityJson)
 
-/** Build a validated identity. */
-export const makeToolBindingIdentity = (input: ToolBindingIdentity): ToolBindingIdentity =>
-  ToolBindingIdentity.make(input)
-
 /** Key for one assistant tool call binding row. */
 export const ToolCallBindingKey = Schema.Struct({
   assistantMessageId: MessageId,

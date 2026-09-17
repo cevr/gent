@@ -48,7 +48,6 @@ import {
   persistMessageParts,
   persistMessageReceived,
   recordToolOutcome,
-  type ToolResponsePart,
   ToolResultReplayError,
 } from "./turn-persistence.js"
 import { type ResolvedTurnContext, resolveTurnContext } from "./turn-resolve.js"
@@ -446,20 +445,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       resolved: ResolvedTurnContext
       activeStream: ActiveStreamHandle
     }) {
-      const persistAssistantPartsLocal = (
-        at: StepAddress,
-        parts: ReadonlyArray<AssistantResponsePart>,
-        createdAt?: Date,
-      ) =>
-        persistMessageParts({
-          role: "assistant",
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          messageId: at.assistant,
-          parts,
-          createdAt,
-        })
-
       const persistAssistantPartsWithBindingsAt = (
         at: StepAddress,
         parts: ReadonlyArray<AssistantResponsePart>,
@@ -495,20 +480,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             }),
           ),
         )
-
-      const persistToolPartsLocal = (
-        at: StepAddress,
-        parts: ReadonlyArray<ToolResponsePart>,
-        createdAt?: Date,
-      ) =>
-        persistMessageParts({
-          role: "tool",
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          messageId: at.toolResult,
-          parts,
-          createdAt,
-        })
 
       let nextExternalStep = params.step
 
@@ -665,7 +636,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           step: responseStep,
           toolCalls: stepToolCalls,
         })
-        yield* persistToolPartsLocal(responseAddress, toolParts)
+        yield* persistMessageParts({
+          role: "tool",
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          messageId: responseAddress.toolResult,
+          parts: toolParts,
+        })
         // A step the model answered owns no unsettled call; a tool step is
         // closed by `executeTools` once its results commit.
         if (stepToolCalls.length === 0) {
@@ -680,7 +657,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
        */
       const persistCutStep = (reason: "Interrupted" | "StreamFailed") =>
         Effect.gen(function* () {
-          yield* persistAssistantPartsLocal(responseAddress, assistantParts)
+          yield* persistMessageParts({
+            role: "assistant",
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            messageId: responseAddress.assistant,
+            parts: assistantParts,
+          })
           const settled = new Set(
             toolParts.filter((part) => part.type === "tool-result").map((part) => part.id),
           )

@@ -10,12 +10,8 @@ import type {
 import { DEFAULT_AGENT_NAME } from "./agent.js"
 import type { AgentEvent, TurnCompleted } from "./event.js"
 import { causeMessage } from "./guards.js"
-import type {
-  ExtensionHostPlatform,
-  ExtensionHostProcessResult,
-  ExtensionTurnContext,
-} from "./extension.js"
-import type { RunProcessOptions } from "../runtime/run-process.js"
+import type { ExtensionHostPlatform, ExtensionTurnContext } from "./extension.js"
+import type { ProcessResult, RunProcessOptions } from "../runtime/run-process.js"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -184,7 +180,7 @@ export interface ExtensionProcessService {
     command: string,
     args: ReadonlyArray<string>,
     options?: RunProcessOptions,
-  ) => Effect.Effect<ExtensionHostProcessResult, ExtensionServiceError>
+  ) => Effect.Effect<ProcessResult, ExtensionServiceError>
   // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
   readonly parentEnv: Record<string, string | undefined>
 }

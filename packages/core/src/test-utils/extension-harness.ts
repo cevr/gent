@@ -23,7 +23,7 @@ import {
   testExtensionProcess,
   testExtensionState,
 } from "./extension-host-context.js"
-import { createDependencies } from "../server/dependencies.js"
+import { createDependencies, StateLocation } from "../server/dependencies.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,
@@ -59,7 +59,7 @@ export interface ToolTestLayerConfig {
 export const createToolTestLayer = (config: ToolTestLayerConfig) =>
   createDependencies({
     ...testEnvironment,
-    persistenceMode: "memory",
+    state: StateLocation.cases.Memory.make({}),
     languageModelLayerOverride: LanguageModelLayers.debug(),
     extensions: [testAgentsExtension(config.agents, config.tools), ...(config.extensions ?? [])],
     branchTools: config.branchTools ?? noBranchTools,

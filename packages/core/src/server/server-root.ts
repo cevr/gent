@@ -3,6 +3,14 @@ import { Clock, Context, Effect, Layer } from "effect"
 import type { Scope } from "effect"
 import type { FileSystem } from "effect/FileSystem"
 import { createDependencies, type DependenciesConfig } from "./dependencies.js"
+
+/**
+ * A root names where its state lives when it names the root. Re-exported here
+ * so a server entrypoint takes both from `server-root` and never reaches into
+ * the dependency graph directly.
+ */
+export { StateLocation } from "./dependencies.js"
+
 import { ConnectionTracker, type ConnectionTrackerService } from "./connection-tracker.js"
 import { ServerIdentity, type ServerIdentityApi } from "./server-identity.js"
 import { buildServerRoutes } from "./server-routes.js"

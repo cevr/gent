@@ -7,7 +7,7 @@ import { InteractionRequestMismatchError } from "../domain/interaction-request.j
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ProviderError } from "../domain/provider-error.js"
 import { ConfigLoadError } from "../runtime/config-service.js"
-import { SessionRuntimeErrorSchema } from "../runtime/session-runtime.js"
+import { SessionRuntimeError } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/sqlite-storage.js"
 
 export { InvalidStateError, NotFoundError } from "../domain/business-errors.js"
@@ -24,7 +24,7 @@ export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocol
 export const GentRpcError = Schema.Union([
   ConfigLoadError,
   StorageError,
-  SessionRuntimeErrorSchema,
+  SessionRuntimeError,
   ProviderError,
   ProviderAuthError,
   DriverError,

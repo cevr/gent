@@ -26,6 +26,7 @@ import { ExtensionHost } from "../extensions/api.js"
 import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
 import { buildServerRoot } from "../server/server-root.js"
+import { StateLocation } from "../server/dependencies.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import {
@@ -174,10 +175,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     observability: Layer.empty,
     dependencies: {
       ...testEnvironment,
-      persistenceMode: Option.fromUndefinedOr(config.storagePath).pipe(
-        Option.match({ onNone: () => "memory", onSome: () => "disk" }),
-      ),
-      dbPath: config.storagePath,
+      state: Option.match(Option.fromUndefinedOr(config.storagePath), {
+        onNone: () => StateLocation.cases.Memory.make({}),
+        onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
+      }),
       languageModelLayerOverride: config.providerLayer,
       extensions: extensionInputsForConfig(config),
       branchTools: config.branchTools ?? noBranchTools,
