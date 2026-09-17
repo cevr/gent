@@ -8,8 +8,11 @@ import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
 import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-display"
-import { WORKSPACE_ID_HEADER } from "@gent/core-internal/server/workspace-rpc"
-import { workspaceHeadersForCwd, workspaceIdForCwd } from "../src/transport-headers"
+import {
+  WORKSPACE_ID_HEADER,
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+} from "@gent/core-internal/server/workspace-rpc"
 
 describe("sdk client helpers", () => {
   test("extractText extracts text from message parts", () => {

@@ -28,7 +28,7 @@ import {
   type GentServer,
   type GentServerOptions,
 } from "./server.js"
-import { workspaceHeadersForCwd } from "./transport-headers.js"
+import { workspaceHeadersForCwd } from "@gent/core-internal/server/workspace-rpc.js"
 
 // ---------------------------------------------------------------------------
 // Utility functions (unchanged)

@@ -29,17 +29,17 @@ import type { BranchToolFeature } from "@gent/core-internal/runtime/agent/branch
 import type { GentExtension } from "@gent/core/extensions/api"
 import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import { seedDebugSession } from "./debug-session.js"
-import { provideWorkspaceIdHeader } from "@gent/core-internal/server/workspace-rpc.js"
+import {
+  provideWorkspaceIdHeader,
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+  type WorkspaceHeaders,
+} from "@gent/core-internal/server/workspace-rpc.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import type { LanguageModel } from "effect/unstable/ai"
 import { BuildFingerprint } from "./build-fingerprint.js"
 import { GentObservability } from "./logger.js"
 import { GentConnectionError } from "@gent/core/protocol"
-import {
-  workspaceHeadersForCwd,
-  workspaceIdForCwd,
-  type WorkspaceHeaders,
-} from "./transport-headers.js"
 import {
   readServerLock,
   validateServerLockEntry,

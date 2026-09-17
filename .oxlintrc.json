@@ -163,7 +163,7 @@
       }
     },
     {
-      "files": ["packages/sdk/src/server.ts", "packages/sdk/src/transport-headers.ts"],
+      "files": ["packages/sdk/src/server.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
       }
