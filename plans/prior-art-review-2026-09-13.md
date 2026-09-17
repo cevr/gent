@@ -29,10 +29,18 @@ Priorities: effect-native, actor-model, lean core, fully extensible.
 
 ## Where gent stands
 
+> **Corrected 2026-09-16.** The "Loop proper" row originally read 110 lines for
+> pi and 70 for exo. Both were wrong: they measured a single function, not the
+> loop. Measured with `wc -l` at the recorded clone revisions, pi's
+> `packages/agent/src/agent-loop.ts` is 803 lines and exo's real loop is
+> `model-runtime/turn-loop.ts` at 194 (the 162-line `harness.ts` first cited is
+> prompt text that delegates to it). No prior's loop is an order of magnitude
+> smaller than ours. Do not cite the original figures.
+
 | Concept       | gent                                                | opencode v2                                               | pi                                | exo                                 | deepseek                                   | prime                                          |
 | ------------- | --------------------------------------------------- | --------------------------------------------------------- | --------------------------------- | ----------------------------------- | ------------------------------------------ | ---------------------------------------------- |
 | Core LOC      | 27.6k (`packages/core/src`)                         | 61.9k                                                     | ~2.3k loop + 3.5k session         | ~0.7k loop + Rust substrate         | 4.1k spine, 275 pkgs                       | 2.3k loop + 13.3k session                      |
-| Loop proper   | `runtime/agent` 8.2k                                | `runner/llm.ts` 370 + `step.ts` 298                       | 110 lines                         | 70 lines                            | `agent.ts` 619                             | 963                                            |
+| Loop proper   | `runtime/agent` 8,338                               | `runner/llm.ts` 370 + `step.ts` 298                       | `agent-loop.ts` 803               | `turn-loop.ts` 194                  | `agent.ts` 619                             | `agent-loop.ts` 963                            |
 | Concurrency   | encore actor per (ws, session, branch)              | doorbell coordinator + write-ahead claim                  | lanes = actors with durable inbox | file lock per conversation          | durable inbox projection                   | daemon + worker per tree                       |
 | Queued input  | `agent_loop_queues` table                           | `session_inbox` steer/queue, delivery boundaries          | two `PendingMessageQueue`s        | none                                | `agent/inbox/spliced` events               | steer/followUp                                 |
 | Storage       | SQLite, event log + projection, 14 migrations       | SQLite/Drizzle, event + projection same tx, 47 migrations | JSONL tree                        | JSON files, UUIDv7                  | JSONL, immutable generations               | JSONL tree                                     |

@@ -1091,9 +1091,24 @@ exit code from exactly that field — `Deferred.succeed(done, event.unanswered
 **0 having printed nothing**.
 
 This is the same failure `agent-loop-empty-final-step.test.ts` was written to
-prevent, at the other exit from the same loop. The three `MAX_TURN_STEPS` sites
-(`:467` external, `:862` replay scan, `:1273` runaway) had no test between
-them.
+prevent, at the other exit from the same loop.
+
+**Correction to the first draft of this section.** It claimed the three
+`MAX_TURN_STEPS` sites had no test between them. That was wrong, and a later
+check found the receipt: `external-turn.test.ts:541` already drives 201
+`runTool` calls through the external driver and asserts the `:467` guard in
+detail — 200 executions, 200 persisted call/result pairs, the exact message-id
+sequence, and the `External turn exceeded the 200 tool step limit` error. Only
+`:1273`, the model-side runaway, was uncovered. A duplicate test written for
+`:467` before that check was found was deleted rather than committed: it
+asserted a strict subset of the existing one.
+
+The third site, the replay scan at `:862`, needs no test. It walks
+`step = 1..MAX_TURN_STEPS` looking for persisted assistant messages, and every
+writer of those messages is itself bounded — the model path stops at `:1273`,
+the external path fails at `:467`. No turn can persist a step the scan cannot
+reach, so the bound can never truncate a real position. An earlier note in this
+ledger called it a silent truncation; that was wrong too.
 
 The fix sets `unanswered = true` at the runaway break. The receipt now
 distinguishes a turn that gave up from a turn that replied, which is all the
@@ -1109,5 +1124,118 @@ behaviour, but it needs a per-step `toolChoice` seam that `ResolvedTurnContext`
 does not carry (`turn-resolve.ts:251`), and the honest receipt is the
 prerequisite either way. Recorded here so a later pass can take it up knowing
 the seam is the work, not the prompt.
+
+Gate `GATE EXIT 0` on the rift.
+
+## The TUI sweep: two candidates, both refused (2026-09-16)
+
+A sweep of `apps/tui` (23,340 lines, and the hot spot by churn — 73 of the last
+40 commits' file touches) returned two candidates. Both are refused, and the
+receipts are here so a later pass does not re-derive them.
+
+**Candidate — fold pane visibility into `ClientSessionQuery` — refused.** The
+report saw `setOpen(true); refresh(...)` in both docked panes and proposed a
+shared `show()`/`toggle()` that refreshes on open.
+
+The duplication is three lines across two files: `agents-view.client.tsx:632`
+and `thread-view.client.tsx:540`. `setOpen(true)` appears at exactly those two
+sites repo-wide. Against that, the two panes do not share a refresh contract.
+`agents-view` refreshes at six sites (`:265` a poll, `:596` gated on
+`!open()`, `:607`, `:633`, `:649`, `:659` after a delete) and passes a query
+string; `thread-view` refreshes at two (`:528` gated on `open()` — the
+_opposite_ polarity — and `:541`) and takes no argument. A shared opener would
+carry a per-caller query thunk and both polarities, which is more interface
+than the three lines it removes.
+
+It also contradicts the module's own stated contract.
+`client-services.ts:115-119` says the keyed query stops at the load state and
+leaves the schedule to the pane, because a pane refreshes on its own terms.
+Visibility is presentation state, and `agents-view.client.tsx:74-78` already
+records why it lives on the controller: a docked widget is always mounted, so
+nothing else can own whether it shows. Deleting the proposed module puts three
+lines back. That is a pass-through, not a deepening.
+
+**Candidate — one shared staleness guard — refused.** The report found three
+spellings of "may this reply still write?" and proposed unifying them. All
+three exist: a counter in `auth.tsx:86`, a counter in
+`client/context.tsx:449`, and the key comparison in
+`client-services.ts:170-174`. They are not one rule.
+
+`auth.tsx` bumps on _every_ action including cancel (`:380`), and `begin()`
+fuses in `clearSuccess()` (`:96-99`), which interrupts a success-flash fiber.
+A shared guard would have to carry that fiber. `client/context.tsx:460` bumps
+inside `createEffect(on(deps))` where the deps are `[workerEpoch(), sessionId]`
+— and `workerEpoch` is not part of `SessionKey` (`client-services.ts:133` is
+`{sessionId, branchId}`). Folding it in means widening that key for both pane
+consumers (`agents-view.client.tsx:96`, `thread-view.client.tsx:318`), which
+carry no epoch. Each remedy widens a deep shared interface to absorb one
+caller's rule — the same mistake as the `SwitchAgent` case above.
+
+The report's count was also high: `auth.tsx` holds 20 obligations (`begin()`
+×7, `whileCurrent(` ×10, `isCurrent(token)` ×3), not nine. And the third
+counter is not an untested hazard: `widgets-render.test.tsx:277` and `:337`
+already drive it across a reconnect generation change and a session switch.
+
+The file's own doc (`auth.tsx:17-24`) records that a _two_-counter version of
+this rule was the bug, fixed by collapsing to one. Splitting it back out to a
+shared module would re-open that seam from the other side.
+
+Gate `GATE EXIT 0` on the rift.
+
+## The remaining packages: no findings (2026-09-16)
+
+`packages/extensions` (15,828 lines), `packages/sdk`, `packages/tooling`,
+`packages/e2e` and `apps/server` were swept in the same pass. No deepening
+survived the deletion test. The five candidates and why each was refused:
+
+**The two credential stacks.** The largest mass in scope and the likeliest
+duplication. Already factored: `provider-credentials.ts:83`
+(`makeCredentialCache`) owns the TTL, the seed, single-flight refresh, the
+`PendingPersist` write-back and invalidation, and each provider binds only
+`read`/`refresh`/`toPersisted`. `provider-http.ts:84` owns 401 recovery and
+header reconstruction for both. What is left is provider-specific, not copied:
+anthropic's keychain is a source of truth so it supplies `read`
+(`anthropic/credential-service.ts:114`), while openai has no keychain and must
+prefer the rotated refresh token over the bootstrap one
+(`openai/credential-service.ts:123-129`). Collapsing them puts a conditional
+inside the shared module to re-express a difference the hooks already carry.
+
+**The two `transformClient` adapters.** The common third is already in
+`provider-http.ts`; the residue differs in substance — anthropic adds 429/529
+retry and cross-request long-context beta learning
+(`anthropic/keychain-transform.ts:258-305`), openai adds Codex URL and body
+rewriting. A further shared layer returns only the `pipe` skeleton to each
+caller.
+
+**Keyed fiber registries.** Reported as three, verified as two. `WakeAlarms`
+(`wake/index.ts:78-110`) and bash's `BackgroundBashState`
+(`exec-tools/bash.ts:166-169`, built at `:344`) both key a `Fiber` by id in a
+`Ref`. btw's `SideQuestionRuns` (`btw/index.ts:64-89`) is not one — its map
+holds run _values_, it has no cancel, and its `fork` does not key anything.
+The two that are real differ where it counts: bash pairs its map with a
+`Semaphore` gate, a `completed` set and durable SQLite claim/reconcile
+(`exec-tools/bash-storage.ts:152`), wake pairs its with a durable per-branch
+file and re-arm (`wake/index.ts:290`). A shared registry would absorb about
+fifteen lines of `new Map()` bookkeeping and leave the durability contract —
+the actual interface — with each caller.
+
+**Per-branch durable file state.** Already factored:
+`branch-state-store.ts:26` owns missing-file-as-empty, atomic write, and
+lock-serialized read-modify-write; both consumers (`wake/index.ts:39`,
+`goal/goal-store.ts:2`) bind only directory, codec, empty value and error. No
+third hand-rolled variant exists.
+
+**Wake's deferred re-arm.** `rearmPendingAlarms` runs only on the
+`turnProjection` hook (`wake/index.ts:528`), which core invokes from one site
+(`turn-resolve.ts:189`), so a past-due alarm after a restart waits for the
+branch's next turn. Deliberate, documented at `wake/index.ts:526-527`, and
+locked by `wake.test.ts:127`. Not a defect.
+
+`packages/extensions/src/agents-view/` was read and deliberately not reported:
+it is the server half ARCHITECTURE.md already records as Known gap R6.
+
+`apps/server` is clean — `main.ts` reads the environment and delegates every
+composition decision to `Gent.server`. Its `package.json` still has no `test`
+script, so the launch-config decoders correctly live in `packages/sdk/tests/`.
 
 Gate `GATE EXIT 0` on the rift.
