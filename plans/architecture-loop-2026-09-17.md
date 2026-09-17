@@ -141,15 +141,15 @@ startup prompt whose send failed was lost; fixed in the commit after `5fcf2b6a`
 
 ## Pass 4 and pass 5 (closing)
 
-| #          | Candidate                                                                                                    | Status                                                                           |
-| ---------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| G13        | A session rename wiped the child rows, the extension resources and the slash commands (record, not identity) | done `b984180f`: `sessionIdentity()` on the client; guard `tui-session-identity` |
-| H1, H3, H4 | `runtime/extensions/`: dead `isClientFile` export, `registry.ts` with two jobs, two loops one literal apart  | done `08dc0fdf`                                                                  |
-| H2         | Activation branch looked dead                                                                                | rejected: the deletion probe fails 6 tests; it enforces the description rule     |
-| Guard      | A namesake vouched for an export                                                                             | done `ac5ab556`; alias and namespace reads kept alive `2e130837`                 |
-| D1         | `packages/extensions/src/` counted an export's own file as a consumer                                        | done `f15b5204`: 105 names leave the module surface                              |
-| D2         | `gent doctor` and `storage reset` ignored `GENT_DATA_DIR`; three owners for the data directory               | done `7d65a341`: `packages/sdk/src/data-paths.ts`; checked live                  |
-| L14        | Five turn-record read-modify-write pairs                                                                     | done `6530c00e`: `updateTurnRecord`                                              |
+| #          | Candidate                                                                                                    | Status                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| G13        | A session rename wiped the child rows, the extension resources and the slash commands (record, not identity) | done `b984180f`: `sessionIdentity()` on the client; guard `tui-session-identity`       |
+| H1, H3, H4 | `runtime/extensions/`: dead `isClientFile` export, `registry.ts` with two jobs, two loops one literal apart  | done `08dc0fdf`                                                                        |
+| H2         | Activation branch looked dead                                                                                | done `ea8b191a`: `checkToolDescriptions` is the one owner of the tool description rule |
+| Guard      | A namesake vouched for an export                                                                             | done `ac5ab556`; alias and namespace reads kept alive `2e130837`                       |
+| D1         | `packages/extensions/src/` counted an export's own file as a consumer                                        | done `f15b5204`: 105 names leave the module surface                                    |
+| D2         | `gent doctor` and `storage reset` ignored `GENT_DATA_DIR`; three owners for the data directory               | done `7d65a341`: `packages/sdk/src/data-paths.ts`; checked live                        |
+| L14        | Five turn-record read-modify-write pairs                                                                     | done `6530c00e`: `updateTurnRecord`                                                    |
 
 Counsel on pass 4: two defects, both fixed in `2e130837`.
 
