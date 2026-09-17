@@ -10,9 +10,7 @@
 
 import {
   Cause,
-  Clock,
   Context,
-  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -25,7 +23,6 @@ import {
   Scope,
   TxQueue,
   TxSubscriptionRef,
-  type Stream,
   type FileSystem,
   type Path,
 } from "effect"
@@ -47,7 +44,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 import type { StorageError } from "../../domain/storage-error.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
-import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
+import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { EventStorage } from "../../storage/event-storage.js"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import { TurnRecordStorage } from "../../storage/turn-record-storage.js"
@@ -63,31 +60,23 @@ import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { resolveTurnProfile as resolveSessionTurnProfile } from "../session-runtime-context.js"
 import {
-  appendFollowUpQueueState,
-  appendSteeringItem,
   buildIdleState,
-  buildRunningState,
-  canStartTurnNow,
-  clearInFlightQueuedTurn,
-  countQueuedFollowUps,
-  drainVisibleQueueItems,
-  emptyLoopQueueState,
-  projectRuntimeState,
-  queueSnapshotFromQueueState,
-  removeQueuedFollowUp,
-  takeNextQueuedTurn,
-  buildInitialAgentLoopState,
   AgentLoopError,
   asAgentLoopError,
-  type AgentLoopState,
-  type LoopQueueState,
-  type LoopState,
-  type QueuedTurnItem,
   type RunningState,
-  type SessionRuntimeState,
-  turnFailureEpoch,
 } from "./agent-loop.state.js"
-import type { QueueSnapshot } from "../../domain/queue.js"
+import {
+  buildInitialAgentLoopState,
+  makeLoopInbox,
+  turnFailureEpoch,
+  type AgentLoopState,
+  type LoopInbox,
+} from "./loop-inbox.js"
+import {
+  emptyLoopQueueState,
+  type LoopQueueState,
+  type QueuedTurnItem,
+} from "../../domain/queue.js"
 import type { ActiveStreamHandle } from "./turn-response.js"
 import { makeTurnLedger } from "./turn-ledger.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
@@ -95,321 +84,6 @@ import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { makeTurnInterruption } from "./turn-interruption.js"
-
-/**
- * The loop's durable queue: admission, steering, follow-ups, and the
- * checkpoint each transaction persists.
- */
-
-const FOLLOW_UP_QUEUE_MAX = 10
-
-type AgentLoopQueueContext = {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
-  readonly queuePersistenceSemaphore: Semaphore.Semaphore
-  readonly persistenceFailure: Deferred.Deferred<void, AgentLoopError>
-  readonly startedRef: Ref.Ref<boolean>
-}
-
-type AgentLoopQueue = {
-  readonly readState: Effect.Effect<AgentLoopState>
-  readonly stateChanges: Stream.Stream<AgentLoopState>
-  readonly runtimeState: Effect.Effect<SessionRuntimeState>
-  readonly queueSnapshot: Effect.Effect<QueueSnapshot>
-  readonly currentLoopState: Effect.Effect<LoopState>
-  readonly writeInitialQueue: Effect.Effect<void, AgentLoopError>
-  readonly reserveStartOrQueueFollowUp: (
-    item: QueuedTurnItem,
-    options: { readonly queueOnly: boolean },
-  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
-  readonly takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
-  readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
-  readonly clearInFlightTurn: (
-    messageId: QueuedTurnItem["message"]["id"],
-  ) => Effect.Effect<boolean, AgentLoopError>
-  readonly appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
-  /**
-   * The steering items a running turn can deliver at its next step boundary,
-   * left in the queue. Items with an agent override or run spec need their own
-   * turn profile and stay queued for the turn boundary.
-   */
-  readonly peekSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
-  /**
-   * Drop the items a step boundary has written to the transcript. Separate from
-   * the read so the transcript write commits first: a crash between the two
-   * replays the delivery instead of losing input the branch already accepted.
-   */
-  readonly dropSteeringDelivered: (
-    delivered: ReadonlyArray<QueuedTurnItem>,
-  ) => Effect.Effect<void, AgentLoopError>
-  readonly drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
-  /** True when a queued follow-up was removed; false when it was absent or already in flight. */
-  readonly removeFollowUp: (
-    messageId: QueuedTurnItem["message"]["id"],
-  ) => Effect.Effect<boolean, AgentLoopError>
-  readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
-}
-
-const mergeConcurrentLoopMetadata = (
-  base: AgentLoopState,
-  current: AgentLoopState,
-  next: AgentLoopState,
-): AgentLoopState => {
-  if (current.turnFailure === base.turnFailure) return next
-  const merged = { ...next }
-  if (Predicate.isUndefined(current.turnFailure)) {
-    delete merged.turnFailure
-  } else {
-    merged.turnFailure = current.turnFailure
-  }
-  return merged
-}
-
-const makeAgentLoopQueue = (
-  scope: AgentLoopQueueContext,
-): Effect.Effect<AgentLoopQueue, never, AgentLoopQueueStorage> =>
-  Effect.gen(function* () {
-    const queueStorage = yield* AgentLoopQueueStorage
-
-    const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
-      Effect.flatMap(Ref.get(scope.startedRef), (started) => {
-        if (!started) return Effect.void
-        return queueStorage
-          .putQueueState(scope.sessionId, scope.branchId, queue)
-          .pipe(
-            asAgentLoopError(
-              `Failed to persist ${operation} for ${scope.sessionId}/${scope.branchId}`,
-            ),
-          )
-      })
-
-    const recordPersistenceFailure = (error: AgentLoopError) =>
-      Deferred.fail(scope.persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
-
-    const commitQueueTransaction = <A>(
-      operation: string,
-      decide: (state: AgentLoopState) => {
-        readonly value: A
-        readonly next: AgentLoopState
-        readonly persist: boolean
-      },
-    ): Effect.Effect<A, AgentLoopError> =>
-      Effect.gen(function* () {
-        const base = yield* TxSubscriptionRef.get(scope.loopRef)
-        const next = decide(base)
-        const decision = next
-        if (decision.persist) {
-          yield* persistCommittedQueue(decision.next.queue, operation).pipe(
-            Effect.tapError(recordPersistenceFailure),
-          )
-        }
-        yield* TxSubscriptionRef.update(scope.loopRef, (current) =>
-          mergeConcurrentLoopMetadata(base, current, decision.next),
-        )
-        return decision.value
-      }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
-
-    /**
-     * Move the loop to its next phase.
-     *
-     * Storage holds the queue and nothing else, and a phase move never
-     * changes the queue: every caller has already run its
-     * `commitQueueTransaction`, which wrote the row when — and only when —
-     * the queue actually changed. So this is a memory write. Dropping
-     * `startingState` is the point: the reservation this phase consumed is
-     * spent, and it was never durable to begin with.
-     */
-    const moveToPhase = (state: LoopState): Effect.Effect<void> =>
-      TxSubscriptionRef.update(scope.loopRef, (current) => {
-        const next: AgentLoopState = { state, queue: current.queue }
-        if (!Predicate.isUndefined(current.turnFailure)) {
-          return Object.assign(next, { turnFailure: current.turnFailure })
-        }
-        return next
-      }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
-
-    const currentLoopState = TxSubscriptionRef.get(scope.loopRef).pipe(Effect.map((s) => s.state))
-    const readState = TxSubscriptionRef.get(scope.loopRef)
-    const stateChanges = TxSubscriptionRef.changesStream(scope.loopRef)
-    const runtimeState: Effect.Effect<SessionRuntimeState> = readState.pipe(
-      Effect.map(projectRuntimeState),
-    )
-    const queueState = readState.pipe(Effect.map((s) => s.queue))
-    const queueSnapshot: Effect.Effect<QueueSnapshot> = queueState.pipe(
-      Effect.map(queueSnapshotFromQueueState),
-    )
-
-    const reserveStartOrQueueFollowUp = Effect.fn("AgentLoop.reserveStartOrQueueFollowUp")(
-      function* (item: QueuedTurnItem, options: { readonly queueOnly: boolean }) {
-        const startedAtMs = yield* Clock.currentTimeMillis
-        return yield* commitQueueTransaction<Option.Option<RunningState> | AgentLoopError>(
-          "reserved or queued follow-up",
-          (current) => {
-            if (countQueuedFollowUps(current.queue) >= FOLLOW_UP_QUEUE_MAX) {
-              return {
-                value: new AgentLoopError({
-                  message: `Follow-up queue full (max ${FOLLOW_UP_QUEUE_MAX})`,
-                }),
-                next: current,
-                persist: false,
-              }
-            }
-
-            const nextQueue = appendFollowUpQueueState(current.queue, item)
-            if (options.queueOnly) {
-              return {
-                value: Option.none(),
-                next: { ...current, queue: nextQueue },
-                persist: true,
-              }
-            }
-
-            const projectedState = projectRuntimeState(current)
-            if (projectedState._tag !== "Idle" || !canStartTurnNow(current)) {
-              return {
-                value: Option.none(),
-                next: { ...current, queue: nextQueue },
-                persist: true,
-              }
-            }
-
-            const reservedRunningState = buildRunningState(item, { startedAtMs })
-            return {
-              value: Option.some(reservedRunningState),
-              next: { ...current, startingState: reservedRunningState },
-              persist: false,
-            }
-          },
-        ).pipe(
-          Effect.filterOrFail(
-            (value): value is Option.Option<RunningState> => !Schema.is(AgentLoopError)(value),
-            (value) => {
-              if (Schema.is(AgentLoopError)(value)) return value
-              return new AgentLoopError({ message: "Queue transaction returned an invalid value" })
-            },
-          ),
-        )
-      },
-    )
-
-    /**
-     * Write the branch its queue row once the loop is started.
-     *
-     * A branch that has never queued anything has no row, and every later
-     * write is a conditional update inside a queue transaction. This is the
-     * one unconditional write, so a fresh branch has a row from its first
-     * open onward.
-     */
-    const writeInitialQueue = Effect.suspend(
-      Effect.fn("AgentLoop.writeInitialQueue")(function* () {
-        if (!(yield* Ref.get(scope.startedRef))) return
-        const current = yield* TxSubscriptionRef.get(scope.loopRef)
-        yield* persistCommittedQueue(current.queue, "initial queue").pipe(
-          Effect.tapError(recordPersistenceFailure),
-          scope.queuePersistenceSemaphore.withPermits(1),
-        )
-      }),
-    )
-
-    const takeNextQueuedTurnFromState = Effect.fn("AgentLoop.takeNextQueuedTurnFromState")(
-      function* (options: { readonly onlyIfIdle: boolean }) {
-        const queuedCreatedAt = yield* DateTime.nowAsDate
-        return yield* commitQueueTransaction("dequeued turn", (s) => {
-          if (options.onlyIfIdle && !canStartTurnNow(s)) {
-            return { value: Option.none(), next: s, persist: false }
-          }
-          const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
-          return {
-            value: nextItem,
-            next: { ...s, queue },
-            persist: queue !== s.queue,
-          }
-        })
-      },
-    )
-
-    const clearInFlightTurn = Effect.fn("AgentLoop.clearInFlightTurn")(
-      (messageId: QueuedTurnItem["message"]["id"]) =>
-        commitQueueTransaction("cleared in-flight turn", (s) => {
-          const queue = clearInFlightQueuedTurn(s.queue, messageId)
-          return {
-            value: queue !== s.queue,
-            next: { ...s, queue },
-            persist: queue !== s.queue,
-          }
-        }),
-    )
-
-    const appendSteering = Effect.fn("AgentLoop.appendSteering")((item: QueuedTurnItem) =>
-      commitQueueTransaction("queued steering", (s) => ({
-        value: s.state,
-        next: { ...s, queue: appendSteeringItem(s.queue, item) },
-        persist: true,
-      })),
-    )
-
-    const deliverableAtStep = (item: QueuedTurnItem) =>
-      Predicate.isUndefined(item.agentOverride) && Predicate.isUndefined(item.runSpec)
-
-    const peekSteeringForStep = TxSubscriptionRef.get(scope.loopRef).pipe(
-      Effect.map((s) => s.queue.steering.filter(deliverableAtStep)),
-      Effect.withSpan("AgentLoop.peekSteeringForStep"),
-    )
-
-    const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
-      if (delivered.length === 0) return Effect.void
-      const deliveredIds = new Set<string>(delivered.map((item) => item.message.id))
-      return commitQueueTransaction("dropped delivered steering", (s) => {
-        const kept = s.queue.steering.filter((item) => !deliveredIds.has(item.message.id))
-        if (kept.length === s.queue.steering.length) {
-          return { value: void 0, next: s, persist: false }
-        }
-        return {
-          value: void 0,
-          next: { ...s, queue: { ...s.queue, steering: kept } },
-          persist: true,
-        }
-      }).pipe(Effect.withSpan("AgentLoop.dropSteeringDelivered"))
-    }
-
-    const drainQueue = commitQueueTransaction("drained queue", (s) => ({
-      value: queueSnapshotFromQueueState(s.queue),
-      next: { ...s, queue: drainVisibleQueueItems(s.queue) },
-      persist: true,
-    })).pipe(Effect.withSpan("AgentLoop.drainQueue"))
-
-    const removeFollowUp = Effect.fn("AgentLoop.removeFollowUp")(
-      (messageId: QueuedTurnItem["message"]["id"]) =>
-        commitQueueTransaction("removed queued follow-up", (s) => {
-          const queue = removeQueuedFollowUp(s.queue, messageId)
-          return {
-            value: queue !== s.queue,
-            next: { ...s, queue },
-            persist: queue !== s.queue,
-          }
-        }),
-    )
-
-    return {
-      readState,
-      stateChanges,
-      runtimeState,
-      queueSnapshot,
-      currentLoopState,
-      writeInitialQueue,
-      reserveStartOrQueueFollowUp,
-      takeNextQueuedTurnIfIdle: takeNextQueuedTurnFromState({ onlyIfIdle: true }),
-      takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),
-      clearInFlightTurn,
-      appendSteering,
-      peekSteeringForStep,
-      dropSteeringDelivered,
-      drainQueue,
-      removeFollowUp,
-      moveToPhase,
-    }
-  })
 
 type AgentLoopRuntimeServices =
   | SessionStorage
@@ -440,22 +114,22 @@ const provideAgentLoopRuntimeContext =
 
 export type AgentLoopBehavior = {
   persistenceFailure: Effect.Effect<void, AgentLoopError>
-  readState: Effect.Effect<AgentLoopState>
+  /**
+   * Everything this branch has accepted and not yet answered. The behavior
+   * does not restate the inbox's verbs: a caller that wants to admit, steer,
+   * withdraw or read the queue asks the inbox itself.
+   */
+  inbox: LoopInbox
   /** The newest user message whose turn never completed; what a reopened loop resumes. */
   incompleteUserTurn: Effect.Effect<Option.Option<Message>>
   /** Whether this session has ever written to the branch; a cold loop with history wakes. */
   hasPriorHistory: Effect.Effect<boolean>
-  stateChanges: Stream.Stream<AgentLoopState>
-  runtimeState: Effect.Effect<SessionRuntimeState>
-  queueSnapshot: Effect.Effect<QueueSnapshot>
-  reserveStartOrQueueFollowUp: (
-    item: QueuedTurnItem,
-    options: { readonly queueOnly: boolean },
-  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
-  takeNextQueuedTurnIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
-  appendSteering: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
-  drainQueue: Effect.Effect<QueueSnapshot, AgentLoopError>
-  removeFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  /**
+   * Withdraw a follow-up the loop may already have admitted. The inbox alone
+   * cannot answer this: an item the worker has claimed has left the queue, so
+   * the withdrawal has to reach the admission gate as well.
+   */
+  withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
@@ -464,9 +138,6 @@ export type AgentLoopBehavior = {
    * context, or a branch Resource resolves as "Service not found".
    */
   branchContext: Context.Context<never>
-  writeInitialQueue: Effect.Effect<void, AgentLoopError>
-  /** Read the current loop state. */
-  snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
@@ -647,7 +318,7 @@ export const makeAgentLoopBehavior = (
     const closed = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
-    const queue = yield* makeAgentLoopQueue({
+    const inbox = yield* makeLoopInbox({
       sessionId,
       branchId,
       loopRef,
@@ -665,25 +336,6 @@ export const makeAgentLoopBehavior = (
         },
       }))
 
-    const {
-      readState,
-      stateChanges,
-      runtimeState,
-      queueSnapshot,
-      currentLoopState,
-      writeInitialQueue,
-      reserveStartOrQueueFollowUp,
-      takeNextQueuedTurnIfIdle,
-      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
-      clearInFlightTurn,
-      appendSteering,
-      peekSteeringForStep,
-      dropSteeringDelivered,
-      drainQueue,
-      removeFollowUp,
-      moveToPhase,
-    } = queue
-
     const { runTurn } = yield* makeAgentLoopTurnExecution({
       sessionId,
       branchId,
@@ -691,9 +343,7 @@ export const makeAgentLoopBehavior = (
       activeStreamRef,
       turnLedger,
       turnInterruption,
-      clearInFlightTurn,
-      peekSteeringForStep,
-      dropSteeringDelivered,
+      inbox,
     })
 
     const worker = makeAgentLoopWorker({
@@ -708,10 +358,7 @@ export const makeAgentLoopBehavior = (
         onNone: () => Effect.void,
         onSome: (work) => work.cancel,
       }),
-      currentLoopState,
-      moveToPhase,
-      takeNextQueuedTurn: takeNextQueuedTurnCommitted,
-      clearInFlightTurn,
+      inbox,
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
       publishEvent,
@@ -782,18 +429,11 @@ export const makeAgentLoopBehavior = (
 
     return {
       persistenceFailure: Deferred.await(persistenceFailure),
-      readState,
+      inbox,
       incompleteUserTurn,
       hasPriorHistory,
-      stateChanges,
-      runtimeState,
-      queueSnapshot,
-      reserveStartOrQueueFollowUp,
-      takeNextQueuedTurnIfIdle,
-      appendSteering,
-      drainQueue,
-      removeFollowUp: (messageId) =>
-        removeFollowUp(messageId).pipe(
+      withdrawFollowUp: (messageId) =>
+        inbox.withdraw(messageId).pipe(
           Effect.flatMap((removed) => {
             if (removed) return Effect.succeed(true)
             return worker.withdrawAdmittedTurn(messageId)
@@ -801,8 +441,6 @@ export const makeAgentLoopBehavior = (
         ),
       resolveTurnProfile,
       branchContext,
-      writeInitialQueue,
-      snapshot: currentLoopState,
       startTurn: worker.startTurn,
       interrupt: worker.interrupt,
       respondInteraction: worker.respondInteraction,

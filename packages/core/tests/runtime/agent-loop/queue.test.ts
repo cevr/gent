@@ -1,7 +1,19 @@
 import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Predicate, Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import {
+  Predicate,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+  TxSubscriptionRef,
+} from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -36,18 +48,22 @@ import {
   waitForPhase,
 } from "./helpers"
 import { MessageStorage } from "../../../src/storage/message-storage"
+import { buildIdleState, buildRunningState } from "../../../src/runtime/agent/agent-loop.state"
 import {
-  appendFollowUpQueueState,
-  buildIdleState,
   buildInitialAgentLoopState,
-  buildRunningState,
   canStartTurnNow,
+  makeLoopInbox,
+  wantsWakeOnRecovery,
+  type AgentLoopState,
+} from "../../../src/runtime/agent/loop-inbox"
+import {
   emptyLoopQueueState,
   LoopQueueState,
-  queueRequestsWake,
   type LoopQueueState as LoopQueueStateType,
-} from "../../../src/runtime/agent/agent-loop.state"
+  type QueuedTurnItem,
+} from "../../../src/domain/queue"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
+import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { StorageError } from "../../../src/domain/storage-error"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { noBranchTools } from "../../../src/runtime/agent/branch-tool-feature"
@@ -92,47 +108,96 @@ describe("turn admission", () => {
 })
 
 describe("wake admission", () => {
+  const wakeSessionId = SessionId.make("wake-session")
+  const wakeBranchId = BranchId.make("wake-branch")
   const queuedMessage = (id: string, text: string) =>
     Message.cases.regular.make({
       id: MessageId.make(id),
-      sessionId: SessionId.make("wake-session"),
-      branchId: BranchId.make("wake-branch"),
+      sessionId: wakeSessionId,
+      branchId: wakeBranchId,
       role: "user",
       parts: [Prompt.textPart({ text })],
       createdAt: dateFromMillis(1_767_225_600_000),
     })
 
-  test("a batched follow-up keeps the wake request and the queue reports it", () => {
-    const quiet = appendFollowUpQueueState(emptyLoopQueueState(), {
-      message: queuedMessage("wake-a", "first"),
+  /**
+   * Batching and keying are the inbox's, so they are exercised through
+   * `admit`. The inbox runs over a memory queue row: the durable write is
+   * covered by the drain and recovery suites below.
+   */
+  const withInbox = <A>(
+    body: (inbox: {
+      readonly admit: (item: QueuedTurnItem) => Effect.Effect<unknown, AgentLoopError>
+      readonly queue: Effect.Effect<LoopQueueStateType>
+    }) => Effect.Effect<A, AgentLoopError>,
+  ) =>
+    Effect.gen(function* () {
+      const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
+        buildInitialAgentLoopState({
+          state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
+        }),
+      )
+      const rows = yield* Ref.make(emptyLoopQueueState())
+      const inbox = yield* makeLoopInbox({
+        sessionId: wakeSessionId,
+        branchId: wakeBranchId,
+        loopRef,
+        queuePersistenceSemaphore: yield* Semaphore.make(1),
+        persistenceFailure: yield* Deferred.make<void, AgentLoopError>(),
+        startedRef: yield* Ref.make(true),
+      }).pipe(
+        Effect.provideService(AgentLoopQueueStorage, {
+          getQueueState: () => Ref.get(rows),
+          putQueueState: (_s, _b, queue) => Ref.set(rows, queue),
+        }),
+      )
+      return yield* body({
+        admit: (item) => inbox.admit(item, { queueOnly: true }),
+        queue: TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue)),
+      })
     })
-    expect(queueRequestsWake(quiet)).toBe(false)
-    const woken = appendFollowUpQueueState(quiet, {
-      message: queuedMessage("wake-b", "second"),
-      wake: true,
-    })
-    expect(woken.followUp).toHaveLength(1)
-    expect(woken.followUp[0]?.wake).toBe(true)
-    expect(queueRequestsWake(woken)).toBe(true)
-  })
 
-  test("a source-keyed follow-up is never merged into its neighbour; re-admission replaces it", () => {
-    const plain = appendFollowUpQueueState(emptyLoopQueueState(), {
-      message: queuedMessage("user-a", "first"),
-    })
-    const keyed = appendFollowUpQueueState(plain, {
-      message: queuedMessage("follow-up:w:s:b:child-1", "child done"),
-      keyed: true,
-    })
-    expect(keyed.followUp.map((item) => String(item.message.id))).toEqual([
-      "user-a",
-      "follow-up:w:s:b:child-1",
-    ])
-    const again = appendFollowUpQueueState(keyed, {
-      message: queuedMessage("follow-up:w:s:b:child-1", "child done (retry)"),
-      keyed: true,
-    })
-    expect(again.followUp).toHaveLength(2)
+  it.effect("a batched follow-up keeps the wake request and the queue reports it", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("wake-a", "first") })
+        expect(wantsWakeOnRecovery(yield* inbox.queue)).toEqual(
+          Option.some({ unconditional: false }),
+        )
+        yield* inbox.admit({ message: queuedMessage("wake-b", "second"), wake: true })
+        const woken = yield* inbox.queue
+        expect(woken.followUp).toHaveLength(1)
+        expect(woken.followUp[0]?.wake).toBe(true)
+        expect(wantsWakeOnRecovery(woken)).toEqual(Option.some({ unconditional: true }))
+      }),
+    ),
+  )
+
+  it.effect(
+    "a source-keyed follow-up is never merged into its neighbour; re-admission replaces it",
+    () =>
+      withInbox((inbox) =>
+        Effect.gen(function* () {
+          yield* inbox.admit({ message: queuedMessage("user-a", "first") })
+          yield* inbox.admit({
+            message: queuedMessage("follow-up:w:s:b:child-1", "child done"),
+            keyed: true,
+          })
+          expect((yield* inbox.queue).followUp.map((item) => String(item.message.id))).toEqual([
+            "user-a",
+            "follow-up:w:s:b:child-1",
+          ])
+          yield* inbox.admit({
+            message: queuedMessage("follow-up:w:s:b:child-1", "child done (retry)"),
+            keyed: true,
+          })
+          expect((yield* inbox.queue).followUp).toHaveLength(2)
+        }),
+      ),
+  )
+
+  test("a recovered queue with nothing in it never wakes", () => {
+    expect(wantsWakeOnRecovery(emptyLoopQueueState())).toEqual(Option.none())
   })
 })
 

@@ -1,10 +1,8 @@
-import { Effect, Match, Option, Predicate, Schema } from "effect"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { Effect, Option, Predicate, Schema } from "effect"
 import type { ToolCapability } from "../../domain/capability/tool.js"
 import {
   AgentName,
   RunSpecSchema,
-  DEFAULT_AGENT_NAME,
   type AgentDefinition as AgentDefinitionType,
   type DriverRef,
   type EffectiveModelDriver,
@@ -13,14 +11,8 @@ import {
 } from "../../domain/agent.js"
 import type { AgentEvent } from "../../domain/event.js"
 import { Message } from "../../domain/message.js"
-import { messagePartsTextLines, messageSingleText } from "../../domain/message-part-display.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
-import {
-  FollowUpQueueEntryInfo,
-  QueueSnapshot,
-  SteeringQueueEntryInfo,
-  type QueueEntryInfo,
-} from "../../domain/queue.js"
+import { QueueSnapshot } from "../../domain/queue.js"
 import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
@@ -39,266 +31,6 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
  */
 export const asAgentLoopError = (message: string) =>
   Effect.mapError((cause: unknown) => new AgentLoopError({ message, cause }))
-
-// ── Queue ──
-
-const QueuedTurnItemSchema = Schema.Struct({
-  message: Message,
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  /**
-   * `false` withholds the tools that ask the user, which a child turn has no
-   * one to answer. Only `false` is read, so absent and `true` mean the same
-   * thing, and only `agent-runner.ts` writes it.
-   *
-   * It stays optional under this name because a queue row on disk may predate
-   * any change: a required field rejects a row whose key is absent, and a
-   * renamed one drops a stored `false` and hands the child the tools it was
-   * denied. Both were measured, not assumed.
-   */
-  interactive: Schema.optional(Schema.Boolean),
-  /** The admitter asked for a turn even when the branch has no prior history. */
-  wake: Schema.optional(Schema.Boolean),
-  /**
-   * The message id is a durable source key (`followUpMessageIdForSource`), so
-   * re-admission replaces this item by id and it is never merged into a
-   * neighbour; merging would lose the identity the key exists for.
-   */
-  keyed: Schema.optional(Schema.Boolean),
-})
-export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
-
-/** True when any admitted item carries an explicit wake request. */
-export const queueRequestsWake = (queue: LoopQueueState): boolean =>
-  queue.followUp.some((item) => item.wake === true) ||
-  queue.steering.some((item) => item.wake === true) ||
-  queue.inFlight?.wake === true
-
-export const LoopQueueState = Schema.Struct({
-  steering: Schema.Array(QueuedTurnItemSchema),
-  followUp: Schema.Array(QueuedTurnItemSchema),
-  inFlight: Schema.optional(QueuedTurnItemSchema),
-})
-export type LoopQueueState = typeof LoopQueueState.Type
-
-const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
-  if (
-    !Predicate.isUndefined(existing.agentOverride) ||
-    !Predicate.isUndefined(incoming.agentOverride)
-  )
-    return false
-  if (!Predicate.isUndefined(existing.runSpec) || !Predicate.isUndefined(incoming.runSpec)) {
-    return false
-  }
-  if (!Predicate.isUndefined(existing.interactive) || !Predicate.isUndefined(incoming.interactive))
-    return false
-  if (existing.message.role !== "user" || incoming.message.role !== "user") return false
-  if (existing.message._tag === "interjection" || incoming.message._tag === "interjection") {
-    return false
-  }
-  return (
-    !Predicate.isUndefined(messageSingleText(existing.message.parts)) &&
-    !Predicate.isUndefined(messageSingleText(incoming.message.parts))
-  )
-}
-
-const mergeQueuedFollowUp = (
-  existing: QueuedTurnItem,
-  incoming: QueuedTurnItem,
-): QueuedTurnItem => {
-  const existingText = Option.fromUndefinedOr(messageSingleText(existing.message.parts))
-  const incomingText = Option.fromUndefinedOr(messageSingleText(incoming.message.parts))
-  if (Option.isNone(existingText) || Option.isNone(incomingText)) return incoming
-
-  const merged: QueuedTurnItem = {
-    ...existing,
-    message: Message.cases.regular.make({
-      id: existing.message.id,
-      sessionId: existing.message.sessionId,
-      branchId: existing.message.branchId,
-      role: existing.message.role,
-      parts: [Prompt.textPart({ text: `${existingText.value}\n${incomingText.value}` })],
-      createdAt: existing.message.createdAt,
-      turnDurationMs: existing.message.turnDurationMs,
-      metadata: existing.message.metadata,
-    }),
-  }
-  if (incoming.wake === true) return { ...merged, wake: true }
-  return merged
-}
-
-const appendFollowUpItem = (
-  queue: ReadonlyArray<QueuedTurnItem>,
-  item: QueuedTurnItem,
-): QueuedTurnItem[] => {
-  const existingIndex = queue.findIndex((queued) => queued.message.id === item.message.id)
-  if (existingIndex >= 0) {
-    return queue.map((queued, index) => {
-      if (index === existingIndex) {
-        return item
-      }
-      return queued
-    })
-  }
-
-  if (item.keyed === true) return [...queue, item]
-
-  const last = queue[queue.length - 1]
-  if (Predicate.isUndefined(last) || !canBatchQueuedFollowUp(last, item)) {
-    return [...queue, item]
-  }
-  return [...queue.slice(0, -1), mergeQueuedFollowUp(last, item)]
-}
-
-const toQueueEntry = (
-  tag: "Steering" | "FollowUp",
-  item: QueuedTurnItem,
-): Option.Option<QueueEntryInfo> => {
-  const content = messagePartsTextLines(item.message.parts).join("\n")
-  if (content === "") return Option.none()
-  const fields = {
-    id: item.message.id,
-    content,
-    createdAt: item.message.createdAt.getTime(),
-  }
-  if (!Predicate.isUndefined(item.agentOverride)) {
-    Object.assign(fields, { agentOverride: item.agentOverride })
-  }
-  if (tag === "Steering") {
-    return Option.some(SteeringQueueEntryInfo.make(fields))
-  }
-  return Option.some(FollowUpQueueEntryInfo.make(fields))
-}
-
-const toQueueSnapshot = (
-  steeringItems: ReadonlyArray<QueuedTurnItem>,
-  followUpItems: ReadonlyArray<QueuedTurnItem>,
-): QueueSnapshot =>
-  new QueueSnapshot({
-    steering: steeringItems.flatMap((item) =>
-      Option.match(toQueueEntry("Steering", item), {
-        onNone: () => [],
-        onSome: (entry) => [entry],
-      }),
-    ),
-    followUp: followUpItems.flatMap((item) =>
-      Option.match(toQueueEntry("FollowUp", item), {
-        onNone: () => [],
-        onSome: (entry) => [entry],
-      }),
-    ),
-  })
-
-export const emptyLoopQueueState = (): LoopQueueState => ({
-  steering: [],
-  followUp: [],
-})
-
-export const drainVisibleQueueItems = (queue: LoopQueueState): LoopQueueState => ({
-  steering: [],
-  followUp: [],
-  inFlight: queue.inFlight,
-})
-
-/** Drops one queued follow-up. An in-flight item is already a turn and stays. */
-export const removeQueuedFollowUp = (
-  queue: LoopQueueState,
-  messageId: QueuedTurnItem["message"]["id"],
-): LoopQueueState => {
-  const followUp = queue.followUp.filter((item) => item.message.id !== messageId)
-  if (followUp.length === queue.followUp.length) return queue
-  return { ...queue, followUp }
-}
-
-export const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => {
-  const inFlight = Option.fromUndefinedOr(queue.inFlight)
-  if (
-    (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) ||
-    queue.steering.some((existing) => existing.message.id === item.message.id)
-  ) {
-    return queue
-  }
-  return {
-    ...queue,
-    steering: [...queue.steering, item],
-  }
-}
-
-export const appendFollowUpQueueState = (
-  queue: LoopQueueState,
-  item: QueuedTurnItem,
-): LoopQueueState => {
-  const inFlight = Option.fromUndefinedOr(queue.inFlight)
-  if (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) return queue
-  return {
-    ...queue,
-    followUp: appendFollowUpItem(queue.followUp, item),
-  }
-}
-
-const restampQueuedMessage = (message: Message, createdAt: Date): Message => {
-  const fields = {
-    id: message.id,
-    sessionId: message.sessionId,
-    branchId: message.branchId,
-    role: message.role,
-    parts: message.parts,
-    createdAt,
-    turnDurationMs: message.turnDurationMs,
-    metadata: message.metadata,
-  }
-  if (message._tag === "interjection") {
-    return Message.cases.interjection.make({ ...fields, role: "user" })
-  }
-  return Message.cases.regular.make(fields)
-}
-
-const restampQueuedTurnItem = (item: QueuedTurnItem, createdAt: Date): QueuedTurnItem => ({
-  ...item,
-  message: restampQueuedMessage(item.message, createdAt),
-})
-
-export const takeNextQueuedTurn = (queue: LoopQueueState, createdAt: Date): QueuedTurnTake => {
-  if (!Predicate.isUndefined(queue.inFlight)) {
-    return { queue, nextItem: Option.some(queue.inFlight) } satisfies QueuedTurnTake
-  }
-
-  const [nextSteer, ...restSteering] = queue.steering
-  if (!Predicate.isUndefined(nextSteer)) {
-    const nextItem = restampQueuedTurnItem(nextSteer, createdAt)
-    return {
-      queue: { ...queue, steering: restSteering, inFlight: nextItem },
-      nextItem: Option.some(nextItem),
-    } satisfies QueuedTurnTake
-  }
-
-  const [nextFollowUp, ...restFollowUp] = queue.followUp
-  if (Predicate.isUndefined(nextFollowUp)) {
-    return { queue, nextItem: Option.none() } satisfies QueuedTurnTake
-  }
-
-  const nextItem = restampQueuedTurnItem(nextFollowUp, createdAt)
-  return {
-    queue: { ...queue, followUp: restFollowUp, inFlight: nextItem },
-    nextItem: Option.some(nextItem),
-  } satisfies QueuedTurnTake
-}
-
-export const countQueuedFollowUps = (queue: LoopQueueState) => queue.followUp.length
-
-export const clearInFlightQueuedTurn = (
-  queue: LoopQueueState,
-  messageId: QueuedTurnItem["message"]["id"],
-): LoopQueueState => {
-  const inFlight = Option.fromUndefinedOr(queue.inFlight)
-  if (Option.isSome(inFlight) && inFlight.value.message.id === messageId) {
-    return {
-      steering: queue.steering,
-      followUp: queue.followUp,
-    }
-  }
-  return queue
-}
 
 // ── Shared field groups ──
 
@@ -351,11 +83,6 @@ export type LoopState = Schema.Schema.Type<typeof LoopState>
 type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
 export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
-
-interface QueuedTurnTake {
-  readonly queue: LoopQueueState
-  readonly nextItem: Option.Option<QueuedTurnItem>
-}
 
 // ── Runtime projection (transport/UI) ──
 // Public runtime state mirrors the machine directly. No parallel `phase/status`
@@ -450,8 +177,19 @@ export const foldSessionMetrics = (
 
 export const buildIdleState = (): IdleState => LoopState.cases.Idle.make({})
 
+/**
+ * The fields a phase carries over from whatever admitted it. Structural, so
+ * this module never has to know about the inbox that holds the item.
+ */
+type TurnOrigin = {
+  readonly message: Message
+  readonly agentOverride?: AgentNameType
+  readonly runSpec?: typeof RunSpecSchema.Type
+  readonly interactive?: boolean
+}
+
 export const buildRunningState = (
-  item: QueuedTurnItem,
+  item: TurnOrigin,
   options: { startedAtMs: number },
 ): RunningState =>
   LoopState.cases.Running.make({
@@ -478,81 +216,3 @@ export const toWaitingForInteractionState = (params: {
     pendingRequestId: params.pendingRequestId,
     pendingToolCallId: params.pendingToolCallId,
   })
-
-export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
-  toQueueSnapshot(queue.steering, queue.followUp)
-
-// ── Runtime state projection ──
-//
-// Tag for tag with `LoopState`, derived from the same `AgentLoopState` on
-// every read. The projection cannot lag the machine, so a caller that wants
-// the current phase reads either one, never both.
-
-const runtimeStateFromLoopState = (
-  state: LoopState,
-  queue: LoopQueueState,
-): SessionRuntimeState => {
-  // One shipped agent. A run narrows it per turn through `agentOverride`; the
-  // branch itself never holds another, so the projection names the default.
-  const agent = DEFAULT_AGENT_NAME
-  const queueSnapshot = queueSnapshotFromQueueState(queue)
-
-  return Match.type<LoopState>().pipe(
-    Match.tagsExhaustive({
-      Idle: () => SessionRuntimeStateSchema.cases.Idle.make({ agent, queue: queueSnapshot }),
-      Running: () => SessionRuntimeStateSchema.cases.Running.make({ agent, queue: queueSnapshot }),
-      WaitingForInteraction: () =>
-        SessionRuntimeStateSchema.cases.WaitingForInteraction.make({
-          agent,
-          queue: queueSnapshot,
-        }),
-    }),
-  )(state)
-}
-
-// ── Aggregate (single-Ref shape) ──
-//
-// The per-branch memory the loop reads and writes through one
-// SubscriptionRef. `runtimeState` derives from `state` + `queue` at the
-// watchState boundary and is never stored, so the projection cannot lag.
-
-export interface AgentLoopState {
-  readonly state: LoopState
-  readonly queue: LoopQueueState
-  readonly turnFailure?: {
-    readonly epoch: number
-    readonly error: unknown
-  }
-  readonly startingState?: LoopState
-}
-
-export const buildInitialAgentLoopState = (params: {
-  state: LoopState
-  queue?: LoopQueueState
-}): AgentLoopState => ({
-  state: params.state,
-  queue: Option.getOrElse(Option.fromUndefinedOr(params.queue), emptyLoopQueueState),
-})
-
-export const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState =>
-  runtimeStateFromLoopState(s.state, s.queue)
-
-/**
- * Whether a caller may take a turn for this branch right now.
- *
- * Idle is not enough on its own. `startingState` holds an item another caller
- * already reserved but has not started yet: it has left the queue and has not
- * reached `state`, so a plain idle test cannot see it. A caller that takes a
- * turn past that reservation leaves the reserving caller to find the loop
- * `Running` when it finally starts, with its item in neither the queue nor the
- * transcript. Both admission paths ask this one question.
- */
-export const canStartTurnNow = (s: AgentLoopState): boolean =>
-  s.state._tag === "Idle" && Predicate.isUndefined(s.startingState)
-
-/** How many failures this branch had recorded, or 0 if it has had none. */
-export const turnFailureEpoch = (state: AgentLoopState): number =>
-  Option.getOrElse(
-    Option.fromUndefinedOr(state.turnFailure).pipe(Option.map(({ epoch }) => epoch)),
-    () => 0,
-  )
