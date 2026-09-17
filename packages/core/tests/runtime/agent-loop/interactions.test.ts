@@ -14,6 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
@@ -244,6 +245,130 @@ describe("interaction", () => {
         }).pipe(Effect.provide(layer)),
       )
     }),
+  )
+  it.live(
+    "a turn interrupted after a tool call arrived leaves a transcript the next turn reads",
+    () =>
+      Effect.gen(function* () {
+        const executed = yield* Ref.make(0)
+        const toolCallArrived = yield* Deferred.make<void>()
+        const echo = tool({
+          id: "interrupted-echo",
+          description: "Counts executions",
+          params: Schema.Struct({ value: Schema.String }),
+          output: Schema.String,
+          execute: (params: { value: string }) =>
+            Ref.update(executed, (n) => n + 1).pipe(Effect.as(params.value)),
+        })
+        let calls = 0
+        const provider = LanguageModelLayers.testStream(() => {
+          calls += 1
+          if (calls > 1) {
+            return Effect.succeed(
+              Stream.fromIterable([
+                textDeltaPart("after interrupt"),
+                finishPart({ finishReason: "stop" }),
+              ]),
+            )
+          }
+          // The tool call arrives whole, then the stream stalls before its finish
+          // part: the interrupt lands with a call the step never got to run.
+          return Effect.succeed(
+            Stream.make(toolCallPart("interrupted-echo", { value: "never runs" })).pipe(
+              Stream.concat(
+                Stream.fromEffect(Deferred.succeed(toolCallArrived, void 0)).pipe(Stream.drain),
+              ),
+              Stream.concat(Stream.never),
+            ),
+          )
+        })
+        const layer = makeLiveToolLayer(provider, [echo])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const first = makeIntMessage("interrupt me mid tool call")
+            const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+            yield* Deferred.await(toolCallArrived)
+            yield* steerAgentLoop({
+              _tag: "Interrupt",
+              sessionId: intSessionId,
+              branchId: intBranchId,
+              requestId: "req-interrupt-mid-tool-call",
+            })
+            yield* Fiber.join(running)
+            expect(yield* Ref.get(executed)).toBe(0)
+
+            const second = makeIntMessage("are you still there")
+            yield* runAgentLoop(agentLoop, second)
+            const reply = yield* (yield* MessageStorage).getMessage(
+              assistantMessageIdForTurn(second.id, 1),
+            )
+            expect(reply?.parts).toEqual([Prompt.textPart({ text: "after interrupt" })])
+            const unrun = yield* (yield* MessageStorage).getMessage(
+              toolResultMessageIdForTurn(first.id, 1),
+            )
+            expect(
+              unrun?.parts.map((part) => part.type === "tool-result" && part.isFailure),
+            ).toEqual([true])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+        )
+      }),
+  )
+  it.live(
+    "a stream that fails after a tool call arrived leaves a transcript the re-prompt reads",
+    () =>
+      Effect.gen(function* () {
+        const executed = yield* Ref.make(0)
+        const echo = tool({
+          id: "cut-echo",
+          description: "Counts executions",
+          params: Schema.Struct({ value: Schema.String }),
+          output: Schema.String,
+          execute: (params: { value: string }) =>
+            Ref.update(executed, (n) => n + 1).pipe(Effect.as(params.value)),
+        })
+        let calls = 0
+        const provider = LanguageModelLayers.testStream(() => {
+          calls += 1
+          if (calls > 1) {
+            return Effect.succeed(
+              Stream.fromIterable([
+                textDeltaPart("after failure"),
+                finishPart({ finishReason: "stop" }),
+              ]),
+            )
+          }
+          return Effect.succeed(
+            Stream.make(toolCallPart("cut-echo", { value: "never runs" })).pipe(
+              Stream.concat(
+                Stream.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "streamText",
+                    reason: new AiError.UnknownError({ description: "connection reset" }),
+                  }),
+                ),
+              ),
+            ),
+          )
+        })
+        const layer = makeLiveToolLayer(provider, [echo])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const first = makeIntMessage("the stream breaks mid tool call")
+            // A stream that broke with output in hand is re-prompted inside the turn.
+            yield* runAgentLoop(agentLoop, first)
+            expect(yield* Ref.get(executed)).toBe(0)
+            const reply = yield* (yield* MessageStorage).getMessage(
+              assistantMessageIdForTurn(first.id, 2),
+            )
+            expect(reply?.parts).toEqual([Prompt.textPart({ text: "after failure" })])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+        )
+      }),
   )
   it.live("interrupt during WaitingForInteraction finalizes turn", () =>
     Effect.gen(function* () {

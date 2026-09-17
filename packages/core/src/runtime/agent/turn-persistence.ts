@@ -339,7 +339,7 @@ export const recordToolOutcome = (params: {
   branchId: BranchId
   toolResultMessageId: MessageId
   assistantMessageId: MessageId
-  parts: ReadonlyArray<Prompt.ToolResultPart>
+  parts: ReadonlyArray<ToolResponsePart>
 }) =>
   persistMessageParts({
     role: "tool",
@@ -353,7 +353,7 @@ export const recordToolOutcome = (params: {
         sessionId: params.sessionId,
         branchId: params.branchId,
         assistantMessageId: params.assistantMessageId,
-        parts: params.parts,
+        parts: params.parts.filter((part) => part.type === "tool-result"),
       }),
     ),
   )

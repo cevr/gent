@@ -644,6 +644,39 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }
       })
 
+      /**
+       * The stream stopped before the step settled. Keep what arrived, and give
+       * every tool call that never ran a failure result: a call with no result
+       * makes the transcript unreadable for every later turn.
+       */
+      const persistCutStep = (reason: "Interrupted" | "StreamFailed") =>
+        Effect.gen(function* () {
+          yield* persistAssistantPartsLocal(responseStep, assistantParts)
+          const settled = new Set(
+            toolParts.filter((part) => part.type === "tool-result").map((part) => part.id),
+          )
+          const unrun = assistantParts
+            .filter((part) => part.type === "tool-call")
+            .filter((call) => !settled.has(call.id))
+            .map((call) =>
+              Prompt.toolResultPart({
+                id: call.id,
+                name: call.name,
+                isFailure: true,
+                providerExecuted: false,
+                result: { error: "The tool did not run: the step stopped first.", reason },
+              }),
+            )
+          yield* recordToolOutcome({
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            toolResultMessageId: toolResultMessageIdForTurn(params.messageId, responseStep),
+            assistantMessageId: assistantMessageIdForTurn(params.messageId, responseStep),
+            parts: [...toolParts, ...unrun],
+          })
+          yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
+        })
+
       yield* Match.type<StepOutcome>().pipe(
         Match.tagsExhaustive({
           Interrupted: () =>
@@ -658,15 +691,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   outcome: "Interrupted",
                 }),
               )
-              yield* persistAssistantPartsLocal(responseStep, assistantParts)
+              yield* persistCutStep("Interrupted")
             }),
           // The failure already ended the stream where it broke; keep what arrived.
-          Failed: () =>
-            Effect.gen(function* () {
-              yield* persistAssistantPartsLocal(responseStep, assistantParts)
-              yield* persistToolPartsLocal(responseStep, toolParts)
-              yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
-            }),
+          Failed: () => persistCutStep("StreamFailed"),
           External: () => settleStep,
           ToolCalls: () => settleStep,
           Answered: () => settleStep,
