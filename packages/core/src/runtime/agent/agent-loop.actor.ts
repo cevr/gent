@@ -247,7 +247,7 @@ const buildAgentLoopActorHandlers = (config: {
     // Serializes per-entity `handle` rebuild. The actor mailbox is
     // `concurrency: "unbounded"`, so concurrent ops can both observe a
     // closed loop and race into `openLoop`, leaking the first behavior's
-    // fibers and producing torn reads of `handle`/`startupExit`.
+    // fibers and leaving `lifecycleRef` holding a state the other built.
     const startupSemaphore = yield* Semaphore.make(1)
     const sessionGovernance = yield* AgentLoopSessionGovernance
     const platform = yield* GentPlatform
@@ -340,8 +340,8 @@ const buildAgentLoopActorHandlers = (config: {
 
     // Typed reentrant-only handle lookup. The only legitimate caller is the
     // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
-    // fires from inside the behavior itself (during turn execution), so the
-    // handle is provably published into `handleRef` by then. Mailbox handlers
+    // fires from inside the behavior itself (during turn execution), so
+    // `lifecycleRef` provably holds `Open` by then. Mailbox handlers
     // (which arrive from outside the behavior) MUST go through `ensureStarted`
     // instead — that path holds `startupSemaphore` across the rebuild/publish,
     // ensuring no one observes a half-reopened loop.
@@ -900,9 +900,9 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* sessionGovernance.markTerminated(workspaceId, sessionId)
             // Lifecycle stop must not depend on the loop being open. If the
-            // mailbox closed before we got here, `handleRef` may be empty;
-            // skip cleanup in that case rather than triggering a rebuild
-            // via `ensureStarted`.
+            // mailbox closed before we got here, `lifecycleRef` may still be
+            // `Building`; skip cleanup in that case rather than triggering a
+            // rebuild via `ensureStarted`.
             const handle = lifecycleHandle(yield* Ref.get(lifecycleRef))
             if (Option.isSome(handle)) {
               yield* closeBehavior(handle.value)

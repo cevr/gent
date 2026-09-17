@@ -20,7 +20,7 @@ bun run clean      # Remove dist and tsbuildinfo files
 bun run --cwd apps/tui dev
 
 # Continue last session for cwd
-bun run --cwd apps/tui dev -c
+bun run --cwd apps/tui dev resume
 
 # Start with prompt (creates session, goes straight to session view)
 bun run --cwd apps/tui dev -p "your prompt"
@@ -85,10 +85,9 @@ packages/core/src/       # Everything non-UI
   storage/               # SQLite service assembler, schema, migrations, focused sub-tag impls
   providers/             # AI SDK adapters
   runtime/               # SessionRuntime, AgentLoop internals, profiles, context-estimation, retry
-  tools/                 # Tool implementations
+  extensions/            # Public extension API surface and branch-tool entry points
   server/                # transport contract, commands, queries, handlers, startup wiring
-  test-utils/            # Mock layers, sequence recording, in-process layer
-  debug/                 # Sequence step builders (textStep, toolCallStep, multiToolCallStep)
+  test-utils/            # Mock layers, sequence recording, step builders, in-process layer
 packages/sdk/            # Client wrappers
 apps/tui/                # @opentui/solid TUI
 apps/server/             # BunHttpServer
@@ -102,14 +101,14 @@ bun run test:e2e          # PTY + focused server-process lifecycle coverage (slo
 bun run gate              # typecheck + lint + fmt + build + test
 ```
 
-Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/tools/`, etc. One file per feature area, no fix-shaped files or god tests.
+Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/storage/`, etc. One file per feature area, no fix-shaped files or god tests.
 
 ### Test philosophy
 
 - **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `SqliteStorage.TestWithSql()` for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
-- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core-internal/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core-internal/debug/provider`.
+- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core-internal/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core-internal/test-utils/sequence-steps`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -163,7 +162,7 @@ assertSequence(calls, [
 | `packages/core/src/runtime/agent/agent-loop.behavior.ts` | per-branch turn engine used by the actor            |
 | `packages/core/src/runtime/wide-event-boundary.ts`       | `effect-wide-event` integration + context factories |
 | `packages/core/src/test-utils/in-process-layer.ts`       | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
-| `packages/core/src/debug/provider.ts`                    | step builders for `LanguageModelLayers.sequence`    |
+| `packages/core/src/test-utils/sequence-steps.ts`         | step builders for `LanguageModelLayers.sequence`    |
 | `packages/core/src/test-utils/language-model.ts`         | `LanguageModelLayers` + stream-part helpers         |
 | `apps/tui/tsconfig.json`                                 | `jsxImportSource: "@opentui/solid"` required        |
 

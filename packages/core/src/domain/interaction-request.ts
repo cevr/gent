@@ -7,8 +7,8 @@
  * The agent loop machine catches this and parks in WaitingForInteraction.
  *
  * When the client responds, the resolution `{ approved, notes?, editedContent? }` is stored
- * keyed by requestId. The machine resumes ExecutingTools — the tool re-calls
- * approve(), finds the stored resolution, and continues.
+ * keyed by requestId. The loop leaves WaitingForInteraction and runs the step
+ * again — the tool re-calls approve(), finds the stored resolution, and continues.
  *
  * No Deferred, no blocked fiber. Interactions survive server restarts.
  */

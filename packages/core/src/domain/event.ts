@@ -183,7 +183,7 @@ export const AgentEvent = Schema.TaggedUnion({
     parentToolCallId: Schema.optional(ToolCallId),
     assistantMessageId: Schema.optional(MessageId),
   },
-  /** Generic interaction event — replaces PromptPresented, HandoffPresented, QuestionsAsked */
+  /** One event for every kind of interaction a turn can present. */
   InteractionPresented: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -191,7 +191,7 @@ export const AgentEvent = Schema.TaggedUnion({
     text: Schema.String,
     metadata: Schema.optional(Schema.Unknown),
   },
-  /** Generic interaction resolution — replaces all Confirmed/Rejected/Dismissed events */
+  /** One event for every way an interaction can settle. */
   InteractionResolved: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -271,10 +271,10 @@ export const AgentEvent = Schema.TaggedUnion({
    * clients fetch via the extension's typed request capability (the
    * published transport surface).
    *
-   * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The event
-   * is honest: it tells subscribers "extension X has news" without coupling a
-   * schema between server and client. Any transport consumer (TUI, SDK, future
-   * web UI) reads the new state the same way — via `client.extension.request`.
+   * The event is honest: it tells subscribers "extension X has news" without
+   * coupling a schema between server and client. Any transport consumer (TUI,
+   * SDK, future web UI) reads the new state the same way — via
+   * `client.extension.request`.
    *
    * Client widgets subscribe by `extensionId` filter and refetch their typed
    * capability request on each pulse.

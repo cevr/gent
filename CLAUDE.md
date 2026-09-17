@@ -85,9 +85,9 @@ packages/core/src/       # Everything non-UI
   storage/               # SQLite service assembler, schema, migrations, focused sub-tag impls
   providers/             # AI SDK adapters
   runtime/               # SessionRuntime, AgentLoop internals, profiles, context-estimation, retry
-  tools/                 # Tool implementations
+  extensions/            # Public extension API surface and branch-tool entry points
   server/                # transport contract, commands, queries, handlers, startup wiring
-  test-utils/            # Mock layers, sequence recording, in-process layer
+  test-utils/            # Mock layers, sequence recording, step builders, in-process layer
 packages/sdk/            # Client wrappers
 apps/tui/                # @opentui/solid TUI
 apps/server/             # BunHttpServer
@@ -101,7 +101,7 @@ bun run test:e2e          # PTY + focused server-process lifecycle coverage (slo
 bun run gate              # typecheck + lint + fmt + build + test
 ```
 
-Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/tools/`, etc. One file per feature area, no fix-shaped files or god tests.
+Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/storage/`, etc. One file per feature area, no fix-shaped files or god tests.
 
 ### Test philosophy
 

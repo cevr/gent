@@ -128,7 +128,7 @@ export const SubscribeEventsInput = Schema.Struct({
 })
 export type SubscribeEventsInput = typeof SubscribeEventsInput.Type
 
-/** Generic interaction response — replaces RespondPromptInput/RespondHandoffInput/RespondQuestionsInput */
+/** One response shape for every kind of interaction a turn can present. */
 export const RespondInteractionInput = Schema.Struct({
   requestId: InteractionRequestId,
   sessionId: SessionId,

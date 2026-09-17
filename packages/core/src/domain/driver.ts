@@ -2,9 +2,9 @@
  * Driver primitives — unified registration for both model providers and
  * external turn executors.
  *
- * Codex's review of the  plan flagged that collapsing both into a single
- * `TurnDriver` interface loses provider-shaped capabilities (auth + listModels
- * + resolveModel). So drivers split by **capability** under one registry:
+ * One `TurnDriver` interface for both would lose the provider-shaped
+ * capabilities (auth + listModels + resolveModel), so drivers split by
+ * **capability** under one registry:
  *
  *   - `ModelDriverContribution`     — wraps an LLM provider (auth, listModels,
  *                                     resolveModel returning a Layer that
@@ -17,14 +17,11 @@
  *                                     (ACP agents: claude-code/opencode/gemini-cli).
  *
  * Agents reference a driver by `driver: DriverRef`; the agent loop dispatches
- * through `DriverRegistry` instead of distinct `getProvider`/`getTurnExecutor`
- * paths. This replaces both `ProviderContribution` and
- * `TurnExecutorContribution` with a single capability-shaped union, dispatched
- * in one place — `composability-not-flags`.
+ * through `DriverRegistry`, so both kinds of backend reach a turn through one
+ * capability-shaped union resolved in one place — `composability-not-flags`.
  *
- * The auth/hint/resolution shapes that lived in `provider-contribution.ts`
- * move here too: they are model-driver-only concepts and belong with their
- * sole consumer.
+ * The auth, hint, and resolution shapes live here too: they are
+ * model-driver-only concepts and belong with their sole consumer.
  *
  * @module
  */
@@ -61,7 +58,7 @@ export class DriverError extends Schema.TaggedError<DriverError>()("DriverError"
   reason: Schema.String,
 }) {}
 
-// ── Shared types lifted from provider-contribution.ts ──
+// ── Shapes shared by every model driver ──
 
 export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
   "ProviderAuthError",
@@ -184,9 +181,8 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 // ── ModelDriverContribution — provider-shaped driver ──
 
 /**
- * Registers a model provider as a driver. Same capability surface as the
- * pre- `ProviderContribution` — `id` doubles as the driver id, the model
- * returned by `resolveModel` provides an `effect/unstable/ai` LanguageModel,
+ * Registers a model provider as a driver. `id` doubles as the driver id, the
+ * model returned by `resolveModel` provides an `effect/unstable/ai` LanguageModel,
  * `listModels` filters/extends the catalog, and `auth` wires the OAuth/API
  * key flow. The driver registry routes a `DriverRef({ _tag: "Model", id })`
  * to the matching contribution.

@@ -2,28 +2,28 @@
  * Regression: per-entity `handle` rebuild in `agent-loop.actor.ts` must
  * serialize against `concurrency: "unbounded"` mailbox dispatch.
  *
- * `openLoop` flips `closed=false` synchronously, then yields on its first
- * I/O (`getQueueState`). Without holding the startup permit across the
- * full read/rebuild/check, a second op arriving between those two steps
- * observes `closed=false`, skips the serialization, and proceeds against
- * a `handle`/`startupExit` pair that has not yet been reassigned.
+ * `ensureStarted` reads `lifecycleRef`, and `openLoop` yields on its first
+ * I/O (`getQueueState`) before it can publish a new state there. Without
+ * holding the startup permit across the full read/rebuild/check, a second op
+ * arriving between those two steps reads a `lifecycleRef` the first op is
+ * still rebuilding and proceeds against a loop that is not the one it will
+ * be handed.
  *
  * To turn this into a deterministic regression: wrap `AgentLoopQueueStorage`
  * so the first `getQueueState` call (the one `openLoop` makes on reopen)
- * blocks on a `Deferred`. Op1 enters `ensureStarted`, sets `closed=false`,
- * blocks inside `getQueueState`. Op2 fires concurrently. With the full-body
- * permit, Op2 blocks waiting for Op1 to drop the permit — its completion
- * `Deferred` is unset until we release Op1's gate. With a narrow permit,
- * Op2 races past the `closed` check and completes immediately, before we
- * have released Op1.
+ * blocks on a `Deferred`. Op1 enters `ensureStarted` and blocks inside
+ * `getQueueState`. Op2 fires concurrently. With the full-body permit, Op2
+ * blocks waiting for Op1 to drop the permit — its completion `Deferred` is
+ * unset until we release Op1's gate. With a narrow permit, Op2 races past
+ * the lifecycle check and completes immediately, before we have released Op1.
  *
  * Assertion: Op2 has NOT completed at the moment Op1 is still inside the
  * gated `getQueueState`. After releasing the gate, Op1 + Op2 both complete.
  *
- * To deterministically drive the actor into `closed=true` first, use
- * `TerminateBranch` (the production path that flips per-entity `closed`
- * via `cleanupLoop`) followed by `clearTerminated` so subsequent ops are
- * allowed past `rejectIfTerminated`.
+ * To deterministically drive the actor into `Closed` first, use
+ * `TerminateBranch` (the production path that settles `lifecycleRef` on
+ * `Closed`) followed by `clearTerminated` so subsequent ops are allowed
+ * past `rejectIfTerminated`.
  */
 
 import { describe, expect, it } from "effect-bun-test"

@@ -1,21 +1,15 @@
 /**
  * `domain/auth` — single module owning every auth concept gent uses.
  *
- * Collapses the prior four-file split (`auth-method`, `auth-store`,
- * `auth-storage`, `auth-guard`) plus the runtime `auth-guard-live` into
- * one place. Persistence is delegated to
- * `KeyValueStore.layerFileSystem(...)` + `toSchemaStore`; the previous
- * hand-rolled "encrypted file vs. macOS keychain" split is gone — the
- * directory inherits whatever protection the user's home directory
- * already has, which matches how every other gent state file
+ * The auth method, the store, its persistence, and the guard all live here.
+ * Persistence is delegated to `KeyValueStore.layerFileSystem(...)` +
+ * `toSchemaStore`: the directory inherits whatever protection the user's home
+ * directory already has, which matches how every other gent state file
  * (`~/.gent/data.db`, journals, etc.) is stored.
  *
  * Each provider's auth blob is one URL-encoded file under the configured
  * directory (default `~/.gent/auth/`). The schema is `Auth.Info`, a
  * tagged enum with `Api | Oauth` variants.
- *
- * Breaking change at C2: any existing `~/.gent/auth.json[.enc]` content
- * is unreadable by this module. Users re-authenticate on next launch.
  */
 
 import { Predicate, Context, Effect, Layer, Option, Schema } from "effect"
@@ -61,12 +55,10 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
  * - `Api`   — bearer/API key; presented to the model driver as `key`.
  * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
  *
- * A third "ambient auth owned by the driver" variant was specced
- * during the C2 collapse but has no caller wiring yet, so it isn't
- * carried as a parallel API. Drivers that own auth out-of-band (e.g.
- * Claude Code SDK reading the OS keychain) currently bypass the auth
- * store entirely; if a future caller needs a persisted presence
- * marker, add it back to this enum at that point.
+ * There is no "ambient auth owned by the driver" variant. Drivers that own
+ * auth out-of-band (e.g. Claude Code SDK reading the OS keychain) bypass the
+ * auth store entirely; add the variant when a caller needs a persisted
+ * presence marker for one.
  */
 export const AuthInfo = Schema.TaggedUnion({
   Api: {
@@ -232,8 +224,8 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
   //   secondary tag to keep `<file>/<ClassName>`.
 
   /**
-   * Live `AuthGuard`. The guard's logic is inseparable from the auth
-   * model — a separate `auth-guard-live.ts` was redundant.
+   * Live `AuthGuard`. The guard's logic is inseparable from the auth model,
+   * so it lives beside it.
    *
    * Composes auth info (`Auth.get`) with registry-derived metadata
    * (`DriverRegistry.listModels`) and per-session routing

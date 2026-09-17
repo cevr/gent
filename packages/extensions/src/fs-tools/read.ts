@@ -38,9 +38,8 @@ export const ReadResult = Schema.Struct({
   nextOffset: Schema.optional(Schema.Finite),
 })
 
-// Read Tool — authored through the typed `tool(...)` factory ().
-// `tool(...)` lowers directly to a Capability; the previous two-step
-// `tool(defineTool({...}))` pattern is gone.
+// Read Tool — authored through the typed `tool(...)` factory, which lowers
+// directly to a Capability.
 
 export const ReadTool = tool({
   id: "read",

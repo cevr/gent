@@ -1,10 +1,8 @@
 /**
  * Resource — long-lived state with explicit scope.
  *
- * Replaces single-purpose contribution kinds (`layer`, `lifecycle`,
- * `workflow.machine`) with one primitive that
- * carries the unifying concept: "this extension owns a long-lived service
- * with optional startup/shutdown."
+ * One primitive carries the whole concept: "this extension owns a long-lived
+ * service with optional startup/shutdown."
  *
  * The `scope` discriminator is intentionally narrow. The host owns two
  * long-lived resource lifetimes:
@@ -12,9 +10,9 @@
  *   - `"process"` — survives for the server's lifetime; requires `ServerScope`
  *   - `"branch"`  — survives for one agent-loop branch; requires `BranchScope`
  *
- * Add more scope literals only with their host lifecycle implementation in the
- * same wave. Advertising `session`/`cwd` without a runtime owner makes
- * impossible lifetimes look supported.
+ * Add a scope literal only together with its host lifecycle implementation.
+ * Advertising `session`/`cwd` without a runtime owner makes impossible
+ * lifetimes look supported.
  *
  * @module
  */

@@ -6,8 +6,6 @@
  * must be an LLM-JSON-schema-able `Schema.Schema`, `execute` returns an
  * `Effect`, and the request-only fields (`slash`, `input`) are forbidden.
  *
- * Replaces the previous two-step `tool(defineTool({...}))` pattern.
- *
  * Lowering: produces a branded native Effect AI tool annotated with Gent
  * metadata. Runtime code reads Gent-only fields from that annotation instead
  * of widening Effect's tool surface.
