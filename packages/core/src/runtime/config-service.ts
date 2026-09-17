@@ -1,11 +1,11 @@
 import {
-  Predicate,
   Context,
   Effect,
   FileSystem,
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Schema,
   SynchronizedRef,
@@ -104,17 +104,23 @@ export interface ConfigServiceService {
    * Invalid JSON or schema data is reported to the caller.
    */
   readonly getFresh: (cwd: string) => Effect.Effect<UserConfig, ConfigLoadError>
-  readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
+  /** Fails with `ConfigLoadError` when the user config on disk did not
+   *  decode. Writing would replace the unreadable file with a default,
+   *  discarding every setting in it. */
+  readonly set: (config: Partial<UserConfig>) => Effect.Effect<void, ConfigLoadError>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  Use this rather than `set({ driverOverrides })` so callers don't have
    *  to remember the partial-merge semantics — `set({ driverOverrides: undefined })`
    *  preserves the existing record, which is the wrong default for clears. */
-  readonly setDriverOverride: (agent: AgentName, driver: DriverRef) => Effect.Effect<void>
+  readonly setDriverOverride: (
+    agent: AgentName,
+    driver: DriverRef,
+  ) => Effect.Effect<void, ConfigLoadError>
   /** Remove a per-agent driver override. No-op when the agent has none. */
-  readonly clearDriverOverride: (agent: AgentName) => Effect.Effect<void>
+  readonly clearDriverOverride: (agent: AgentName) => Effect.Effect<void, ConfigLoadError>
 }
 
-class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
+export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
   path: Schema.String,
   message: Schema.String,
 }) {}
@@ -150,6 +156,11 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // State: user + project configs
       const userConfigRef = yield* SynchronizedRef.make<UserConfig>(new UserConfig({}))
       const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
+      // Set when the user config exists but does not decode. Reads still
+      // degrade to an empty config so a broken file cannot stop a turn, but
+      // writes refuse: `saveUserConfig` would persist that empty config over
+      // the user's file and discard every setting it holds.
+      const userLoadFailureRef = yield* Ref.make<Option.Option<ConfigLoadError>>(Option.none())
 
       const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
         mergeConfigsImpl(user, project)
@@ -189,10 +200,24 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           ),
         )
 
-      // Load config from disk (merges project over user)
+      // Load config from disk (merges project over user).
+      //
+      // A project config that will not decode stays tolerant — gent never
+      // writes that file, so a broken one can only mislead, not lose data.
+      // A user config that will not decode is remembered: reads degrade,
+      // writes refuse.
       const loadConfig = Effect.gen(function* () {
-        const userConfig = yield* readConfigOrEmpty(userConfigPath)
         const projectConfig = yield* readConfigOrEmpty(projectConfigPath)
+        const userConfig = yield* readConfigFresh(userConfigPath).pipe(
+          Effect.tap(() => Ref.set(userLoadFailureRef, Option.none())),
+          Effect.catchEager((error) =>
+            Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
+              Effect.annotateLogs({ path: userConfigPath, error: error.message }),
+              Effect.andThen(Ref.set(userLoadFailureRef, Option.some(error))),
+              Effect.as(new UserConfig({})),
+            ),
+          ),
+        )
 
         yield* SynchronizedRef.set(userConfigRef, userConfig)
         yield* Ref.set(projectConfigRef, projectConfig)
@@ -230,12 +255,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           readonly updated: UserConfig
           readonly save: boolean
         },
-      ) =>
-        SynchronizedRef.modifyEffect(userConfigRef, (current) => {
-          const decision = decide(current)
-          let save = Effect.void
-          if (decision.save) save = saveUserConfig(decision.updated)
-          return save.pipe(Effect.as([true, decision.updated]))
+      ): Effect.Effect<boolean, ConfigLoadError> =>
+        Effect.gen(function* () {
+          // Refuse before touching the ref: a write built on the fallback
+          // empty config would overwrite a file we could not read.
+          const failure = yield* Ref.get(userLoadFailureRef)
+          if (Option.isSome(failure)) return yield* failure.value
+          return yield* SynchronizedRef.modifyEffect(userConfigRef, (current) => {
+            const decision = decide(current)
+            let save = Effect.void
+            if (decision.save) save = saveUserConfig(decision.updated)
+            return save.pipe(Effect.as([true, decision.updated]))
+          })
         })
 
       const service: ConfigServiceService = {
@@ -262,6 +293,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           // arbitrary session cwds continue to use their own fresh file on
           // every `get(cwd)` call.
           yield* SynchronizedRef.set(userConfigRef, user)
+          // A successful fresh read means the file parses again: lift the
+          // write refusal so a user who fixed their config can save.
+          yield* Ref.set(userLoadFailureRef, Option.none())
           if (cwd === runtimeEnvironment.cwd) yield* Ref.set(projectConfigRef, project)
           return mergeConfigs(user, project)
         }),

@@ -1464,3 +1464,47 @@ on the bare tag string.
 carries a lint fixture for it, so the rule exists and these are not covered by
 it. Converting them to `Schema.TaggedUnion` is a separate change with its own
 call-site fallout.
+
+## A malformed user config no longer overwrites itself (2026-09-17)
+
+The `DriverRef` compatibility fix (`f6892370`) removed one trigger. Counsel
+then made the sharper point: the tag was never the defect. The defect is the
+fallback.
+
+`readConfigOrEmpty` (`config-service.ts:183`) maps **any** read or decode
+failure to `new UserConfig({})`. `loadConfig` stored that fallback as the
+current user config, and the next `set()` encoded it straight back over the
+file (`saveUserConfig`). So one malformed byte — or any future schema change —
+silently discarded `disabledExtensions`, `trustedProjects`, and every agent
+override. A rename was only the most likely way to reach it.
+
+The fix separates the two files, because they have opposite requirements:
+
+- **Project config stays tolerant.** Gent never writes `.gent/config.json`, so
+  a broken project file can mislead but cannot lose data, and refusing would
+  block dispatch for a whole workspace. `readProjectConfigAt` and the project
+  half of `loadConfig` keep degrading to empty.
+- **User config now fails loudly on write.** `loadConfig` reads it through
+  `readConfigFresh`, and on failure records the `ConfigLoadError` in
+  `userLoadFailureRef` while still degrading the _read_ to an empty config, so
+  a broken file cannot stop a turn. `mutateUserConfig` checks that ref before
+  touching the snapshot and re-raises, so `set`, `setDriverOverride`, and
+  `clearDriverOverride` now carry `ConfigLoadError`. A successful `getFresh`
+  clears the flag, so fixing the file re-enables writes without a restart.
+
+`ConfigLoadError` joins `GentRpcError`, which is what lets the widened mutators
+stay inside the existing `driver.set` / `driver.clear` handlers unchanged.
+
+The test writes a config that is valid JSON but invalid against the schema
+(`disabledExtensions: 42`) alongside two real settings, then asserts the
+mutation fails and the file is unchanged byte for byte. It fails without the
+guard: `Expected "Failure", Received "Success"`.
+
+### Deliberately not fixed here
+
+Counsel's second finding stands and is **open**: `UserConfig` declares four
+fields, the decoder drops unknown ones, and the next mutation re-encodes only
+what it knows. A config written by a newer gent therefore loses its unknown
+fields on a downgrade. That is a separate data-loss path from the fallback, it
+needs a policy decision (preserve unknown keys, reject them, or add a versioned
+migration), and it does not belong in the same commit as the write guard.

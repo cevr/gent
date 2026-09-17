@@ -265,6 +265,40 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    // `readConfigOrEmpty` maps ANY decode failure to an empty config, and the
+    // next `set()` encodes that empty config over the file. A malformed user
+    // config must therefore not be silently replaced — the bytes stay put and
+    // the mutation refuses.
+    it.scopedLive("a malformed user config is never overwritten by a later write", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        // Valid JSON, invalid against the schema: `disabledExtensions` must be
+        // an array of strings. Everything else here is a real user setting.
+        const original =
+          '{"disabledExtensions":42,"trustedProjects":["/keep/me"],"agents":{"main":{"reasoningEffort":"high"}}}'
+        yield* fs.writeFileString(userConfigPath, original)
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          // A mutation must not succeed against a config that never loaded.
+          const outcome = yield* Effect.exit(cfg.set({ trustedProjects: [cwd] }))
+          expect(outcome._tag).toBe("Failure")
+          // The user's settings are still on disk, byte for byte.
+          const after = yield* fs.readFileString(userConfigPath)
+          expect(after).toEqual(original)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.live("re-setting an agent's driver replaces the prior override", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
