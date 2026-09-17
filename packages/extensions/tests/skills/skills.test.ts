@@ -1,11 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
-import {
-  Skill,
-  resolveSkillName,
-  formatSkillsForPrompt,
-  parseSkillFile,
-} from "../../src/skills/skills.js"
+import { Skill, formatSkillsForPrompt, parseSkillFile } from "../../src/skills/skills.js"
 
 const makeSkill = (name: string, level: "local" | "global", description = `${name} skill`) =>
   new Skill({
@@ -15,56 +10,6 @@ const makeSkill = (name: string, level: "local" | "global", description = `${nam
     content: `Content for ${name}`,
     level,
   })
-
-describe("resolveSkillName", () => {
-  const skills = [
-    makeSkill("effect-v4", "local"),
-    makeSkill("effect-v4", "global"),
-    makeSkill("react", "global"),
-    makeSkill("bun", "local"),
-  ]
-
-  test("plain name resolves local first", () => {
-    const result = resolveSkillName(skills, "effect-v4", Option.none())
-    expect(Option.getOrThrow(result).level).toBe("local")
-  })
-
-  test("plain name falls back to global", () => {
-    const result = resolveSkillName(skills, "react", Option.none())
-    expect(Option.getOrThrow(result).level).toBe("global")
-  })
-
-  test("$skill:local resolves to local", () => {
-    const result = resolveSkillName(skills, "$effect-v4:local", Option.none())
-    expect(Option.getOrThrow(result).level).toBe("local")
-  })
-
-  test("$skill:global resolves to global", () => {
-    const result = resolveSkillName(skills, "$effect-v4:global", Option.none())
-    expect(Option.getOrThrow(result).level).toBe("global")
-  })
-
-  test("strips $ prefix", () => {
-    const result = Option.getOrThrow(resolveSkillName(skills, "$bun", Option.none()))
-    expect(result.name).toBe("bun")
-    expect(result.level).toBe("local")
-  })
-
-  test("explicit level parameter overrides", () => {
-    const result = resolveSkillName(skills, "effect-v4", Option.some("global"))
-    expect(Option.getOrThrow(result).level).toBe("global")
-  })
-
-  test("returns undefined for unknown skill", () => {
-    const result = resolveSkillName(skills, "unknown", Option.none())
-    expect(Option.isNone(result)).toBe(true)
-  })
-
-  test("colon in name without level suffix treated as part of name", () => {
-    const result = resolveSkillName(skills, "effect:v4", Option.none())
-    expect(Option.isNone(result)).toBe(true)
-  })
-})
 
 describe("formatSkillsForPrompt", () => {
   test("empty array returns empty string", () => {

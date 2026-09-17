@@ -84,9 +84,10 @@ export const DelegateTool = tool({
     const ctx = yield* ExtensionContext
     const agent = yield* requireCurrentAgent
 
-    const appendSessionRef = (error: string, sessionId?: string) => {
-      if (Predicate.isUndefined(sessionId)) return error
-      return `${error}\n\nFull session: session://${sessionId}`
+    // Both outcomes point the parent at the child's session when there is one.
+    const withSessionRef = (text: string, sessionId?: string) => {
+      if (Predicate.isUndefined(sessionId)) return text
+      return `${text}\n\nFull session: session://${sessionId}`
     }
 
     // Background mode: durable child admission; the host delivers completion as a message.
@@ -118,17 +119,13 @@ export const DelegateTool = tool({
 
     if (result._tag === "Error") {
       return DelegateResult.cases.Error.make({
-        error: appendSessionRef(result.error, result.sessionId),
+        error: withSessionRef(result.error, result.sessionId),
       })
     }
 
     const sessionId = result.sessionId
-    const parts = [result.text]
-    if (Predicate.isNotUndefined(sessionId)) {
-      parts.push(`\n\nFull session: session://${sessionId}`)
-    }
     return DelegateResult.cases.Completed.make({
-      output: parts.join(""),
+      output: withSessionRef(result.text, sessionId),
       metadata: Record.filter(
         {
           sessionId,

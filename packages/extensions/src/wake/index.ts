@@ -17,12 +17,11 @@ import {
   DateTime,
   Duration,
   Effect,
-  Fiber,
+  FiberMap,
   Layer,
   Match,
   Option,
   Predicate,
-  Ref,
   Schema,
 } from "effect"
 import {
@@ -78,33 +77,25 @@ export class WakeAlarms extends Context.Service<WakeAlarms, WakeAlarmsService>()
 export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
   WakeAlarms,
   Effect.gen(function* () {
-    const scope = yield* Effect.scope
-    const running = yield* Ref.make<ReadonlyMap<string, Fiber.Fiber<void>>>(new Map())
-    const forget = (wakeId: string) =>
-      Ref.update(running, (current) => {
-        const next = new Map(current)
-        next.delete(wakeId)
-        return next
-      })
+    // The map is bound to the branch scope, so closing the branch interrupts
+    // every timer, and a fired timer drops its own key.
+    const running = yield* FiberMap.make<string, void>()
     const schedule: WakeAlarmsService["schedule"] = (wakeId, work) =>
       Effect.gen(function* () {
-        const current = yield* Ref.get(running)
-        if (current.has(wakeId)) return false
-        const fiber = yield* work.pipe(Effect.ensuring(forget(wakeId)), Effect.forkIn(scope))
-        yield* Ref.update(running, (latest) => new Map(latest).set(wakeId, fiber))
+        if (yield* FiberMap.has(running, wakeId)) return false
+        yield* FiberMap.run(running, wakeId, work)
         return true
       })
     const cancel: WakeAlarmsService["cancel"] = (wakeId) =>
       Effect.gen(function* () {
-        const fiber = Option.fromUndefinedOr((yield* Ref.get(running)).get(wakeId))
-        if (Option.isNone(fiber)) return false
-        yield* Fiber.interrupt(fiber.value)
+        if (!(yield* FiberMap.has(running, wakeId))) return false
+        yield* FiberMap.remove(running, wakeId)
         return true
       })
     return WakeAlarms.of({
       schedule,
       cancel,
-      pending: Ref.get(running).pipe(Effect.map((current) => [...current.keys()])),
+      pending: Effect.sync(() => [...running].map(([wakeId]) => wakeId)),
     })
   }),
 )

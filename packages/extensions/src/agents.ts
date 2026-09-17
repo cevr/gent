@@ -5,7 +5,6 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
-  type ExtensionContextService,
 } from "@gent/core/extensions/api"
 
 // What a Gent agent is and how it works. The loop states how a turn ends and
@@ -61,50 +60,52 @@ const PROJECT_INSTRUCTIONS_PRIORITY = 70
 
 const SEPARATOR = "\n---\n"
 
-type Files = Pick<ExtensionContextService["Files"], "exists" | "read" | "join">
-
 /**
  * Project instruction locations in the order they appear in the prompt. Each
  * location reads `AGENTS.md`, or `CLAUDE.md` when `AGENTS.md` is missing or
  * empty. When no location has content, the Claude user file stands in.
  */
-const locations = (files: Files, paths: { readonly cwd: string; readonly home: string }) => [
-  [files.join(paths.home, ".gent", "AGENTS.md"), files.join(paths.home, ".gent", "CLAUDE.md")],
-  [files.join(paths.cwd, "AGENTS.md"), files.join(paths.cwd, "CLAUDE.md")],
-  [files.join(paths.cwd, ".gent", "AGENTS.md"), files.join(paths.cwd, ".gent", "CLAUDE.md")],
-]
+const locations = Effect.fn("Agents.locations")(function* () {
+  const { Files, cwd, home } = yield* ExtensionContext
+  return [
+    [Files.join(home, ".gent", "AGENTS.md"), Files.join(home, ".gent", "CLAUDE.md")],
+    [Files.join(cwd, "AGENTS.md"), Files.join(cwd, "CLAUDE.md")],
+    [Files.join(cwd, ".gent", "AGENTS.md"), Files.join(cwd, ".gent", "CLAUDE.md")],
+  ]
+})
 
-const readIfPresent = (files: Files, path: string): Effect.Effect<string> =>
-  Effect.gen(function* () {
-    if (!(yield* files.exists(path))) return ""
-    return (yield* files.read(path)).trim()
+const readIfPresent = Effect.fn("Agents.readIfPresent")(function* (path: string) {
+  const { Files } = yield* ExtensionContext
+  return yield* Effect.gen(function* () {
+    if (!(yield* Files.exists(path))) return ""
+    return (yield* Files.read(path)).trim()
   }).pipe(Effect.catchEager(() => Effect.succeed("")))
+})
 
-const readFirstNonEmpty = (files: Files, candidates: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    for (const candidate of candidates) {
-      const content = yield* readIfPresent(files, candidate)
-      if (content.length > 0) return content
-    }
-    return ""
-  })
+const readFirstNonEmpty = Effect.fn("Agents.readFirstNonEmpty")(function* (
+  candidates: ReadonlyArray<string>,
+) {
+  for (const candidate of candidates) {
+    const content = yield* readIfPresent(candidate)
+    if (content.length > 0) return content
+  }
+  return ""
+})
 
 /**
  * The joined `AGENTS.md`/`CLAUDE.md` text, or an empty string when no file has
  * content. Files are read on every turn, so an edit reaches the next turn of a
  * running session; a file that cannot be read counts as absent.
  */
-export const readProjectInstructions = Effect.fn("Agents.readProjectInstructions")(function* (
-  files: Files,
-  paths: { readonly cwd: string; readonly home: string },
-) {
+export const readProjectInstructions = Effect.fn("Agents.readProjectInstructions")(function* () {
+  const { Files, home } = yield* ExtensionContext
   const contents: Array<string> = []
-  for (const candidates of locations(files, paths)) {
-    const content = yield* readFirstNonEmpty(files, candidates)
+  for (const candidates of yield* locations()) {
+    const content = yield* readFirstNonEmpty(candidates)
     if (content.length > 0) contents.push(content)
   }
   if (contents.length === 0) {
-    const fallback = yield* readIfPresent(files, files.join(paths.home, ".claude", "CLAUDE.md"))
+    const fallback = yield* readIfPresent(Files.join(home, ".claude", "CLAUDE.md"))
     if (fallback.length > 0) contents.push(fallback)
   }
   return contents.join(SEPARATOR)
@@ -128,8 +129,7 @@ export const AgentsExtension = defineExtension({
     yield* host.register("agent", ...CoreAgents)
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
-        const ctx = yield* ExtensionContext
-        const text = yield* readProjectInstructions(ctx.Files, { cwd: ctx.cwd, home: ctx.home })
+        const text = yield* readProjectInstructions()
         return { promptSections: [...basePromptSections, ...projectInstructionsSection(text)] }
       }),
     )

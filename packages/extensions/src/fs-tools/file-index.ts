@@ -40,7 +40,6 @@ interface FileIndexService {
   /** List all indexed files for a directory. */
   readonly listFiles: (params: {
     readonly cwd: string
-    readonly waitForScanMs?: number
   }) => Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError>
 }
 
@@ -195,10 +194,12 @@ interface FinderEntry {
   scanned: boolean
 }
 
+const SCAN_TIMEOUT_MS = 5000
+
 // The fff-bun library exposes a synchronous `waitForScan(timeoutMs)` that
 // blocks until the indexer signals completion (or the timeout elapses).
-const waitForScan = (finder: NativeFileFinder, timeoutMs: number): Effect.Effect<boolean> =>
-  Effect.promise(() => finder.waitForScan(timeoutMs)).pipe(
+const waitForScan = (finder: NativeFileFinder): Effect.Effect<boolean> =>
+  Effect.promise(() => finder.waitForScan(SCAN_TIMEOUT_MS)).pipe(
     Effect.map((result) => result.ok && result.value),
   )
 
@@ -260,7 +261,7 @@ const makeNativeService = (
           const finderEntry = entry.value
 
           if (!finderEntry.scanned) {
-            const completed = yield* waitForScan(finderEntry.finder, params.waitForScanMs ?? 5000)
+            const completed = yield* waitForScan(finderEntry.finder)
             if (!completed) {
               return yield* new FileIndexError({
                 message: "scan timed out",

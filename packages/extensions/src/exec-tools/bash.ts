@@ -1,7 +1,6 @@
 import {
   Cause,
   Context,
-  Deferred,
   Duration,
   Effect,
   Exit,
@@ -15,7 +14,6 @@ import {
   Scope,
   Semaphore,
   Stream,
-  type Fiber,
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
@@ -163,11 +161,6 @@ const SIGKILL_DELAY_MS = 3000
 
 type BackgroundBashJobKey = string
 
-interface BackgroundBashState {
-  readonly active: ReadonlyMap<BackgroundBashJobKey, Fiber.Fiber<void>>
-  readonly completed: ReadonlySet<BackgroundBashJobKey>
-}
-
 interface BackgroundBashJob {
   readonly command: string
   readonly cwd: Option.Option<string>
@@ -259,14 +252,6 @@ const backgroundJobKeyFields = (target: BackgroundBashTarget): BackgroundBashJob
   toolCallId: target.toolCallId,
 })
 
-const markJobCompleted = (state: BackgroundBashState, key: BackgroundBashJobKey) => {
-  const active = new Map(state.active)
-  active.delete(key)
-  const completed = new Set(state.completed)
-  completed.add(key)
-  return { active, completed } satisfies BackgroundBashState
-}
-
 const targetStillExists = (target: BackgroundBashTarget) =>
   Effect.gen(function* () {
     const session = yield* Effect.option(target.Session.getSession())
@@ -346,10 +331,13 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     const storage = yield* BackgroundBashStorage
     const scope = yield* Effect.scope
     const gate = yield* Semaphore.make(1)
-    const state = yield* Ref.make<BackgroundBashState>({
-      active: new Map(),
-      completed: new Set(),
-    })
+    // Keys this process already delivered a terminal notice for. The durable
+    // row outlives them, so without this a repeated start of a finished job
+    // would replay its notice; the fibers themselves need no map, because the
+    // durable claim answers AlreadyRunning and scope close interrupts them.
+    const completed = yield* Ref.make<ReadonlySet<BackgroundBashJobKey>>(new Set())
+    const rememberCompleted = (key: BackgroundBashJobKey) =>
+      Ref.update(completed, (keys) => new Set(keys).add(key))
 
     const runBackgroundJob = Effect.fn("BackgroundBashSupervisor.runBackgroundJob")(function* (
       job: BackgroundBashJob,
@@ -410,8 +398,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         }
         const key = backgroundJobKey(target)
         const keyFields = backgroundJobKeyFields(target)
-        const current = yield* Ref.get(state)
-        if (current.completed.has(key) || current.active.has(key)) return
+        if ((yield* Ref.get(completed)).has(key)) return
         const claim = yield* storage.claimStart({
           ...keyFields,
           command: job.command,
@@ -420,11 +407,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         if (claim._tag === "AlreadyRunning") return
         if (claim._tag === "Terminal") {
           yield* queueTerminalFollowUp(target, claim.state)
-          yield* Ref.update(state, (s) => markJobCompleted(s, key))
+          yield* rememberCompleted(key)
           return
         }
 
-        const started = yield* Deferred.make<void>()
         const fullContext = yield* Effect.context<
           ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
         >()
@@ -438,14 +424,13 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           FileSystem.FileSystem,
           Path.Path,
         )(fullContext)
-        const fiber = yield* Deferred.await(started).pipe(
-          Effect.andThen(runBackgroundJob(job, target)),
+        yield* runBackgroundJob(job, target).pipe(
           Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.void
             return queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`)
           }),
-          Effect.ensuring(Ref.update(state, (s) => markJobCompleted(s, key))),
+          Effect.ensuring(rememberCompleted(key)),
           Effect.updateContext(
             (
               _: Context.Context<
@@ -455,13 +440,6 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           ),
           Effect.forkIn(scope),
         )
-
-        yield* Ref.update(state, (s) => {
-          const active = new Map(s.active)
-          active.set(key, fiber)
-          return { ...s, active }
-        })
-        yield* Deferred.succeed(started, void 0)
       }).pipe(gate.withPermits(1))
 
     return BackgroundBashSupervisor.of({ start })

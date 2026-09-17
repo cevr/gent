@@ -56,12 +56,14 @@ describe("SkillsExtension via RPC", () => {
         const raw = yield* client.extension.request({
           sessionId,
           branchId,
-          extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
-          capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
-          input: { name: "principles" },
+          extensionId: ref(SkillsRpc.ListSkills).extensionId,
+          capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
+          input: {},
         })
-        const skill = yield* Schema.decodeUnknownEffect(SkillEntry)(raw)
-        expect(skill.name).toBe("principles")
+        const listed = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(raw)
+        const skill = Option.getOrThrow(
+          Option.fromUndefinedOr(listed.find((entry) => entry.name === "principles")),
+        )
         expect(yield* fs.readFileString(skill.filePath)).toContain(
           "references/redesign-from-first-principles.md",
         )
@@ -128,63 +130,7 @@ describe("SkillsExtension via RPC", () => {
           expect(Array.isArray(reply)).toBe(true)
           expect(reply).toHaveLength(2)
           expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "GetSkillContent via request RPC returns single skill",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [SkillsExtension],
-            layerOverrides: skillsLayerOverride,
-          })
-
-          const rawReply = yield* client.extension.request({
-            sessionId,
-            extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
-            capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
-            input: { name: "effect-v4" },
-            branchId,
-          })
-          const reply = yield* Schema.decodeUnknownEffect(Schema.NullOr(SkillEntry))(rawReply)
-
-          expect(reply).not.toBeNull()
-          expect(reply!.name).toBe("effect-v4")
-          expect(reply!.content).toBe("Use Effect.fn for tracing")
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "GetSkillContent via request RPC returns null for unknown skill",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [SkillsExtension],
-            layerOverrides: skillsLayerOverride,
-          })
-
-          const reply = yield* client.extension.request({
-            sessionId,
-            extensionId: ref(SkillsRpc.GetSkillContent).extensionId,
-            capabilityId: ref(SkillsRpc.GetSkillContent).capabilityId,
-            input: { name: "nonexistent" },
-            branchId,
-          })
-
-          expect(reply).toBeNull()
+          expect(reply[0]?.content).toBe("Use Effect.fn for tracing")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

@@ -38,6 +38,6 @@ export const SkillsExtension = defineExtension({
         }
       }),
     )
-    yield* host.register("request", SkillsRpc.ListSkills, SkillsRpc.GetSkillContent)
+    yield* host.register("request", SkillsRpc.ListSkills)
   }),
 })

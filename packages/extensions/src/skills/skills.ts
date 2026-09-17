@@ -19,17 +19,13 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 // Skills Service Interface
 //
 // `Skills` is a read-only surface — it exposes the loaded skill set
-// (`list` / `get`) but no reload/refresh path. Skill loading runs once
+// (`list`) but no reload/refresh path. Skill loading runs once
 // in the Live layer's setup; if a runtime reload becomes a real need
 // later it should arrive as an admin `request` capability or a fresh
 // resource start, not a method on the read interface.
 
 export interface SkillsService {
   readonly list: Effect.Effect<ReadonlyArray<Skill>>
-  readonly get: (
-    name: string,
-    level: Option.Option<SkillLevel>,
-  ) => Effect.Effect<Option.Option<Skill>>
 }
 
 export class Skills extends Context.Service<Skills, SkillsService>()(
@@ -38,7 +34,6 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
   static Live = (options: {
     cwd: string
     home: string
-    ignored?: ReadonlyArray<string>
   }): Layer.Layer<
     Skills,
     PlatformError.PlatformError,
@@ -49,7 +44,6 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const ignored = Option.fromNullishOr(options.ignored)
 
         const loadSkillsFromDir = (
           dir: string,
@@ -63,44 +57,22 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
             const result: Skill[] = []
 
             for (const entry of entries) {
-              const filePath = path.join(dir, entry)
-              const stat = yield* fs.stat(filePath)
+              const entryPath = path.join(dir, entry)
+              const stat = yield* fs.stat(entryPath)
 
+              // A skill is either `<dir>/<name>.md` or `<dir>/<name>/SKILL.md`.
+              let filePath = Option.none<string>()
               if (stat.type === "File" && entry.endsWith(".md")) {
-                const content = yield* fs.readFileString(filePath)
-                const parsed = parseSkillFile(content, entry)
-                if (
-                  Option.isSome(parsed) &&
-                  !Option.exists(ignored, (names) => names.includes(parsed.value.name))
-                ) {
-                  result.push(
-                    new Skill({
-                      ...parsed.value,
-                      filePath,
-                      level,
-                    }),
-                  )
-                }
+                filePath = Option.some(entryPath)
               } else if (stat.type === "Directory") {
-                // Check for SKILL.md in subdirectory
-                const skillPath = path.join(filePath, "SKILL.md")
-                const skillExists = yield* fs.exists(skillPath)
-                if (skillExists) {
-                  const content = yield* fs.readFileString(skillPath)
-                  const parsed = parseSkillFile(content, entry)
-                  if (
-                    Option.isSome(parsed) &&
-                    !Option.exists(ignored, (names) => names.includes(parsed.value.name))
-                  ) {
-                    result.push(
-                      new Skill({
-                        ...parsed.value,
-                        filePath: skillPath,
-                        level,
-                      }),
-                    )
-                  }
-                }
+                const skillPath = path.join(entryPath, "SKILL.md")
+                if (yield* fs.exists(skillPath)) filePath = Option.some(skillPath)
+              }
+              if (Option.isNone(filePath)) continue
+
+              const parsed = parseSkillFile(yield* fs.readFileString(filePath.value), entry)
+              if (Option.isSome(parsed)) {
+                result.push(new Skill({ ...parsed.value, filePath: filePath.value, level }))
               }
             }
 
@@ -122,24 +94,27 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
 
         const SKILL_DIRS = [".gent/skills", ".claude/skills", ".codex/skills", ".agents/skills"]
 
+        // Load every dir at one level, in order; the first dir to name a skill wins.
+        const loadLevel = (dirs: ReadonlyArray<string>, level: SkillLevel) =>
+          Effect.gen(function* () {
+            const skills: Skill[] = []
+            const seen = new Set<string>()
+            for (const dir of dirs) {
+              for (const skill of yield* loadSkillsFromDir(dir, level)) {
+                if (seen.has(skill.name)) continue
+                seen.add(skill.name)
+                skills.push(skill)
+              }
+            }
+            return skills
+          })
+
         const loadAllSkills = Effect.gen(function* () {
           // ── Global sources ──
           const globalDirs = [
             ...SKILL_DIRS.map((d) => path.join(options.home, d)),
             yield* installBundledSkills(options.home),
           ]
-
-          const globalSkills: Skill[] = []
-          const globalSeen = new Set<string>()
-          for (const dir of globalDirs) {
-            const dirSkills = yield* loadSkillsFromDir(dir, "global")
-            for (const skill of dirSkills) {
-              if (!globalSeen.has(skill.name)) {
-                globalSeen.add(skill.name)
-                globalSkills.push(skill)
-              }
-            }
-          }
 
           // ── Local sources ──
           // Walk from cwd up to git root, collecting skill dirs at each ancestor.
@@ -159,79 +134,21 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
             current = parent
           }
 
-          const localSkills: Skill[] = []
-          const localSeen = new Set<string>()
-          for (const dir of localDirs) {
-            const dirSkills = yield* loadSkillsFromDir(dir, "local")
-            for (const skill of dirSkills) {
-              if (!localSeen.has(skill.name)) {
-                localSeen.add(skill.name)
-                localSkills.push(skill)
-              }
-            }
-          }
-
-          return [...localSkills, ...globalSkills]
+          return [
+            ...(yield* loadLevel(localDirs, "local")),
+            ...(yield* loadLevel(globalDirs, "global")),
+          ]
         })
 
         // Initial load
         const skills = yield* loadAllSkills
 
-        return Skills.of({
-          list: Effect.succeed(skills),
-          get: (name, level) => Effect.succeed(resolveSkillName(skills, name, level)),
-        })
+        return Skills.of({ list: Effect.succeed(skills) })
       }),
     )
 
   static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
-    Layer.succeed(
-      Skills,
-      Skills.of({
-        list: Effect.succeed(testSkills),
-        get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
-      }),
-    )
-}
-
-// Resolve a skill name with optional level qualifier
-
-export function resolveSkillName(
-  skills: ReadonlyArray<Skill>,
-  name: string,
-  level: Option.Option<SkillLevel>,
-): Option.Option<Skill> {
-  // Parse "$skill:level" syntax
-  const colonIdx = name.lastIndexOf(":")
-  let parsedName = name
-  let parsedLevel = level
-  if (colonIdx > 0) {
-    const suffix = name.slice(colonIdx + 1)
-    if (suffix === "local" || suffix === "global") {
-      parsedName = name.slice(0, colonIdx)
-      parsedLevel = Option.some(suffix)
-    }
-  }
-
-  // Strip leading $ if present
-  if (parsedName.startsWith("$")) {
-    parsedName = parsedName.slice(1)
-  }
-
-  if (Option.isSome(parsedLevel)) {
-    return Option.fromNullishOr(
-      skills.find((s) => s.name === parsedName && s.level === parsedLevel.value),
-    )
-  }
-
-  // No level specified: local first, then global
-  return Option.fromNullishOr(
-    skills.find((s) => s.name === parsedName && s.level === "local"),
-  ).pipe(
-    Option.orElse(() =>
-      Option.fromNullishOr(skills.find((s) => s.name === parsedName && s.level === "global")),
-    ),
-  )
+    Layer.succeed(Skills, Skills.of({ list: Effect.succeed(testSkills) }))
 }
 
 // Parse skill file with frontmatter
