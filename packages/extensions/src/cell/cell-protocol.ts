@@ -161,7 +161,7 @@ const maximumBoundaryTokenLength = 128
 const maximumBoundaryLength =
   boundaryDelimiter.length * 2 + boundaryPrefix.length + maximumBoundaryTokenLength
 
-/** The worker writes this to stdout and stderr after a cell, before its result frame. */
+/** The worker writes this to its output pipe after a cell, before its result frame. */
 export const cellOutputBoundary = (token: string) =>
   `${boundaryDelimiter}${boundaryPrefix}${token}${boundaryDelimiter}`
 

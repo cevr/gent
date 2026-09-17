@@ -283,8 +283,8 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           .pipe(Effect.mapError(processError))
         if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
         const frame = yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
-        // The worker marks the end of the cell on both output streams before the frame;
-        // the take resolves once both marks arrived, so the output is complete and ordered.
+        // The worker marks the end of the cell on its one output pipe before the frame;
+        // the take resolves once that mark arrived, so the output is complete and ordered.
         return {
           frame,
           output: yield* child.takeOutput(outputToken).pipe(Effect.mapError(processError)),

@@ -64,11 +64,31 @@ describe("cell worker process", () => {
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(streamed.display).toBe("via stdout\nvia stderr\nfrom child\nvalue")
         // A large write right before the result still lands in full: the worker marks the
-        // end of the cell on both streams, and the host waits for both marks.
+        // end of the cell on its one output pipe, and the host waits for that mark.
         const large = yield* kernel
           .evaluate("process.stdout.write('y'.repeat(40000)); 'tail'")
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(large.display).toBe(`${"y".repeat(40000)}\ntail`)
+        // Interleaved writes return in write order. Two pipes cannot do this: a stderr
+        // write spanning several chunks, then stdout, then more stderr arrives inverted,
+        // because a merge of two pipes preserves order only within each one. The filler
+        // stays under maximumCellDisplayLength so the marks are not truncated away.
+        const interleaved = yield* kernel
+          .evaluate(
+            "process.stderr.write('E'.repeat(16000) + '\\n'); process.stdout.write('LAST-OUT\\n'); process.stderr.write('TRAILING-ERR\\n'); 'done'",
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        const marks = interleaved.display
+          .split("\n")
+          .filter((line) => line === "LAST-OUT" || line === "TRAILING-ERR")
+        expect(marks).toEqual(["LAST-OUT", "TRAILING-ERR"])
+        // A process the cell spawns writes to the same pipe, so its stderr is kept too.
+        const spawned = yield* kernel
+          .evaluate(
+            "Bun.spawnSync(['sh', '-c', 'echo child-err 1>&2'], { stderr: 'inherit' }); 'after'",
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(spawned.display).toBe("child-err\nafter")
         const quiet = yield* kernel
           .evaluate("'nothing streamed'")
           .pipe(Effect.provideService(CellOperationHost, host))
@@ -492,6 +512,48 @@ describe("cell worker process", () => {
         }
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
     10000,
+  )
+
+  it.scopedLive(
+    "reports a launch phase when the binary cannot execute, and pipes one output stream",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const binaryPath = path.join(directory, "not-executable")
+        yield* fs.writeFileString(binaryPath, "certainly not a program\n")
+        // The worker runs under a shell, so a bad binary fails at the shell's exec
+        // rather than at spawn. A death before Ready is still a launch failure.
+        const error = yield* openCellProcess({
+          binaryPath,
+          workerPath: binaryPath,
+          readinessTimeoutMs: 2000,
+        }).pipe(Effect.flip)
+        expect(error.phase).toBe("launch")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "gives the worker one output pipe and no separate stderr stream",
+    () =>
+      Effect.gen(function* () {
+        // Deterministic half of the ordering guarantee: with stderr folded into
+        // stdout there is only one stream to read, so no merge can reorder it.
+        const artifact = yield* buildCellExecutable
+        const kernel = yield* openCellKernel(artifact)
+        const host = CellOperationHost.of({ call: () => Effect.succeed(0) })
+        const fds = yield* kernel
+          .evaluate(
+            "const fs = require('node:fs'); const a = fs.fstatSync(1); const b = fs.fstatSync(2); [a.dev === b.dev, a.ino === b.ino]",
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        // One file description behind both descriptors: nothing can reorder it.
+        expect(fds.display).toBe("[ true, true ]")
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
   )
 
   it.scopedLive(

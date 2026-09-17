@@ -12,7 +12,8 @@ import {
 } from "./cell-protocol.js"
 import { CellWorkerTransport, runCellWorker } from "./cell-worker.js"
 
-/** Frames use dedicated descriptors so cell code keeps stdout and stderr for itself. */
+/** Frames use dedicated descriptors so cell code keeps stdout and stderr for itself.
+ * The host points the worker's stderr at its stdout, so both reach one ordered pipe. */
 const DescriptorTransport = Layer.effect(
   CellWorkerTransport,
   Effect.gen(function* () {
@@ -47,13 +48,10 @@ const DescriptorTransport = Layer.effect(
           Stream.concat(Stream.fromEffect(reader.end).pipe(Stream.drain)),
         )
       }),
-      endCellOutput: Effect.fn("CellWorkerTransport.endCellOutput")((outputToken) => {
-        const marker = cellOutputBoundary(outputToken)
-        return Effect.all(
-          [writeMarker(process.stdout, marker), writeMarker(process.stderr, marker)],
-          { concurrency: "unbounded", discard: true },
-        )
-      }),
+      // stderr is the same pipe as stdout, so one marker closes all cell output.
+      endCellOutput: Effect.fn("CellWorkerTransport.endCellOutput")((outputToken) =>
+        writeMarker(process.stdout, cellOutputBoundary(outputToken)),
+      ),
       send: Effect.fn("CellWorkerTransport.send")((response) =>
         Semaphore.withPermit(
           outputPermit,

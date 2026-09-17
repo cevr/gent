@@ -1614,7 +1614,7 @@ and 17210ms against 22314ms. It also failed one run in two, on
 `cell worker process > runs a compiled worker`, the same starvation signature.
 Three and a half seconds is not worth a gate that fails half the time.
 
-### Open: the cell host cannot promise cross-pipe order
+### Closed: the cell host now has one ordered output pipe
 
 Counsel confirmed a pre-existing defect. The worker writes its end-of-cell
 marker to stdout and stderr with `concurrency: "unbounded"`
@@ -1626,6 +1626,88 @@ comment at `cell-process.ts:119` and the assertion at
 ordered transcript. Under load the observed output was `via stdout`,
 `from child`, `via stderr`, `value`.
 
-The fix is one pipe for both streams, or one serialized worker output channel.
-It is a product change with its own test, so it is not in this commit. It is
-also what blocks the overlapped gate above.
+The fix is one pipe. The host now spawns the worker through a shell that points
+its stderr at its stdout before `exec`
+(`packages/extensions/src/cell/cell-process.ts:25,83`), so the kernel orders every
+write into a single descriptor. `exec` replaces the shell, so `handle.pid`,
+`isRunning`, and `kill` still address the worker itself; a probe confirmed the
+host and the child report the same pid. The host reads one stream
+(`cell-process.ts:191`), and the worker writes one marker
+(`packages/extensions/src/cell/main.ts:51`).
+
+Four other designs were measured and rejected, each with a receipt:
+
+| Design                                      | Receipt                                                            | Why it fails                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `handle.all`                                | `NodeChildProcessSpawner.ts:329` is `Stream.merge(stdout, stderr)` | The same defect one layer up                                          |
+| Rebind `process.stderr.write` in the worker | Probe lost `c-child-err`                                           | A spawned process inherits the descriptor, not the binding            |
+| A dedicated output descriptor (fd 5)        | Probe lost `c-child-out`                                           | A spawned process inherits fd 1, so its output never reaches the cell |
+| A numeric fd through `ChildProcess.make`    | Probe lost `b-err` and `c-child-err`                               | Effect's typed surface does not pass an fd through to the stdio array |
+
+The last two would break the promise at
+`packages/extensions/src/cell/cell-tool.ts:24`, that inherited output of spawned
+processes returns with the cell result.
+
+The regression test does not need load, but it is not certain either. A stderr
+write of 16,000 characters, then stdout, then more stderr inverted through
+`Stream.merge` ten times out of ten in a ten-run sample. Counsel then ran one
+hundred and measured eighty-nine failures against eleven passes, so the earlier
+"deterministic" claim was wrong: the test catches a revert with high
+probability, not with certainty. A second assertion covers the launch contract
+itself and is deterministic. The filler stays under `maximumCellDisplayLength`
+(65,536) so the marks are not truncated away. With the two-pipe code restored
+the suite returns `["TRAILING-ERR", "LAST-OUT"]` against the expected
+`["LAST-OUT", "TRAILING-ERR"]`; with the fix it passes
+(`packages/extensions/tests/cell/cell-process.test.ts:72`). A second case
+asserts a spawned process's inherited stderr still returns with the cell.
+
+This also unblocks the overlapped gate rejected above.
+
+Counsel reviewed the commit and returned no blocker, with two findings that are
+now fixed in the same scope. The first was the determinism overclaim corrected
+above. The second was a behavior change: a binary that cannot execute used to
+report `phase: "launch"`, and under the shell it reported `phase: "exit"`,
+because the shell starts successfully and only its `exec` fails. `phase` reaches
+the model through `packages/extensions/src/cell/cell-execution.ts:264`, so the
+change was user-visible. A single mutable phase now carries the answer
+(`packages/extensions/src/cell/cell-process.ts:109`): it reads `launch` until the
+worker sends `Ready`, and `exit` after. Every death path reports through it, so
+no handler can disagree with another. Two tests cover it: a non-executable binary
+asserts `launch`, and the existing post-`stop` case still asserts `exit`.
+
+Counsel also confirmed by probe what reasoning alone could not: quoting survives
+spaces, quotes, and newlines; `exec` keeps the pid and process group; shell
+`exec` errors still reach the diagnostics buffer; and the merged pipe produced
+zero wrong orders across four hundred runs at 16 KiB, 64 KiB, 256 KiB, and 1 MiB.
+One open note, not a merge condition: `/bin/sh` is a new runtime requirement, and
+a minimal Linux image is not guaranteed to have it.
+
+### The wake store tests run on a virtual clock (2026-09-17)
+
+`packages/extensions/tests/wake/wake-store.test.ts` waited on real alarms:
+0.2s, 0.3s, and a `gent/no-sleep`-waived `Effect.sleep("500 millis")`. It now
+provides `TestClock.layer()` in the same merged layer as `WakeAlarmsLive`, so
+the fiber `WakeAlarms.schedule` forks with `Effect.forkIn(scope)` follows
+virtual time. The file went from 864ms to about 130ms, and the sleep waiver is
+gone. The whole wake directory is 8 tests in 1452ms, against 2.20s before.
+
+Two facts shaped the conversion. `TestClock` starts at epoch 0, so a stored
+`dueAt` of 1,000 is one second ahead of it rather than past due. And firing is
+not one step: `armEntry` wires `Effect.ensuring(forget)` around the work
+(`packages/extensions/src/wake/index.ts:258`), so the wake is queued before the
+branch file is rewritten. A latch opened by the test's own `queueFollowUp`
+therefore opens too early to assert the file.
+
+The wait for that second step was wrong twice before it was right. Yielding a
+bounded number of times and then returning silently passed alone and failed the
+gate: under `--parallel=3` the alarm fiber did not get scheduled inside the
+budget, so the test read a half-finished fire. The wait now advances the virtual
+clock one millisecond per turn, which both yields and releases sleeps, and fails
+loudly when the budget runs out. Under six busy loops it failed two runs in
+twenty before, and zero in twenty after.
+
+`packages/extensions/tests/wake/wake.test.ts` is not converted. Its four heavy
+cases run through `createRpcHarness`, and a probe of that harness under
+`TestClock.layer()` stalled inside the RPC transport
+(`effect/unstable/rpc/RpcClient.js:115`). The saving is the 739ms above, not the
+1.4s the earlier note estimated.

@@ -22,6 +22,13 @@ export const cellResponseFd = 3
 /** Host-to-worker frames travel on this descriptor. */
 export const cellRequestFd = 4
 
+/**
+ * The worker runs under a shell that points its stderr at its stdout, so all cell
+ * output shares one pipe and arrives in write order. `$0` is the binary and `$1`
+ * the worker path, so the worker sees the same argv it would without the shell.
+ */
+const cellOutputRedirect = 'exec "$0" "$1" 2>&1'
+
 /** Keeps the first `limit` characters and counts the rest. */
 const makeOutputBuffer = (limit: number) => {
   let text = ""
@@ -69,16 +76,23 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     const info = yield* fs.stat(file).pipe(Effect.mapError(launchError))
     if (info.type !== "File") return yield* launchError("Cell launch requires regular files")
   }
-  const handle = yield* ChildProcess.make(binaryPath, [workerPath], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    additionalFds: {
-      [`fd${cellResponseFd}`]: { type: "output" },
-      [`fd${cellRequestFd}`]: { type: "input" },
+  // `exec` replaces the shell, so the worker keeps this pid and the redirect makes
+  // its stderr the same pipe as its stdout. One descriptor means the kernel orders
+  // every write, including those of a process the cell spawns with inherited stdio.
+  const handle = yield* ChildProcess.make(
+    "/bin/sh",
+    ["-c", cellOutputRedirect, binaryPath, workerPath],
+    {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+      additionalFds: {
+        [`fd${cellResponseFd}`]: { type: "output" },
+        [`fd${cellRequestFd}`]: { type: "input" },
+      },
+      forceKillAfter: "1 second",
     },
-    forceKillAfter: "1 second",
-  }).pipe(Effect.mapError(launchError))
+  ).pipe(Effect.mapError(launchError))
 
   const diagnosticsBuffer = makeOutputBuffer(8192)
   const diagnostics = () => diagnosticsBuffer.read()
@@ -88,9 +102,14 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   const ready = yield* Deferred.make<boolean, CellProcessError>()
   const incoming = yield* Queue.make<CellResponse, CellProcessError>({ capacity: 8 })
   const outbound = yield* Queue.make<Uint8Array>({ capacity: 8 })
+  // A worker that dies before it reports Ready never launched. The shell reports a
+  // bad binary through its own exit, so the phase has to come from readiness rather
+  // than from whichever handler noticed the death first.
+  // The flag holds the phase itself, so a death needs no branch to classify it.
+  let deathPhase: "launch" | "exit" = "launch"
   const closedError = () =>
     new CellProcessError({
-      phase: "exit",
+      phase: deathPhase,
       message: "Cell worker closed",
       diagnostics: diagnostics(),
     })
@@ -103,7 +122,11 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   yield* handle.exitCode.pipe(
     Effect.mapError(
       (cause) =>
-        new CellProcessError({ phase: "exit", message: String(cause), diagnostics: diagnostics() }),
+        new CellProcessError({
+          phase: deathPhase,
+          message: String(cause),
+          diagnostics: diagnostics(),
+        }),
     ),
     Effect.flatMap(() => Effect.fail(closedError())),
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
@@ -116,13 +139,12 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
     Effect.forkScoped,
   )
-  // Worker stdout and stderr carry cell output, never protocol frames. Each Evaluate
-  // carries an unpredictable token; the worker ends the cell with a boundary carrying
-  // that token on both streams before its result frame. Text before both boundaries
-  // belongs to the cell. Text after them is dropped when the next Evaluate is sent,
-  // and text after that belongs to the next cell.
+  // One pipe carries all cell output, never protocol frames. Each Evaluate carries an
+  // unpredictable token; the worker ends the cell with a boundary carrying that token
+  // before its result frame. Text before the boundary belongs to the cell. Text after
+  // it is dropped when the next Evaluate is sent, and text after that belongs to the
+  // next cell.
   const cellOutput = makeOutputBuffer(maximumCellDisplayLength)
-  const endedStreams = new Set<string>()
   let expectedToken = Option.none<string>()
   let finished = Option.none<{ readonly token: string; readonly text: string }>()
   let outputClosed = false
@@ -132,14 +154,12 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   }>()
   const beginCell = (token: string) => {
     cellOutput.take()
-    endedStreams.clear()
     expectedToken = Option.some(token)
     finished = Option.none()
   }
   const settle = (token: string) =>
     Effect.suspend(() => {
       const text = cellOutput.take()
-      endedStreams.clear()
       expectedToken = Option.none()
       if (Option.isSome(waiter) && waiter.value.token === token) {
         return Deferred.succeed(waiter.value.deferred, text)
@@ -147,19 +167,15 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
       finished = Option.some({ token, text })
       return Effect.void
     })
-  const readOutput = (name: string, bytes: Stream.Stream<Uint8Array, unknown>) => {
+  const readOutput = (bytes: Stream.Stream<Uint8Array, unknown>) => {
     const decoder = new TextDecoder()
-    const scanner = makeCellOutputScanner(() => {
-      if (endedStreams.has(name)) return Option.none()
-      return expectedToken
-    })
+    const scanner = makeCellOutputScanner(() => expectedToken)
     const consume = (segment: CellOutputSegment) =>
       Effect.gen(function* () {
         diagnosticsBuffer.append(segment.text)
         cellOutput.append(segment.text)
         if (Option.isNone(segment.boundary)) return
-        endedStreams.add(name)
-        if (endedStreams.size === 2) yield* settle(segment.boundary.value)
+        yield* settle(segment.boundary.value)
       })
     return bytes.pipe(
       Stream.mapEffect((chunk) =>
@@ -181,10 +197,7 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
       onSome: (active) => Deferred.fail(active.deferred, closedError()),
     })
   })
-  yield* Stream.merge(
-    readOutput("stdout", handle.stdout),
-    readOutput("stderr", handle.stderr),
-  ).pipe(
+  yield* readOutput(handle.stdout).pipe(
     Stream.runDrain,
     Effect.mapError(ioError),
     Effect.catchCause((cause) => Deferred.failCause(failure, cause)),
@@ -224,7 +237,7 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
         Stream.suspend(() =>
           Stream.fail(
             new CellProcessError({
-              phase: "exit",
+              phase: deathPhase,
               message: "Cell worker pipe closed",
               diagnostics: diagnostics(),
             }),
@@ -235,14 +248,13 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     )
   })
 
-  let receivedReady = false
   yield* responses.pipe(
     Stream.runForEach((response) =>
       Effect.gen(function* () {
-        if (!receivedReady) {
+        if (deathPhase === "launch") {
           if (response._tag !== "Ready")
             return yield* launchError("Cell worker did not send Ready first")
-          receivedReady = true
+          deathPhase = "exit"
           yield* Deferred.succeed(ready, true)
         } else if (response._tag === "Ready") {
           return yield* ioError("Cell worker sent Ready twice")
@@ -287,7 +299,7 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     pid: handle.pid,
     responses: Stream.fromQueue(incoming),
     diagnostics: Effect.sync(diagnostics),
-    /** Output the worker wrote during the cell, once both streams passed its boundary. */
+    /** Output the worker wrote during the cell, once its boundary arrived. */
     takeOutput,
     isRunning: handle.isRunning.pipe(Effect.mapError(ioError)),
     exitCode: handle.exitCode.pipe(Effect.mapError(ioError)),
