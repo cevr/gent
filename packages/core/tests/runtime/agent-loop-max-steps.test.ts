@@ -18,6 +18,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers, finishPart, toolCallPart } from "../../src/test-utils/language-model"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
+import { AgentName } from "../../src/domain/agent"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import type { AgentEvent } from "../../src/domain/event"
 import { makeAgentLoopService, makeLayerWithEvents, runAgentLoop } from "./agent-loop/helpers"
@@ -70,6 +71,38 @@ describe("max turn steps", () => {
         expect(turnCompleted.length).toBeGreaterThan(0)
         // Without the flag this reads as a successful turn with an empty
         // transcript, and headless mode exits 0 on it.
+        expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
+    }),
+  )
+
+  /**
+   * The same failure at the loop's other give-up exit.
+   *
+   * `resolveTurnContext` publishes `ErrorOccurred` and returns undefined for an
+   * agent no extension defines (`turn-resolve.ts:134`). `runTurnStep` turned
+   * that into a `Stop` with every flag false, so the turn published a
+   * `TurnCompleted` indistinguishable from a reply.
+   */
+  it.live("a turn for an unknown agent is marked unanswered", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("who are you"), {
+          agentOverride: AgentName.make("no-such-agent"),
+        })
+
+        const events = yield* Ref.get(eventsRef)
+        expect(
+          events.some(
+            (event) =>
+              event._tag === "ErrorOccurred" && event.error === "Unknown agent: no-such-agent",
+          ),
+        ).toBe(true)
+        const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+        expect(turnCompleted).toHaveLength(1)
         expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))

@@ -77,6 +77,16 @@ export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): Mess
 export const continuationMessageIdForTurn = (messageId: MessageId, step: number): MessageId =>
   MessageId.make(`${messageId}:continuation:${step}`)
 
+/**
+ * The durable instruction that opens the last step a turn is allowed.
+ *
+ * Separate from `continuationMessageIdForTurn` because it is not a
+ * continuation: continuations are bounded per turn and answer a step that went
+ * wrong, while this one opens a step the budget itself ended.
+ */
+export const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
+  MessageId.make(`${messageId}:final-step`)
+
 export const interjectionMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.make(`${commandId}:interjection`)
 

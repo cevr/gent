@@ -1103,12 +1103,26 @@ sequence, and the `External turn exceeded the 200 tool step limit` error. Only
 `:467` before that check was found was deleted rather than committed: it
 asserted a strict subset of the existing one.
 
-The third site, the replay scan at `:862`, needs no test. It walks
-`step = 1..MAX_TURN_STEPS` looking for persisted assistant messages, and every
-writer of those messages is itself bounded — the model path stops at `:1273`,
-the external path fails at `:467`. No turn can persist a step the scan cannot
-reach, so the bound can never truncate a real position. An earlier note in this
-ledger called it a silent truncation; that was wrong too.
+The third site, the replay scan at `:862`, was twice recorded here as needing
+no test because "every writer is bounded". **That is false, and this is the
+second correction to the same claim.** Counsel found it on 2026-09-17 and the
+trace confirms it: `nextExternalStep` starts at `params.step` (`:468`); the
+guard rejects only `step > MAX_TURN_STEPS` (`:481`), so a callback at exactly
+step 200 passes and increments to 201 (`:488`); `:566` then assigns
+`responseStep = nextExternalStep` for the final external response. A writer can
+persist step 201.
+
+The scan walks `1..MAX_TURN_STEPS` (`:872`) and breaks on the first missing
+assistant id (`:886`). After 200 contiguous callbacks it finds all 200, sets
+`lastCompletedStep = 200`, and exits without ever looking at 201. On the
+fallback path — turn-record row missing — recovery therefore resumes believing
+step 200 was the last, and the step-201 answer is invisible to the derived
+position.
+
+`external-turn.test.ts:541` drives 201 callbacks and asserts the `:467` guard
+in detail, but nothing covers 200 callbacks **followed by a final answer**,
+which is the shape that reaches 201. Open, not fixed in this rift: the fix
+belongs with its own probe rather than folded into an unrelated batch.
 
 The fix sets `unanswered = true` at the runaway break. The receipt now
 distinguishes a turn that gave up from a turn that replied, which is all the
@@ -1119,11 +1133,13 @@ through the full budget. With the fix, 1 pass — the wide event records
 `toolCallCount: 200, unanswered: true`. With the fix reverted and nothing else
 changed, it fails on the flag: `Expected: true, Received: false`.
 
-Not adopted: opencode's re-prompt-with-tools-disabled. It is the better product
-behaviour, but it needs a per-step `toolChoice` seam that `ResolvedTurnContext`
-does not carry (`turn-resolve.ts:251`), and the honest receipt is the
-prerequisite either way. Recorded here so a later pass can take it up knowing
-the seam is the work, not the prompt.
+Adopted on 2026-09-17, and the seam was smaller than this paragraph predicted.
+It is not on `ResolvedTurnContext` at all: `resolveTurnSource` takes a
+`finalStep` flag and passes `toolChoice: "none"` to `streamText`
+(`turn-source.ts:385`). Effect supports that natively, so the toolkit stays in
+the request and the provider's cached prefix survives — dropping the tools, the
+approach this paragraph assumed, would have invalidated it. See the section
+below.
 
 Gate `GATE EXIT 0` on the rift.
 
@@ -1239,3 +1255,78 @@ composition decision to `Gent.server`. Its `package.json` still has no `test`
 script, so the launch-config decoders correctly live in `packages/sdk/tests/`.
 
 Gate `GATE EXIT 0` on the rift.
+
+## The toolChoice seam, and two more unanswered-turn bugs (2026-09-17)
+
+### The seam
+
+opencode-v2 re-prompts at its step ceiling with tools disabled
+(`runner/llm.ts:221`) so the model spends its last step writing an answer
+instead of being cut off mid-plan. We now do the same.
+
+- `MAX_STEPS_INSTRUCTION` (`agent-loop.turn-execution.ts:128`) is what the
+  model reads on that step.
+- `finalStepMessageIdForTurn` (`agent-loop.utils.ts:87`) gives it a durable id.
+  It is deliberately not a continuation: continuations are bounded at
+  `MAX_CONTINUATIONS_PER_TURN = 2` and would refuse at step 200.
+- `"max-steps"` joins the closed `RuntimeUserMessageType` enum
+  (`message.ts:63`), so the instruction never resumes as a user turn.
+- `resolveTurnSource` gained `finalStep` and passes `toolChoice: "none"`
+  (`turn-source.ts:110`, `:385`). The toolkit stays: dropping it would
+  invalidate the provider's cached prefix, and Effect supports the flag
+  natively (`LanguageModel.d.ts:229`).
+- `runTurn` fires it at `step === MAX_TURN_STEPS` — the last permitted step —
+  leaving `unanswered = true` at `step > MAX_TURN_STEPS` to mean "even the
+  tool-free step said nothing".
+
+Receipt: `turn.max-steps-final` logs once at `step: 200, max: 200`. The
+existing `agent-loop-max-steps.test.ts` still passes and still reports
+`unanswered: true`, because `LanguageModelLayers.testStream` returns a fixed
+tool-call stream and cannot honour `toolChoice`. That is the correct outcome,
+not a masked failure: a model that ignores tool-disabling still answered
+nothing. `testStream` does receive `options`, so a future test can assert the
+flag directly.
+
+### Two more turns that reported success with no answer
+
+Counsel found both on the `64c924c4..9048f674` review. Both are the same
+defect as the runaway fix, at other exits from the same loop.
+
+**An empty external turn.** `classifyStep` computed `observable` and then
+returned `External.make({})` without it (`:99`, `:102`), and the consumer
+stopped with every flag false (`:1225`). An ACP prompt that finishes without
+sending an update produces exactly one finish part: `executor.ts:328` filters
+the empty update stream away and concatenates the terminal part alone.
+`StepOutcome.External` now carries `empty`, and the consumer sets `unanswered`
+from it.
+
+**An unknown agent.** `resolveTurnContext` publishes `ErrorOccurred` and
+returns undefined (`turn-resolve.ts:134`); `runTurnStep` turned that into a
+`Stop` with every flag false. It now sets `unanswered: true`. Note that
+`headless-runner.ts:118` separately resolves its deferred as _answered_ on
+`ErrorOccurred` — that is deliberate, the error did reach stderr, and the flag
+question is independent of it.
+
+Probes, each reverting one line and nothing else:
+
+- Revert `External: ({ empty }) => ... unanswered: empty` to `stop({})` —
+  `external-turn.test.ts:551` fails on the flag.
+- Revert the unknown-agent flag to `stopWith(..., {})` —
+  `agent-loop-max-steps.test.ts:106` fails on the flag: 1 pass, 1 fail.
+- Both restored: 19 pass, 0 fail across the two files.
+
+### Counsel findings not taken
+
+- **The size comparison uses incomparable scopes.** Fair hit. The gent figure
+  is a whole directory (8,338) and every other figure is a single file. The
+  order-of-magnitude framing is withdrawn; the corrected table stays for the
+  per-file numbers only.
+- **The max-steps test does not assert it reached the limit.** True. It checks
+  the flag, not the call count. The wide event does record
+  `toolCallCount: 200`, and the probe shows the old source fails the
+  assertion, so the test is not passing incidentally today. A call-count
+  assertion would harden it.
+- **`makeClientSessionQuery` has no request-generation guard.** Real, and
+  distinct from the shared-staleness candidate refused above — that refusal
+  stands. Two queries for the _same_ session can still land out of order
+  (`client-services.ts:145`, `:157`; `agents-view.client.tsx:528`). Open.

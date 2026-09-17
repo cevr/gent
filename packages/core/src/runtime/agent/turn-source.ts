@@ -102,6 +102,12 @@ export type ExternalToolPersistence = {
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
   step: number
+  /**
+   * The last step this turn may run. The model keeps its tool definitions —
+   * dropping them would invalidate the provider's cached prefix — but is told
+   * it may not call one, so the step produces the turn's answer.
+   */
+  finalStep: boolean
   resolved: ResolvedTurnContext
   sessionId: SessionId
   branchId: BranchId
@@ -376,6 +382,14 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     resolveAdmittedModel(modelRequest).pipe(
       Effect.map((model) => {
         if (resolved.tools.length > 0) {
+          if (params.finalStep) {
+            return model.streamText({
+              prompt,
+              toolkit,
+              toolChoice: "none",
+              disableToolCallResolution: true,
+            })
+          }
           return model.streamText({
             prompt,
             toolkit,

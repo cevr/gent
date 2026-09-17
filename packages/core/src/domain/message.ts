@@ -47,6 +47,11 @@ export type MessageRole = typeof MessageRole.Type
  * of them is a turn a person asked for on its own, so recovery never answers
  * one by itself.
  *
+ * `max-steps` marks the instruction that opens the last step a turn is
+ * allowed. The step that reads it runs with tools disabled, so the turn ends
+ * with an answer rather than being cut off mid-plan. Like the others it is
+ * never a turn to answer on its own.
+ *
  * `steering` marks only an interjection delivered at a step boundary: the
  * turn it joined already answers it, and it never gets a `TurnCompleted` of
  * its own. An interjection that woke an idle branch is a turn in its own
@@ -55,6 +60,7 @@ export type MessageRole = typeof MessageRole.Type
 export const RuntimeUserMessageType = Schema.Literals([
   "continuation",
   "context-window",
+  "max-steps",
   "model-change",
   "steering",
 ])

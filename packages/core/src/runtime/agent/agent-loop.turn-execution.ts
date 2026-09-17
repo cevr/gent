@@ -25,6 +25,7 @@ import {
 } from "../../domain/tool-call-recovery.js"
 import {
   continuationMessageIdForTurn,
+  finalStepMessageIdForTurn,
   toolCallsFromMessage,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
@@ -85,8 +86,11 @@ export const StepOutcome = Schema.TaggedUnion({
   Interrupted: {},
   /** The stream failed; `partialOutput` says whether observable output was saved first. */
   Failed: { partialOutput: Schema.Boolean },
-  /** The external driver ran the whole step, tools included. */
-  External: {},
+  /**
+   * The external driver ran the whole step, tools included. `empty` says the
+   * driver finished without producing anything observable.
+   */
+  External: { empty: Schema.Boolean },
   /** The model asked for tools; the response parts carry them. */
   ToolCalls: { count: Schema.Int },
   /** No tool calls: an answer, nothing at all, or output cut off at the limit. */
@@ -98,7 +102,9 @@ export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
   const observable = collected.responseParts.some(isObservableModelOutputPart)
   if (collected.interrupted) return StepOutcome.cases.Interrupted.make({})
   if (collected.streamFailed) return StepOutcome.cases.Failed.make({ partialOutput: observable })
-  if (collected.driverKind === "external") return StepOutcome.cases.External.make({})
+  if (collected.driverKind === "external") {
+    return StepOutcome.cases.External.make({ empty: !observable })
+  }
   const count = toolCallsFromResponseParts(collected.responseParts).length
   if (count > 0) return StepOutcome.cases.ToolCalls.make({ count })
   return StepOutcome.cases.Answered.make({
@@ -117,6 +123,16 @@ const CONTINUATION_INSTRUCTION =
 
 const EMPTY_RESPONSE_INSTRUCTION =
   "Your previous step returned no text and no tool calls. Answer the request now using the tool results above."
+
+/**
+ * What the model is told on the last step its turn is allowed.
+ *
+ * The step runs with `toolChoice: "none"`, so this is not a request the model
+ * can decline by calling one more tool: it is the only move left. Prior art:
+ * opencode-v2 does the same at its own ceiling (`runner/llm.ts:221`).
+ */
+const MAX_STEPS_INSTRUCTION =
+  "You have reached the maximum number of steps for this turn, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the step limit stopped you, summarise what you established, and name what is still unfinished."
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
   "Your previous step hit the output limit before it finished, so its tool call was discarded. Retry in smaller steps: make one shorter tool call now and continue after its result."
@@ -385,6 +401,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const collectTurnStream = Effect.fn("AgentLoop.collectTurnStream")(function* (params: {
       messageId: RunningState["message"]["id"]
       step: number
+      /** The last step the turn may run; it streams with tools disabled. */
+      finalStep: boolean
       resolved: ResolvedTurnContext
       activeStream: ActiveStreamHandle
     }) {
@@ -457,6 +475,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const source = yield* resolveTurnSource({
         messageId: params.messageId,
         step: params.step,
+        finalStep: params.finalStep,
         resolved: params.resolved,
         sessionId: scope.sessionId,
         branchId: scope.branchId,
@@ -1092,6 +1111,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const runTurnStep = Effect.fn("AgentLoop.runTurnStep")(function* (params: {
       readonly state: RunningState
       readonly step: number
+      /**
+       * The last step this turn may run. Set by `runTurn` when the step budget
+       * is down to its final step, so the model answers instead of being cut
+       * off mid-plan.
+       */
+      readonly finalStep: boolean
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
@@ -1115,7 +1140,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           unanswered: false,
           ...flags,
         })
-      if (Predicate.isUndefined(resolved)) return stopWith(params.currentTurnAgent, {})
+      // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
+      // agent, most often. The turn produced no answer, so say so rather than
+      // publish a `TurnCompleted` no caller can tell from a reply.
+      if (Predicate.isUndefined(resolved)) {
+        return stopWith(params.currentTurnAgent, { unanswered: true })
+      }
 
       const currentTurnAgent = resolved.currentTurnAgent
       if (params.step === 1) {
@@ -1136,6 +1166,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return yield* collectTurnStream({
             messageId: params.state.message.id,
             step: params.step,
+            finalStep: params.finalStep,
             resolved,
             activeStream,
           })
@@ -1201,7 +1232,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             if (!partialOutput) return Effect.succeed(stop({ streamFailed: true }))
             return continueOr(CONTINUATION_INSTRUCTION, stop({ streamFailed: true }))
           },
-          External: () => Effect.succeed(stop({})),
+          // An external driver that finished without observable output answered
+          // nothing. Leaving the flags false publishes a `TurnCompleted` that
+          // reads like a reply, and `headless-runner.ts:122` exits 0 on it.
+          External: ({ empty }) => Effect.succeed(stop({ unanswered: empty })),
           // A step with nothing observable answered nothing; one cut off at the
           // output limit lost what it was writing. Re-prompt rather than report
           // the fragment as the reply; once continuations are spent, say so.
@@ -1271,11 +1305,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         while (true) {
           step++
           if (step > MAX_TURN_STEPS) {
-            // A turn that burns the whole step budget never reached an answer:
-            // every step it ran asked for more tools. Leaving the flags false
-            // publishes a `TurnCompleted` no caller can tell from a reply, and
-            // `headless-runner.ts` reads exactly that flag to pick its exit
-            // code, so `gent -H` would exit 0 having printed nothing.
+            // Only reachable when the final step below said nothing at all: it
+            // ran with tools disabled, so it had no way to ask for another.
+            // Leaving the flags false publishes a `TurnCompleted` no caller can
+            // tell from a reply, and `headless-runner.ts` reads exactly that
+            // flag to pick its exit code, so `gent -H` would exit 0 having
+            // printed nothing.
             unanswered = true
             yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
               Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
@@ -1288,7 +1323,35 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             break
           }
 
-          const stepResult = yield* runTurnStep({ state, step, currentTurnAgent, turnProfile })
+          // The last step the budget allows. Rather than cut the turn off
+          // mid-plan, tell the model its tools are gone and let it spend this
+          // step writing the answer. Prior art: opencode-v2 does the same at
+          // its ceiling (`runner/llm.ts:221`).
+          const finalStep = step === MAX_TURN_STEPS
+          if (finalStep) {
+            yield* persistMessageReceived({
+              message: Message.cases.regular.make({
+                id: finalStepMessageIdForTurn(state.message.id),
+                sessionId: scope.sessionId,
+                branchId: scope.branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text: MAX_STEPS_INSTRUCTION })],
+                createdAt: yield* DateTime.nowAsDate,
+                metadata: { customType: "max-steps", details: { step } },
+              }),
+            })
+            yield* Effect.logWarning("turn.max-steps-final").pipe(
+              Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
+            )
+          }
+
+          const stepResult = yield* runTurnStep({
+            state,
+            step,
+            finalStep,
+            currentTurnAgent,
+            turnProfile,
+          })
           if (stepResult._tag === "Stop") {
             currentTurnAgent = stepResult.currentTurnAgent
             interrupted = stepResult.interrupted

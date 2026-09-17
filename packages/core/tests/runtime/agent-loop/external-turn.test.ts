@@ -527,6 +527,33 @@ describe("external turn execution", () => {
       )
     }),
   )
+  it.live("an external turn that produces nothing is marked unanswered", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      // An ACP prompt that completes without ever sending an update produces
+      // exactly this: `executor.ts:328` filters the empty update stream away
+      // and concatenates the terminal finish part on its own.
+      const executor = makeMockExecutor([finish()])
+      const layer = makeLayerWithEvents(executor, eventsRef)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const loop = yield* makeAgentLoopService
+          yield* runAgentLoop(loop, makeMessage("say nothing"), {
+            agentOverride: externalAgent.name,
+          })
+          const completed = (yield* Ref.get(eventsRef)).filter(
+            (event) => event._tag === "TurnCompleted",
+          )
+          expect(completed).toHaveLength(1)
+          // `classifyStep` returned `External` before it read `observable`, so
+          // every flag stayed false and headless mode exited 0 on an empty
+          // transcript.
+          expect(completed.every((event) => event.unanswered === true)).toBe(true)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+      )
+    }),
+  )
   it.live("external callback limit rejects before another side effect or saved intent", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
