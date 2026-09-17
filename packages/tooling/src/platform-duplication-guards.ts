@@ -86,6 +86,10 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
       "The subprocess trace handoff is deleted with its supervisor; nothing sets these variables",
   },
   {
+    pattern: /\b(?:positiveIntegerOr|tcpPortOr|knownModeOr|LaunchConfigError)\b/,
+    message: "Hand-written launch decoders are deleted; read the environment through LaunchConfig",
+  },
+  {
     pattern: /\b(?:Any)?(?:Query|Capability)Contribution\b/,
     message:
       "Query/Capability contribution authoring is deleted; extensions contribute tools and requests",

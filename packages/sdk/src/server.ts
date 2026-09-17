@@ -10,8 +10,8 @@ import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import {
   Clock,
+  Config,
   Context,
-  Data,
   Deferred,
   Effect,
   Layer,
@@ -86,80 +86,39 @@ export interface IdleShutdownSpec {
 }
 
 /**
- * A launch value the environment got wrong.
+ * Every launch value the standalone server reads from its environment.
  *
- * It stops the process at startup instead of letting a wrong value run:
- * `GENT_IDLE_TIMEOUT_MS=-1` would otherwise shut the server down on its first
- * poll, and a misspelled `GENT_PROVIDER_MODE` would quietly bill a live
- * provider for what the caller asked to run scripted.
+ * Each field stops the process at startup rather than letting a wrong value
+ * run: `GENT_IDLE_TIMEOUT_MS=-1` would otherwise shut the server down on its
+ * first poll, and a misspelled `GENT_PROVIDER_MODE` would quietly bill a live
+ * provider for what the caller asked to run scripted. An unset variable takes
+ * its default; a present but invalid one fails.
  *
- * These decoders live beside `GentServerOptions` because that is the surface
- * they guard. A launcher reads strings from its environment; this is where a
- * string becomes a value `Gent.server` accepts.
+ * This lives beside `GentServerOptions` because that is the surface it guards.
+ * A launcher reads strings from its environment; this is where they become
+ * values `Gent.server` accepts.
  */
-export class LaunchConfigError extends Data.TaggedError("@gent/sdk/src/server/LaunchConfigError")<{
-  readonly variable: string
-  readonly value: string
-  readonly expected: string
-}> {
-  override get message(): string {
-    return `${this.variable}=${this.value} is not valid; expected ${this.expected}`
-  }
-}
-
-/** A positive whole number, or the fallback when the variable is unset. */
-export const positiveIntegerOr = (
-  variable: string,
-  raw: Option.Option<string>,
-  fallback: number,
-): Effect.Effect<number, LaunchConfigError> => {
-  if (Option.isNone(raw)) return Effect.succeed(fallback)
-  const value = raw.value
-  const parsed = Number(value)
-  if (Number.isSafeInteger(parsed) && parsed > 0) return Effect.succeed(parsed)
-  return Effect.fail(
-    new LaunchConfigError({ variable, value, expected: "a positive whole number" }),
-  )
-}
-
-/** A port this process may bind: a whole number in the TCP range. */
-export const tcpPortOr = (
-  variable: string,
-  raw: Option.Option<string>,
-  fallback: number,
-): Effect.Effect<number, LaunchConfigError> => {
-  if (Option.isNone(raw)) return Effect.succeed(fallback)
-  const value = raw.value
-  const parsed = Number(value)
-  if (Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 65535) return Effect.succeed(parsed)
-  return Effect.fail(
-    new LaunchConfigError({ variable, value, expected: "a whole number from 1 to 65535" }),
-  )
-}
-
-/**
- * One of `allowed`, or the fallback when the variable is unset.
- *
- * An unknown mode fails rather than falling through to the default. Every mode
- * selects a different provider, store, or process lifetime, so silently
- * picking the default hides the typo until the wrong one has already run.
- */
-export const knownModeOr = <A extends string>(
-  variable: string,
-  raw: Option.Option<string>,
-  allowed: ReadonlyArray<A>,
-  fallback: A,
-): Effect.Effect<A, LaunchConfigError> => {
-  if (Option.isNone(raw)) return Effect.succeed(fallback)
-  const value = raw.value
-  const match = allowed.find((candidate) => candidate === value)
-  if (Predicate.isUndefined(match)) {
-    return Effect.fail(
-      new LaunchConfigError({ variable, value, expected: `one of ${allowed.join(", ")}` }),
-    )
-  }
-  return Effect.succeed(match)
-}
+export const LaunchConfig = Config.all({
+  port: Config.port("GENT_PORT").pipe(Config.withDefault(3000)),
+  serverMode: Config.literals(["standalone", "shared"], "GENT_SERVER_MODE").pipe(
+    Config.withDefault("standalone"),
+  ),
+  persistenceMode: Config.literals(["sqlite", "memory"], "GENT_PERSISTENCE_MODE").pipe(
+    Config.withDefault("sqlite"),
+  ),
+  providerMode: Config.literals(["live", "debug-scripted"], "GENT_PROVIDER_MODE").pipe(
+    Config.withDefault("live"),
+  ),
+  // An idle window of no length stops the server at once, so zero fails too.
+  idleTimeoutMs: Config.schema(
+    Schema.Int.check(Schema.isGreaterThan(0)),
+    "GENT_IDLE_TIMEOUT_MS",
+  ).pipe(Config.withDefault(30_000)),
+  home: Config.option(Config.string("HOME")),
+  dataDir: Config.option(Config.string("GENT_DATA_DIR")),
+  authDirectory: Config.option(Config.string("GENT_AUTH_DIRECTORY")),
+  shell: Config.option(Config.string("SHELL")),
+})
 
 export interface GentServerOptions {
   readonly cwd: string

@@ -9,6 +9,7 @@ describe("SDK public surface", () => {
       "Gent",
       "GentConnectionError",
       "LOG_DIR",
+      "LaunchConfig",
       "QueueEntryInfo",
       "QueueSnapshot",
       "ServerLockEntry",
@@ -23,14 +24,11 @@ describe("SDK public surface", () => {
       "extractText",
       "getLocalHostname",
       "isPidAlive",
-      "knownModeOr",
       "makeJsonFileLogger",
-      "positiveIntegerOr",
       "probeServerLockEntryIdentity",
       "readServerLock",
       "removeServerLock",
       "signalIfIdentityOwned",
-      "tcpPortOr",
       "validateServerLockEntry",
     ])
     expect("GentRpcs" in RuntimePublicSdk).toBe(false)
