@@ -1286,6 +1286,42 @@ describe("AgentRunner", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  it.scopedLive("a foreground child that never answers is an error, not a success", () =>
+    Effect.gen(function* () {
+      // An empty reply is re-prompted; once the continuations are spent the
+      // receipt says `unanswered`. The caller must not read that as a result.
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep(""),
+        textStep(""),
+        textStep(""),
+      ])
+      const context = yield* Layer.build(makeLiveAgentRunnerLayer(providerLayer))
+      yield* Effect.gen(function* () {
+        const parentSessionId = SessionId.make("unanswered-parent")
+        const parentBranchId = BranchId.make("unanswered-branch")
+        const now = dateFromMillis(1_767_225_600_000)
+        yield* (yield* SessionStorage).createSession(
+          new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+        )
+        yield* (yield* BranchStorage).createBranch(
+          new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+        )
+        const runner = yield* AgentRunnerService
+        const result = yield* runner.run({
+          agent: { name: DEFAULT_AGENT_NAME },
+          prompt: "Say nothing",
+          cwd: "/tmp",
+          parentSessionId,
+          parentBranchId,
+        })
+        expect(result).toMatchObject({
+          _tag: "Error",
+          error: expect.stringContaining("no answer produced"),
+        })
+      }).pipe(Effect.provideContext(context))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.scopedLive("does not create a durable child for a missing parent", () =>
     Effect.gen(function* () {
       const agent = builtinAgent

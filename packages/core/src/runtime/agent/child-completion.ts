@@ -26,6 +26,19 @@ const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:co
 const maximumPreviewChars = 4_000
 
 /**
+ * The ways a turn receipt says the turn ended badly, in words a model reads.
+ * Both child paths use it: the background completion message and the
+ * foreground run result.
+ */
+export const turnFailureNames = (completion: TurnCompleted): ReadonlyArray<string> => {
+  const names: Array<string> = []
+  if (completion.interrupted === true) names.push("interrupted")
+  if (completion.streamFailed === true) names.push("model stream failed")
+  if (completion.unanswered === true) names.push("no answer produced")
+  return names
+}
+
+/**
  * The message a parent reads when a child finishes.
  *
  * A turn receipt is not task success, and the ways a turn can end badly are
@@ -44,10 +57,7 @@ export const describeChildCompletion = (params: {
   readonly completion: TurnCompleted
   readonly text: string
 }): string => {
-  const outcome: Array<string> = []
-  if (params.completion.interrupted === true) outcome.push("interrupted")
-  if (params.completion.streamFailed === true) outcome.push("model stream failed")
-  if (params.completion.unanswered === true) outcome.push("no answer produced")
+  const outcome = turnFailureNames(params.completion)
   let status = "completed"
   if (outcome.length > 0) status = `ended (${outcome.join(", ")})`
   const preview = headTailChars(params.text, maximumPreviewChars)

@@ -56,7 +56,7 @@ import type { RelationshipStorage } from "../../storage/relationship-storage.js"
 import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { admitChildSessionDepth } from "../session-depth.js"
 import { SessionRuntime } from "../session-runtime.js"
-import { ChildCompletionDelivery } from "./child-completion.js"
+import { ChildCompletionDelivery, turnFailureNames } from "./child-completion.js"
 
 /** Storage and transport faults become the one caller-facing error at their source. */
 const toAgentRunError = (cause: { readonly _tag: string; readonly message: string }) => {
@@ -534,6 +534,23 @@ export const InProcessRunner: Layer.Layer<
             Option.some(messagesToolCalls(childMessages)),
             (calls) => calls.length > 0,
           )
+          // A receipt that says the turn ended badly is not a success, whatever
+          // text the child left behind. The background path names these same
+          // outcomes in its completion message.
+          const failures = Option.match(completion, {
+            onNone: (): ReadonlyArray<string> => [],
+            onSome: (event) => {
+              if (event._tag !== "TurnCompleted") return []
+              return turnFailureNames(event)
+            },
+          })
+          if (failures.length > 0) {
+            if (!isPrivate) yield* eventPublisher.publish(AgentRunFailed.make(receipt))
+            const partial = latestAssistantText(childMessages)
+            let error = `The child turn ended (${failures.join(", ")}).`
+            if (partial.length > 0) error = `${error} Partial output:\n${partial}`
+            return AgentRunResult.cases.Error.make({ error, sessionId, agentName })
+          }
           const success = AgentRunResult.cases.Success.make({
             text: latestAssistantText(childMessages),
             sessionId,
