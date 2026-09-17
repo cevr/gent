@@ -161,6 +161,26 @@ const StepResult = Schema.TaggedUnion({
 })
 type StepResult = Schema.Schema.Type<typeof StepResult>
 
+/**
+ * End the turn after this step. The three flags default to false, so a caller
+ * names only the one that happened — and a step that simply finished names
+ * none.
+ */
+const endStep = (
+  currentTurnAgent: AgentNameType,
+  reason: {
+    readonly interrupted?: boolean
+    readonly streamFailed?: boolean
+    readonly unanswered?: boolean
+  },
+) =>
+  StepResult.cases.Stop.make({
+    currentTurnAgent,
+    interrupted: reason.interrupted ?? false,
+    streamFailed: reason.streamFailed ?? false,
+    unanswered: reason.unanswered ?? false,
+  })
+
 type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -1153,25 +1173,21 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         baseSections: params.turnProfile.turnBaseSections,
         interactive: params.state.interactive,
       })
-      const stopWith = (
-        currentTurnAgent: AgentNameType,
-        flags: { interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean },
-      ) =>
-        StepResult.cases.Stop.make({
-          currentTurnAgent,
-          interrupted: false,
-          streamFailed: false,
-          unanswered: false,
-          ...flags,
-        })
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.
       if (Predicate.isUndefined(resolved)) {
-        return stopWith(params.currentTurnAgent, { unanswered: true })
+        return endStep(params.currentTurnAgent, { unanswered: true })
       }
 
       const currentTurnAgent = resolved.currentTurnAgent
+      const stop = (reason: {
+        readonly interrupted?: boolean
+        readonly streamFailed?: boolean
+        readonly unanswered?: boolean
+      }) => endStep(currentTurnAgent, reason)
+      const proceed = StepResult.cases.Continue.make({ currentTurnAgent })
+
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
         // Only reachable when the final step said nothing at all: it ran with
@@ -1182,7 +1198,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )
-        return stopWith(currentTurnAgent, { unanswered: true })
+        return stop({ unanswered: true })
       }
       // The last step the budget allows. Rather than cut the turn off mid-plan,
       // tell the model its tools are gone and let it spend this step writing
@@ -1213,7 +1229,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }))
       }
       if (yield* scope.turnInterruption.interrupted) {
-        return stopWith(currentTurnAgent, { interrupted: true })
+        return stop({ interrupted: true })
       }
 
       const attempt = yield* Effect.scoped(
@@ -1244,12 +1260,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         })
       }
       const { collected, outcome } = attempt.success
-      const stop = (flags: {
-        interrupted?: boolean
-        streamFailed?: boolean
-        unanswered?: boolean
-      }) => stopWith(currentTurnAgent, flags)
-      const proceed = StepResult.cases.Continue.make({ currentTurnAgent })
       // Whatever the model did produce stays; a durable instruction follows it
       // and the same turn runs one more step. Once the budget is spent, stop.
       const continueOr = (instruction: string, otherwise: StepResult) =>
@@ -1350,62 +1360,59 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
 
       let preserveReplayBindings = false
+      const turnAgent = state.agentOverride ?? DEFAULT_AGENT_NAME
+
+      /**
+       * Run model steps until one says stop, the branch is interrupted, or a
+       * tool parks the turn on an interaction.
+       *
+       * Returns the `Stop` that ends the turn, or the `Interaction` that
+       * suspends it. Everything `finalizeTurn` needs already rides on `Stop`,
+       * so the loop hands that value up instead of unpacking it into flags.
+       */
+      const runSteps = Effect.fn("AgentLoop.runSteps")(function* (from: number) {
+        let step = from
+        let agent = turnAgent
+        while (true) {
+          step++
+          if (yield* scope.turnInterruption.interrupted) {
+            return endStep(agent, { interrupted: true })
+          }
+          const result = yield* runTurnStep({ state, step, currentTurnAgent: agent, turnProfile })
+          if (result._tag !== "Continue") return result
+          agent = result.currentTurnAgent
+        }
+      })
+
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
         yield* scope.clearInFlightTurn(state.message.id)
-        let interrupted = yield* scope.turnInterruption.interrupted
-        let streamFailed = false
-        let unanswered = false
-        let currentTurnAgent: AgentNameType = state.agentOverride ?? DEFAULT_AGENT_NAME
 
         const resumed = yield* resumeTurn({
           state,
           messageId: state.message.id,
-          interrupted,
-          currentTurnAgent,
+          interrupted: yield* scope.turnInterruption.interrupted,
+          currentTurnAgent: turnAgent,
           turnProfile,
         })
-        let step = resumed.step
         if (Option.isSome(resumed.interaction)) {
           preserveReplayBindings = true
           return resumed.interaction.value
         }
 
-        while (true) {
-          step++
-          if (yield* scope.turnInterruption.interrupted) {
-            interrupted = true
-            break
-          }
-
-          const stepResult = yield* runTurnStep({
-            state,
-            step,
-            currentTurnAgent,
-            turnProfile,
-          })
-          if (stepResult._tag === "Stop") {
-            currentTurnAgent = stepResult.currentTurnAgent
-            interrupted = stepResult.interrupted
-            streamFailed = stepResult.streamFailed
-            unanswered = stepResult.unanswered
-            break
-          }
-          if (stepResult._tag === "Continue") {
-            currentTurnAgent = stepResult.currentTurnAgent
-            continue
-          }
+        const ended = yield* runSteps(resumed.step)
+        if (ended._tag === "Interaction") {
           preserveReplayBindings = true
-          return stepResult.outcome
+          return ended.outcome
         }
 
         yield* finalizeTurn({
           startedAtMs: state.startedAtMs,
           messageId: state.message.id,
-          turnInterrupted: interrupted,
-          streamFailed,
-          unanswered,
-          turnAgent: currentTurnAgent,
+          turnInterrupted: ended.interrupted,
+          streamFailed: ended.streamFailed,
+          unanswered: ended.unanswered,
+          turnAgent: ended.currentTurnAgent,
         })
         return TurnOutcome.cases.Done.make({})
       })
