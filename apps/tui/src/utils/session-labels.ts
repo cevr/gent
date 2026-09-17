@@ -67,23 +67,19 @@ export function buildContextLabels(input: {
  * configured, the gauge reports what the session has spent, and the two
  * belong at opposite ends.
  */
-export function buildTopRightLabels(
-  // eslint-disable-next-line effect/noNullish -- this helper mirrors the optional client snapshot fields.
-  reasoningLevel: string | undefined,
-  theme: ThemeColors,
-  // eslint-disable-next-line effect/noNullish -- Solid component options are optional at this boundary.
-  options?: { debugMode?: boolean },
-): BorderLabelItem[] {
+export function buildTopRightLabels(input: {
+  readonly reasoningLevel: Option.Option<string>
+  readonly theme: ThemeColors
+  readonly debugMode: boolean
+}): BorderLabelItem[] {
   const items: BorderLabelItem[] = []
-  const reasoning = Option.fromNullishOr(reasoningLevel)
 
-  if (Option.isSome(reasoning)) {
-    items.push({ text: reasoning.value, color: theme.info })
+  if (Option.isSome(input.reasoningLevel)) {
+    items.push({ text: input.reasoningLevel.value, color: input.theme.info })
   }
 
-  const debug = Option.fromNullishOr(options)
-  if (Option.isSome(debug) && debug.value.debugMode === true) {
-    items.push({ text: "debug", color: theme.warning })
+  if (input.debugMode) {
+    items.push({ text: "debug", color: input.theme.warning })
   }
 
   return items

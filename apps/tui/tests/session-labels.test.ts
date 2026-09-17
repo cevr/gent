@@ -27,25 +27,41 @@ const contextLabels = (
 
 describe("buildTopRightLabels", () => {
   test("empty when no data", () => {
-    const labels = buildTopRightLabels(absent, theme)
+    const labels = buildTopRightLabels({
+      reasoningLevel: Option.none(),
+      theme,
+      debugMode: false,
+    })
     expect(labels.length).toBe(0)
   })
 
   test("shows thinking level when set", () => {
-    const labels = buildTopRightLabels("high", theme)
+    const labels = buildTopRightLabels({
+      reasoningLevel: Option.some("high"),
+      theme,
+      debugMode: false,
+    })
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("high")
     expect(labels[0]!.color).toBe(theme.info)
   })
 
   test("debug mode shows debug label", () => {
-    const labels = buildTopRightLabels(absent, theme, { debugMode: true })
+    const labels = buildTopRightLabels({
+      reasoningLevel: Option.none(),
+      theme,
+      debugMode: true,
+    })
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("debug")
   })
 
   test("carries no context gauge — that anchors to the right edge", () => {
-    const labels = buildTopRightLabels("high", theme, { debugMode: true })
+    const labels = buildTopRightLabels({
+      reasoningLevel: Option.some("high"),
+      theme,
+      debugMode: true,
+    })
     expect(labels.map((label) => label.text)).toEqual(["high", "debug"])
   })
 })

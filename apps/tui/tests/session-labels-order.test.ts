@@ -23,13 +23,11 @@ const theme = {
 
 const texts = (items: ReadonlyArray<{ text: string }>) => items.map((item) => item.text)
 
-// `buildTopRightLabels` mirrors the client snapshot's optional fields, so its
+// `buildContextLabels` mirrors the client snapshot's optional fields, so its
 // absent values are genuinely undefined at this boundary. Naming them keeps
 // the intent readable where the signature cannot use Option.
 // eslint-disable-next-line effect/noNullish -- matches the helper's optional parameters.
 const NO_CONTEXT_LENGTH: number | undefined = undefined
-// eslint-disable-next-line effect/noNullish -- matches the helper's optional parameters.
-const NO_EFFORT: string | undefined = undefined
 // eslint-disable-next-line effect/noNullish -- matches the helper's optional parameters.
 const NO_CONTEXT: undefined = undefined
 
@@ -47,12 +45,20 @@ const contextLabels = (
 
 describe("effort sits with the model and the gauge anchors right", () => {
   test("reports the effort without the context gauge", () => {
-    const labels = buildTopRightLabels("medium", theme, {})
+    const labels = buildTopRightLabels({
+      reasoningLevel: Option.some("medium"),
+      theme,
+      debugMode: false,
+    })
     expect(texts(labels)).toEqual(["medium"])
   })
 
   test("reports no effort when none is set", () => {
-    const labels = buildTopRightLabels(NO_EFFORT, theme, {})
+    const labels = buildTopRightLabels({
+      reasoningLevel: Option.none(),
+      theme,
+      debugMode: false,
+    })
     expect(texts(labels)).toEqual([])
   })
 

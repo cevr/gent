@@ -151,7 +151,11 @@ export function Session(props: SessionProps) {
     const items: BorderLabelItem[] = []
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
-      buildTopRightLabels(client.reasoningLevel(), theme, { debugMode: props.debugMode }),
+      buildTopRightLabels({
+        reasoningLevel: Option.fromNullishOr(client.reasoningLevel()),
+        theme,
+        debugMode: props.debugMode === true,
+      }),
     )
   }
 
