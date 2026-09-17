@@ -112,10 +112,17 @@ describe("native transcript commit handover", () => {
         // The overlay closes, the split footer returns, and the item that came
         // back is offered again. It must reach scrollback exactly once: an item
         // dropped from the live view without a commit is lost text.
+        // The re-offer settles over several frames, and how many depends on
+        // the machine's load; a fixed count of flushes failed under the
+        // parallel gate. Flush until it lands, and let the assertion name the
+        // failure when it never does.
         setOverlayOpen(false)
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.promise(() => setup.flush())
-        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({
+            until: () => committedText.join("").includes("FIRST-ITEM line 1"),
+            times: 200,
+          }),
+        )
         expect(committedText.join("")).toContain("FIRST-ITEM line 1")
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
@@ -161,6 +168,69 @@ describe("native transcript commit handover", () => {
         yield* Effect.promise(() => setup.flush())
 
         expect(committedText.join("")).not.toContain("CLEARED-ITEM")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  /**
+   * Scrollback is written by letting the committed rows scroll off the top of
+   * the output region above the footer, so that region has to exist and has to
+   * be scrollable. Two footer spellings used to destroy it: a footer grown to
+   * the full screen left no region, and a per-commit footer change ran
+   * OpenTUI's `applyScreenMode` mid-commit, which rewrites the screen with
+   * `ESC[nS` and drops the rows instead of scrolling them away. Both reported
+   * success to the component while the terminal kept no history at all.
+   */
+  it.live(
+    "a tall live view still leaves the terminal rows to scroll",
+    () =>
+      Effect.gen(function* () {
+        // Enough items that the live view wants far more than the 14 rows the
+        // terminal has, which is what used to push the footer to full screen.
+        const items = Array.from({ length: 8 }, (_, index) =>
+          assistant(`item-${index}`, longBody(`ITEM-${index}`)),
+        )
+        const screenHeight = 14
+        const footerHeights: number[] = []
+        let committedFooterHeights: number[] = []
+
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () =>
+              transcript({
+                items,
+                displayRevision: () => 0,
+                overlayOpen: () => false,
+                onRenderer: (renderer) => {
+                  // Record the footer height the renderer actually holds at the
+                  // moment rows are handed to scrollback, and on every frame,
+                  // so a height that only exists mid-commit is still seen.
+                  renderer.on("external_output", () => {
+                    committedFooterHeights.push(renderer.footerHeight)
+                  })
+                  renderer.on("frame", () => {
+                    footerHeights.push(renderer.footerHeight)
+                  })
+                },
+              }),
+            { width: 60, height: screenHeight },
+          ),
+        )
+        for (let pass = 0; pass < 6; pass++) {
+          yield* Effect.promise(() => setup.flush())
+        }
+
+        expect(footerHeights.length).toBeGreaterThan(0)
+        // Every height the component asked for must leave a region the
+        // terminal can scroll. One row cannot scroll, so two is the floor.
+        for (const height of footerHeights) {
+          expect(screenHeight - height).toBeGreaterThanOrEqual(2)
+        }
+        // And each commit ran against such a footer.
+        for (const height of committedFooterHeights) {
+          expect(screenHeight - height).toBeGreaterThanOrEqual(2)
+        }
+        committedFooterHeights = []
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
