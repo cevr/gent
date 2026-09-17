@@ -43,6 +43,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Match,
   Option,
   Path,
   Predicate,
@@ -128,6 +129,36 @@ import {
 
 const stateHoldsMessage = (state: LoopState, messageId: MessageId) =>
   state._tag !== "Idle" && state.message.id === messageId
+
+const BehaviorHandle = Schema.declare<AgentLoopBehavior>((value): value is AgentLoopBehavior =>
+  Predicate.hasProperty(value, "awaitExit"),
+)
+
+/**
+ * Where one entity's loop stands.
+ *
+ * The three facts a caller needs — is there a handle, did startup fail, and
+ * does the next op have to rebuild — are one value, so no ordering between
+ * them is possible and the illegal combinations cannot be written.
+ *
+ * `Building` is the state before the first `openLoop` publishes anything, the
+ * only one with no handle. `Closed` keeps its handle because a close is not a
+ * teardown: the finalizer and `TerminateBranch` close the behavior they last
+ * held, and the next op rebuilds over it.
+ */
+const LoopLifecycle = Schema.TaggedUnion({
+  Building: {},
+  Open: { handle: BehaviorHandle },
+  Failed: { handle: BehaviorHandle, error: AgentLoopError },
+  Closed: { handle: BehaviorHandle },
+})
+type LoopLifecycle = Schema.Schema.Type<typeof LoopLifecycle>
+
+/** The handle this state holds, if it has reached one. */
+const lifecycleHandle = (lifecycle: LoopLifecycle): Option.Option<AgentLoopBehavior> => {
+  if (lifecycle._tag === "Building") return Option.none()
+  return Option.some(lifecycle.handle)
+}
 
 /** The loop still owns this message: starting, running, waiting, or queued. */
 const holdsMessage = (s: AgentLoopState, messageId: MessageId): boolean => {
@@ -260,7 +291,6 @@ const buildAgentLoopActorHandlers = (config: {
     const queueStorage = yield* AgentLoopQueueStorage
     const operations = yield* SessionOperationStorage
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
-    const closed = yield* Ref.make(false)
     const operationSeen = yield* Ref.make(false)
 
     type ExtensionRequestEffect = Effect.Effect<
@@ -289,23 +319,17 @@ const buildAgentLoopActorHandlers = (config: {
         Effect.mapError(extensionRequestError),
       )
 
-    // `handle` and `startupExit` were plain `let` bindings before C13.1. The
-    // mailbox runs at `concurrency: "unbounded"`, so the post-flip window in
-    // `openLoop` between `Ref.set(closed, false)` and the assignment of
-    // `handle`/`startupExit` was racing: a fiber arriving via `ensureStarted`
-    // could observe `closed=false`, skip the rebuild branch, and then read
-    // a stale (now-closed) handle. Promoted to `Ref` and all reads happen
-    // inside `ensureStarted` (which holds `startupSemaphore` across the
-    // rebuild, the post-check, and the published handle return).
-    const handleRef = yield* Ref.make<Option.Option<AgentLoopBehavior>>(Option.none())
-    const startupExitRef = yield* Ref.make<Option.Option<Exit.Exit<void, AgentLoopError>>>(
-      Option.none(),
-    )
+    // Every read happens inside `ensureStarted`, which holds
+    // `startupSemaphore` across the rebuild and the handle return, so no
+    // caller can be handed a handle from a cycle that has since closed.
+    const lifecycleRef = yield* Ref.make<LoopLifecycle>(LoopLifecycle.cases.Building.make({}))
 
+    /** Close once. A second call finds `Closed` and leaves the behavior alone. */
     const closeBehaviorWithHeldStartupPermit = (loop: AgentLoopBehavior) =>
       Effect.gen(function* () {
-        if (yield* Ref.get(closed)) return
-        yield* Ref.set(closed, true)
+        const closing = LoopLifecycle.cases.Closed.make({ handle: loop })
+        const previous = yield* Ref.getAndSet(lifecycleRef, closing)
+        if (previous._tag === "Closed") return
         yield* loop.close
       }).pipe(Effect.ignore)
 
@@ -345,7 +369,7 @@ const buildAgentLoopActorHandlers = (config: {
     // instead — that path holds `startupSemaphore` across the rebuild/publish,
     // ensuring no one observes a half-reopened loop.
     const reentrantHandle = Effect.gen(function* () {
-      const value = yield* Ref.get(handleRef)
+      const value = lifecycleHandle(yield* Ref.get(lifecycleRef))
       if (Option.isNone(value)) {
         return yield* new AgentLoopError({
           message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
@@ -579,7 +603,13 @@ const buildAgentLoopActorHandlers = (config: {
                 ),
             }),
             Scope.provide(loopScope),
-            Effect.tap((handle) => Ref.set(handleRef, Option.some(handle))),
+            // Published before startup runs: a turn recovered below can enqueue
+            // a follow-up through `reentrantHandle` while startup is still in
+            // flight. `ensureStarted` cannot see this state — it holds the
+            // startup permit across the whole rebuild.
+            Effect.tap((handle) =>
+              Ref.set(lifecycleRef, LoopLifecycle.cases.Open.make({ handle })),
+            ),
           ),
         (loopScope, exit) => {
           if (Exit.isFailure(exit)) return Scope.close(loopScope, exit)
@@ -587,8 +617,10 @@ const buildAgentLoopActorHandlers = (config: {
         },
       )
       if (Option.isSome(initialQueueFailure)) {
-        yield* Ref.set(startupExitRef, Option.some(Exit.fail(initialQueueFailure.value)))
-        yield* Ref.set(closed, false)
+        yield* Ref.set(
+          lifecycleRef,
+          LoopLifecycle.cases.Failed.make({ handle, error: initialQueueFailure.value }),
+        )
         return
       }
 
@@ -622,44 +654,54 @@ const buildAgentLoopActorHandlers = (config: {
           ),
         ),
       )
-      yield* Ref.set(startupExitRef, Option.some(exit))
-      // Publish `closed=false` only after both `handleRef` and
-      // `startupExitRef` are visible. `ensureStarted` reads `closed`
-      // before reading the handle/exit, so flipping it last guarantees a
-      // fiber that sees `closed=false` will read the freshly-published
-      // pair, not a stale one from a previous open cycle.
-      yield* Ref.set(closed, false)
+      // One write settles the cycle: success leaves the published `Open`, and
+      // a failure replaces it with the error every later op will be handed.
+      // A startup that closed the behavior on its way out always fails too, so
+      // `Failed` never hides a live loop.
+      if (Exit.isFailure(exit)) {
+        yield* Ref.set(
+          lifecycleRef,
+          LoopLifecycle.cases.Failed.make({
+            handle,
+            error: causeToAgentLoopError(exit.cause),
+          }),
+        )
+      }
     })
 
     yield* openLoop.pipe(provideActorWorkspace)
     yield* Effect.addFinalizer(() =>
-      Effect.flatMap(Ref.get(handleRef), (loop) => {
+      Effect.flatMap(Ref.get(lifecycleRef), (lifecycle) => {
+        const loop = lifecycleHandle(lifecycle)
         if (Option.isNone(loop)) return Effect.void
         return closeBehavior(loop.value)
       }),
     )
 
     // Serialize the full read/rebuild/check path so concurrent ops cannot
-    // observe a partially-rebuilt loop. `openLoop` writes `handleRef` and
-    // `startupExitRef` and only flips `closed=false` after both are
-    // published; `ensureStarted` then reads them inside the same permit
-    // window and returns the handle directly so callers cannot read a
-    // post-rebuild stale handle.
+    // observe a partially-rebuilt loop. The rebuild and the read share one
+    // permit window, so the handle a caller is handed belongs to the cycle
+    // this call just settled.
     const ensureStarted = Effect.gen(function* () {
-      if (yield* Ref.get(closed)) {
+      if ((yield* Ref.get(lifecycleRef))._tag === "Closed") {
         yield* openLoop.pipe(provideActorWorkspace)
       }
-      const exit = yield* Ref.get(startupExitRef)
-      if (Option.isNone(exit) || Exit.isSuccess(exit.value)) {
-        const handle = yield* Ref.get(handleRef)
-        if (Option.isNone(handle)) {
-          return yield* new AgentLoopError({
-            message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
-          })
-        }
-        return handle.value
-      }
-      return yield* causeToAgentLoopError(exit.value.cause)
+      // The rebuild above settles `Open` or `Failed`. The other two mean the
+      // rebuild left no usable loop, and handing back a closed handle would
+      // run the op against a behavior whose fibers are gone.
+      const unavailable = Effect.fail(
+        new AgentLoopError({
+          message: `AgentLoop handle unavailable for ${sessionId}/${branchId}`,
+        }),
+      )
+      return yield* Match.type<LoopLifecycle>().pipe(
+        Match.tagsExhaustive({
+          Open: ({ handle }) => Effect.succeed(handle),
+          Failed: ({ error }) => Effect.fail(error),
+          Closed: () => unavailable,
+          Building: () => unavailable,
+        }),
+      )(yield* Ref.get(lifecycleRef))
     }).pipe(startupSemaphore.withPermits(1))
 
     const currentRegisteredState = Effect.gen(function* () {
@@ -901,7 +943,7 @@ const buildAgentLoopActorHandlers = (config: {
             // mailbox closed before we got here, `handleRef` may be empty;
             // skip cleanup in that case rather than triggering a rebuild
             // via `ensureStarted`.
-            const handle = yield* Ref.get(handleRef)
+            const handle = lifecycleHandle(yield* Ref.get(lifecycleRef))
             if (Option.isSome(handle)) {
               yield* closeBehavior(handle.value)
             }
