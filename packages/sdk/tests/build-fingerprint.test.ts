@@ -35,8 +35,6 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
       env: Effect.succeed({}),
       pathListSeparator: Effect.succeed(":"),
       signal: () => Effect.void,
-      exit: () => Effect.die(new Error("exit not expected in this test")),
-      now: Effect.succeed(0),
       hash: (_alg, input) => {
         let text = input
         if (!Predicate.isString(text)) text = new TextDecoder().decode(text)

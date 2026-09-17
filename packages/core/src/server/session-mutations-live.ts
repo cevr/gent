@@ -265,9 +265,6 @@ const makeSessionMutationsService: Effect.Effect<
       branchId: operation.branchId,
       content: operation.initialPrompt,
     }
-    if (Predicate.isNotUndefined(operation.agentOverride)) {
-      message = { ...message, agentOverride: operation.agentOverride }
-    }
     if (Option.isSome(requestId)) {
       message = { ...message, requestId: `session.create:${requestId.value}:initial` }
     }
@@ -350,7 +347,6 @@ const makeSessionMutationsService: Effect.Effect<
           branchId,
           name,
           initialPrompt: input.initialPrompt,
-          agentOverride: input.agentOverride,
         }
         return { envelope, result }
       }),

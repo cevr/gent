@@ -11,7 +11,6 @@ import {
   AuthAuthorization,
   AuthMethod,
   AuthProviderInfo,
-  AuthProviderQuery,
   ListAuthProvidersPayload,
 } from "../domain/auth.js"
 import { EventEnvelope } from "../domain/event.js"
@@ -41,8 +40,6 @@ export const CreateSessionInput = Schema.Struct({
   parentBranchId: Schema.optional(BranchId),
   /** If provided, sends this message immediately after creation */
   initialPrompt: Schema.optional(Schema.String),
-  /** Agent override for the initial prompt (turn-scoped, not persistent) */
-  agentOverride: Schema.optional(AgentName),
   requestId: Schema.optional(RequestId),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
@@ -102,7 +99,6 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
    * re-derive the precedence. */
   resolvedModelId: ModelId,
   resolvedReasoningLevel: Schema.optional(ReasoningEffort),
-  activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntimeStateSchema),
   /** Cumulative usage derived from the event log (turns, tokens, cost, last
@@ -187,7 +183,7 @@ export const CallbackAuthInput = Schema.Struct({
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
 
-export { AuthProviderInfo, AuthProviderQuery, ListAuthProvidersPayload }
+export { AuthProviderInfo, ListAuthProvidersPayload }
 export { EventEnvelope }
 export { QueueSnapshot }
 
@@ -273,11 +269,9 @@ export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthS
 export const DriverInfo = Schema.Union([
   Schema.TaggedStruct("Model", {
     id: Schema.String,
-    description: Schema.optional(Schema.String),
   }),
   Schema.TaggedStruct("External", {
     id: Schema.String,
-    description: Schema.optional(Schema.String),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type DriverInfo = Schema.Schema.Type<typeof DriverInfo>

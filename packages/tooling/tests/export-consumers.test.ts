@@ -455,6 +455,41 @@ const packageSurface = (
   paths: Readonly<Record<string, ReadonlyArray<string>>>,
 ) => findPackageSurfaceFindings(new Map(entries), { compilerOptions: { paths } })
 
+describe("chained entry points", () => {
+  const PROTOCOL_FILE = "packages/core/src/protocol.ts"
+  const SDK_INDEX = "packages/sdk/src/index.ts"
+
+  test("an sdk re-export keeps a protocol name alive", () => {
+    // `@gent/sdk` both declares `emptyQueueSnapshot` and gets it from
+    // `@gent/core/protocol`. Skipping every file that declares the name would
+    // call the whole chained surface dead.
+    const findings = findingsFor([
+      {
+        file: PROTOCOL_FILE,
+        text: `export { QueueSnapshot, emptyQueueSnapshot } from "./domain/queue.js"\n`,
+      },
+      {
+        file: SDK_INDEX,
+        text: `export { QueueSnapshot, emptyQueueSnapshot } from "@gent/core/protocol"\n`,
+      },
+    ])
+    expect(findings.filter((finding) => finding.file === PROTOCOL_FILE)).toEqual([])
+  })
+
+  test("a protocol name no chained entry point re-exports is still reported", () => {
+    const findings = findingsFor([
+      {
+        file: PROTOCOL_FILE,
+        text: `export { QueueSnapshot, DriverInfo } from "./domain/queue.js"\n`,
+      },
+      { file: SDK_INDEX, text: `export { QueueSnapshot } from "@gent/core/protocol"\n` },
+    ])
+    const reported = findings.filter((finding) => finding.file === PROTOCOL_FILE)
+    expect(reported).toHaveLength(1)
+    expect(reported[0]?.message).toContain('"DriverInfo"')
+  })
+})
+
 describe("package entry points", () => {
   test("allows explicit extension and protocol exports", () => {
     expect(

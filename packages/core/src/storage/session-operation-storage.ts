@@ -46,7 +46,6 @@ export const StoredCreateSessionResult = Schema.Struct({
   branchId: BranchId,
   name: Schema.String,
   initialPrompt: Schema.optional(Schema.String),
-  agentOverride: Schema.optional(AgentName),
 })
 export type StoredCreateSessionResult = typeof StoredCreateSessionResult.Type
 

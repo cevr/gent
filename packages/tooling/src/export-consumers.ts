@@ -85,6 +85,15 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     enforced: true,
   },
   {
+    prefix: "packages/core/src/protocol.ts",
+    exempt: [],
+    outsideOf: ["packages/core/src/", "packages/core-internal/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/core/protocol"),
+    enforced: true,
+  },
+  {
     prefix: "packages/core/src/",
     exempt: [
       "packages/core/src/extensions/",
@@ -452,6 +461,11 @@ const messageFor = (file: string, declaration: Declaration): string =>
  * declarations rather than a search per name. Files that declare the same
  * name themselves never vouch for it: two modules exporting `sameName` need
  * a third file to keep either alive.
+ *
+ * One exception: entry points chain. `@gent/sdk` re-exports names it gets
+ * from `@gent/core/protocol`, so it both declares them and consumes them.
+ * A re-export that names the upstream specifier is a real consumer — the
+ * blanket skip would otherwise call every chained name dead.
  */
 export const findUnconsumedExports = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
@@ -474,9 +488,12 @@ export const findUnconsumedExports = (
       () => new Set<string>(),
     )
     for (const [candidate, facts] of factsByFile) {
-      if (declaredIn.has(candidate)) continue
       if (!mayConsume(candidate, declaration.surface)) continue
-      if (mentions(facts, declaration.surface, declaration.name)) return true
+      if (!mentions(facts, declaration.surface, declaration.name)) continue
+      // A peer that merely declares the same name does not vouch for it; one
+      // that imports it through this entry point's own specifier does.
+      if (declaredIn.has(candidate) && Option.isNone(declaration.surface.specifier)) continue
+      return true
     }
     if (!declaration.surface.ownFileCounts) return false
     return Option.exists(Option.fromNullishOr(factsByFile.get(file)), (facts) =>

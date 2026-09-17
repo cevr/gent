@@ -839,7 +839,8 @@ add a worker, runtime owner, or model-facing cell dispatch path.
 Explicit platform/runtime seams:
 
 - `GentPlatform` owns host capabilities such as process identity, signals, env,
-  executable path, ids, time, and OS info.
+  executable path, ids, hashing, and OS info. Time comes from Effect's `Clock`,
+  so a test can drive it.
 - `RuntimeEnvironment` carries launch/session configuration values:
   `cwd`, `home`, and platform name.
 - tracer/logger services

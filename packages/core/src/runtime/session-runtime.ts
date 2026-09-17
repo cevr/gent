@@ -104,38 +104,6 @@ export const SendUserMessagePayload = Schema.Struct({
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
-const CancelInterruptPayload = Schema.TaggedStruct("Cancel", {
-  commandId: Schema.optional(ActorCommandId),
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: RequestId,
-})
-type CancelInterruptPayload = typeof CancelInterruptPayload.Type
-
-const InterruptTurnPayload = Schema.TaggedStruct("Interrupt", {
-  commandId: Schema.optional(ActorCommandId),
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: RequestId,
-})
-type InterruptTurnPayload = typeof InterruptTurnPayload.Type
-
-const InterjectPayload = Schema.TaggedStruct("Interject", {
-  commandId: Schema.optional(ActorCommandId),
-  sessionId: SessionId,
-  branchId: BranchId,
-  requestId: RequestId,
-  message: Schema.String,
-})
-type InterjectPayload = typeof InterjectPayload.Type
-
-const InterruptPayload = Schema.Union([
-  CancelInterruptPayload,
-  InterruptTurnPayload,
-  InterjectPayload,
-]).pipe(Schema.toTaggedUnion("_tag"))
-type InterruptPayload = typeof InterruptPayload.Type
-
 const QueueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
@@ -169,11 +137,6 @@ const DrainQueuedMessagesPayload = Schema.Struct({
   requestId: RequestId,
 })
 type DrainQueuedMessagesPayload = typeof DrainQueuedMessagesPayload.Type
-
-const SessionRuntimeSessionTarget = Schema.Struct({
-  sessionId: SessionId,
-})
-type SessionRuntimeSessionTarget = typeof SessionRuntimeSessionTarget.Type
 
 type SessionRuntimeLayerRequirements =
   | ApprovalService

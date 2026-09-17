@@ -191,10 +191,6 @@ const initialMigration = Effect.gen(function* () {
   yield* sql.unsafe(
     `CREATE UNIQUE INDEX idx_interaction_requests_pending_singleton ON interaction_requests(session_id, branch_id) WHERE status = 'pending'`,
   )
-
-  yield* sql.unsafe(
-    `CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED, session_id UNINDEXED, branch_id UNINDEXED, role UNINDEXED)`,
-  )
 })
 
 const agentLoopQueueMigration = Effect.gen(function* () {
@@ -452,6 +448,21 @@ const dropWriteOnlyStorageMigration = Effect.gen(function* () {
   yield* sql.unsafe(`DROP INDEX IF EXISTS idx_tool_call_bindings_tool_call`)
 })
 
+/**
+ * Drop the message full-text index.
+ *
+ * `messages_fts` was written on every message insert and read by exactly one
+ * storage method that no extension, app or SDK ever called. The cell reads the
+ * database directly and its guidance names `sessions`, `messages`,
+ * `message_chunks`, `content_chunks` and `events` — never this table — so no
+ * model is told to query it either. A database created by any earlier build
+ * still holds the table, so the drop is a migration, not a schema edit.
+ */
+const dropMessageSearchIndexMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`)
+})
+
 const sessionModelMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql
@@ -537,6 +548,7 @@ const makeStorageMigratorLive = (
       "017_session_model": sessionModelMigration,
       "018_turn_records": turnRecordsMigration,
       "019_session_thread": sessionThreadMigration,
+      "020_drop_message_search_index": dropMessageSearchIndexMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

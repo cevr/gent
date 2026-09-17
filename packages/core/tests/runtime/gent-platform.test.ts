@@ -7,7 +7,7 @@
  * downstream tests can rely on it without re-checking each method.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Predicate, Deferred, Effect, Layer } from "effect"
+import { Predicate, Effect } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { GentPlatform, SignalError } from "../../src/runtime/gent-platform"
 
@@ -80,17 +80,6 @@ describe("GentPlatform", () => {
         expect(failure.reason.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(BunGentPlatformLive)),
     )
-
-    it.live("now returns monotonically non-decreasing milliseconds", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const a = yield* platform.now
-        const b = yield* platform.now
-        expect(Predicate.isNumber(a)).toBe(true)
-        expect(Predicate.isNumber(b)).toBe(true)
-        expect(b).toBeGreaterThanOrEqual(a)
-      }).pipe(Effect.provide(BunGentPlatformLive)),
-    )
   })
 
   describe("GentPlatform.Test", () => {
@@ -106,7 +95,7 @@ describe("GentPlatform", () => {
       }).pipe(Effect.provide(GentPlatform.Test("t"))),
     )
 
-    it.live("osInfo / pid / execPath / now return Test stub values", () =>
+    it.live("osInfo / pid / execPath return Test stub values", () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const info = yield* platform.osInfo
@@ -117,9 +106,6 @@ describe("GentPlatform", () => {
         expect(info.type).toBe("Linux")
         expect(yield* platform.pid).toBe(1)
         expect(yield* platform.execPath).toBe("/usr/bin/node")
-        // `now` increments on each call in the Test layer, starting at 1.
-        expect(yield* platform.now).toBe(1)
-        expect(yield* platform.now).toBe(2)
       }).pipe(Effect.provide(GentPlatform.Test())),
     )
 
@@ -129,51 +115,6 @@ describe("GentPlatform", () => {
         yield* platform.signal(123, "SIGTERM")
         yield* platform.signal(123, 0)
       }).pipe(Effect.provide(GentPlatform.Test())),
-    )
-
-    // Default Test stub for `exit` dies loudly so accidental calls are
-    // visible failures rather than silent test hangs.
-    it.live("exit dies loudly in the default Test layer", () =>
-      Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const exit = yield* platform.exit(3).pipe(Effect.exit)
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          // It must be a defect (Die), not a typed Failure — exit is
-          // declared `Effect<never>`, so any failure is a defect by shape.
-          // The error message must mention the captured exit code so
-          // misuse is greppable in test output.
-          const pretty = String(exit.cause)
-          expect(pretty).toContain("3")
-          expect(pretty).toContain("recorder")
-        }
-      }).pipe(Effect.provide(GentPlatform.Test())),
-    )
-
-    // Tests that need to assert "exit was called with code N" override
-    // the layer with a `Deferred` recorder. This locks that pattern as
-    // the documented usage.
-    it.live("exit captures intended code via a Deferred recorder layer", () =>
-      Effect.gen(function* () {
-        const captured = yield* Deferred.make<number>()
-        const recorder = Layer.effect(
-          GentPlatform,
-          Effect.gen(function* () {
-            const base = yield* GentPlatform
-            return GentPlatform.of({
-              ...base,
-              exit: (code) => Deferred.succeed(captured, code).pipe(Effect.andThen(Effect.never)),
-            })
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          }).pipe(Effect.provide(GentPlatform.Test())),
-        )
-        yield* Effect.gen(function* () {
-          const platform = yield* GentPlatform
-          yield* Effect.race(platform.exit(7), Deferred.await(captured))
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(recorder))
-        expect(yield* Deferred.await(captured)).toBe(7)
-      }),
     )
   })
 })

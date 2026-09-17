@@ -83,19 +83,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
         },
       }),
 
-    // `process.exit` is synchronous and bypasses Effect finalizers — there
-    // is no portable, in-Effect way to run finalizers before the host goes
-    // down. This adapter therefore exposes `exit` as a *signal*: it yields
-    // to Effect once (`Effect.yieldNow`) so any pending microtasks drain,
-    // then calls `process.exit`. Code that needs deterministic finalizer
-    // ordering must surface its exit code through the Effect result and
-    // let the entrypoint's `BunRuntime.runMain` translate it (see audit
-    // note in `apps/tui/src/main.tsx:520-536`).
-    exit: (code) =>
-      Effect.yieldNow.pipe(Effect.andThen(Effect.sync((): never => process.exit(code)))),
-
-    now: Effect.sync(() => performance.now()),
-
     hash: (algorithm, input) => createHash(algorithm).update(input).digest("hex"),
 
     randomBytes: (length) =>

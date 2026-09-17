@@ -357,11 +357,6 @@ export const makeExtensionHostContextProvider = (
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
-        search: (query, options) =>
-          messages((storage) => storage.searchMessages(query, options)).pipe(
-            Effect.mapError(sessionError("search")),
-            inWorkspace,
-          ),
         queueFollowUp: (params) =>
           control((loop) =>
             loop.queueFollowUp({

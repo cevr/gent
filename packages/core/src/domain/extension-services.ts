@@ -28,7 +28,6 @@ import {
   type SessionId,
   type ToolCallId,
 } from "./ids.js"
-import type { MessageSearchResult } from "../storage/message-storage.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 
 export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceError>()(
@@ -77,15 +76,6 @@ export interface ExtensionSessionService {
   readonly renameCurrent: (
     name: string,
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
-  readonly search: (
-    query: string,
-    options?: {
-      readonly sessionId?: SessionId
-      readonly dateAfter?: number
-      readonly dateBefore?: number
-      readonly limit?: number
-    },
-  ) => Effect.Effect<ReadonlyArray<MessageSearchResult>, ExtensionServiceError>
   readonly queueFollowUp: (params: {
     readonly sourceId: string
     readonly content: string

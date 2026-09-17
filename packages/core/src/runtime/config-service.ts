@@ -12,7 +12,6 @@ import {
 } from "effect"
 import { AgentName, AgentRunOverridesSchema, DriverRefFromConfig } from "../domain/agent.js"
 import type { DriverRef } from "../domain/agent.js"
-import { omitUndefined } from "../domain/guards.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 
 // User config schema - stored at ~/.gent/config.json
@@ -48,8 +47,6 @@ const nonEmptyRecord = <A>(record: Readonly<Record<AgentName, A>>) =>
 
 /** Pure user-config transitions shared by the live and in-memory services. */
 const configUpdates = {
-  set: (current: UserConfig, partial: Partial<UserConfig>): UserConfig =>
-    new UserConfig({ ...current, ...omitUndefined(partial) }),
   setDriverOverride: (current: UserConfig, agent: AgentName, driver: DriverRef): UserConfig =>
     new UserConfig({
       ...current,
@@ -87,7 +84,7 @@ const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig =>
 
 // ConfigService
 
-export interface ConfigServiceService {
+interface ConfigServiceService {
   /**
    * Resolve the merged user + project config. Pass `cwd` whenever the
    * consumer is acting *on behalf of a specific session* — a multi-cwd
@@ -104,14 +101,10 @@ export interface ConfigServiceService {
    * Invalid JSON or schema data is reported to the caller.
    */
   readonly getFresh: (cwd: string) => Effect.Effect<UserConfig, ConfigLoadError>
-  /** Fails with `ConfigLoadError` when the user config on disk did not
-   *  decode. Writing would replace the unreadable file with a default,
-   *  discarding every setting in it. */
-  readonly set: (config: Partial<UserConfig>) => Effect.Effect<void, ConfigLoadError>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
-   *  Use this rather than `set({ driverOverrides })` so callers don't have
-   *  to remember the partial-merge semantics — `set({ driverOverrides: undefined })`
-   *  preserves the existing record, which is the wrong default for clears. */
+   *  Fails with `ConfigLoadError` when the user config on disk did not decode:
+   *  writing would replace the unreadable file with a default and discard
+   *  every setting in it. */
   readonly setDriverOverride: (
     agent: AgentName,
     driver: DriverRef,
@@ -300,13 +293,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           return mergeConfigs(user, project)
         }),
 
-        set: Effect.fn("ConfigService.set")(function* (partial) {
-          yield* mutateUserConfig((current) => ({
-            updated: configUpdates.set(current, partial),
-            save: true,
-          }))
-        }),
-
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
             updated: configUpdates.setDriverOverride(current, agent, driver),
@@ -351,8 +337,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               const project = yield* Ref.get(projectConfigRef)
               return mergeConfigsImpl(user, project)
             }),
-          set: (partial) =>
-            Ref.update(userConfigRef, (current) => configUpdates.set(current, partial)),
           setDriverOverride: (agent, driver) =>
             Ref.update(userConfigRef, (current) =>
               configUpdates.setDriverOverride(current, agent, driver),

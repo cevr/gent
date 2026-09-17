@@ -68,7 +68,6 @@ describe("ambient extension host context", () => {
         present: () => Effect.succeed({ approved: true }),
         pendingRequestId: () => Effect.die("not used"),
         storeResolution: () => Effect.die("not used"),
-        respond: () => Effect.void,
         rehydrate: () => Effect.void,
       }),
     ),

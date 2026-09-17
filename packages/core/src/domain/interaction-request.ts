@@ -124,7 +124,6 @@ export interface InteractionService {
     branchId: BranchId
     // oxlint-disable-next-line effect/noNullish -- The public interaction lookup preserves undefined for no pending request.
   }) => Effect.Effect<InteractionRequestId | undefined>
-  readonly respond: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
   /** Store a resolution for cold-mode resumption (keyed by requestId) */
   readonly storeResolution: (
     requestId: InteractionRequestId,
@@ -276,18 +275,6 @@ export const makeInteractionService = (
             current.pendingByContext.get(contextKey(ctx.sessionId, ctx.branchId)),
           ),
         ),
-
-      respond: Effect.fn("InteractionService.respond")(function* (requestId: InteractionRequestId) {
-        yield* config.storage.resolve(requestId)
-        yield* Ref.update(state, (current) => ({
-          storedResolutions: new Map(
-            [...current.storedResolutions].filter(([id]) => id !== requestId),
-          ),
-          pendingByContext: new Map(
-            [...current.pendingByContext].filter(([, id]) => id !== requestId),
-          ),
-        }))
-      }),
 
       rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
         requestId: InteractionRequestId,

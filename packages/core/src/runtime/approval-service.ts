@@ -117,7 +117,6 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         pendingRequestId: () =>
           Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
         storeResolution: () => Effect.void,
-        respond: () => Effect.void,
         rehydrate: () => Effect.void,
       }),
     )

@@ -160,7 +160,6 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     reasoningLevel: session.reasoningLevel,
     resolvedModelId: settings.modelId,
     resolvedReasoningLevel: Option.getOrUndefined(settings.reasoningLevel),
-    activeBranchId: session.activeBranchId,
     runtime,
     metrics: snapshotState.metrics,
   })
@@ -488,7 +487,6 @@ const RpcHandlers = GentRpcs.toLayer(
             ...models.map((driver) =>
               DriverInfo.cases.Model.make({
                 id: driver.id,
-                description: driver.name,
               }),
             ),
             ...externals.map((driver) =>

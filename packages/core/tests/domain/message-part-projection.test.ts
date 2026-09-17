@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   messagePartsImages,
   messagePartsReasoning,
-  messagePartsSearchText,
   messagePartsText,
   messagePartsTextLines,
   latestAssistantText,
@@ -190,9 +189,6 @@ describe("message part projection", () => {
     expect(messagePartsReasoning(parts)).toBe("")
     expect(messagePartsImages(parts)).toEqual([{ mediaType: "image/png" }])
     expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
-    expect(messagePartsSearchText(parts)).toBe(
-      'hello\nimage/png\nread {"path":"README.md"}\nread {"ok":true}',
-    )
   })
 
   test("preserves line-oriented text and reasoning projections", () => {

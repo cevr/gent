@@ -1,7 +1,7 @@
 /**
  * `GentPlatform` — single Effect service that owns every Bun-API and host-OS
  * call gent relies on. Product code yields `GentPlatform` and uses
- * `platform.randomId`, `platform.osInfo`, `platform.exit`, etc., so the
+ * `platform.randomId`, `platform.osInfo`, `platform.pid`, etc., so the
  * runtime stays portable and the `Bun.*` and raw `process.*` references
  * live in exactly one file (`BunGentPlatformLive`).
  *
@@ -16,15 +16,6 @@
  *   - `pathListSeparator`— PATH-like list separator (`;` on Windows, `:`
  *                          elsewhere)
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
- *   - `exit(code)`       — request the host to exit with `code`. NOT
- *                          finalizer-safe: `process.exit` is synchronous and
- *                          bypasses Effect finalizers. Code that needs
- *                          deterministic teardown should surface the exit
- *                          code through the Effect result and let
- *                          `BunRuntime.runMain` translate it.
- *   - `now`              — monotonic timestamp in milliseconds. Use for
- *                          relative measurements (supervisor backoff math),
- *                          NOT epoch-ish wall-clock comparisons.
  *   - `hash(alg, input)` — content-addressed hex digest. `sha256` for durable
  *                          ids and cache keys; `md5` for non-cryptographic
  *                          memoization. Sync because content-addressed
@@ -94,8 +85,6 @@ interface GentPlatformApi {
   readonly env: Effect.Effect<Record<string, string | undefined>>
   readonly pathListSeparator: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
-  readonly exit: (code: number) => Effect.Effect<never>
-  readonly now: Effect.Effect<number>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
   readonly randomBytes: (length: number) => Effect.Effect<Uint8Array>
   readonly fileURLToPath: (url: string) => string
@@ -114,7 +103,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
       GentPlatform,
       Effect.gen(function* () {
         const counter = yield* Ref.make(0)
-        const clock = yield* Ref.make(0)
         return GentPlatform.of({
           randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
@@ -133,18 +121,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           env: Effect.succeed({}),
           pathListSeparator: Effect.succeed(":"),
           signal: () => Effect.void,
-          // The default Test stub dies loudly: silent `Effect.never` would
-          // make accidental `platform.exit(...)` calls in a test hang
-          // forever, which is the worst possible failure mode. Tests that
-          // *intend* to assert "exit was called with code N" override the
-          // layer with a `Deferred` recorder.
-          exit: (code) =>
-            Effect.die(
-              new Error(
-                `GentPlatform.Test: platform.exit(${code}) called without a recorder override. Provide a layer that captures the intended exit code via Deferred.`,
-              ),
-            ),
-          now: Ref.updateAndGet(clock, (n) => n + 1),
           // Deterministic, content-derived stub: same input → same digest.
           // Length matches the real `sha256`/`md5` hex output (64/32) so
           // consumers that slice off a prefix observe the right shape.

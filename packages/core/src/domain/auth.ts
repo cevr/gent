@@ -125,11 +125,11 @@ export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
  * payload so callers can't smuggle in an override that bypasses model
  * auth.
  */
-export const AuthProviderQuery = Schema.Struct({
+const AuthProviderQuery = Schema.Struct({
   agentName: Schema.optional(AgentName),
   driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),
 })
-export type AuthProviderQuery = typeof AuthProviderQuery.Type
+type AuthProviderQuery = typeof AuthProviderQuery.Type
 
 // ── Auth service ────────────────────────────────────────────────────────
 
