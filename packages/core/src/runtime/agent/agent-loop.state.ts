@@ -1,4 +1,4 @@
-import { Match, Option, Predicate, Schema } from "effect"
+import { Effect, Match, Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ToolCapability } from "../../domain/capability/tool.js"
 import {
@@ -31,6 +31,14 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
+
+/**
+ * A storage or transport fault becomes the loop's one caller-facing error at
+ * the call that raised it, keeping what actually went wrong as the cause.
+ * Mirrors `asAgentRunError` in `agent-runner.ts`.
+ */
+export const asAgentLoopError = (message: string) =>
+  Effect.mapError((cause: unknown) => new AgentLoopError({ message, cause }))
 
 // ── Queue ──
 
@@ -310,10 +318,8 @@ export type ResolvedTurn = {
 
 // ── Phase-tagged loop state (flat, actor-owned) ──
 //
-// Replaces the `effect-machine` `State()` / `Machine` driver from
-// pre-. The loop is a single fiber + Phase Ref now; this enum is
-// the source of truth for "where is the loop?" while the actor entity is
-// materialized.
+// The loop is one fiber plus this Ref. While the actor entity is
+// materialized, this enum is the source of truth for "where is the loop?".
 
 export const LoopState = Schema.TaggedUnion({
   /** No turn in progress. */
@@ -496,11 +502,9 @@ const runtimeStateFromLoopState = (
 
 // ── Aggregate (single-Ref shape) ──
 //
-// Replaces the stateRef / queueRef / runtimeStateRef projection mirror set
-// with one source of truth. The FSM driver still owns the LoopState
-// transition table; this aggregate is the per-session memory the loop
-// reads/writes through a single SubscriptionRef. `runtimeState` derives
-// from `state` + `queue` at the watchState boundary — never stored.
+// The per-branch memory the loop reads and writes through one
+// SubscriptionRef. `runtimeState` derives from `state` + `queue` at the
+// watchState boundary and is never stored, so the projection cannot lag.
 
 export interface AgentLoopState {
   readonly state: LoopState

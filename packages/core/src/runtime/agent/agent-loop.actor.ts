@@ -1,27 +1,22 @@
 /**
  * `AgentLoop` as `Actor.fromEntity`.
  *
- * Replaces the per-(sessionId, branchId) hand-rolled fiber map +
- * `LoopState` tagged union + actor mailbox persistence.
- *
- * **Op surface (C5.1-followup counsel):** request/reply only.
- * `Subscribe` and `Snapshot` are NOT actor ops:
+ * **Op surface:** request/reply only. `Subscribe` and `Snapshot` are NOT
+ * actor ops:
  * - `Actor.fromEntity` is request/reply; `OperationHandle.watch` is
  *   polling status, not a live state stream.
  * - State subscription stays behavior-owned and is exposed through
- *   `Actor.registerState` (or `Actor.withProtocol` later if encore grows
- *   streaming-RPC support).
+ *   `Actor.registerState`.
  *
  * **Entity ID** keys per `(sessionId, branchId)` so all ops for one branch
  * share an actor instance. Handler concurrency is intentionally unbounded;
  * behavior-owned queue and actor-owned semaphore serialize turn execution, durable queue,
  * and side-effect lanes.
  *
- * **Single source of truth for routing** (C5.2 counsel): for ops that
- * carry a domain payload owning its own `(sessionId, branchId)`,
- * top-level routing fields are dropped — the embedded payload IS the
- * authority. Only `Interrupt` (no embedded payload) carries explicit
- * target fields.
+ * **Single source of truth for routing:** an op that carries a domain payload
+ * owning its own `(sessionId, branchId)` has no top-level routing fields — the
+ * embedded payload IS the authority. Only `Interrupt` (no embedded payload)
+ * carries explicit target fields.
  *
  * **Execution id key** per op:
  * - `Submit` — `message.id` (live-only)
@@ -78,6 +73,7 @@ import { SessionProfileCache } from "../session-profile.js"
 import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import {
   AgentLoopError,
+  asAgentLoopError,
   emptyLoopQueueState,
   projectRuntimeState,
   queueRequestsWake,
@@ -452,13 +448,12 @@ const buildAgentLoopActorHandlers = (config: {
         return yield* run(handle)
       }).pipe(provideActorWorkspace)
 
-    // Both call sites supply an already-resolved `handle`:
+    // Both call sites supply an already-resolved `handle`, so no admission can
+    // reach the behavior without going through one of the two safe lookups:
     //   - the `AgentLoopFollowUp` enqueue implementation reads
-    //     `reentrantHandle` lazily — it fires during turn execution (well
-    //     after `openLoop` published `handleRef`), so the read is provably safe.
+    //     `reentrantHandle` lazily — it fires during turn execution, well after
+    //     `openLoop` published the handle, so the read is provably safe.
     //   - the `QueueFollowUp` mailbox handler resolves it via `ensureStarted`.
-    // Taking it as a parameter eliminates the implicit two-step contract
-    // that previously bypassed `ensureStarted` for non-reentrant callers.
     type FollowUpInput = {
       /** Keys the message id so repeated admissions and later removal target one item. */
       readonly sourceId?: string
@@ -556,15 +551,9 @@ const buildAgentLoopActorHandlers = (config: {
 
     const openLoop = Effect.gen(function* () {
       const loadedQueue = yield* Effect.result(
-        queueStorage.getQueueState(sessionId, branchId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: `Failed to load loop queue for ${sessionId}/${branchId}`,
-                cause,
-              }),
-          ),
-        ),
+        queueStorage
+          .getQueueState(sessionId, branchId)
+          .pipe(asAgentLoopError(`Failed to load loop queue for ${sessionId}/${branchId}`)),
       )
       const initialQueue = Result.getOrElse(loadedQueue, emptyLoopQueueState)
       const initialQueueFailure = Result.getFailure(loadedQueue)
@@ -731,9 +720,7 @@ const buildAgentLoopActorHandlers = (config: {
     const turnAlreadyCompleted = (messageId: MessageId) =>
       messageStorage.getMessage(messageId).pipe(
         Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
-        Effect.mapError(
-          (cause) => new AgentLoopError({ message: "Cannot read submitted message", cause }),
-        ),
+        asAgentLoopError("Cannot read submitted message"),
       )
 
     /**
@@ -784,15 +771,9 @@ const buildAgentLoopActorHandlers = (config: {
       yield* ensureTarget(command)
       yield* markWrite
       if (isCancellation(command) && Predicate.isNotUndefined(command.messageId)) {
-        yield* operations.cancelTurn({ sessionId, branchId, messageId: command.messageId }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: "Cannot record targeted cancellation",
-                cause,
-              }),
-          ),
-        )
+        yield* operations
+          .cancelTurn({ sessionId, branchId, messageId: command.messageId })
+          .pipe(asAgentLoopError("Cannot record targeted cancellation"))
       }
       const handle = yield* ensureStarted
 

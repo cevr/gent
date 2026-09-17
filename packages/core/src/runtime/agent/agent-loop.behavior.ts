@@ -78,6 +78,7 @@ import {
   takeNextQueuedTurn,
   buildInitialAgentLoopState,
   AgentLoopError,
+  asAgentLoopError,
   type AgentLoopState,
   type LoopQueueState,
   type LoopState,
@@ -175,15 +176,13 @@ const makeAgentLoopQueue = (
     const persistCommittedQueue = (queue: LoopQueueState, operation: string) =>
       Effect.flatMap(Ref.get(scope.startedRef), (started) => {
         if (!started) return Effect.void
-        return queueStorage.putQueueState(scope.sessionId, scope.branchId, queue).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: `Failed to persist ${operation} for ${scope.sessionId}/${scope.branchId}`,
-                cause,
-              }),
-          ),
-        )
+        return queueStorage
+          .putQueueState(scope.sessionId, scope.branchId, queue)
+          .pipe(
+            asAgentLoopError(
+              `Failed to persist ${operation} for ${scope.sessionId}/${scope.branchId}`,
+            ),
+          )
       })
 
     const recordPersistenceFailure = (error: AgentLoopError) =>
@@ -467,7 +466,7 @@ export type AgentLoopBehavior = {
    */
   branchContext: Context.Context<never>
   writeInitialQueue: Effect.Effect<void, AgentLoopError>
-  /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
+  /** Read the current loop state. */
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
@@ -492,9 +491,8 @@ export const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
 }
 
 /**
- * Closure-local follow-up enqueue. Stand-in for the legacy
- * `service.queueFollowUp` recursive reference; routes back through the actor
- * via mutual recursion with `Message` as the authoritative payload.
+ * Closure-local follow-up enqueue. Routes back through the actor via mutual
+ * recursion, with `Message` as the authoritative payload.
  */
 type EnqueueFollowUp = (input: {
   sourceId: string
@@ -594,15 +592,7 @@ export const makeAgentLoopBehavior = (
       })
 
     const publishEvent = (event: AgentEvent) =>
-      eventPublisher.publish(event).pipe(
-        Effect.mapError(
-          (error) =>
-            new AgentLoopError({
-              message: `Failed to publish ${event._tag}`,
-              cause: error,
-            }),
-        ),
-      )
+      eventPublisher.publish(event).pipe(asAgentLoopError(`Failed to publish ${event._tag}`))
 
     const hostProvider = yield* makeExtensionHostContextProvider({
       extensionRegistry,

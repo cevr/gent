@@ -19,7 +19,12 @@ import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
-import { AgentLoopError, type QueuedTurnItem, type RunningState } from "./agent-loop.state.js"
+import {
+  AgentLoopError,
+  asAgentLoopError,
+  type QueuedTurnItem,
+  type RunningState,
+} from "./agent-loop.state.js"
 import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
@@ -1018,9 +1023,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               })
               .pipe(
                 runAgentLoopTurnProfile(params.turnProfile),
-                Effect.mapError(
-                  (cause) => new AgentLoopError({ message: "Tool call recovery failed", cause }),
-                ),
+                asAgentLoopError("Tool call recovery failed"),
               ),
         })
         if (outcome._tag === "Suspended") {
@@ -1341,15 +1344,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           messageId: state.message.id,
         })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AgentLoopError({
-                message: "Cannot read targeted cancellation",
-                cause,
-              }),
-          ),
-        )
+        .pipe(asAgentLoopError("Cannot read targeted cancellation"))
       if (cancelled) yield* scope.turnInterruption.interrupt
 
       const turnProfile = yield* scope.resolveTurnProfile
