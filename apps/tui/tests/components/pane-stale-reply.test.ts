@@ -1,10 +1,15 @@
 /**
- * Docked panes must not write a previous session's rows.
+ * Docked panes must not write a previous session's rows, and must not write an
+ * older query's rows either.
  *
  * Both panes refetch across a session switch — the agents tray on `current()`
  * changing plus a 2 s poll, the thread pane on a compaction event — so a reply
  * can land after the shell has already moved. The key the fetch was made for
  * is re-read when it lands; a reply for any other key is dropped.
+ *
+ * The filter fires one fetch per keystroke, so replies also race each other
+ * within one session. Only the newest refresh may write, and every reply that
+ * reaches the query clears the load state, even the ones it drops.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Option } from "effect"
@@ -57,6 +62,80 @@ describe("Agents controller across a session switch", () => {
       yield* Effect.yieldNow
 
       expect(result.controller.rows()).toEqual([])
+      result.dispose()
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("keeps the newest filter's rows when an older one replies last", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const first = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+      const second = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+      const gates = new Map([
+        ["a", first],
+        ["ab", second],
+      ])
+
+      const active = Option.some(key("only"))
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          (query) =>
+            Option.match(Option.fromUndefinedOr(gates.get(query)), {
+              onNone: () => Effect.never,
+              onSome: (gate) => Deferred.await(gate),
+            }),
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => active,
+        )
+        return { controller, dispose }
+      })
+
+      // One fetch per keystroke; the shorter query is still out when the
+      // longer one replies.
+      result.controller.refresh("a")
+      result.controller.refresh("ab")
+
+      yield* Deferred.succeed(second, [row("ab-match")])
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(first, [row("a-match")])
+      yield* Effect.yieldNow
+
+      expect(result.controller.rows().map((entry) => String(entry.sessionId))).toEqual(["ab-match"])
+      result.dispose()
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("stops loading even when the reply is for the session the shell left", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+
+      let active = Option.some(key("first"))
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Deferred.await(gate),
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => active,
+        )
+        return { controller, dispose }
+      })
+
+      result.controller.refresh("")
+      expect(result.controller.loading()).toBe(true)
+      active = Option.some(key("second"))
+
+      yield* Deferred.succeed(gate, [row("first")])
+      yield* Effect.yieldNow
+
+      // The rows are dropped, but the pane must not draw "loading" forever.
+      expect(result.controller.rows()).toEqual([])
+      expect(result.controller.loading()).toBe(false)
       result.dispose()
     }).pipe(Effect.timeout("20 seconds")),
   )

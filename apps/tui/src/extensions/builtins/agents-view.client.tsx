@@ -62,6 +62,8 @@ interface AgentsController {
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
+  /** Re-read the listing under the filter already typed, after a row changed. */
+  readonly reload: () => void
   /**
    * Detail for the row the reader is on, or `None` while it loads. Listings
    * stay cheap by carrying identity and liveness only; this is the second
@@ -99,7 +101,7 @@ export const makeAgentsController = (
     cast,
     fetch: (query: string) => fetchRows(query),
   })
-  const { value: rows, error, loading, refresh } = listing
+  const { value: rows, error, loading, refresh, reload } = listing
 
   const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
   // Arrow keys move faster than a round trip, so replies can land out of order.
@@ -138,7 +140,7 @@ export const makeAgentsController = (
 
   const [open, setOpen] = createSignal(false)
 
-  return { rows, current, error, loading, refresh, detail, select, open, setOpen }
+  return { rows, current, error, loading, refresh, reload, detail, select, open, setOpen }
 }
 
 /** Section headings, with the count each carries. Empty sections are skipped. */
@@ -656,7 +658,9 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
                       Effect.annotateLogs({ sessionId: row.sessionId, error: String(cause) }),
                     ),
                   ),
-                  Effect.andThen(Effect.sync(() => controller.refresh(""))),
+                  // The pane is open and may be filtered, so the listing is
+                  // re-read under the query the reader typed, not under "".
+                  Effect.andThen(Effect.sync(() => controller.reload())),
                 ),
               )
             }
