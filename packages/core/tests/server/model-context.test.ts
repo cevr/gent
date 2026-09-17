@@ -51,6 +51,8 @@ describe("model context RPC boundary", () => {
             return yield* Effect.die("unexpected event in error stream")
           }
           expect(errorEvent.value.event.error).toContain("ModelContextProjectionError")
+          // The transcript prints this text; stack frames belong in the log.
+          expect(errorEvent.value.event.error).not.toContain("\n    at ")
           const snapshot = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) => current.runtime._tag === "Idle",

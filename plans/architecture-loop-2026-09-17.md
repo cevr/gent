@@ -19,21 +19,21 @@ Sources: my own read of the spine, and three surveys (codex; opencode-v2 + pi;
 prime + exo + deepseek). A candidate is listed only when two readers agree or
 the code proves it.
 
-| #   | Candidate                                                               | Status             |
-| --- | ----------------------------------------------------------------------- | ------------------ |
-| L1  | `invokeTool` has no production caller                                   | done `b38af2f4`    |
-| L2  | Test-only and single-valued names in the tool path                      | open               |
-| L3  | `SwitchAgent` has no sender; `currentAgent` rides the loop state for it | open               |
-| L4  | `runtimeState` and `snapshot` read one ref; the double read is dead     | open               |
-| L5  | An interrupted step can persist a tool call with no result              | done `0d987793`    |
-| L6  | `TurnRecord` is a non-transactional cache of the messages               | open               |
-| L7  | The process-local result cache repeats the durable tool events          | open, probe first  |
-| L8  | `saveCheckpoint` writes a queue that did not change                     | open               |
-| L9  | Turn state lives at loop scope and is reset by hand in four places      | open               |
-| L10 | Admission is encoded four ways because the mailbox is unbounded         | open, highest risk |
-| L11 | The spine reads bottom-up: flags, wrappers, `Object.assign`             | open               |
-| L12 | `systemPrompt` hook repeats `turnProjection.promptSections`             | open               |
-| L13 | The child result is built twice                                         | open               |
+| #   | Candidate                                                               | Status                                                                                                                                             |
+| --- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1  | `invokeTool` has no production caller                                   | done `b38af2f4`                                                                                                                                    |
+| L2  | Test-only and single-valued names in the tool path                      | done `42d333f8` (only the single-valued `origin` held up)                                                                                          |
+| L3  | `SwitchAgent` has no sender; `currentAgent` rides the loop state for it | done `4c74c24d`                                                                                                                                    |
+| L4  | `runtimeState` and `snapshot` read one ref; the double read is dead     | done `1ecadc3e`                                                                                                                                    |
+| L5  | An interrupted step can persist a tool call with no result              | done `0d987793`                                                                                                                                    |
+| L6  | `TurnRecord` is a non-transactional cache of the messages               | partial `bc9aa0c1`: the record is not in the step transaction; the resume now cross-checks the messages. The cache stays                           |
+| L7  | The process-local result cache repeats the durable tool events          | rejected: the cached results have durable events but no message row; deletion widens `ToolResultReplayError` to the whole step                     |
+| L8  | `saveCheckpoint` writes a queue that did not change                     | done `8ec7a1eb`                                                                                                                                    |
+| L9  | Turn state lives at loop scope and is reset by hand in four places      | done `858f1721` (`turn-ledger.ts`); the other loop-scope state is load-bearing                                                                     |
+| L10 | Admission is encoded four ways because the mailbox is unbounded         | rejected: the cause is `TxQueue.unbounded` at `agent-loop.behavior.ts:647`, whose entries cannot be retracted; `holdsMessage` needs all five forms |
+| L11 | The spine reads bottom-up: flags, wrappers, `Object.assign`             | done `eab23ce5`: the four mutable flags are gone                                                                                                   |
+| L12 | `systemPrompt` hook repeats `turnProjection.promptSections`             | rejected: `systemPrompt` is the only hook after `compileToolPolicy`, and the cell needs `hostTools`                                                |
+| L13 | The child result is built twice                                         | rejected: two different results (typed `AgentRunResult` vs a prose message), exclusive paths                                                       |
 
 ## Live gamut findings (sol-luna, `/private/tmp/gent-gamut-0917`, pane `wZ:p1A`)
 
@@ -48,8 +48,9 @@ the code proves it.
 | G7  | The orchestrator cannot message a running child (user request 2026-09-17)                                                                                                                                                                       | done: `agent-child` `send` steers the child; steering at an answered step joins the turn                 |
 | G8  | Second gamut: `send` reached the Task 2 child live (it added the requested test; 18 pass). The orchestrator set alarms to wait for background children, and one fired stale after they finished                                                 | done: the `delegate` description says a background result starts a turn by itself                        |
 | G4  | Scrollback fix verified live after the merge (`ff185983`): pane history went from 5 rows to 150 on `gent resume`                                                                                                                                | verified                                                                                                 |
-| G9  | A turn failure prints `Cause.pretty` with every stack frame into the transcript (150 rows for one `StorageError`); `agent-loop.worker.ts:75`                                                                                                    | open, after `arch-loop` merges                                                                           |
+| G9  | A turn failure prints `Cause.pretty` with every stack frame into the transcript (150 rows for one `StorageError`); `agent-loop.worker.ts:75`                                                                                                    | done `f571125b`: the event carries the cause-chain messages; frames go to the log                        |
 | G10 | Rift binaries open the real `~/.gent/data.db`. Migration `020_drop_message_search_index` ran there, so any binary older than `arch-core` now fails every message write with `no such table: messages_fts`                                       | open: merge to main closes it; consider a per-rift `GENT_HOME`                                           |
+| G11 | A foreground child that was interrupted, lost its stream, or never answered still returned `Success` (found by the `arch-loop` agent)                                                                                                           | done `cb82d5cb`                                                                                          |
 
 ## fx survey (vercel-labs/fx), adopt list
 
