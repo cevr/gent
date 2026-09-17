@@ -32,7 +32,7 @@ import { WriteTool } from "./fs-tools/write.js"
 import { EditTool } from "./fs-tools/edit.js"
 import { GrepTool } from "./fs-tools/grep.js"
 import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
-import { WebSearchTool } from "./network-tools/websearch.js"
+import { NetworkToolsExtension } from "./network-tools.js"
 import { ReadSessionTool } from "./session-tools/read-session.js"
 import { AskUserTool } from "./interaction-tools/ask-user.js"
 import { PromptTool } from "./interaction-tools/prompt.js"
@@ -80,14 +80,6 @@ export const FsToolsExtension = defineExtension({
         layer: FileIndexLive({ home: host.home }),
       }),
     )
-  }),
-})
-
-const NetworkToolsExtension = defineExtension({
-  id: "@gent/network-tools",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", WebSearchTool)
   }),
 })
 

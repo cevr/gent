@@ -1,6 +1,8 @@
 import { Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { tool } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
+
+// ── websearch ───────────────────────────────────────────────────────────────
 
 // WebSearch Error
 
@@ -198,5 +200,15 @@ export const WebSearchTool = tool({
       output: result,
       query: params.query,
     }
+  }),
+})
+
+// ── extension ───────────────────────────────────────────────────────────────
+
+export const NetworkToolsExtension = defineExtension({
+  id: "@gent/network-tools",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", WebSearchTool)
   }),
 })
