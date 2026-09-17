@@ -236,7 +236,7 @@ export interface BoundedOutput {
   readonly read: () => string
   /** `read()`, then reset to empty. */
   readonly take: () => string
-  /** Whether any text has been dropped or pushed past the head. */
+  /** Whether any text has been dropped. */
   readonly truncated: () => boolean
   /** Reset to empty without reading. */
   readonly reset: () => void
@@ -257,16 +257,16 @@ export const makeBoundedOutput = (options: {
   let head = ""
   let tail = ""
   let omitted = 0
-  let truncated = false
+  // Text that spilled past the head but still fits is whole: no notice until
+  // a character is really dropped.
   const read = (): string => {
-    if (!truncated) return head
+    if (omitted === 0) return head + tail
     return `${head}\n... [${omitted} characters omitted] ...\n${tail}`
   }
   const reset = (): void => {
     head = ""
     tail = ""
     omitted = 0
-    truncated = false
   }
   return {
     append: (text: string): void => {
@@ -279,7 +279,6 @@ export const makeBoundedOutput = (options: {
         return
       }
       head += next.slice(0, headRoom)
-      truncated = true
       tail += next.slice(headRoom)
       if (tail.length > tailLimit) {
         omitted += tail.length - tailLimit
@@ -292,7 +291,7 @@ export const makeBoundedOutput = (options: {
       reset()
       return result
     },
-    truncated: () => truncated,
+    truncated: () => omitted > 0,
     reset,
   }
 }

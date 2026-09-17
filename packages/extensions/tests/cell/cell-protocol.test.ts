@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import {
   CellRequest,
@@ -11,6 +11,7 @@ import {
   maximumCellFrameBytes,
   cellOutputBoundary,
   makeCellOutputScanner,
+  makeBoundedOutput,
 } from "../../src/cell/cell-protocol.js"
 
 describe("cell process protocol", () => {
@@ -139,4 +140,27 @@ describe("cell process protocol", () => {
       expect(scanner.end()).toBe("")
     }),
   )
+})
+
+describe("bounded output", () => {
+  test("text that fits the limit comes back whole, with no omission notice", () => {
+    const exact = makeBoundedOutput({ limit: 4, headLimit: 2 })
+    exact.append("abcd")
+    expect(exact.read()).toBe("abcd")
+    expect(exact.truncated()).toBe(false)
+  })
+  test("one character past the limit drops one character and says so", () => {
+    const over = makeBoundedOutput({ limit: 4, headLimit: 2 })
+    over.append("abcde")
+    expect(over.read()).toBe("ab\n... [1 characters omitted] ...\nde")
+    expect(over.truncated()).toBe(true)
+  })
+  test("the count covers text dropped across appends, and take resets it", () => {
+    const many = makeBoundedOutput({ limit: 4, headLimit: 2 })
+    many.append("abc")
+    many.append("defg")
+    expect(many.take()).toBe("ab\n... [3 characters omitted] ...\nfg")
+    expect(many.read()).toBe("")
+    expect(many.truncated()).toBe(false)
+  })
 })
