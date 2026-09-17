@@ -304,41 +304,6 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     return { ...response.frame.result, display: withOutput(response.frame.result.display) }
   })
 
-  const reset = Effect.fn("CellKernel.reset")(function* () {
-    if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
-    if (status === "lost") {
-      if (replacements >= maximumReplacements) {
-        return yield* failure("replacement-limit", "Cell worker replacement limit reached")
-      }
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          replacements++
-          workerCatalogHash = Option.none()
-          child = yield* restore(openWorker()).pipe(Effect.mapError(processError))
-          // close can run while the replacement is starting. Never restore a closed owner.
-          if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
-          status = "ready"
-        }),
-      )
-    }
-    const requestId = String(++sequence)
-    yield* Effect.gen(function* () {
-      yield* child.send(CellRequest.cases.Reset.make({ requestId }))
-      const response = yield* child.responses.pipe(Stream.runHead)
-      if (
-        Option.isNone(response) ||
-        response.value._tag !== "Reset" ||
-        response.value.requestId !== requestId
-      ) {
-        return yield* failure("protocol", "Unexpected cell reset response")
-      }
-    }).pipe(
-      Effect.catchTag("CellProcessError", (error) => Effect.fail(processError(error))),
-      Effect.timeoutOrElse(deadline),
-      Effect.onError(() => discard().pipe(Effect.orDie)),
-    )
-  })
-
   /** One control request with one matching reply, while no cell is active. */
   const control = Effect.fn("CellKernel.control")(function* <A>(
     make: (requestId: string) => CellRequest,
@@ -362,6 +327,36 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       Effect.onError(() => discard().pipe(Effect.orDie)),
     )
   })
+
+  const reset = Effect.fn("CellKernel.reset")(function* () {
+    if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
+    // A lost worker has nothing to talk to: replace the process instead.
+    if (status === "lost") {
+      if (replacements >= maximumReplacements) {
+        return yield* failure("replacement-limit", "Cell worker replacement limit reached")
+      }
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          replacements++
+          workerCatalogHash = Option.none()
+          child = yield* restore(openWorker()).pipe(Effect.mapError(processError))
+          // close can run while the replacement is starting. Never restore a closed owner.
+          if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
+          status = "ready"
+        }),
+      )
+    }
+    // A live worker resets like any other control request; the reply carries
+    // nothing but its own id, so that is what the read returns.
+    yield* control(
+      (requestId) => CellRequest.cases.Reset.make({ requestId }),
+      (frame, requestId): Option.Option<string> => {
+        if (frame._tag === "Reset" && frame.requestId === requestId) return Option.some(requestId)
+        return Option.none()
+      },
+    )
+  })
+
   const snapshot = control(
     (requestId) => CellRequest.cases.Snapshot.make({ requestId }),
     (frame, requestId): Option.Option<CellSnapshot> => {
