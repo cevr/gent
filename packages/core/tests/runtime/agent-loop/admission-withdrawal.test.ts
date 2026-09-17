@@ -1,5 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
-import { DateTime, Effect, Fiber, Option, Ref, Semaphore, TxQueue } from "effect"
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Semaphore,
+  TxQueue,
+  TxSubscriptionRef,
+} from "effect"
 import type { ActiveStreamHandle } from "../../../src/runtime/agent/turn-response"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { dateFromMillis, Message } from "../../../src/domain/message"
@@ -7,14 +17,21 @@ import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import {
   buildIdleState,
   buildRunningState,
-  clearInFlightQueuedTurn,
-  emptyLoopQueueState,
-  takeNextQueuedTurn,
-  type LoopQueueState,
+  type AgentLoopError,
   type LoopState,
-  type QueuedTurnItem,
   type RunningState,
 } from "../../../src/runtime/agent/agent-loop.state"
+import {
+  buildInitialAgentLoopState,
+  makeLoopInbox,
+  type AgentLoopState,
+} from "../../../src/runtime/agent/loop-inbox"
+import {
+  emptyLoopQueueState,
+  type LoopQueueState,
+  type QueuedTurnItem,
+} from "../../../src/domain/queue"
+import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import {
   emptyAdmissionGate,
   makeAgentLoopWorker,
@@ -42,10 +59,38 @@ const admitted = (item: QueuedTurnItem, rest: ReadonlyArray<QueuedTurnItem>) => 
   queue: { ...emptyLoopQueueState(), followUp: [...rest], inFlight: item },
 })
 
+/**
+ * The worker runs against a real `LoopInbox`, not a stub of the queue algebra.
+ * The subject is the admission gate, and only a real inbox proves the worker's
+ * withdrawal and the inbox's in-flight slot agree about what was admitted.
+ * Storage is a memory cell: the durable write is not this test's subject.
+ */
+const memoryQueueStorage = Layer.effect(
+  AgentLoopQueueStorage,
+  Effect.gen(function* () {
+    const rows = yield* Ref.make(new Map<string, LoopQueueState>())
+    const key = (s: string, b: string) => `${s}/${b}`
+    return AgentLoopQueueStorage.of({
+      getQueueState: (s, b) =>
+        Ref.get(rows).pipe(Effect.map((map) => map.get(key(s, b)) ?? emptyLoopQueueState())),
+      putQueueState: (s, b, queue) => Ref.update(rows, (map) => new Map(map).set(key(s, b), queue)),
+    })
+  }),
+)
+
 const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
   Effect.gen(function* () {
-    const stateRef = yield* Ref.make<LoopState>(initial.state)
-    const queueRef = yield* Ref.make<LoopQueueState>(initial.queue)
+    const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
+      buildInitialAgentLoopState({ state: initial.state, queue: initial.queue }),
+    )
+    const inbox = yield* makeLoopInbox({
+      sessionId,
+      branchId,
+      loopRef,
+      queuePersistenceSemaphore: yield* Semaphore.make(1),
+      persistenceFailure: yield* Deferred.make<void, AgentLoopError>(),
+      startedRef: yield* Ref.make(true),
+    })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const gateRef = yield* Ref.make(emptyAdmissionGate)
@@ -58,20 +103,7 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       turnInterruption: yield* makeTurnInterruption,
       interruptToolWork: Effect.void,
-      currentLoopState: Ref.get(stateRef),
-      moveToPhase: (next: LoopState) => Ref.set(stateRef, next),
-      takeNextQueuedTurn: Effect.gen(function* () {
-        const now = yield* DateTime.nowAsDate
-        const queue = yield* Ref.get(queueRef)
-        const { queue: next, nextItem } = takeNextQueuedTurn(queue, now)
-        yield* Ref.set(queueRef, next)
-        return nextItem
-      }),
-      clearInFlightTurn: (messageId) =>
-        Ref.modify(queueRef, (queue): [boolean, LoopQueueState] => {
-          const next = clearInFlightQueuedTurn(queue, messageId)
-          return [next !== queue, next]
-        }),
+      inbox,
       admissionGateRef: gateRef,
       recordTurnFailure: () => Effect.void,
       publishEvent: () => Effect.void,
@@ -80,8 +112,11 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
           Effect.as(TurnOutcome.cases.Done.make({})),
         ),
     })
-    return { worker, stateRef, queueRef, ranTurns, turnWorkerQueue, gateRef }
-  })
+    const phase = inbox.phase
+    const queue = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue))
+    const setPhase = (next: LoopState) => inbox.moveToPhase(next)
+    return { worker, phase, queue, setPhase, ranTurns, turnWorkerQueue, gateRef }
+  }).pipe(Effect.provide(memoryQueueStorage))
 
 const waitForEmptyWorkerQueue = (queue: TxQueue.TxQueue<RunningState>): Effect.Effect<void> =>
   TxQueue.size(queue).pipe(
@@ -98,8 +133,8 @@ describe("admitted turn withdrawal", () => {
       const harness = yield* makeHarness(admitted(first, []))
       const withdrawn = yield* harness.worker.withdrawAdmittedTurn(first.message.id)
       expect(withdrawn).toBe(true)
-      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Idle")
-      expect((yield* Ref.get(harness.queueRef)).inFlight).toBeUndefined()
+      expect((yield* harness.phase)._tag).toBe("Idle")
+      expect((yield* harness.queue).inFlight).toBeUndefined()
     }),
   )
 
@@ -110,10 +145,10 @@ describe("admitted turn withdrawal", () => {
       const harness = yield* makeHarness(admitted(first, [second]))
       const withdrawn = yield* harness.worker.withdrawAdmittedTurn(first.message.id)
       expect(withdrawn).toBe(true)
-      const state = yield* Ref.get(harness.stateRef)
+      const state = yield* harness.phase
       expect(state._tag).toBe("Running")
       if (state._tag === "Running") expect(String(state.message.id)).toBe("second")
-      expect((yield* Ref.get(harness.queueRef)).followUp).toHaveLength(0)
+      expect((yield* harness.queue).followUp).toHaveLength(0)
     }),
   )
 
@@ -123,7 +158,7 @@ describe("admitted turn withdrawal", () => {
       const harness = yield* makeHarness(admitted(first, []))
       const withdrawn = yield* harness.worker.withdrawAdmittedTurn(MessageId.make("other"))
       expect(withdrawn).toBe(false)
-      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Running")
+      expect((yield* harness.phase)._tag).toBe("Running")
     }),
   )
 
@@ -137,7 +172,7 @@ describe("admitted turn withdrawal", () => {
       })
       const withdrawn = yield* harness.worker.withdrawAdmittedTurn(first.message.id)
       expect(withdrawn).toBe(false)
-      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Running")
+      expect((yield* harness.phase)._tag).toBe("Running")
     }),
   )
 
@@ -150,7 +185,7 @@ describe("admitted turn withdrawal", () => {
       })
       const withdrawn = yield* harness.worker.withdrawAdmittedTurn(first.message.id)
       expect(withdrawn).toBe(false)
-      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Running")
+      expect((yield* harness.phase)._tag).toBe("Running")
     }),
   )
 
@@ -162,7 +197,7 @@ describe("admitted turn withdrawal", () => {
       // The finishing turn enqueued `first`; the withdrawal lands before the worker takes it.
       yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
       yield* harness.worker.withdrawAdmittedTurn(first.message.id)
-      yield* Ref.set(harness.stateRef, buildIdleState())
+      yield* harness.setPhase(buildIdleState())
       const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
       yield* waitForEmptyWorkerQueue(harness.turnWorkerQueue)
       expect(yield* Ref.get(harness.ranTurns)).toEqual([])
@@ -184,7 +219,7 @@ describe("admitted turn withdrawal", () => {
         { concurrency: "unbounded" },
       )
       expect(results.filter((removed) => removed)).toHaveLength(1)
-      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Idle")
+      expect((yield* harness.phase)._tag).toBe("Idle")
       // The losing call must not clear the marker the worker checks.
       expect(Option.getOrUndefined((yield* Ref.get(harness.gateRef)).withdrawn)).toBe(
         first.message.id,
@@ -204,8 +239,8 @@ describe("admitted turn withdrawal", () => {
       expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(true)
       expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(false)
       expect(yield* harness.worker.withdrawAdmittedTurn(second.message.id)).toBe(true)
-      expect((yield* Ref.get(harness.stateRef))._tag).toBe("Idle")
-      expect((yield* Ref.get(harness.queueRef)).followUp).toHaveLength(0)
+      expect((yield* harness.phase)._tag).toBe("Idle")
+      expect((yield* harness.queue).followUp).toHaveLength(0)
     }),
   )
 })

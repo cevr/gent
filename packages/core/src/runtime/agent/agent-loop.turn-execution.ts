@@ -19,12 +19,8 @@ import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
-import {
-  AgentLoopError,
-  asAgentLoopError,
-  type QueuedTurnItem,
-  type RunningState,
-} from "./agent-loop.state.js"
+import { AgentLoopError, asAgentLoopError, type RunningState } from "./agent-loop.state.js"
+import type { LoopInbox } from "./loop-inbox.js"
 import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
@@ -204,13 +200,7 @@ type AgentLoopTurnExecutionContext = {
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
-  readonly clearInFlightTurn: (
-    messageId: QueuedTurnItem["message"]["id"],
-  ) => Effect.Effect<boolean, AgentLoopError>
-  readonly peekSteeringForStep: Effect.Effect<ReadonlyArray<QueuedTurnItem>, AgentLoopError>
-  readonly dropSteeringDelivered: (
-    delivered: ReadonlyArray<QueuedTurnItem>,
-  ) => Effect.Effect<void, AgentLoopError>
+  readonly inbox: LoopInbox
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -1101,10 +1091,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * next model call reads it without an interrupted stream. Reports whether
      * anything joined: an answer written while steering waited is not the
      * turn's last word.
+     *
+     * The inbox decides *which* items a step may take and when none may be
+     * taken at all; this supplies only the transcript write.
      */
-    const deliverSteeringAtStepBoundary = Effect.fn("AgentLoop.deliverSteering")(function* () {
-      const items = yield* scope.peekSteeringForStep
-      for (const item of items) {
+    const deliverSteeringAtStepBoundary = (options: { readonly finalStep: boolean }) =>
+      scope.inbox.deliverSteering({
+        finalStep: options.finalStep,
         // The message joins the transcript now. Its admission time could sort it
         // between a tool call and its result, which the projection rejects.
         //
@@ -1113,22 +1106,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // and a restart reads that as an unanswered turn and answers it twice.
         // Only delivery stamps it: an interjection that woke an idle branch
         // never reaches this boundary and must still recover.
-        yield* persistMessageReceived({
-          message: {
-            ...item.message,
-            createdAt: yield* DateTime.nowAsDate,
-            metadata: { ...item.message.metadata, customType: "steering" },
-          },
-        })
-      }
-      // Dropped only once the transcript holds them. The queue write and the
-      // message write cannot share a transaction, so the order decides which
-      // way a crash between them fails: this way replays a delivery that
-      // `persistMessageReceived` already treats as a no-op, the other way
-      // loses input the branch accepted.
-      yield* scope.dropSteeringDelivered(items)
-      return items.length > 0
-    })
+        join: (item) =>
+          Effect.gen(function* () {
+            yield* persistMessageReceived({
+              message: {
+                ...item.message,
+                createdAt: yield* DateTime.nowAsDate,
+                metadata: { ...item.message.metadata, customType: "steering" },
+              },
+            })
+          }),
+      })
 
     /**
      * Narrow retry inside a turn: whatever the model did produce stays, a
@@ -1291,7 +1279,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* clearProcessLocalReplayBindings(
           stepAddress(params.state.message.id, params.step).assistant,
         )
-        yield* deliverSteeringAtStepBoundary()
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
         return proceed
       })
 
@@ -1318,8 +1306,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               // Not on the last step of the budget: delivery takes the item
               // off the queue, and with no step left to read it the message
               // would be gone. It stays queued and opens the next turn.
-              if (finalStep) return Effect.succeed(stop({}))
-              return deliverSteeringAtStepBoundary().pipe(
+              return deliverSteeringAtStepBoundary({ finalStep }).pipe(
                 Effect.map((joined) => {
                   if (joined) return proceed
                   return stop({})
@@ -1381,7 +1368,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
-        yield* scope.clearInFlightTurn(state.message.id)
+        yield* scope.inbox.settle(state.message.id)
 
         const resumed = yield* resumeTurn({
           state,

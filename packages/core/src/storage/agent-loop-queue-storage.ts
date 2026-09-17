@@ -12,7 +12,7 @@ import {
   emptyLoopQueueState,
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
-} from "../runtime/agent/agent-loop.state.js"
+} from "../domain/queue.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { type StorageError, storageError } from "../domain/storage-error.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"

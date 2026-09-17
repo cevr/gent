@@ -71,17 +71,9 @@ import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { SessionProfileCache } from "../session-profile.js"
 import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
-import {
-  AgentLoopError,
-  asAgentLoopError,
-  emptyLoopQueueState,
-  projectRuntimeState,
-  queueRequestsWake,
-  turnFailureEpoch,
-  type AgentLoopState,
-  type LoopState,
-  type QueuedTurnItem,
-} from "./agent-loop.state.js"
+import { AgentLoopError, asAgentLoopError } from "./agent-loop.state.js"
+import { turnFailureEpoch, wantsWakeOnRecovery, type AgentLoopState } from "./loop-inbox.js"
+import { emptyLoopQueueState, type QueuedTurnItem } from "../../domain/queue.js"
 import {
   AgentLoopFollowUp,
   type AgentLoopBehavior,
@@ -123,9 +115,6 @@ import {
  * turn's failure.
  */
 
-const stateHoldsMessage = (state: LoopState, messageId: MessageId) =>
-  state._tag !== "Idle" && state.message.id === messageId
-
 const BehaviorHandle = Schema.declare<AgentLoopBehavior>((value): value is AgentLoopBehavior =>
   Predicate.hasProperty(value, "awaitExit"),
 )
@@ -156,27 +145,16 @@ const lifecycleHandle = (lifecycle: LoopLifecycle): Option.Option<AgentLoopBehav
   return Option.some(lifecycle.handle)
 }
 
-/** The loop still owns this message: starting, running, waiting, or queued. */
-const holdsMessage = (s: AgentLoopState, messageId: MessageId): boolean => {
-  const item = (queued: QueuedTurnItem) => queued.message.id === messageId
-  return (
-    stateHoldsMessage(s.state, messageId) ||
-    (Predicate.isNotUndefined(s.startingState) && stateHoldsMessage(s.startingState, messageId)) ||
-    (Predicate.isNotUndefined(s.queue.inFlight) && item(s.queue.inFlight)) ||
-    s.queue.followUp.some(item) ||
-    s.queue.steering.some(item)
-  )
-}
-
 const waitForMessageReleased = (
   behavior: AgentLoopBehavior,
   messageId: MessageId,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const current = yield* behavior.readState
-    if (!holdsMessage(current, messageId)) return
-    yield* behavior.stateChanges.pipe(
-      Stream.filter((state) => !holdsMessage(state, messageId)),
+    const { inbox } = behavior
+    const current = yield* inbox.read
+    if (!inbox.holds(current, messageId)) return
+    yield* inbox.changes.pipe(
+      Stream.filter((state) => !inbox.holds(state, messageId)),
       Stream.runHead,
     )
   })
@@ -193,7 +171,7 @@ const waitForTurnFailureAfterEpoch = (
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
-    const current = yield* behavior.readState
+    const current = yield* behavior.inbox.read
     if (Predicate.isNotUndefined(current.turnFailure) && current.turnFailure.epoch > baseline) {
       return yield* failTurnFailureState(current.turnFailure)
     }
@@ -202,7 +180,10 @@ const waitForTurnFailureAfterEpoch = (
     ): state is AgentLoopState & {
       readonly turnFailure: NonNullable<AgentLoopState["turnFailure"]>
     } => Predicate.isNotUndefined(state.turnFailure) && state.turnFailure.epoch > baseline
-    const next = yield* behavior.stateChanges.pipe(Stream.filter(hasNewTurnFailure), Stream.runHead)
+    const next = yield* behavior.inbox.changes.pipe(
+      Stream.filter(hasNewTurnFailure),
+      Stream.runHead,
+    )
     if (Option.isSome(next)) return yield* failTurnFailureState(next.value.turnFailure)
     return yield* new AgentLoopError({
       message: "Agent loop turn failure stream ended",
@@ -214,7 +195,7 @@ const failIfTurnFailedAfterEpoch = (
   baseline: number,
 ): Effect.Effect<void, AgentLoopError> =>
   Effect.gen(function* () {
-    const current = yield* behavior.readState
+    const current = yield* behavior.inbox.read
     if (Predicate.isNotUndefined(current.turnFailure) && current.turnFailure.epoch > baseline) {
       return yield* failTurnFailureState(current.turnFailure)
     }
@@ -222,7 +203,7 @@ const failIfTurnFailedAfterEpoch = (
 
 /** Record the failure mark to wait from. Take this *before* starting the turn. */
 const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number> =>
-  Effect.map(behavior.readState, turnFailureEpoch)
+  Effect.map(behavior.inbox.read, turnFailureEpoch)
 
 /**
  * Wait until the loop has released `messageId`, started after `baseline`.
@@ -352,7 +333,7 @@ const buildAgentLoopActorHandlers = (config: {
       options: { readonly queueOnly: boolean },
     ) =>
       Effect.gen(function* () {
-        const reserved = yield* handle.reserveStartOrQueueFollowUp(item, options)
+        const reserved = yield* handle.inbox.admit(item, options)
         if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
         return reserved
       })
@@ -387,7 +368,7 @@ const buildAgentLoopActorHandlers = (config: {
       options?: { readonly startupPermitHeld?: boolean },
     ) =>
       Effect.gen(function* () {
-        const start = yield* handle.takeNextQueuedTurnIfIdle
+        const start = yield* handle.inbox.takeIfIdle
         if (Option.isSome(start)) {
           yield* handle.startTurn(start.value).pipe(
             Effect.catchEager((error) => {
@@ -515,7 +496,7 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       yield* markWrite
       const item = yield* buildFollowUpItem(input)
-      yield* handle.reserveStartOrQueueFollowUp(item, { queueOnly: true })
+      yield* handle.inbox.admit(item, { queueOnly: true })
       if (yield* shouldWake(handle, input)) {
         yield* Ref.set(wakeRequested, true)
         // A retained facade can enqueue after its original turn has ended.
@@ -585,7 +566,7 @@ const buildAgentLoopActorHandlers = (config: {
               dequeue: (input) =>
                 reentrantHandle.pipe(
                   Effect.flatMap((h) =>
-                    h.removeFollowUp(
+                    h.withdrawFollowUp(
                       followUpMessageIdForSource({ workspaceId: brandedWorkspaceId, ...input }),
                     ),
                   ),
@@ -615,7 +596,7 @@ const buildAgentLoopActorHandlers = (config: {
 
       const exit = yield* Effect.exit(
         handle.start.pipe(
-          Effect.andThen(handle.writeInitialQueue),
+          Effect.andThen(handle.inbox.writeInitialQueue),
           Effect.andThen(
             Effect.gen(function* () {
               const incompleteMessage = yield* handle.incompleteUserTurn
@@ -631,12 +612,9 @@ const buildAgentLoopActorHandlers = (config: {
                   )
                 return
               }
-              const hasRecoveredQueue =
-                !Predicate.isUndefined(initialQueue.inFlight) ||
-                initialQueue.steering.length > 0 ||
-                initialQueue.followUp.length > 0
-              if (!hasRecoveredQueue) return
-              if (queueRequestsWake(initialQueue) || (yield* handle.hasPriorHistory)) {
+              const recovered = wantsWakeOnRecovery(initialQueue)
+              if (Option.isNone(recovered)) return
+              if (recovered.value.unconditional || (yield* handle.hasPriorHistory)) {
                 yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
               }
             }),
@@ -696,17 +674,14 @@ const buildAgentLoopActorHandlers = (config: {
     const currentRegisteredState = Effect.gen(function* () {
       yield* rejectIfTerminated
       const handle = yield* ensureStarted
-      return yield* handle.runtimeState
+      return yield* handle.inbox.runtimeState
     })
 
     const registeredStateChanges = Stream.unwrap(
       Effect.gen(function* () {
         yield* rejectIfTerminated
         const handle = yield* ensureStarted
-        return handle.stateChanges.pipe(
-          Stream.map(projectRuntimeState),
-          Stream.interruptWhen(handle.awaitExit),
-        )
+        return handle.inbox.runtimeChanges.pipe(Stream.interruptWhen(handle.awaitExit))
       }),
     )
 
@@ -780,7 +755,7 @@ const buildAgentLoopActorHandlers = (config: {
       switch (command._tag) {
         case "Cancel":
         case "Interrupt":
-          if (isActiveLoopState(yield* handle.snapshot)) {
+          if (isActiveLoopState(yield* handle.inbox.phase)) {
             yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
           }
           return
@@ -805,15 +780,15 @@ const buildAgentLoopActorHandlers = (config: {
           // An idle branch has no turn to join, so the item waits in the queue
           // where `queue.get` can still show it. Only a caller that asked to
           // wake gets a turn of its own — the same signal recovery uses at
-          // startup. `appendSteering` answers with the state the queue had
+          // startup. `inbox.steer` answers with the state the queue had
           // *before* the append, so the idle test is made on that. The start
           // belongs here, inside the actor: a caller that read the state first
           // and steered second would race a turn that ended in between.
           // `startTurn` re-reads the state under its own permit, so it is a
           // no-op when a turn did begin meanwhile.
-          const before = yield* handle.appendSteering(item)
+          const before = yield* handle.inbox.steer(item)
           if (command.wake !== true || before._tag !== "Idle") return
-          const next = yield* handle.takeNextQueuedTurnIfIdle
+          const next = yield* handle.inbox.takeIfIdle
           if (Option.isNone(next)) return
           yield* handle.startTurn(next.value).pipe(orCleanup(handle))
           return
@@ -856,12 +831,12 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            if ((yield* handle.snapshot)._tag === "WaitingForInteraction") {
+            if ((yield* handle.inbox.phase)._tag === "WaitingForInteraction") {
               return yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
             }
             // A reply to a loop that lost its turn (a restart mid-interaction)
             // resumes that turn instead; the interaction is answered inside it.
-            if ((yield* handle.snapshot)._tag !== "Idle") return
+            if ((yield* handle.inbox.phase)._tag !== "Idle") return
             const message = yield* handle.incompleteUserTurn
             if (Option.isNone(message)) return
             const baseline = yield* turnFailureBaseline(handle)
@@ -871,21 +846,21 @@ const buildAgentLoopActorHandlers = (config: {
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
         ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          branchCommand(operation, markWrite, (handle) => handle.drainQueue),
+          branchCommand(operation, markWrite, (handle) => handle.inbox.drain),
       ),
       RemoveFollowUp: Effect.fn("AgentLoop.RemoveFollowUp")(
         ({ operation }: HandlerRequest<RemoveFollowUpInput>) =>
           branchCommand(operation, markWrite, (handle) =>
-            handle.removeFollowUp(operation.messageId),
+            handle.withdrawFollowUp(operation.messageId),
           ),
       ),
       GetQueue: Effect.fn("AgentLoop.GetQueue")(
         ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          branchCommand(operation, rejectIfTerminated, (handle) => handle.queueSnapshot),
+          branchCommand(operation, rejectIfTerminated, (handle) => handle.inbox.snapshot),
       ),
       GetState: Effect.fn("AgentLoop.GetState")(
         ({ operation }: HandlerRequest<BranchCommandInput>) =>
-          branchCommand(operation, rejectIfTerminated, (handle) => handle.runtimeState),
+          branchCommand(operation, rejectIfTerminated, (handle) => handle.inbox.runtimeState),
       ),
       RequestExtension: Effect.fn("AgentLoop.RequestExtension")(
         ({ operation }: HandlerRequest<RequestExtensionInput>) =>

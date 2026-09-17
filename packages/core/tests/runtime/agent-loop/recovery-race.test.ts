@@ -60,7 +60,7 @@ import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-sto
 import {
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
-} from "../../../src/runtime/agent/agent-loop.state"
+} from "../../../src/domain/queue"
 import { StorageError } from "../../../src/domain/storage-error"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"
