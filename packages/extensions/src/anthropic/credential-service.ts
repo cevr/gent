@@ -21,13 +21,10 @@ import {
 } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
-import {
-  ClaudeCredentials,
-  freshEnoughForUse,
-  PRIMARY_CLAUDE_SERVICE,
-  readClaudeCodeCredentials,
-  refreshClaudeCodeCredentials,
-} from "./oauth.js"
+import { readClaudeCodeCredentials } from "./oauth/accounts.js"
+import { ClaudeCredentials, freshEnoughForUse } from "./oauth/credentials.js"
+import { PRIMARY_CLAUDE_SERVICE } from "./oauth/keychain.js"
+import { refreshClaudeCodeCredentials } from "./oauth/refresh.js"
 import type { AnthropicPlatform } from "./platform-adapter.js"
 import {
   EMPTY_CREDENTIAL_CELL,

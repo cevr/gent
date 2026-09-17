@@ -11,13 +11,10 @@ import {
   type ProviderAuthorizationResult,
   type ProviderHints,
 } from "@gent/core/extensions/api"
-import {
-  freshEnoughForUse,
-  PRIMARY_CLAUDE_SERVICE,
-  readClaudeCodeCredentials,
-  refreshClaudeCodeCredentials,
-  type ClaudeCredentials,
-} from "./oauth.js"
+import { readClaudeCodeCredentials } from "./oauth/accounts.js"
+import { freshEnoughForUse, type ClaudeCredentials } from "./oauth/credentials.js"
+import { PRIMARY_CLAUDE_SERVICE } from "./oauth/keychain.js"
+import { refreshClaudeCodeCredentials } from "./oauth/refresh.js"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"

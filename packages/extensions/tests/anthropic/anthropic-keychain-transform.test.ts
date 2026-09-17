@@ -27,7 +27,7 @@ import type { AnthropicCredentialIO } from "../../src/anthropic/credential-servi
 import type { CredentialCache } from "../../src/provider-credentials.js"
 import { AnthropicCredentialService } from "../../src/anthropic/credential-service.js"
 import { AnthropicBetaCache, type AnthropicBetaCacheApi } from "../../src/anthropic/beta-cache.js"
-import type { ClaudeCredentials } from "../../src/anthropic/oauth.js"
+import type { ClaudeCredentials } from "../../src/anthropic/oauth/credentials.js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import { runEffectBoundary } from "../run-effect-boundary.js"

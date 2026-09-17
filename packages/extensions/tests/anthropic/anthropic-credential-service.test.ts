@@ -16,7 +16,7 @@ import {
   type AnthropicCredentialIO,
 } from "../../src/anthropic/credential-service.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
-import type { ClaudeCredentials } from "../../src/anthropic/oauth.js"
+import type { ClaudeCredentials } from "../../src/anthropic/oauth/credentials.js"
 import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import { testHostFacts } from "@gent/core-internal/test-utils"
 const testPlatformLayer = (): Layer.Layer<AnthropicPlatform> => {
