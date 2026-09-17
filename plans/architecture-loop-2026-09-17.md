@@ -56,8 +56,8 @@ the code proves it.
 
 | #   | Candidate                                                                        | Status                                                                                                                                            |
 | --- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | open                                                                                                                                              |
-| F2  | Scrollback-ownership invariants on top of F1                                     | open                                                                                                                                              |
+| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | done `724820c9`: `settleAndCapture` + `@xterm/headless` grid                                                                                      |
+| F2  | Scrollback-ownership invariants on top of F1                                     | done `d47b11c9`: three scrollback tests; all fail with the reserve set to 0                                                                       |
 | F3  | Byte tape (stdout, stdin, resize) with replay                                    | parked: new capability, not a reduction                                                                                                           |
 | F4  | `MAX_TURN_STEPS` and `maximumModelToolResultChars` on `UserConfig`               | done (steps): `AgentDefinition.maxSteps` + run override                                                                                           |
 | F5  | Palette folded into `SessionOverlayState` (`session.tsx:237` has a second owner) | rejected: the palette is app-level. `apps/tui/src/app.tsx:54` renders it with no session, so the session overlay cannot own it                    |

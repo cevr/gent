@@ -157,17 +157,19 @@ describe("server lifecycle", () => {
           )
           yield* bundle.runtime.lifecycle.waitForReady
 
-          const states: string[] = []
+          // Typed by the lifecycle, so a renamed state fails to compile here
+          // instead of failing in a suite the gate does not run.
+          const states: Array<ReturnType<typeof bundle.runtime.lifecycle.getState>["_tag"]> = []
           bundle.runtime.lifecycle.subscribe((s) => states.push(s._tag))
 
           const status1 = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
           expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
-          expect(states).toContain("connected")
+          expect(states).toContain("Connected")
 
           serverRef.current.proc.kill("SIGKILL")
           yield* Effect.promise(() => serverRef.current.proc.exited)
 
-          const sawReconnecting = yield* waitUntil(() => states.includes("reconnecting"), 5_000)
+          const sawReconnecting = yield* waitUntil(() => states.includes("Reconnecting"), 5_000)
           expect(sawReconnecting).toBe(true)
 
           serverRef.current = yield* spawnServerOnPort({ dataDir, port })
