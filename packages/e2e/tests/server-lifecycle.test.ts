@@ -7,12 +7,7 @@ import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
 import { toTestFailure } from "./test-failure-boundary"
-import {
-  killProcess,
-  spawnIdleServer,
-  spawnServerOnPort,
-  waitUntil,
-} from "../src/server-process-fixture"
+import { killProcess, spawnServer, waitUntil } from "../src/server-process-fixture"
 import { waitForProcessExit } from "../src/wait-for-process-exit"
 
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
@@ -26,7 +21,7 @@ describe("server lifecycle", () => {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
-            spawnServerOnPort({ dataDir, port }),
+            spawnServer({ dataDir, port }),
             ({ proc }) => killProcess(proc),
           )
 
@@ -54,7 +49,7 @@ describe("server lifecycle", () => {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
-            spawnServerOnPort({ dataDir, port }),
+            spawnServer({ dataDir, port }),
             ({ proc }) => killProcess(proc),
           )
 
@@ -81,7 +76,7 @@ describe("server lifecycle", () => {
           const idleTimeoutMs = 500
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
-            spawnIdleServer({ dataDir, idleTimeoutMs, port }),
+            spawnServer({ dataDir, port, idleTimeoutMs }),
             ({ proc }) => killProcess(proc),
           )
 
@@ -105,7 +100,7 @@ describe("server lifecycle", () => {
           const idleTimeoutMs = 750
           const port = yield* randomLifecyclePort
           const { url, proc } = yield* Effect.acquireRelease(
-            spawnIdleServer({ dataDir, idleTimeoutMs, port }),
+            spawnServer({ dataDir, port, idleTimeoutMs }),
             ({ proc }) => killProcess(proc),
           )
 
@@ -145,9 +140,7 @@ describe("server lifecycle", () => {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
           const serverRef = yield* Effect.acquireRelease(
-            spawnServerOnPort({ dataDir, port }).pipe(
-              Effect.map((server) => ({ current: server })),
-            ),
+            spawnServer({ dataDir, port }).pipe(Effect.map((server) => ({ current: server }))),
             (ref) => killProcess(ref.current.proc),
           )
 
@@ -172,7 +165,7 @@ describe("server lifecycle", () => {
           const sawReconnecting = yield* waitUntil(() => states.includes("Reconnecting"), 5_000)
           expect(sawReconnecting).toBe(true)
 
-          serverRef.current = yield* spawnServerOnPort({ dataDir, port })
+          serverRef.current = yield* spawnServer({ dataDir, port })
 
           const reconnected = yield* waitUntil(
             () => bundle.runtime.lifecycle.getState()._tag === "Connected",

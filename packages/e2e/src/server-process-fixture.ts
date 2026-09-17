@@ -63,35 +63,21 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
   return Effect.race(ready, timeout)
 }
 
-export const spawnIdleServer = (opts: {
+/**
+ * Spawn a shared-mode server subprocess on `port` and wait for its ready line.
+ * Pass `idleTimeoutMs` to give the server an idle-shutdown deadline; omit it to
+ * let the server run until it is killed.
+ */
+export const spawnServer = (opts: {
   dataDir: string
-  idleTimeoutMs: number
   port: number
+  idleTimeoutMs?: number
 }): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError> =>
   Effect.gen(function* () {
-    const proc = Bun.spawn(["bun", serverEntry], {
-      cwd: repoRoot,
-      env: {
-        ...Bun.env,
-        GENT_PORT: String(opts.port),
-        GENT_SERVER_MODE: "shared",
-        GENT_PERSISTENCE_MODE: "memory",
-        GENT_PROVIDER_MODE: "debug-scripted",
-        GENT_DATA_DIR: opts.dataDir,
-        GENT_IDLE_TIMEOUT_MS: String(opts.idleTimeoutMs),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
+    const idleTimeoutEnv = Option.match(Option.fromNullishOr(opts.idleTimeoutMs), {
+      onNone: () => ({}),
+      onSome: (ms) => ({ GENT_IDLE_TIMEOUT_MS: String(ms) }),
     })
-    const url = yield* readReadyUrl(proc)
-    return { url: `${url}/rpc`, proc }
-  })
-
-export const spawnServerOnPort = (opts: {
-  dataDir: string
-  port: number
-}): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError> =>
-  Effect.gen(function* () {
     const proc = Bun.spawn(["bun", serverEntry], {
       cwd: repoRoot,
       env: {
@@ -101,6 +87,7 @@ export const spawnServerOnPort = (opts: {
         GENT_PERSISTENCE_MODE: "memory",
         GENT_PROVIDER_MODE: "debug-scripted",
         GENT_DATA_DIR: opts.dataDir,
+        ...idleTimeoutEnv,
       },
       stdout: "pipe",
       stderr: "pipe",
