@@ -91,6 +91,7 @@ describe("Subagent tray", () => {
               refresh: (query) => {
                 refreshes.push(query)
               },
+              reload: () => {},
               detail: () => Option.none(),
               select: () => {},
               open,
@@ -129,6 +130,7 @@ describe("Subagent tray", () => {
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
+              reload: () => {},
               detail: () => Option.none(),
               select: () => {},
               open: () => false,

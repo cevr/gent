@@ -1,6 +1,6 @@
 import { Clock, Effect, Option, Schema } from "effect"
 
-export class WaitForTimeout extends Schema.TaggedError<WaitForTimeout>()("WaitForTimeout", {
+class WaitForTimeout extends Schema.TaggedError<WaitForTimeout>()("WaitForTimeout", {
   label: Schema.String,
 }) {
   override get message(): string {

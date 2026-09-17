@@ -25,18 +25,6 @@ const toAutocompleteEffect = (
   return Effect.succeed(items)
 }
 
-export const runAutocompleteItems = (
-  contribution: AutocompleteContribution,
-  filter: string,
-  clientRuntime: ClientRuntime,
-): Promise<readonly AutocompleteItem[]> => {
-  const out = contribution.items(filter)
-  if (Effect.isEffect(out)) {
-    return clientRuntime.runPromise(out)
-  }
-  return clientRuntime.runPromise(Effect.succeed(out))
-}
-
 export const runAutocompleteContributions = (
   contributions: ReadonlyArray<AutocompleteContribution>,
   filter: string,

@@ -54,7 +54,7 @@ export const MAX_ENTRIES = 200
  * nothing yet. Keying by id alone means one pick of `test` lifts `test` for
  * every filter that matches it, which is the behaviour actually wanted.
  */
-export const FrecencyEntry = Schema.Struct({
+const FrecencyEntry = Schema.Struct({
   count: Schema.Finite,
   lastAt: Schema.Finite,
 })
@@ -75,7 +75,7 @@ export type FrecencyStoreValue = typeof FrecencyStore.Type
 export const emptyFrecencyStore = (): FrecencyStoreValue => ({ entries: {} })
 
 /** The store key for a row, namespaced by the prefix that offered it. */
-export const frecencyKey = (prefix: string, id: string): string => `${prefix}${id}`
+const frecencyKey = (prefix: string, id: string): string => `${prefix}${id}`
 
 /**
  * The decayed weight of an entry at `now`.

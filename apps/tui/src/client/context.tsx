@@ -374,19 +374,6 @@ export function ClientProvider(props: ClientProviderProps) {
     Option.none(),
   )
 
-  /**
-   * Drop every metric the previous session left behind.
-   *
-   * All three session changes go through here so none can reset a subset. The
-   * context gauge is the reason this is one function: `buildContextLabels`
-   * prefers the projection over the live token count whenever it carries a
-   * limit, so a `contextMetrics` left from the previous session outranks the
-   * fresh `latestInputTokens` of the new one and renders the old percentage.
-   */
-  const resetSessionMetrics = (): void => {
-    setLatestInputTokens(0)
-    setContextMetrics(Option.none())
-  }
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
   )
@@ -404,6 +391,36 @@ export function ClientProvider(props: ClientProviderProps) {
   }
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
+
+  /**
+   * Drop everything the previous session left behind.
+   *
+   * All three session changes go through here so none can reset a subset. The
+   * context gauge is the reason this is one function: `buildContextLabels`
+   * prefers the projection over the live token count whenever it carries a
+   * limit, so a `contextMetrics` left from the previous session outranks the
+   * fresh `latestInputTokens` of the new one and renders the old percentage.
+   *
+   * `switchSession` is the one caller that can land back on the session it is
+   * already on, and extension health belongs to the session rather than the
+   * branch, so it says whether to clear it.
+   */
+  const resetForSession = (input: {
+    readonly agent: Option.Option<AgentName>
+    readonly clearExtensionHealth: boolean
+  }): void => {
+    setAgentStore({
+      agent: input.agent,
+      status: AgentStatus.cases.Idle.make({}),
+      cost: 0,
+      resolvedModelId: Option.none(),
+      resolvedReasoningLevel: Option.none(),
+    })
+    setLatestInputTokens(0)
+    setContextMetrics(Option.none())
+    clearConnectionIssue()
+    if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+  }
 
   const [modelStore, setModelStore] = createStore<{
     modelsById: Record<string, Model>
@@ -690,21 +707,9 @@ export function ClientProvider(props: ClientProviderProps) {
       createSessionEffect().pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            // Replicate `switchSession`'s side-effect resets so `/new`
-            // does not inherit stale agent status / token counts / error
-            // banners / extension-health from the previous session.
             // Create always transitions out of a prior session (or from
-            // "none"), so the extensionHealth reset is unconditional.
-            setAgentStore({
-              agent: Option.some(defaultAgent),
-              status: AgentStatus.cases.Idle.make({}),
-              cost: 0,
-              resolvedModelId: Option.none(),
-              resolvedReasoningLevel: Option.none(),
-            })
-            resetSessionMetrics()
-            clearConnectionIssue()
-            setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+            // "none"), so extension health is cleared unconditionally.
+            resetForSession({ agent: Option.some(defaultAgent), clearExtensionHealth: true })
             dispatchSession(
               SessionStateEvent.cases.CreateSucceeded.make({
                 session: {
@@ -752,19 +757,12 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name, agent) => {
       const currentSessionId = Option.map(sessionOption(), (value) => value.sessionId)
-      const nextAgent = Option.fromNullishOr(agent)
-      setAgentStore({
-        agent: nextAgent,
-        status: AgentStatus.cases.Idle.make({}),
-        cost: 0,
-        resolvedModelId: Option.none(),
-        resolvedReasoningLevel: Option.none(),
+      resetForSession({
+        agent: Option.fromNullishOr(agent),
+        // A branch switch within one session keeps that session's health.
+        clearExtensionHealth:
+          Option.isNone(currentSessionId) || currentSessionId.value !== sessionId,
       })
-      resetSessionMetrics()
-      clearConnectionIssue()
-      if (Option.isNone(currentSessionId) || currentSessionId.value !== sessionId) {
-        setExtensionHealth(EMPTY_EXTENSION_HEALTH)
-      }
       dispatchSession(
         SessionStateEvent.cases.Activated.make({
           session: {
@@ -780,16 +778,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       dispatchSession(SessionStateEvent.cases.Clear.make({}))
-      setAgentStore({
-        agent: Option.some(defaultAgent),
-        status: AgentStatus.cases.Idle.make({}),
-        cost: 0,
-        resolvedModelId: Option.none(),
-        resolvedReasoningLevel: Option.none(),
-      })
-      resetSessionMetrics()
-      clearConnectionIssue()
-      setExtensionHealth(EMPTY_EXTENSION_HEALTH)
+      resetForSession({ agent: Option.some(defaultAgent), clearExtensionHealth: true })
     },
 
     listMessages: Effect.gen(function* () {

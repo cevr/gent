@@ -3,14 +3,13 @@
  * Thread view — one docked pane over the chain of sessions and the context
  * windows inside each.
  *
- * A thread is a view, not a record. `Session.parentSessionId` links a session
- * to the one it continued from, and every `context-window` marker on a branch
- * opens a new window whose notice summarizes what left the model view. The
- * pane walks the chain up from the shell's session and lists the windows per
- * session, oldest first, so a reader sees the whole thread while the model
- * sees one window.
+ * A thread is a view, not a record. The server says which sessions belong to
+ * a thread, and every `context-window` marker on a branch opens a new window
+ * whose notice summarizes what left the model view. The pane lists the
+ * thread's sessions oldest first with the windows inside each, so a reader
+ * sees the whole thread while the model sees one window.
  *
- * Client-first: `session.list` and `message.list` are the only reads.
+ * Client-first: `session.thread` and `message.list` are the only reads.
  *
  * @module
  */
@@ -45,7 +44,7 @@ import {
 import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-services"
 import { ClientTransport } from "../client-transport"
 
-export const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
+const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
 
 const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
 

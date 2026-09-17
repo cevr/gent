@@ -114,11 +114,13 @@ Components derive state from providers, not props. Add/remove rows per view.
 
 | Flag             | Purpose                                                  |
 | ---------------- | -------------------------------------------------------- |
-| `-c, --continue` | Resume last session for cwd                              |
 | `-p, --prompt`   | Initial message (goes straight to session view)          |
 | `-s, --session`  | Resume specific session ID                               |
 | `-H, --headless` | Headless mode + prompt arg                               |
 | `-a, --agent`    | Agent override for headless mode (e.g. `memory:reflect`) |
+
+`gent resume [session-id]` opens a stored session; with no id it opens the last
+session in this directory, which is what `--continue` used to mean.
 
 Priority: headless → session → continue → prompt → home
 

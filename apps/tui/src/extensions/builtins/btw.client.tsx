@@ -31,7 +31,7 @@ import { useTheme } from "../../theme/index"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useScopedKeyboard } from "../../keyboard/context"
 
-export const BTW_OVERLAY_ID = "btw"
+const BTW_OVERLAY_ID = "btw"
 
 export interface SideQuestionPaneState {
   readonly turns: ReadonlyArray<SideTurnType>

@@ -44,8 +44,8 @@ export interface WakeTrayLine {
 }
 
 /** fx-style marks: a clock face for an alarm, a fisheye for a monitor, a bare dot for the overflow line. */
-export const ALARM_GLYPH = "◷"
-export const MONITOR_GLYPH = "◉"
+const ALARM_GLYPH = "◷"
+const MONITOR_GLYPH = "◉"
 
 const entryLine = (entry: WakeEntryType, now: number, width: number): WakeTrayLine =>
   Match.type<WakeEntryType>().pipe(

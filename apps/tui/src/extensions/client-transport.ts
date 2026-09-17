@@ -92,8 +92,6 @@ export interface ClientTransportDefinition {
   ) => Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError>
   /** Delete a session and its descendants; their loops stop and their rows go. */
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ClientTransportRequestError>
-  /** Every stored session, with its parent links. */
-  readonly listSessions: Effect.Effect<ReadonlyArray<Session>, ClientTransportRequestError>
   /**
    * The sessions of one thread, oldest first.
    *
@@ -159,8 +157,10 @@ export const makeClientTransportLayer = (
     onExtensionStateChanged: payload.onExtensionStateChanged,
     onSessionEvent: payload.onSessionEvent,
     agentDetail: (key) => agentDetailAt(payload, key),
-    deleteSession: (sessionId) => deleteSessionAt(payload, sessionId),
-    listSessions: shellRead(payload, "session.list", (client) => client.session.list()),
+    deleteSession: (sessionId) =>
+      shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
+        Effect.asVoid,
+      ),
     threadSessions: (sessionId) =>
       shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
     listMessages: (branchId) =>
@@ -258,27 +258,6 @@ const requestExtensionAt = <Input, Output>(
     )
   })
 
-/**
- * Narrow the session snapshot down to the fields a per-loop detail line shows.
- *
- * The snapshot also carries the full projected message list; a detail line has
- * no use for it, so the extension surface never sees it.
- */
-const deleteSessionAt = (
-  transport: ClientShellTransportDefinition,
-  sessionId: SessionId,
-): Effect.Effect<void, ClientTransportRequestError> =>
-  Effect.tryPromise({
-    try: () => transport.runtime.run(transport.client.session.delete({ sessionId })),
-    catch: (cause) =>
-      new ClientTransportRequestError({
-        extensionId: "@gent/tui/client-transport",
-        tag: "session.delete",
-        message: `session delete failed: ${String(cause)}`,
-        cause,
-      }),
-  }).pipe(Effect.asVoid)
-
 /** One shell RPC read, with its failure named by the RPC it came from. */
 const shellRead = <A>(
   transport: ClientShellTransportDefinition,
@@ -296,26 +275,19 @@ const shellRead = <A>(
       }),
   })
 
+/**
+ * Narrow the session snapshot down to the fields a per-loop detail line shows.
+ *
+ * The snapshot also carries the full projected message list; a detail line has
+ * no use for it, so the extension surface never sees it.
+ */
 const agentDetailAt = (
   transport: ClientShellTransportDefinition,
   key: ActiveExtensionSession,
 ): Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError> =>
-  Effect.tryPromise({
-    try: () =>
-      transport.runtime.run(
-        transport.client.session.getSnapshot({
-          sessionId: key.sessionId,
-          branchId: key.branchId,
-        }),
-      ),
-    catch: (cause) =>
-      new ClientTransportRequestError({
-        extensionId: "@gent/tui/client-transport",
-        tag: "session.getSnapshot",
-        message: `agent detail failed: ${String(cause)}`,
-        cause,
-      }),
-  }).pipe(
+  shellRead(transport, "session.getSnapshot", (client) =>
+    client.session.getSnapshot({ sessionId: key.sessionId, branchId: key.branchId }),
+  ).pipe(
     Effect.map((snapshot) => ({
       status: Option.some(snapshot.runtime._tag),
       model: Option.some(snapshot.resolvedModelId),

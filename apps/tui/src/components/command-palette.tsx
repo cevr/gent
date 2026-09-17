@@ -47,7 +47,7 @@ type SessionNode = {
  * is the session whose thread is itself while still having a parent. The reader
  * sees which rows are side work before opening one.
  */
-export const isSpawn = (session: DomainSession): boolean =>
+const isSpawn = (session: DomainSession): boolean =>
   Option.isSome(Option.fromNullishOr(session.parentSessionId)) &&
   Option.match(Option.fromNullishOr(session.threadId), {
     onNone: () => false,

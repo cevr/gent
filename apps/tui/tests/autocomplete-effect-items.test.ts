@@ -6,8 +6,8 @@
  *
  * This proves the contribution-time adapter path:
  * Effect items() → runtime.runPromise → typed transport → decoded reply.
- * Success returns the items; missing session yields a typed
- * `NoActiveSessionError` that the popup adapter normalizes to `[]`.
+ * Success returns the items; a missing session yields a typed
+ * `NoActiveSessionError` that the helper reports and turns into no rows.
  */
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
@@ -19,7 +19,7 @@ import {
   type ClientTransportDefinition,
   NoActiveSessionError,
 } from "../src/extensions/client-transport"
-import { runAutocompleteItems } from "../src/components/autocomplete-popup-boundary"
+import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   makeClientExtensionRuntime,
@@ -28,7 +28,6 @@ import {
 import { runRuntimeEffectBoundary, runRuntimeExitBoundary } from "./run-effect-boundary"
 
 const absent = Option.getOrUndefined(Option.none())
-const emptyItems: ReadonlyArray<AutocompleteItem> = []
 class AutocompleteTestError extends Schema.TaggedError<AutocompleteTestError>()(
   "AutocompleteTestError",
   { message: Schema.String },
@@ -92,9 +91,13 @@ describe("autocomplete Effect items() through ClientTransport", () => {
             ] satisfies ReadonlyArray<AutocompleteItem>
           }),
       }
+      const failures: Array<string> = []
       const result = yield* Effect.promise(() =>
-        runAutocompleteItems(contribution, "hello", runtime),
+        runAutocompleteContributions([contribution], "hello", runtime, (prefix, reason) => {
+          failures.push(`${prefix}: ${reason}`)
+        }),
       )
+      expect(failures).toEqual([])
       expect(result).toEqual([{ id: "hello", label: "got:hello" }])
       yield* Effect.promise(() => runtime.dispose())
     }),
@@ -113,11 +116,10 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("popup adapter pattern: transport.request failure normalizes to []", () =>
+  it.live("a contribution whose transport call fails is reported and contributes no rows", () =>
     Effect.gen(function* () {
-      // The popup wraps `runAutocompleteItems(...).catch(() => [])` per
-      // `autocomplete-popup.tsx:70`. Prove that pattern still produces an empty
-      // array when the underlying transport call fails (no active session).
+      // One broken contribution must not empty the popup for the rest, so the
+      // helper names it to the caller's log and returns its rows as none.
       const transport = makeFakeTransport({ currentSession: () => absent })
       const runtime = makeTestRuntime(transport)
       const contribution: AutocompleteContribution = {
@@ -129,10 +131,15 @@ describe("autocomplete Effect items() through ClientTransport", () => {
             return reply.map((label) => ({ id: label, label }))
           }),
       }
-      const result = yield* Effect.tryPromise(() =>
-        runAutocompleteItems(contribution, "filter", runtime),
-      ).pipe(Effect.catchEager(() => Effect.succeed(emptyItems)))
+      const failures: Array<string> = []
+      const result = yield* Effect.promise(() =>
+        runAutocompleteContributions([contribution], "filter", runtime, (prefix, reason) => {
+          failures.push(`${prefix}:${reason}`)
+        }),
+      )
       expect(result).toEqual([])
+      expect(failures.length).toBe(1)
+      expect(failures[0]).toContain("NoActiveSessionError")
       yield* Effect.promise(() => runtime.dispose())
     }),
   )

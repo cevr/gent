@@ -510,19 +510,9 @@ const resume = Command.make(
       Argument.withDescription("Session to resume (default: the last one in this directory)"),
       Argument.optional,
     ),
-    connect: Flag.string("connect").pipe(
-      Flag.withDescription("Connect to an existing gent server"),
-      Flag.optional,
-    ),
-    isolate: Flag.boolean("isolate").pipe(
-      Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
-      Flag.withDefault(false),
-    ),
-    prompt: Flag.string("prompt").pipe(
-      Flag.withAlias("p"),
-      Flag.withDescription("Initial prompt"),
-      Flag.optional,
-    ),
+    connect: gentFlags.connect,
+    isolate: gentFlags.isolate,
+    prompt: gentFlags.prompt,
   },
   ({ sessionId, connect, isolate, prompt }) =>
     runGent({

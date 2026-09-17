@@ -8,7 +8,7 @@
  */
 
 import { runProcess } from "@gent/core-internal/runtime/run-process"
-import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
+import { DateTime, Effect, FileSystem, Option, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"
 
@@ -18,12 +18,6 @@ const MAX_BYTES = 50 * 1024 // 50KB
 /** Spill files live beside the rest of the gent data, not in a temp directory. */
 export const shellOutputDirectory = (home: string = homedir()): string =>
   `${home}/.gent/shell-output`
-
-export class ShellCommandError extends Schema.TaggedError<ShellCommandError>(
-  "@gent/tui/src/utils/shell/ShellCommandError",
-)("ShellCommandError", {
-  message: Schema.String,
-}) {}
 
 /**
  * Execute a shell command, capped at MAX_LINES lines and MAX_BYTES bytes.

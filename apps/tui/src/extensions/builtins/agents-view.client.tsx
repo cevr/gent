@@ -7,8 +7,8 @@
  * server owns the projection, so this file only renders and navigates.
  *
  * Replaces the former `session-tree.tsx` overlay: this shows every loop rather
- * than one session's descendants, adds liveness, and is keyed per branch. The
- * shared reducer lives in `filter-list-state`.
+ * than one session's descendants, adds liveness, and is keyed per branch.
+ * Filtering and cursor movement belong to `SelectList`.
  *
  * @module
  */
@@ -62,6 +62,8 @@ interface AgentsController {
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
+  /** Re-read the listing under the filter already typed, after a row changed. */
+  readonly reload: () => void
   /**
    * Detail for the row the reader is on, or `None` while it loads. Listings
    * stay cheap by carrying identity and liveness only; this is the second
@@ -99,7 +101,7 @@ export const makeAgentsController = (
     cast,
     fetch: (query: string) => fetchRows(query),
   })
-  const { value: rows, error, loading, refresh } = listing
+  const { value: rows, error, loading, refresh, reload } = listing
 
   const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
   // Arrow keys move faster than a round trip, so replies can land out of order.
@@ -138,7 +140,7 @@ export const makeAgentsController = (
 
   const [open, setOpen] = createSignal(false)
 
-  return { rows, current, error, loading, refresh, detail, select, open, setOpen }
+  return { rows, current, error, loading, refresh, reload, detail, select, open, setOpen }
 }
 
 /** Section headings, with the count each carries. Empty sections are skipped. */
@@ -153,7 +155,7 @@ type PaneItem =
   | { readonly kind: "heading"; readonly section: AgentRowEntry["section"]; readonly count: number }
   | { readonly kind: "row"; readonly row: AgentRowEntry; readonly index: number }
 
-export const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
+const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
   const items: PaneItem[] = []
   rows.forEach((row, index) => {
     const previous = rows[index - 1]
@@ -167,7 +169,7 @@ export const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<Pan
 }
 
 /** "1 running, 0 idle, 3 inactive" for the pane title. */
-export const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
+const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
   const count = (section: AgentRowEntry["section"]) =>
     rows.filter((row) => row.section === section).length
   return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
@@ -185,7 +187,7 @@ export interface SubtreeCounts {
 
 /** Section counts over every row descending from `root`, at any depth; the root itself is not counted. */
 /** Descendants of `root` at any depth, in the server's parent-before-child order. */
-export const subtreeRows = (
+const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
   root: Option.Option<{ readonly sessionId: string }>,
 ): ReadonlyArray<AgentRowEntry> => {
@@ -656,7 +658,9 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
                       Effect.annotateLogs({ sessionId: row.sessionId, error: String(cause) }),
                     ),
                   ),
-                  Effect.andThen(Effect.sync(() => controller.refresh(""))),
+                  // The pane is open and may be filtered, so the listing is
+                  // re-read under the query the reader typed, not under "".
+                  Effect.andThen(Effect.sync(() => controller.reload())),
                 ),
               )
             }

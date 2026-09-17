@@ -60,10 +60,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type),
   )
 
-  // Autocomplete items return a sync array or an Effect (Promise variant deleted).
-  // Effect is run through `runAutocompleteItems` (boundary helper) so the
-  // result behaves identically to a sync resolution from the resource's POV.
-  // Errors are normalized to an empty array per contribution and logged once.
+  // Autocomplete items return a sync array or an Effect. Both run through
+  // `runAutocompleteContributions` (boundary helper), which merges every
+  // contribution for the prefix, drops duplicate ids, and turns one
+  // contribution's failure into no rows from it plus one log line.
 
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(

@@ -75,7 +75,7 @@ function getMaxLineWidth(text: string): number {
  * Try each preset from roomy → tightest. Pick the first whose
  * rendered output fits within maxWidth. Falls back to tightest.
  */
-export function pickBestPreset(source: string, maxWidth: number): AsciiRenderOptions {
+function pickBestPreset(source: string, maxWidth: number): AsciiRenderOptions {
   for (const preset of PRESETS) {
     const rendered = Effect.runSync(
       Effect.option(

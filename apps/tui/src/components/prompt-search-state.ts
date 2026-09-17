@@ -41,7 +41,7 @@ export const PromptSearchEvent = Schema.TaggedUnion({
 })
 export type PromptSearchEvent = Schema.Schema.Type<typeof PromptSearchEvent>
 
-export const PromptSearchEffect = Schema.TaggedUnion({
+const PromptSearchEffect = Schema.TaggedUnion({
   Preview: { text: Schema.String },
   Close: {},
 })
@@ -63,7 +63,7 @@ export const filterPromptEntries = (
 }
 
 /** What the composer shows for an open palette: the highlighted entry, else the draft. */
-export const getPromptSearchPreview = (state: PromptSearchState): Option.Option<string> => {
+const getPromptSearchPreview = (state: PromptSearchState): Option.Option<string> => {
   if (state._tag !== "open") return Option.none()
   return Option.some(Option.getOrElse(state.highlighted, () => state.draftBeforeOpen))
 }

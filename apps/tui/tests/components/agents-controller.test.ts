@@ -109,6 +109,39 @@ describe("Agents controller detail", () => {
   )
 })
 
+describe("Agents controller reload", () => {
+  it.scopedLive("re-reads the filter the reader typed, not the whole listing", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const asked: Array<string> = []
+
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          (query) => {
+            asked.push(query)
+            return Effect.succeed([])
+          },
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => Option.some({ sessionId: SessionId.make("only"), branchId: BranchId.make("only") }),
+        )
+        return { controller, dispose }
+      })
+
+      // The reader filters the pane, then deletes a row from it. The listing
+      // that comes back must still be the filtered one.
+      result.controller.refresh("dep")
+      result.controller.reload()
+      yield* Effect.yieldNow
+
+      expect(asked).toEqual(["dep", "dep"])
+      result.dispose()
+    }),
+  )
+})
+
 describe("Agents controller stored rows", () => {
   it.scopedLive("never asks a stored session for detail, since the read would spawn its loop", () =>
     Effect.gen(function* () {

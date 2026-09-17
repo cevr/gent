@@ -118,15 +118,21 @@ export interface ClientSessionResource<A> {
  * {@link makeClientSessionResource} fetches on its own whenever the session
  * changes; a pane instead refreshes on its own schedule — a typed query, a
  * poll, an event — and needs to say whether it is loading and what failed. The
- * one rule both share is the key guard: the session the fetch was made for is
- * re-read when the reply lands, and a reply for any other key is dropped, so a
- * switch mid-flight can never write the previous session's rows.
+ * Two rules guard what a reply may write. The generation guard drops every
+ * reply but the newest refresh's, because a filter fires one fetch per
+ * keystroke and a shorter query can answer last. The key guard drops a reply
+ * made for a session the shell has since left, which the generation guard
+ * cannot see because a switch raises no new refresh. A dropped reply still
+ * clears the load state, or a pane that lost a race would say "loading" until
+ * the next refresh.
  */
 export interface ClientSessionQuery<A, Q> {
   readonly value: () => A
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: Q) => void
+  /** Re-run the last query, for a caller whose data changed under it. */
+  readonly reload: () => void
 }
 
 /** The key a query is made for; callers keep their own branded id types. */
@@ -141,30 +147,41 @@ export const makeClientSessionQuery = <A, Q, K extends SessionKey>(opts: {
   const [value, setValue] = createSignal<A>(opts.initial)
   const [error, setError] = createSignal<Option.Option<string>>(Option.none())
   const [loading, setLoading] = createSignal(false)
+  let generation = 0
+  let last = Option.none<Q>()
 
   const refresh = (query: Q): void => {
     const captured = opts.current()
+    last = Option.some(query)
     if (Option.isNone(captured)) return
+    const issued = ++generation
     setLoading(true)
     opts.cast(
       opts.fetch(query, captured.value).pipe(
         Effect.match({
           onFailure: (failure) => {
+            if (issued !== generation) return
+            setLoading(false)
             if (!isCurrent(captured.value)) return
             setError(Option.some(failure.message))
-            setLoading(false)
           },
           onSuccess: (next) => {
+            if (issued !== generation) return
+            setLoading(false)
             // The shell may have moved while this was out; that reply belongs
             // to a session nobody is looking at any more.
             if (!isCurrent(captured.value)) return
             setValue(() => next)
             setError(Option.none())
-            setLoading(false)
           },
         }),
       ),
     )
+  }
+
+  const reload = (): void => {
+    if (Option.isNone(last)) return
+    refresh(last.value)
   }
 
   const isCurrent = (captured: K): boolean =>
@@ -173,7 +190,7 @@ export const makeClientSessionQuery = <A, Q, K extends SessionKey>(opts: {
       onSome: (now) => now.sessionId === captured.sessionId && now.branchId === captured.branchId,
     })
 
-  return { value, error, loading, refresh }
+  return { value, error, loading, refresh, reload }
 }
 
 export const makeClientSessionResource = <A>(opts: {
