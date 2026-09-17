@@ -117,7 +117,7 @@ type AgentLoopQueue = {
   readonly runtimeState: Effect.Effect<SessionRuntimeState>
   readonly queueSnapshot: Effect.Effect<QueueSnapshot>
   readonly currentLoopState: Effect.Effect<LoopState>
-  readonly refreshRuntimeState: Effect.Effect<void, AgentLoopError>
+  readonly writeInitialQueue: Effect.Effect<void, AgentLoopError>
   readonly reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
@@ -147,7 +147,7 @@ type AgentLoopQueue = {
   readonly removeFollowUp: (
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<boolean, AgentLoopError>
-  readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
+  readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
 }
 
 const mergeConcurrentLoopMetadata = (
@@ -211,34 +211,24 @@ const makeAgentLoopQueue = (
         return decision.value
       }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
 
-    const persistRuntimeState = (state: LoopState) =>
-      TxSubscriptionRef.get(scope.loopRef)
-        .pipe(
-          Effect.flatMap((s) =>
-            queueStorage.putQueueState(scope.sessionId, scope.branchId, s.queue).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AgentLoopError({
-                    message: `Failed to persist loop queue for ${scope.sessionId}/${scope.branchId}`,
-                    cause,
-                  }),
-              ),
-              Effect.andThen(
-                TxSubscriptionRef.update(scope.loopRef, (current) => {
-                  const next: AgentLoopState = {
-                    state,
-                    queue: current.queue,
-                  }
-                  if (!Predicate.isUndefined(current.turnFailure)) {
-                    return Object.assign(next, { turnFailure: current.turnFailure })
-                  }
-                  return next
-                }),
-              ),
-            ),
-          ),
-        )
-        .pipe(scope.queuePersistenceSemaphore.withPermits(1))
+    /**
+     * Move the loop to its next phase.
+     *
+     * Storage holds the queue and nothing else, and a phase move never
+     * changes the queue: every caller has already run its
+     * `commitQueueTransaction`, which wrote the row when — and only when —
+     * the queue actually changed. So this is a memory write. Dropping
+     * `startingState` is the point: the reservation this phase consumed is
+     * spent, and it was never durable to begin with.
+     */
+    const moveToPhase = (state: LoopState): Effect.Effect<void> =>
+      TxSubscriptionRef.update(scope.loopRef, (current) => {
+        const next: AgentLoopState = { state, queue: current.queue }
+        if (!Predicate.isUndefined(current.turnFailure)) {
+          return Object.assign(next, { turnFailure: current.turnFailure })
+        }
+        return next
+      }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
 
     const currentLoopState = TxSubscriptionRef.get(scope.loopRef).pipe(Effect.map((s) => s.state))
     const readState = TxSubscriptionRef.get(scope.loopRef)
@@ -304,10 +294,22 @@ const makeAgentLoopQueue = (
       },
     )
 
-    const refreshRuntimeState = Effect.suspend(
-      Effect.fn("AgentLoop.refreshRuntimeState")(function* () {
+    /**
+     * Write the branch its queue row once the loop is started.
+     *
+     * A branch that has never queued anything has no row, and every later
+     * write is a conditional update inside a queue transaction. This is the
+     * one unconditional write, so a fresh branch has a row from its first
+     * open onward.
+     */
+    const writeInitialQueue = Effect.suspend(
+      Effect.fn("AgentLoop.writeInitialQueue")(function* () {
         if (!(yield* Ref.get(scope.startedRef))) return
-        yield* persistRuntimeState(yield* currentLoopState)
+        const current = yield* TxSubscriptionRef.get(scope.loopRef)
+        yield* persistCommittedQueue(current.queue, "initial queue").pipe(
+          Effect.tapError(recordPersistenceFailure),
+          scope.queuePersistenceSemaphore.withPermits(1),
+        )
       }),
     )
 
@@ -390,24 +392,13 @@ const makeAgentLoopQueue = (
         }),
     )
 
-    const saveCheckpoint = (next: LoopState): Effect.Effect<void, AgentLoopError> =>
-      persistRuntimeState(next).pipe(
-        Effect.catchEager((error) =>
-          Deferred.fail(scope.persistenceFailure, error).pipe(
-            Effect.asVoid,
-            Effect.andThen(Effect.fail(error)),
-          ),
-        ),
-        Effect.withSpan("AgentLoop.durability.save"),
-      )
-
     return {
       readState,
       stateChanges,
       runtimeState,
       queueSnapshot,
       currentLoopState,
-      refreshRuntimeState,
+      writeInitialQueue,
       reserveStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle: takeNextQueuedTurnFromState({ onlyIfIdle: true }),
       takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),
@@ -417,7 +408,7 @@ const makeAgentLoopQueue = (
       dropSteeringDelivered,
       drainQueue,
       removeFollowUp,
-      saveCheckpoint,
+      moveToPhase,
     }
   })
 
@@ -474,7 +465,7 @@ export type AgentLoopBehavior = {
    * context, or a branch Resource resolves as "Service not found".
    */
   branchContext: Context.Context<never>
-  refreshRuntimeState: Effect.Effect<void, AgentLoopError>
+  writeInitialQueue: Effect.Effect<void, AgentLoopError>
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
@@ -691,7 +682,7 @@ export const makeAgentLoopBehavior = (
       runtimeState,
       queueSnapshot,
       currentLoopState,
-      refreshRuntimeState,
+      writeInitialQueue,
       reserveStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
@@ -701,7 +692,7 @@ export const makeAgentLoopBehavior = (
       dropSteeringDelivered,
       drainQueue,
       removeFollowUp,
-      saveCheckpoint,
+      moveToPhase,
     } = queue
 
     const { runTurn } = yield* makeAgentLoopTurnExecution({
@@ -729,7 +720,7 @@ export const makeAgentLoopBehavior = (
         onSome: (work) => work.cancel,
       }),
       currentLoopState,
-      saveCheckpoint,
+      moveToPhase,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       clearInFlightTurn,
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
@@ -821,7 +812,7 @@ export const makeAgentLoopBehavior = (
         ),
       resolveTurnProfile,
       branchContext,
-      refreshRuntimeState,
+      writeInitialQueue,
       snapshot: currentLoopState,
       startTurn: worker.startTurn,
       interrupt: worker.interrupt,

@@ -594,7 +594,7 @@ const buildAgentLoopActorHandlers = (config: {
 
       const exit = yield* Effect.exit(
         handle.start.pipe(
-          Effect.andThen(handle.refreshRuntimeState),
+          Effect.andThen(handle.writeInitialQueue),
           Effect.andThen(
             Effect.gen(function* () {
               const incompleteMessage = yield* handle.incompleteUserTurn

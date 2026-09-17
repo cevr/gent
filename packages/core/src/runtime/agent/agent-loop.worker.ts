@@ -28,7 +28,7 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   /** Cancel whatever tool work this loop has in flight. Idempotent. */
   readonly interruptToolWork: Effect.Effect<void>
   readonly currentLoopState: Effect.Effect<LoopState>
-  readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
+  readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
   readonly takeNextQueuedTurn: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   /** True when the message was the in-flight admission. */
   readonly clearInFlightTurn: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
@@ -91,10 +91,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     nextItem: Option.Option<QueuedTurnItem>,
   ): Effect.Effect<void, AgentLoopError> =>
     Effect.gen(function* () {
-      if (Option.isNone(nextItem)) return yield* scope.saveCheckpoint(buildIdleState())
+      if (Option.isNone(nextItem)) return yield* scope.moveToPhase(buildIdleState())
       const startedAtMs = yield* Clock.currentTimeMillis
       const nextRunning = buildRunningState(nextItem.value, { startedAtMs })
-      yield* scope.saveCheckpoint(nextRunning)
+      yield* scope.moveToPhase(nextRunning)
       yield* enqueueTurnWorker(nextRunning)
     })
 
@@ -102,7 +102,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   const resumeWaiting = (state: WaitingForInteractionState): Effect.Effect<void, AgentLoopError> =>
     Effect.gen(function* () {
       const resumed = buildRunningState(state, { startedAtMs: state.startedAtMs })
-      yield* scope.saveCheckpoint(resumed)
+      yield* scope.moveToPhase(resumed)
       yield* enqueueTurnWorker(resumed)
     })
 
@@ -118,7 +118,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           pendingRequestId: outcome.pendingRequestId,
           pendingToolCallId: outcome.pendingToolCallId,
         })
-        yield* scope.saveCheckpoint(next)
+        yield* scope.moveToPhase(next)
         return
       }
 

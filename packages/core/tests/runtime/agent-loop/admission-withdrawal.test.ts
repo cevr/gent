@@ -59,7 +59,7 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       turnInterruption: yield* makeTurnInterruption,
       interruptToolWork: Effect.void,
       currentLoopState: Ref.get(stateRef),
-      saveCheckpoint: (next) => Ref.set(stateRef, next),
+      moveToPhase: (next: LoopState) => Ref.set(stateRef, next),
       takeNextQueuedTurn: Effect.gen(function* () {
         const now = yield* DateTime.nowAsDate
         const queue = yield* Ref.get(queueRef)
