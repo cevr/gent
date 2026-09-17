@@ -25,24 +25,14 @@ describe("user configuration", () => {
         Effect.provide(ConfigService.Test(initial)),
       )
     })
-
-    it.live("a written field is visible on next read", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
-        const result = yield* cfg.get()
-        expect(result.disabledExtensions).toEqual(["@gent/todo"])
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
   })
 
   describe("trustedProjects", () => {
+    const trustedProjects = ["/trusted/project"]
+
+    /** Trust is user-owned and hand-edited; a driver write must leave it alone. */
     const checkTrustPreservation = Effect.gen(function* () {
       const cfg = yield* ConfigService
-      const trustedProjects = ["/trusted/project"]
-      yield* cfg.set({ trustedProjects })
-      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
-      yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
       expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
       yield* cfg.setDriverOverride(
         AgentName.make("cowork"),
@@ -53,13 +43,10 @@ describe("user configuration", () => {
       expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
     })
 
-    it.live("in-memory updates preserve user trust and allow its removal", () =>
-      Effect.gen(function* () {
-        yield* checkTrustPreservation
-        const cfg = yield* ConfigService
-        yield* cfg.set({ trustedProjects: [] })
-        expect((yield* cfg.get()).trustedProjects).toEqual([])
-      }).pipe(Effect.provide(ConfigService.Test())),
+    it.live("in-memory driver writes preserve user trust", () =>
+      checkTrustPreservation.pipe(
+        Effect.provide(ConfigService.Test(new UserConfig({ trustedProjects }))),
+      ),
     )
 
     it.scopedLive("only user config grants trust and live updates preserve it on disk", () =>
@@ -70,7 +57,9 @@ describe("user configuration", () => {
         const home = yield* fs.makeTempDirectoryScoped()
         const projectConfigPath = path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        // The project asks for its own trust; only the user config may grant it.
         yield* fs.writeFileString(projectConfigPath, encodeJson({ trustedProjects: [cwd] }))
+        const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
         const live = ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
           Layer.provide(BunServices.layer),
@@ -79,17 +68,18 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           expect((yield* cfg.get()).trustedProjects).toBeUndefined()
           expect((yield* cfg.getFresh(cwd)).trustedProjects).toBeUndefined()
+          // Trust arrives the way it really does: the user edits the file.
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects }))
+          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual(trustedProjects)
           yield* checkTrustPreservation
-          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual(["/trusted/project"])
-          const persistedText = yield* fs.readFileString(
-            path.join(home, ConfigService.USER_CONFIG_RELATIVE),
-          )
+          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual(trustedProjects)
+          const persistedText = yield* fs.readFileString(userConfigPath)
           const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
             persistedText,
           )
-          expect(persisted.trustedProjects).toEqual(["/trusted/project"])
-          yield* cfg.set({ trustedProjects: [] })
-          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual([])
+          // The driver write rewrote the file and kept the hand-edited trust.
+          expect(persisted.trustedProjects).toEqual(trustedProjects)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
@@ -185,26 +175,19 @@ describe("user configuration", () => {
       )
     })
 
-    it.live("written disabledExtensions appear on next read", () =>
+    it.live("a later write preserves previously stored disabledExtensions", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.set({ disabledExtensions: ["@gent/memory"] })
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
         const result = yield* cfg.get()
-        expect(result.disabledExtensions?.length).toBe(1)
-        expect(result.disabledExtensions?.[0]).toBe("@gent/memory")
-      }).pipe(Effect.provide(ConfigService.Test())),
-    )
-
-    it.live("a later update preserves previously stored disabledExtensions", () =>
-      Effect.gen(function* () {
-        const cfg = yield* ConfigService
-        yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
-        yield* cfg.set({ trustedProjects: ["/trusted/project"] })
-        const result = yield* cfg.get()
-        expect(result.disabledExtensions?.length).toBe(1)
-        expect(result.disabledExtensions?.[0]).toBe("@gent/todo")
-        expect(result.trustedProjects).toEqual(["/trusted/project"])
-      }).pipe(Effect.provide(ConfigService.Test())),
+        expect(result.disabledExtensions).toEqual(["@gent/todo"])
+        expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
+      }).pipe(
+        Effect.provide(ConfigService.Test(new UserConfig({ disabledExtensions: ["@gent/todo"] }))),
+      ),
     )
   })
 
@@ -255,7 +238,10 @@ describe("user configuration", () => {
           // The sibling setting must survive: a dropped config takes it too.
           expect(result.disabledExtensions).toEqual(["@gent/skills"])
           // Re-encoding writes only the new spelling back.
-          yield* cfg.set({ trustedProjects: [cwd] })
+          yield* cfg.setDriverOverride(
+            AgentName.make("helper"),
+            ModelDriverRef.make({ id: "anthropic" }),
+          )
           const persisted = yield* fs.readFileString(userConfigPath)
           expect(persisted).toContain('"External"')
           expect(persisted).not.toContain('"external"')
@@ -289,7 +275,9 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           // A mutation must not succeed against a config that never loaded.
-          const outcome = yield* Effect.exit(cfg.set({ trustedProjects: [cwd] }))
+          const outcome = yield* Effect.exit(
+            cfg.setDriverOverride(AgentName.make("main"), ModelDriverRef.make({ id: "anthropic" })),
+          )
           expect(outcome._tag).toBe("Failure")
           // The user's settings are still on disk, byte for byte.
           const after = yield* fs.readFileString(userConfigPath)
@@ -371,17 +359,25 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("an unrelated update preserves driverOverrides", () =>
+    it.live("another agent's override leaves the first one alone", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
           ExternalDriverRef.make({ id: "acp-claude-code" }),
         )
-        yield* cfg.set({ disabledExtensions: ["@gent/todo"] })
+        yield* cfg.setDriverOverride(
+          AgentName.make("helper"),
+          ModelDriverRef.make({ id: "anthropic" }),
+        )
         const result = yield* cfg.get()
         expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
-      }).pipe(Effect.provide(ConfigService.Test())),
+        expect(result.driverOverrides?.[AgentName.make("helper")]).toBeDefined()
+        // The hand-edited sibling setting is still there.
+        expect(result.disabledExtensions).toEqual(["@gent/todo"])
+      }).pipe(
+        Effect.provide(ConfigService.Test(new UserConfig({ disabledExtensions: ["@gent/todo"] }))),
+      ),
     )
   })
 
@@ -427,15 +423,26 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
-    it.live("a partial update without the field keeps the stored agents", () =>
+    it.live("a write that does not name agents keeps the stored ones", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.set({ agents: { [AgentName.make("main")]: { reasoningEffort: "high" } } })
-        yield* cfg.set({ disabledExtensions: ["@gent/skills"] })
+        yield* cfg.setDriverOverride(
+          AgentName.make("cowork"),
+          ExternalDriverRef.make({ id: "acp-claude-code" }),
+        )
         const result = yield* cfg.get()
         expect(result.agents?.[AgentName.make("main")]).toEqual({ reasoningEffort: "high" })
         expect(result.disabledExtensions).toEqual(["@gent/skills"])
-      }).pipe(Effect.provide(ConfigService.Test())),
+      }).pipe(
+        Effect.provide(
+          ConfigService.Test(
+            new UserConfig({
+              agents: { [AgentName.make("main")]: { reasoningEffort: "high" } },
+              disabledExtensions: ["@gent/skills"],
+            }),
+          ),
+        ),
+      ),
     )
   })
 
