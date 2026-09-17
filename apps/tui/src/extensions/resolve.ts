@@ -8,6 +8,7 @@
  */
 
 import { Option, Schema } from "effect"
+import { type ExtensionScope, SCOPE_PRECEDENCE } from "@gent/core/protocol"
 import type {
   AutocompleteContribution,
   BorderLabelItem,
@@ -16,9 +17,6 @@ import type {
   OverlayComponent,
   WidgetComponent,
 } from "./client-facets.js"
-
-const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 } satisfies Record<string, number>
-type CoreExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
 /**
  * Surfaces invariant violations in the TUI extension resolver: a same-scope
@@ -40,7 +38,7 @@ import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { HeadlessToolRenderer } from "../headless-tool-renderers"
 import type { Command } from "../command/types"
 
-export type ExtensionScope = CoreExtensionScope
+export type { ExtensionScope }
 
 export interface LoadedTuiExtension {
   readonly id: string
