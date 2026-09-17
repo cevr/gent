@@ -1,34 +1,14 @@
-import { Cause, Effect, Exit, Option, Predicate, Schema } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { type AgentName as AgentNameType } from "../../domain/agent.js"
-import {
-  type BranchId,
-  type MessageId,
-  type SessionId,
-  ToolCallId,
-  ToolId,
-} from "../../domain/ids.js"
+import { type BranchId, type MessageId, type SessionId, ToolCallId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
 } from "./current-extension-host-context.js"
 import { ToolRunner, type ResolvedToolCapability } from "./tool-runner"
 import { CurrentToolCall } from "./current-tool-call.js"
-import { makeBindingReplayError, ToolBindingReplayError } from "./tool-binding-replay.js"
-import { captureCurrentToolBinding, resolveReplayToolBinding } from "./tool-binding-resolution.js"
-import {
-  persistAssistantPartsWithBindings,
-  persistMessageParts,
-  recordToolOutcome,
-} from "./turn-persistence.js"
-import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
-import {
-  processLocalReplayBindingKey,
-  ProcessLocalToolReplay,
-} from "./process-local-tool-replay.js"
 
 const TOOL_CONCURRENCY = 8
 
@@ -113,157 +93,4 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
     })
   }
   return results
-})
-
-export const invokeTool = Effect.fn("TurnHelpers.invokeTool")(function* (params: {
-  assistantMessageId: MessageId
-  toolResultMessageId: MessageId
-  toolCallId: ToolCallId
-  toolName: string
-  input: unknown
-  sessionId: SessionId
-  branchId: BranchId
-  currentTurnAgent: AgentNameType
-  turnProfile: AgentLoopTurnProfile
-}) {
-  const messageStorage = yield* MessageStorage
-  const processLocalReplay = yield* ProcessLocalToolReplay
-  const storageTransaction = yield* makeStorageTransaction
-
-  const localBindingKey = processLocalReplayBindingKey({
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    assistantMessageId: params.assistantMessageId,
-    toolCallId: params.toolCallId,
-  })
-
-  return yield* Effect.gen(function* () {
-    const existingResult = yield* messageStorage.getMessage(params.toolResultMessageId)
-    if (!Predicate.isUndefined(existingResult)) return
-    const existingAssistant = yield* messageStorage.getMessage(params.assistantMessageId)
-    let toolCall = Prompt.toolCallPart({
-      id: params.toolCallId,
-      name: params.toolName,
-      params: params.input,
-      providerExecuted: false,
-    })
-    if (!Predicate.isUndefined(existingAssistant)) {
-      const storedToolCall = existingAssistant.parts.find(
-        (part): part is Prompt.ToolCallPart =>
-          part.type === "tool-call" && part.id === params.toolCallId,
-      )
-      if (Predicate.isUndefined(storedToolCall) || storedToolCall.name !== params.toolName) {
-        return yield* makeBindingReplayError({
-          assistantMessageId: params.assistantMessageId,
-          toolCallId: params.toolCallId,
-          toolId: ToolId.make(params.toolName),
-          reason: "MissingBinding",
-          message: `Stored assistant tool call ${params.toolCallId} does not match ${params.toolName}`,
-        })
-      }
-      toolCall = storedToolCall
-    }
-
-    const toolBindings = new Map<string, ResolvedToolCapability>()
-    let current = Option.none<ResolvedToolCapability>()
-    if (Predicate.isNotUndefined(existingAssistant)) {
-      const binding = yield* resolveReplayToolBinding({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        assistantMessageId: params.assistantMessageId,
-        toolCall,
-        generationId: params.turnProfile.turnGenerationId,
-      }).pipe(
-        Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
-          Effect.gen(function* () {
-            const parts = [
-              Prompt.toolResultPart({
-                id: params.toolCallId,
-                name: toolCall.name,
-                isFailure: true,
-                providerExecuted: false,
-                result: { error: error.message, reason: error.reason },
-              }),
-            ]
-            yield* recordToolOutcome({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              toolResultMessageId: params.toolResultMessageId,
-              assistantMessageId: params.assistantMessageId,
-              parts,
-            })
-            return yield* error
-          }),
-        ),
-      )
-      toolBindings.set(toolCall.name, binding)
-    } else {
-      current = yield* captureCurrentToolBinding(toolCall.name)
-      if (Option.isSome(current)) toolBindings.set(toolCall.name, current.value)
-    }
-    const toolCalls = [toolCall]
-
-    const persisted = yield* persistAssistantPartsWithBindings({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: params.assistantMessageId,
-      parts: toolCalls,
-      toolBindings,
-      storageTransaction,
-    })
-    if (Option.isSome(persisted) && persisted.value.inserted && Option.isSome(current)) {
-      yield* processLocalReplay.setBinding(localBindingKey, { entry: current.value })
-    }
-
-    const toolResults = yield* executeToolCalls({
-      hostToolBindings: toolBindings,
-      assistantMessageId: params.assistantMessageId,
-      toolCalls,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      currentTurnAgent: params.currentTurnAgent,
-      toolBindings,
-    })
-    yield* persistMessageParts({
-      role: "tool",
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      messageId: params.toolResultMessageId,
-      parts: toolResults,
-    })
-  }).pipe(
-    Effect.onExit((exit) => {
-      if (Exit.isFailure(exit)) {
-        const error = Cause.findErrorOption(exit.cause)
-        if (Option.isSome(error) && Schema.is(ToolInteractionPending)(error.value))
-          return Effect.void
-      }
-      return Effect.gen(function* () {
-        if (Exit.isFailure(exit)) {
-          const assistant = yield* messageStorage.getMessage(params.assistantMessageId)
-          if (Predicate.isNotUndefined(assistant)) {
-            const parts = assistant.parts.flatMap((part) => {
-              if (part.type !== "tool-call" || part.id !== params.toolCallId) return []
-              return [
-                Prompt.toolResultPart({
-                  id: part.id,
-                  name: part.name,
-                  isFailure: true,
-                  providerExecuted: false,
-                  result: { error: Cause.pretty(exit.cause) },
-                }),
-              ]
-            })
-            yield* recordToolOutcome({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              toolResultMessageId: params.toolResultMessageId,
-              assistantMessageId: params.assistantMessageId,
-              parts,
-            })
-          }
-        }
-      }).pipe(Effect.ensuring(processLocalReplay.removeBinding(localBindingKey)))
-    }),
-  )
 })

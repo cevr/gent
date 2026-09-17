@@ -3,7 +3,6 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import {
   Cause,
-  Context,
   Deferred,
   Effect,
   Exit,
@@ -24,7 +23,6 @@ import {
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
 import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
-import { AgentName } from "../../../src/domain/agent"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
   AgentEvent,
@@ -36,12 +34,7 @@ import { InteractionPendingError } from "../../../src/domain/interaction-request
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
-import {
-  RecordingEventStore,
-  SequenceRecorder,
-  ensureStorageParents,
-  testExtensionHostContext,
-} from "../../../src/test-utils"
+import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import {
   BranchId,
   InteractionRequestId,
@@ -57,15 +50,6 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { ToolRunner } from "../../../src/runtime/agent/tool-runner"
-import { invokeTool } from "../../../src/runtime/agent/turn-tool-execution"
-import {
-  ProcessLocalToolReplay,
-  processLocalReplayBindingKey,
-} from "../../../src/runtime/agent/process-local-tool-replay"
-import { ToolBindingReplayError } from "../../../src/runtime/agent/tool-binding-replay"
-import { runAgentLoopTurnProfile } from "../../../src/runtime/agent/agent-loop.turn-profile"
-import { ExtensionRegistry } from "../../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { MessageStorage } from "../../../src/storage/message-storage"
@@ -904,150 +888,6 @@ describe("interaction", () => {
       )
     }),
   )
-  for (const outcome of ["resume", "failure", "cancel"]) {
-    it.live(`direct source invocation retains pending identity and clears it on ${outcome}`, () =>
-      Effect.gen(function* () {
-        const calls = yield* Ref.make(0)
-        const started = yield* Deferred.make<void>()
-        const resuming = yield* Deferred.make<void>()
-        const directTool = tool({
-          id: "direct-source-replay-tool",
-          description: "Parks once for a direct invocation",
-          params: Schema.Struct({ value: Schema.String }),
-          output: Schema.String,
-          execute: (params: { value: string }) =>
-            Effect.gen(function* () {
-              const ctx = yield* ExtensionContext
-              const count = yield* Ref.getAndUpdate(calls, (value) => value + 1)
-              if (count === 0) {
-                yield* Deferred.succeed(started, void 0)
-                return yield* new InteractionPendingError({
-                  requestId: InteractionRequestId.make("req-direct-source-replay"),
-                  sessionId: ctx.sessionId,
-                  branchId: ctx.branchId,
-                })
-              }
-              if (outcome === "cancel") {
-                yield* Deferred.succeed(resuming, void 0)
-                return yield* Effect.never
-              }
-              return params.value
-            }),
-        })
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-        const layer = Layer.mergeAll(
-          makeLiveToolLayer(providerLayer, [directTool]),
-          ProcessLocalToolReplay.Live,
-        )
-        const messageId = MessageId.make("direct-source-replay-message")
-        const toolResultMessageId = MessageId.make("direct-source-replay-result")
-        const toolCallId = ToolCallId.make("direct-source-replay-call")
-        const params = {
-          assistantMessageId: messageId,
-          toolResultMessageId,
-          toolCallId,
-          toolName: getToolId(directTool),
-          input: { value: "direct" },
-          sessionId: intSessionId,
-          branchId: intBranchId,
-          currentTurnAgent: AgentName.make("cowork"),
-        }
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* ensureStorageParents({ sessionId: intSessionId, branchId: intBranchId })
-            const extensionRegistry = yield* ExtensionRegistry
-            const driverRegistry = yield* DriverRegistry
-            const turnProfile = {
-              turnExtensionRegistry: extensionRegistry,
-              turnDriverRegistry: driverRegistry,
-              turnBaseSections: [],
-              turnHostCtx: testExtensionHostContext({
-                sessionId: intSessionId,
-                branchId: intBranchId,
-                agentName: AgentName.make("cowork"),
-              }),
-            }
-            const invoke = (profile = turnProfile) =>
-              runAgentLoopTurnProfile(profile)(
-                invokeTool({
-                  ...params,
-                  turnProfile: profile,
-                }),
-              )
-
-            const first = yield* Effect.exit(invoke())
-            expect(first._tag).toBe("Failure")
-            yield* Deferred.await(started)
-            const replay = yield* ProcessLocalToolReplay
-            const key = processLocalReplayBindingKey(params)
-            expect(Option.isSome(yield* replay.getBinding(key))).toBe(true)
-            if (outcome === "failure") {
-              const replacement = tool({
-                id: getToolId(directTool),
-                description: "A different source closure",
-                params: Schema.Struct({ value: Schema.String }),
-                output: Schema.String,
-                execute: () => Effect.die("Replacement must not execute"),
-              })
-              const context = yield* Layer.build(makeExtRegistry([replacement]))
-              const failed = yield* Effect.exit(
-                invoke({
-                  ...turnProfile,
-                  turnExtensionRegistry: Context.get(context, ExtensionRegistry),
-                }),
-              )
-              expect(failed._tag).toBe("Failure")
-              if (Exit.isFailure(failed)) {
-                expect(Schema.is(ToolBindingReplayError)(Cause.squash(failed.cause))).toBe(true)
-              }
-              expect(yield* Ref.get(calls)).toBe(1)
-            } else if (outcome === "cancel") {
-              const fiber = yield* Effect.forkChild(invoke())
-              yield* Deferred.await(resuming)
-              yield* Fiber.interrupt(fiber)
-              expect(yield* Ref.get(calls)).toBe(2)
-            } else {
-              const second = yield* invoke()
-              expect(second).toBeUndefined()
-              expect(yield* Ref.get(calls)).toBe(2)
-            }
-            expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
-            const messages = yield* MessageStorage
-            const assistant = yield* messages.getMessage(messageId)
-            const result = yield* messages.getMessage(toolResultMessageId)
-            expect(assistant).not.toBeUndefined()
-            expect(result).not.toBeUndefined()
-            if (Predicate.isNotUndefined(result)) {
-              if (outcome !== "resume") {
-                expect(result.parts[0]).toMatchObject({
-                  type: "tool-result",
-                  id: toolCallId,
-                  name: getToolId(directTool),
-                  isFailure: true,
-                })
-                const count = yield* Ref.get(calls)
-                yield* invoke()
-                expect(yield* Ref.get(calls)).toBe(count)
-                return
-              }
-              expect(result.parts[0]).toEqual(
-                Prompt.toolResultPart({
-                  id: toolCallId,
-                  name: getToolId(directTool),
-                  isFailure: false,
-                  providerExecuted: false,
-                  result: "direct",
-                }),
-              )
-            }
-          })
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-            .pipe(Effect.provide(layer))
-            .pipe(Effect.timeout("2 seconds")),
-        )
-      }),
-    )
-  }
 })
 // ============================================================================
 // Durable suspension + queue drain regression

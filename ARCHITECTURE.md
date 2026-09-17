@@ -566,7 +566,7 @@ Key properties:
   completed result does not give permission to repeat the tool.
 - **One binding policy.** `runtime/agent/tool-binding-resolution.ts` owns
   current capture, durable lookup, identity checks, and invalid local-binding
-  cleanup for native, external, and direct tool adapters. A missing durable row
+  cleanup for native and external tool adapters. A missing durable row
   permits only a same-process, same-generation capability with no durable
   identity. A local copy cannot replace a missing durable row. Dynamic durable
   markers cannot replay. Each adapter owns result persistence and interaction
@@ -575,10 +575,6 @@ Key properties:
   reading an assistant-message binding row. Native replay uses this same check.
   Inner-operation storage can use it without synthetic transcript tool calls.
   Its caller must verify receipt ownership.
-- **Internal direct command.** `InvokeTool` is not a waiting turn. If its tool
-  requests approval, the command closes the request, saves a paired failed result,
-  and returns an explicit failure. Redelivery preserves that failure without
-  running the tool again. Interactive tools use native or external session turns.
 - **No permission rules.** A tool that guards a call asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC.
 
 Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-pending-reader.ts` (pending storage read seam), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
