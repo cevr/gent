@@ -84,7 +84,7 @@ export interface InteractiveBootstrapResult {
 }
 
 // eslint-disable-next-line effect/noNullish -- bootstrap projection returns absence for an unreadable branch.
-export const toSession = (session: DomainSession): ClientSession | undefined => {
+const toSession = (session: DomainSession): ClientSession | undefined => {
   const branchId = Option.fromNullishOr(session.activeBranchId)
   if (Option.isNone(branchId)) return Option.getOrUndefined(Option.none<ClientSession>())
   return {
@@ -117,7 +117,7 @@ const createAndLoadSession = (input: {
     return decodedSession.value
   })
 
-export const resolveAppBootstrap = (
+const resolveAppBootstrap = (
   state: Exclude<InitialState, { _tag: "headless" }>,
   options: {
     missingProviders: readonly ProviderId[]

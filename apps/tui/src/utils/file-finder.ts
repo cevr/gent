@@ -24,20 +24,18 @@ import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 
 // ── Errors ───────────────────────────────────────────────────────────────
 
-export class FileFinderUnavailableError extends Schema.TaggedError<FileFinderUnavailableError>()(
+class FileFinderUnavailableError extends Schema.TaggedError<FileFinderUnavailableError>()(
   "FileFinderUnavailableError",
   {},
 ) {}
 
-export class FileFinderInitError extends Schema.TaggedError<FileFinderInitError>()(
-  "FileFinderInitError",
-  { reason: Schema.String },
-) {}
+class FileFinderInitError extends Schema.TaggedError<FileFinderInitError>()("FileFinderInitError", {
+  reason: Schema.String,
+}) {}
 
-export class FileFinderScanError extends Schema.TaggedError<FileFinderScanError>()(
-  "FileFinderScanError",
-  { reason: Schema.String },
-) {}
+class FileFinderScanError extends Schema.TaggedError<FileFinderScanError>()("FileFinderScanError", {
+  reason: Schema.String,
+}) {}
 
 // ── Singleton cache ──────────────────────────────────────────────────────
 

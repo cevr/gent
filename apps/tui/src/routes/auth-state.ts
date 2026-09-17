@@ -37,7 +37,7 @@ export interface AuthCatalog {
   readonly methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>
 }
 
-export const emptyCatalog: AuthCatalog = { providers: [], methods: {} }
+const emptyCatalog: AuthCatalog = { providers: [], methods: {} }
 
 /**
  * The four screens.
@@ -47,7 +47,7 @@ export const emptyCatalog: AuthCatalog = { providers: [], methods: {} }
  * provider a reader chose. `Key` and `OAuth` are the two ways a provider
  * is authorised, and each holds the text the reader types into it.
  */
-export const AuthScreen = Schema.TaggedUnion({
+const AuthScreen = Schema.TaggedUnion({
   List: {},
   Method: { provider: Schema.String },
   Key: { provider: Schema.String, value: Schema.String },

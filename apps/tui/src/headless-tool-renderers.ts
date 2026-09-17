@@ -136,12 +136,12 @@ export const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   return Option.some(lines.join("\n"))
 }
 
-export const BUILTIN_HEADLESS_TOOL_RENDERERS: ReadonlyArray<HeadlessToolRendererEntry> = [
+const BUILTIN_HEADLESS_TOOL_RENDERERS: ReadonlyArray<HeadlessToolRendererEntry> = [
   { toolNames: ["bash"], render: BashHeadlessToolRenderer },
   { toolNames: ["cell"], render: CellHeadlessToolRenderer },
 ]
 
-export const resolveHeadlessToolRenderers = (
+const resolveHeadlessToolRenderers = (
   entries: ReadonlyArray<HeadlessToolRendererEntry>,
 ): HeadlessToolRendererRegistry => {
   const renderers = new Map<string, HeadlessToolRenderer>()

@@ -44,7 +44,7 @@ import {
 import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-services"
 import { ClientTransport } from "../client-transport"
 
-export const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
+const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
 
 const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
 

@@ -25,7 +25,7 @@ type CoreExtensionScope = keyof typeof SCOPE_PRECEDENCE
  * contribution collision (two extensions claim the same key). This is a
  * programmer-misuse-only signal.
  */
-export class TuiExtensionResolveError extends Schema.TaggedError<TuiExtensionResolveError>()(
+class TuiExtensionResolveError extends Schema.TaggedError<TuiExtensionResolveError>()(
   "TuiExtensionResolveError",
   {
     reason: Schema.Literals(["same-scope-collision"]),

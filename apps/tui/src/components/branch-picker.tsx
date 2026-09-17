@@ -56,7 +56,7 @@ export const formatBranchLabel = (
   return `${name}${count}`
 }
 
-export const collectCounts = (nodes: readonly BranchTreeNode[]): Map<string, number> => {
+const collectCounts = (nodes: readonly BranchTreeNode[]): Map<string, number> => {
   const map = new Map<string, number>()
   const walk = (list: readonly BranchTreeNode[]) => {
     for (const node of list) {

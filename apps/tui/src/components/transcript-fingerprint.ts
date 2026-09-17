@@ -22,7 +22,7 @@ import type { AssistantSegment, SessionItem, ToolCall } from "./message-list"
 const encodeFingerprint = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 /** The tool-call fields that change what a reader sees, nested calls included. */
-export const toolFingerprint = (call: ToolCall): ReadonlyArray<unknown> => [
+const toolFingerprint = (call: ToolCall): ReadonlyArray<unknown> => [
   call.id,
   call.toolName,
   call.status,
@@ -33,7 +33,7 @@ export const toolFingerprint = (call: ToolCall): ReadonlyArray<unknown> => [
 ]
 
 /** One answer piece, by what it draws rather than by its encoding. */
-export const segmentFingerprint = (segment: AssistantSegment): ReadonlyArray<unknown> => {
+const segmentFingerprint = (segment: AssistantSegment): ReadonlyArray<unknown> => {
   if (segment._tag === "tool-call") return [segment._tag, toolFingerprint(segment.toolCall)]
   if (segment._tag === "image") return [segment._tag, segment.image.mediaType]
   return [segment._tag, segment.content]

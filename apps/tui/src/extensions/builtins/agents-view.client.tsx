@@ -155,7 +155,7 @@ type PaneItem =
   | { readonly kind: "heading"; readonly section: AgentRowEntry["section"]; readonly count: number }
   | { readonly kind: "row"; readonly row: AgentRowEntry; readonly index: number }
 
-export const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
+const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> => {
   const items: PaneItem[] = []
   rows.forEach((row, index) => {
     const previous = rows[index - 1]
@@ -169,7 +169,7 @@ export const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<Pan
 }
 
 /** "1 running, 0 idle, 3 inactive" for the pane title. */
-export const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
+const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
   const count = (section: AgentRowEntry["section"]) =>
     rows.filter((row) => row.section === section).length
   return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
@@ -187,7 +187,7 @@ export interface SubtreeCounts {
 
 /** Section counts over every row descending from `root`, at any depth; the root itself is not counted. */
 /** Descendants of `root` at any depth, in the server's parent-before-child order. */
-export const subtreeRows = (
+const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
   root: Option.Option<{ readonly sessionId: string }>,
 ): ReadonlyArray<AgentRowEntry> => {

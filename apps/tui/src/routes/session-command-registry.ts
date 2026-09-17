@@ -40,7 +40,7 @@ const parseReasoningLevel = Schema.decodeUnknownOption(ReasoningLevelInput)
 
 const AMBIGUOUS_PREVIEW = 4
 
-export const describeAmbiguous = (query: string, candidates: readonly Model[]): string => {
+const describeAmbiguous = (query: string, candidates: readonly Model[]): string => {
   const shown: string[] = candidates.slice(0, AMBIGUOUS_PREVIEW).map((model) => model.id)
   if (candidates.length > AMBIGUOUS_PREVIEW) shown.push("…")
   return `"${query}" matches ${candidates.length} models: ${shown.join(", ")}`

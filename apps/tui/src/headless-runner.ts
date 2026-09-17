@@ -27,7 +27,7 @@ import { randomId } from "./utils/random-id"
  * came back empty. Failing here is what gives a scripted caller a non-zero
  * exit — a silent exit 0 with no output is indistinguishable from success.
  */
-export class HeadlessUnansweredError extends Schema.TaggedError<HeadlessUnansweredError>()(
+class HeadlessUnansweredError extends Schema.TaggedError<HeadlessUnansweredError>()(
   "@gent/tui/HeadlessUnansweredError",
   { message: Schema.String },
 ) {}
