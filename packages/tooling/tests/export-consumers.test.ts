@@ -362,24 +362,27 @@ export const plantedDeadSdkExport = "nothing imports this"
   })
 })
 
-describe("schema-aware module surface (extensions)", () => {
-  test("a schema the tool beside it reads is live", () => {
+describe("extensions module surface", () => {
+  test("a schema only the tool beside it reads is reported", () => {
+    // `ownFileCounts: false`: the tool is the package's surface, so the param
+    // and error types it is built from stay file-local.
     const source = `export const EditParams = Schema.Struct({ path: Schema.String })
 export class EditError extends Schema.TaggedError<EditError>()("EditError", {}) {}
 export const edit = tool({ params: EditParams, run: () => new EditError({}) })
 `
-    expect(
-      findingsFor([
-        { file: EXTENSION_FILE, text: source },
-        {
-          file: "packages/extensions/src/index.ts",
-          text: `import { edit } from "./fs-tools/edit"`,
-        },
-      ]),
-    ).toEqual([])
+    const findings = findingsFor([
+      { file: EXTENSION_FILE, text: source },
+      {
+        file: "packages/extensions/src/index.ts",
+        text: `import { edit } from "./fs-tools/edit"`,
+      },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([1, 2])
+    expect(findings[0]?.message).toContain("`EditParams`")
+    expect(findings[1]?.message).toContain("`EditError`")
   })
 
-  test("a service its own module yields is live", () => {
+  test("a service only its own module yields is reported", () => {
     const source = `export interface WakeAlarmsService { readonly schedule: () => void }
 export class WakeAlarms extends Context.Service<WakeAlarms, WakeAlarmsService>()(
   "@gent/extensions/src/wake/WakeAlarms",
@@ -389,9 +392,27 @@ const use = Effect.gen(function* () {
   return alarms
 })
 `
-    expect(findingsFor([{ file: "packages/extensions/src/wake/index.ts", text: source }])).toEqual(
-      [],
-    )
+    const findings = findingsFor([{ file: "packages/extensions/src/wake/index.ts", text: source }])
+    expect(findings.map((finding) => finding.line)).toEqual([1, 2])
+    expect(findings.every((finding) => finding.enforced)).toBe(true)
+  })
+
+  test("a service another extension module yields keeps its export", () => {
+    expect(
+      findingsFor([
+        {
+          file: "packages/extensions/src/wake/index.ts",
+          text: `export class WakeAlarms extends Context.Service<WakeAlarms, never>()(
+  "@gent/extensions/src/wake/WakeAlarms",
+) {}
+`,
+        },
+        {
+          file: "packages/extensions/src/wake/wake-store.ts",
+          text: `import { WakeAlarms } from "./index"\nvoid WakeAlarms\n`,
+        },
+      ]),
+    ).toEqual([])
   })
 
   test("a class only its own declaration, _tag string, and doc comment name is reported", () => {

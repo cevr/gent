@@ -10,13 +10,8 @@ export class BackgroundBashStorageError extends Schema.TaggedError<BackgroundBas
   },
 ) {}
 
-export const BackgroundBashStatus = Schema.Literals([
-  "running",
-  "completed",
-  "failed",
-  "interrupted",
-])
-export type BackgroundBashStatus = typeof BackgroundBashStatus.Type
+const BackgroundBashStatus = Schema.Literals(["running", "completed", "failed", "interrupted"])
+type BackgroundBashStatus = typeof BackgroundBashStatus.Type
 const BackgroundBashTerminalStatus = Schema.Literals(["completed", "failed", "interrupted"])
 type BackgroundBashTerminalStatus = typeof BackgroundBashTerminalStatus.Type
 
@@ -26,7 +21,7 @@ export interface BackgroundBashJobKeyFields {
   readonly toolCallId: ToolCallId
 }
 
-export interface BackgroundBashStartInput extends BackgroundBashJobKeyFields {
+interface BackgroundBashStartInput extends BackgroundBashJobKeyFields {
   readonly command: string
   readonly cwd: Option.Option<string>
 }
@@ -39,14 +34,14 @@ export const BackgroundBashTerminalState = Schema.Struct({
 })
 export type BackgroundBashTerminalState = typeof BackgroundBashTerminalState.Type
 
-export const BackgroundBashClaim = Schema.TaggedUnion({
+const BackgroundBashClaim = Schema.TaggedUnion({
   Started: {},
   AlreadyRunning: {},
   Terminal: {
     state: BackgroundBashTerminalState,
   },
 })
-export type BackgroundBashClaim = typeof BackgroundBashClaim.Type
+type BackgroundBashClaim = typeof BackgroundBashClaim.Type
 
 const BackgroundBashJobRow = Schema.Struct({
   command: Schema.String,
@@ -56,7 +51,7 @@ const BackgroundBashJobRow = Schema.Struct({
 })
 type BackgroundBashJobRow = typeof BackgroundBashJobRow.Type
 
-export interface BackgroundBashStorageService {
+interface BackgroundBashStorageService {
   readonly claimStart: (
     input: BackgroundBashStartInput,
   ) => Effect.Effect<BackgroundBashClaim, BackgroundBashStorageError>

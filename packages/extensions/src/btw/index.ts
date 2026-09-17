@@ -31,14 +31,13 @@ import {
 
 export { SideQuestionProgress } from "./btw-protocol.js"
 
-export class SideQuestionError extends Schema.TaggedError<SideQuestionError>()(
-  "SideQuestionError",
-  { message: Schema.String },
-) {}
+class SideQuestionError extends Schema.TaggedError<SideQuestionError>()("SideQuestionError", {
+  message: Schema.String,
+}) {}
 
 // ── Background runs ──
 
-export interface SideQuestionRunsService {
+interface SideQuestionRunsService {
   readonly get: (branchId: string) => Effect.Effect<Option.Option<SideQuestionRun>>
   readonly set: (branchId: string, run: SideQuestionRun) => Effect.Effect<void>
   readonly update: (
@@ -50,11 +49,11 @@ export interface SideQuestionRunsService {
 }
 
 /** One run per branch. The process resource owns the fibers and closes them on shutdown. */
-export class SideQuestionRuns extends Context.Service<SideQuestionRuns, SideQuestionRunsService>()(
+class SideQuestionRuns extends Context.Service<SideQuestionRuns, SideQuestionRunsService>()(
   "@gent/extensions/src/btw/SideQuestionRuns",
 ) {}
 
-export const SideQuestionRunsLive: Layer.Layer<SideQuestionRuns> = Layer.effect(
+const SideQuestionRunsLive: Layer.Layer<SideQuestionRuns> = Layer.effect(
   SideQuestionRuns,
   Effect.gen(function* () {
     const scope = yield* Effect.scope

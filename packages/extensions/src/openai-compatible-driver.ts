@@ -61,7 +61,7 @@ export const makeOpenAiCompatResolution = (params: {
   return AiModel.make(params.provider, params.modelName, modelLayer)
 }
 
-export const makeApiKeyCompatDriver = (params: {
+const makeApiKeyCompatDriver = (params: {
   readonly id: string
   readonly name: string
   readonly envApiKey: Option.Option<string>

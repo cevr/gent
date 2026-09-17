@@ -3,7 +3,7 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Read Tool Error
 
-export class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
+class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -11,7 +11,7 @@ export class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
 
 // Read Tool Params
 
-export const ReadParams = Schema.Struct({
+const ReadParams = Schema.Struct({
   path: Schema.String.annotate({
     description: "Absolute path to file to read",
   }),
@@ -29,7 +29,7 @@ export const ReadParams = Schema.Struct({
 
 // Read Tool Result
 
-export const ReadResult = Schema.Struct({
+const ReadResult = Schema.Struct({
   content: Schema.String,
   path: Schema.String,
   lineCount: Schema.Finite,

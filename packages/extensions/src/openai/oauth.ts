@@ -116,7 +116,7 @@ interface PkceCodes {
   readonly challenge: string
 }
 
-export interface OpenAIOAuthTokens {
+interface OpenAIOAuthTokens {
   readonly type: "oauth"
   readonly access: string
   readonly refresh: string
@@ -124,7 +124,7 @@ export interface OpenAIOAuthTokens {
   readonly accountId?: string
 }
 
-export interface OpenAIRefreshTokens {
+interface OpenAIRefreshTokens {
   readonly access: string
   readonly refresh: string
   readonly expires: number
@@ -469,8 +469,8 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
  * extension persists. `cancel` interrupts the deferred (used by the
  * 5-minute abandoned-flow timer in `index.ts`).
  */
-export const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> =
-  Effect.gen(function* () {
+const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> = Effect.gen(
+  function* () {
     const pkce = yield* generatePKCE
     const crypto = yield* Crypto.Crypto
     const stateBytes = yield* crypto.randomBytes(32).pipe(
@@ -531,8 +531,9 @@ export const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError,
       callback,
       cancel,
     } satisfies OpenAIAuthorizationFlow
-    // @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary
-  }).pipe(Effect.provide(BunCrypto.layer))
+  },
+  // @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary
+).pipe(Effect.provide(BunCrypto.layer))
 
 /**
  * Refresh an OpenAI OAuth credential against the token endpoint.

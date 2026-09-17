@@ -11,7 +11,7 @@
 import { Effect, Schema } from "effect"
 import { ExtensionContext } from "@gent/core/extensions/api"
 
-export interface BranchStateStoreInput<A, E> {
+interface BranchStateStoreInput<A, E> {
   /** Span prefix, e.g. `GoalStore`. */
   readonly name: string
   /** Directory under `~/.gent` that holds one `<branchId>.json` per branch. */

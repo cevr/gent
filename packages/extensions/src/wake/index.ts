@@ -46,13 +46,13 @@ import {
 
 export { WAKE_EXTENSION_ID, WAKE_MESSAGE_TYPE, WakeDetails, WakeEntry, WakePending }
 
-export const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
+const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_MONITOR_EVERY_SECONDS = 30
 const DEFAULT_MONITOR_TIMEOUT_SECONDS = 30 * 60
 const MINIMUM_MONITOR_EVERY_SECONDS = 0.1
 const MONITOR_OUTPUT_TAIL_CHARS = 2_000
 
-export class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
+class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
   message: Schema.String,
 }) {}
 
@@ -293,7 +293,7 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
 
 // ── Tools ──
 
-export const WakeParams = Schema.Struct({
+const WakeParams = Schema.Struct({
   afterSeconds: Schema.optionalKey(
     Schema.Finite.annotate({ description: "Seconds from now until the alarm fires." }),
   ),
@@ -305,7 +305,7 @@ export const WakeParams = Schema.Struct({
   }),
 })
 
-export const WakeResult = Schema.Struct({
+const WakeResult = Schema.Struct({
   wakeId: Schema.String,
   dueAt: Schema.String,
   note: Schema.String,
@@ -365,7 +365,7 @@ export const WakeTool = tool({
   }),
 })
 
-export const MonitorParams = Schema.Struct({
+const MonitorParams = Schema.Struct({
   command: Schema.String.annotate({
     description:
       "Shell command run on every check. Without `until`, exit 0 means done (for example `gh run view 123 --exit-status`).",
@@ -391,7 +391,7 @@ export const MonitorParams = Schema.Struct({
   }),
 })
 
-export const MonitorResult = Schema.Struct({
+const MonitorResult = Schema.Struct({
   wakeId: Schema.String,
   everySeconds: Schema.Finite,
   deadline: Schema.String,
@@ -409,7 +409,7 @@ const validRegex = (pattern: Option.Option<string>): Effect.Effect<void, WakeErr
       }).pipe(Effect.asVoid),
   })
 
-export const MonitorTool = tool({
+const MonitorTool = tool({
   id: "monitor",
   readonly: true,
   description:
@@ -459,7 +459,7 @@ export const MonitorTool = tool({
   }),
 })
 
-export const CancelParams = Schema.Struct({
+const CancelParams = Schema.Struct({
   wakeId: Schema.optionalKey(
     Schema.String.annotate({
       description:
@@ -468,7 +468,7 @@ export const CancelParams = Schema.Struct({
   ),
 })
 
-export const CancelResult = Schema.Struct({ cancelled: Schema.Array(Schema.String) })
+const CancelResult = Schema.Struct({ cancelled: Schema.Array(Schema.String) })
 
 export const CancelTool = tool({
   id: "wake.cancel",

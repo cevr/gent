@@ -58,7 +58,7 @@ const isPassThrough = Predicate.or(
 )
 type Kernel = Effect.Success<ReturnType<typeof openCellKernel>>
 
-export interface CellExecutionService {
+interface CellExecutionService {
   readonly run: (call: {
     readonly assistantMessageId: MessageId
     readonly toolCallId: ToolCallId

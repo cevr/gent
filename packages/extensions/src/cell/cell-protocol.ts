@@ -8,7 +8,7 @@ export const maximumCellFrameBytes = 1024 * 1024
 export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096
-export const maximumCatalogEntries = 512
+const maximumCatalogEntries = 512
 export const catalogPageSize = 20
 
 /** One selected host tool as the kernel describes it. Descriptions never grant execution. */
@@ -229,7 +229,7 @@ export const makeCellOutputScanner = (expected: () => Option.Option<string>) => 
 }
 
 /** A bounded accumulator of output text: a head, an omitted count, and a bounded tail. */
-export interface BoundedOutput {
+interface BoundedOutput {
   /** Add text; anything past the head spills into the bounded tail. */
   readonly append: (text: string) => void
   /** The accumulated text, with an omission notice when anything was dropped. */

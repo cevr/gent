@@ -8,8 +8,8 @@ export const GOAL_CONTEXT_MESSAGE_TYPE = "goal-context"
 
 export const MAXIMUM_GOAL_OBJECTIVE_CHARS = 4000
 
-export const GoalStatus = Schema.Literals(["active", "paused", "budget_limited", "complete"])
-export type GoalStatus = typeof GoalStatus.Type
+const GoalStatus = Schema.Literals(["active", "paused", "budget_limited", "complete"])
+type GoalStatus = typeof GoalStatus.Type
 
 /** One durable objective per branch. Token and time usage accumulate per turn. */
 export const GoalState = Schema.Struct({

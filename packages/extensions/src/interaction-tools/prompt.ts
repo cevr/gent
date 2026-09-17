@@ -3,7 +3,7 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Prompt Params — single object shape because Anthropic rejects top-level anyOf tool inputs.
 
-export const PromptParams = Schema.Struct({
+const PromptParams = Schema.Struct({
   mode: Schema.Literals(["present", "confirm", "review"]).annotate({
     description: "present: show information, confirm: ask yes/no, review: persist editable content",
   }),
@@ -34,7 +34,7 @@ const ReviewResult = Schema.Struct({
   content: Schema.optional(Schema.String),
 })
 
-export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewResult])
+const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewResult])
 
 const slugify = (text: string): string =>
   text

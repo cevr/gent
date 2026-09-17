@@ -12,7 +12,7 @@ export class WebSearchError extends Schema.TaggedError<WebSearchError>()("WebSea
 
 // WebSearch Params
 
-export const WebSearchParams = Schema.Struct({
+const WebSearchParams = Schema.Struct({
   query: Schema.String.annotate({
     description: "Web search query",
   }),
@@ -30,7 +30,7 @@ export const WebSearchParams = Schema.Struct({
 
 // WebSearch Result
 
-export const WebSearchResult = Schema.Struct({
+const WebSearchResult = Schema.Struct({
   output: Schema.String,
   query: Schema.String,
 })

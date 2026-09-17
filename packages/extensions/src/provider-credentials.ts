@@ -60,7 +60,7 @@ export interface CredentialCache<C> {
 
 type PersistedCredentials = Parameters<NonNullable<ProviderAuthInfo["persist"]>>[0]
 
-export interface CredentialCacheConfig<C> {
+interface CredentialCacheConfig<C> {
   /** Provider name used in persist failure messages. */
   readonly label: string
   readonly credentials: Schema.Schema<C>

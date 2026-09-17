@@ -16,7 +16,7 @@ import { Option } from "effect"
  * @module
  */
 
-export interface ModelOverride {
+interface ModelOverride {
   /** Beta flags to remove from the base list for this model. */
   readonly exclude?: ReadonlyArray<string>
   /** Beta flags to add for this model on top of the base list. */
@@ -26,7 +26,7 @@ export interface ModelOverride {
   readonly disableEffort?: boolean
 }
 
-export interface ModelConfig {
+interface ModelConfig {
   readonly ccVersion: string
   readonly baseBetas: ReadonlyArray<string>
   readonly longContextBetas: ReadonlyArray<string>

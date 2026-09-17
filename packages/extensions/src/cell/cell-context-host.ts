@@ -10,7 +10,7 @@ import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import { CellEvaluationError } from "./cell-protocol.js"
 
 /** Host calls under this prefix serve the cell's `context` namespace, not a selected tool. */
-export const CONTEXT_CALL_PREFIX = "context."
+const CONTEXT_CALL_PREFIX = "context."
 
 export const isContextCall = (name: string): boolean => name.startsWith(CONTEXT_CALL_PREFIX)
 
@@ -90,7 +90,7 @@ const historyEntry = (message: Message): Schema.Json => {
   })
 }
 
-export interface ReadPage {
+interface ReadPage {
   readonly text: string
   readonly totalChars: number
   readonly offset: number

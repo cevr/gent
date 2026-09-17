@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import { defineRequests, ExtensionId, request } from "@gent/core/extensions/api"
 import { Skill, Skills } from "./skills.js"
 
-export const SKILLS_EXTENSION_ID = ExtensionId.make("@gent/skills")
+const SKILLS_EXTENSION_ID = ExtensionId.make("@gent/skills")
 
 export const SkillEntry = Schema.Struct(Skill.fields)
 export type SkillEntry = typeof SkillEntry.Type

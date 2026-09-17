@@ -3,7 +3,7 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Write Tool Error
 
-export class WriteError extends Schema.TaggedError<WriteError>()("WriteError", {
+class WriteError extends Schema.TaggedError<WriteError>()("WriteError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -11,7 +11,7 @@ export class WriteError extends Schema.TaggedError<WriteError>()("WriteError", {
 
 // Write Tool Params
 
-export const WriteParams = Schema.Struct({
+const WriteParams = Schema.Struct({
   atomic: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
@@ -28,7 +28,7 @@ export const WriteParams = Schema.Struct({
 
 // Write Tool Result
 
-export const WriteResult = Schema.Struct({
+const WriteResult = Schema.Struct({
   path: Schema.String,
   bytesWritten: Schema.Finite,
 })

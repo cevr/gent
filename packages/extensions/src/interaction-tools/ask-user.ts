@@ -32,7 +32,7 @@ const AskUserQuestionSchema = Schema.Struct({
   multiple: Schema.optionalKey(Schema.Boolean),
 })
 
-export const AskUserParams = Schema.Struct({
+const AskUserParams = Schema.Struct({
   questions: Schema.Array(AskUserQuestionSchema)
     .check(Schema.isMinLength(1), Schema.isMaxLength(5))
     .annotate({ description: "1-5 questions to ask the user" }),
@@ -40,7 +40,7 @@ export const AskUserParams = Schema.Struct({
 
 // AskUser Result — canonical answers[][] output
 
-export const AskUserResult = Schema.Struct({
+const AskUserResult = Schema.Struct({
   answers: Schema.Array(Schema.Array(Schema.String)).annotate({
     description: "Selected labels for each question",
   }),

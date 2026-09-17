@@ -12,15 +12,15 @@ const ResultJson = Schema.fromJsonString(Prompt.ToolResultPart)
 const ExecutionRow = Schema.Struct({ result_json: Schema.NullOr(Schema.String) })
 
 /** Incomplete means no recorded result, not proof of a live worker. Never reclaim it. */
-export const CellExecutionAdmission = Schema.TaggedUnion({
+const CellExecutionAdmission = Schema.TaggedUnion({
   Claimed: CellInput.fields,
   Incomplete: {},
   Completed: { result: Prompt.ToolResultPart },
 })
-export type CellExecutionAdmission = typeof CellExecutionAdmission.Type
+type CellExecutionAdmission = typeof CellExecutionAdmission.Type
 type SavedCellExecution = Exclude<CellExecutionAdmission, { readonly _tag: "Claimed" }>
 
-export interface CellExecutionStorageService {
+interface CellExecutionStorageService {
   readonly get: (
     address: OwnedToolCallAddress,
   ) => Effect.Effect<Option.Option<SavedCellExecution>, StorageError>

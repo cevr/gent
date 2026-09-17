@@ -118,7 +118,7 @@ export function classifyBashCommand(command: string): BashRisk {
 
 // Bash Tool Error
 
-export class BashError extends Schema.TaggedError<BashError>()("BashError", {
+class BashError extends Schema.TaggedError<BashError>()("BashError", {
   message: Schema.String,
   command: Schema.String,
   exitCode: Schema.optional(Schema.Finite),
@@ -151,7 +151,7 @@ export const BashParams = Schema.Struct({
 
 // Bash Tool Result
 
-export const BashResult = Schema.Struct({
+const BashResult = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.String,
   exitCode: Schema.Finite,
@@ -306,7 +306,7 @@ const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBa
     })
   })
 
-export interface BackgroundBashSupervisorService {
+interface BackgroundBashSupervisorService {
   readonly start: (
     job: BackgroundBashJob,
   ) => Effect.Effect<
@@ -316,7 +316,7 @@ export interface BackgroundBashSupervisorService {
   >
 }
 
-export class BackgroundBashSupervisor extends Context.Service<
+class BackgroundBashSupervisor extends Context.Service<
   BackgroundBashSupervisor,
   BackgroundBashSupervisorService
 >()("@gent/extensions/src/exec-tools/bash/BackgroundBashSupervisor") {}

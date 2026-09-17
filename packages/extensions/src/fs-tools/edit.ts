@@ -3,7 +3,7 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 
 // Edit Tool Error
 
-export class EditError extends Schema.TaggedError<EditError>()("EditError", {
+class EditError extends Schema.TaggedError<EditError>()("EditError", {
   message: Schema.String,
   path: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -30,7 +30,7 @@ export const EditParams = Schema.Struct({
 
 // Edit Tool Result
 
-export const EditResult = Schema.Struct({
+const EditResult = Schema.Struct({
   path: Schema.String,
   replacements: Schema.Finite,
 })
@@ -84,9 +84,9 @@ export function normalizeWhitespace(s: string): string {
   )
 }
 
-export type MatchStrategy = "exact" | "unescaped" | "normalized"
+type MatchStrategy = "exact" | "unescaped" | "normalized"
 
-export interface MatchResult {
+interface MatchResult {
   strategy: MatchStrategy
   searchStr: string
   index: number

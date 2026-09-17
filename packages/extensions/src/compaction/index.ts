@@ -8,7 +8,7 @@ import {
 import { ModelContextCompactor } from "@gent/core/extensions/branch-tools"
 import { ModelContextCompactorLive } from "./model-compaction.js"
 
-export const COMPACTION_EXTENSION_ID = ExtensionId.make("@gent/compaction")
+const COMPACTION_EXTENSION_ID = ExtensionId.make("@gent/compaction")
 
 /** Summarises older history when the model window overflows or the model asks. */
 export const ModelContextCompactorResource = defineResource({

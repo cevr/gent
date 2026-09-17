@@ -2,7 +2,7 @@ import { Effect, Option, Schema } from "effect"
 import { makeBranchStateStore } from "../branch-state-store.js"
 import { GoalSnapshot, type GoalState } from "./goal-protocol.js"
 
-export class GoalStoreError extends Schema.TaggedError<GoalStoreError>()("GoalStoreError", {
+class GoalStoreError extends Schema.TaggedError<GoalStoreError>()("GoalStoreError", {
   message: Schema.String,
 }) {}
 

@@ -30,7 +30,7 @@ export { GOAL_EXTENSION_ID, GOAL_CONTEXT_MESSAGE_TYPE, GoalState } from "./goal-
 
 // ── Errors ──
 
-export class GoalError extends Schema.TaggedError<GoalError>()("GoalError", {
+class GoalError extends Schema.TaggedError<GoalError>()("GoalError", {
   message: Schema.String,
 }) {}
 

@@ -24,10 +24,10 @@ import { Option } from "effect"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
 
 /** Section an agent row is grouped under, in display order. */
-export type AgentSection = "running" | "idle" | "inactive"
+type AgentSection = "running" | "idle" | "inactive"
 
 /** Identity of one agent loop. One session with three branches is three rows. */
-export interface AgentRowKey {
+interface AgentRowKey {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }

@@ -3,7 +3,7 @@ import { ProviderAuthError } from "@gent/core/extensions/api"
 import { decodeCredentials, updateCredentialBlob, type ClaudeCredentials } from "./credentials.js"
 import { AnthropicPlatform } from "../platform-adapter.js"
 
-export const credentialsFilePath = (home: string) =>
+const credentialsFilePath = (home: string) =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     return path.join(home, ".claude", ".credentials.json")

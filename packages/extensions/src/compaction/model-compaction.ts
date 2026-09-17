@@ -34,7 +34,7 @@ import {
 import { RetainedBindings } from "./tool-contracts.js"
 
 /** Maximum estimated input tokens for one summary request. */
-export const MODEL_COMPACTION_INPUT_TOKENS = 32_768
+const MODEL_COMPACTION_INPUT_TOKENS = 32_768
 
 /** Maximum estimated output tokens for one summary request. */
 export const MODEL_COMPACTION_OUTPUT_TOKENS = 1_024
@@ -50,7 +50,7 @@ const SUMMARY_USER_PREFIX =
  * turns in the summarized run, and the notice's id lets the model page the
  * full text back.
  */
-export const MODEL_COMPACTION_MESSAGE_CHARS = 8_000
+const MODEL_COMPACTION_MESSAGE_CHARS = 8_000
 
 const clipMessageText = (text: string): string => {
   if (text.length <= MODEL_COMPACTION_MESSAGE_CHARS) return text
@@ -184,7 +184,7 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
 })
 
 /** The marker text: where the history lives, then the summary as untrusted data. */
-export const handoffNotice = (params: {
+const handoffNotice = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly history: ReadonlyArray<Message>

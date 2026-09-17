@@ -83,7 +83,7 @@ export const FsToolsExtension = defineExtension({
   }),
 })
 
-export const NetworkToolsExtension = defineExtension({
+const NetworkToolsExtension = defineExtension({
   id: "@gent/network-tools",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
@@ -105,7 +105,7 @@ export const SessionToolsExtension = defineExtension({
   }),
 })
 
-export const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
+const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
 
 export const InteractionToolsExtension = defineExtension({
   id: INTERACTION_TOOLS_EXTENSION_ID,

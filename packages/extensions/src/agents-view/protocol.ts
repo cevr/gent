@@ -43,12 +43,12 @@ export const AgentRowEntry = Schema.Struct({
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
-export const ListAgentsInput = Schema.Struct({
+const ListAgentsInput = Schema.Struct({
   /** Case-insensitive substring filter over name, agent, cwd, and ids. */
   query: Schema.optional(Schema.String),
 })
 
-export const ListAgentsOutput = Schema.Struct({
+const ListAgentsOutput = Schema.Struct({
   rows: Schema.Array(AgentRowEntry),
 })
 

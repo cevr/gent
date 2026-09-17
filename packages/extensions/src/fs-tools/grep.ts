@@ -5,7 +5,7 @@ import { FileIndex } from "./file-index.js"
 
 // Grep Tool Error
 
-export class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
+class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
   message: Schema.String,
   pattern: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -13,7 +13,7 @@ export class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
 
 // Grep Tool Params
 
-export const GrepParams = Schema.Struct({
+const GrepParams = Schema.Struct({
   pattern: Schema.String.annotate({
     description: "Regex pattern to search for",
   }),
@@ -46,7 +46,7 @@ export const GrepParams = Schema.Struct({
 
 // Grep Match
 
-export const GrepMatch = Schema.Struct({
+const GrepMatch = Schema.Struct({
   file: Schema.String,
   line: Schema.Finite,
   content: Schema.String,
@@ -60,7 +60,7 @@ export const GrepMatch = Schema.Struct({
 
 // Grep Tool Result
 
-export const GrepResult = Schema.Struct({
+const GrepResult = Schema.Struct({
   matches: Schema.Array(GrepMatch),
   truncated: Schema.Boolean,
 })

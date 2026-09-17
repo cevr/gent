@@ -13,14 +13,14 @@ import {
 
 // Read Session Error
 
-export class ReadSessionError extends Schema.TaggedError<ReadSessionError>()("ReadSessionError", {
+class ReadSessionError extends Schema.TaggedError<ReadSessionError>()("ReadSessionError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
 // Read Session Params
 
-export const ReadSessionParams = Schema.Struct({
+const ReadSessionParams = Schema.Struct({
   sessionId: Schema.String.annotate({
     description: "Session ID to read",
   }),
@@ -38,7 +38,7 @@ export const ReadSessionParams = Schema.Struct({
 
 // Read Session Result
 
-export const ReadSessionResult = Schema.Struct({
+const ReadSessionResult = Schema.Struct({
   sessionId: Schema.String,
   content: Schema.String,
   extracted: Schema.Boolean,

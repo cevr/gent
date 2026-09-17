@@ -5,8 +5,8 @@ import { installBundledSkills } from "./bundled-skills.js"
 
 // Skill Schema
 
-export const SkillLevel = Schema.Literals(["local", "global"])
-export type SkillLevel = typeof SkillLevel.Type
+const SkillLevel = Schema.Literals(["local", "global"])
+type SkillLevel = typeof SkillLevel.Type
 
 export class Skill extends Schema.Class<Skill>("Skill")({
   name: Schema.String,
@@ -24,7 +24,7 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 // later it should arrive as an admin `request` capability or a fresh
 // resource start, not a method on the read interface.
 
-export interface SkillsService {
+interface SkillsService {
   readonly list: Effect.Effect<ReadonlyArray<Skill>>
 }
 

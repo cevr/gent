@@ -22,7 +22,7 @@ import {
 import picomatch from "picomatch"
 import { FileFinder as NativeFileFinder, type FileItem } from "@ff-labs/fff-bun"
 
-export interface IndexedFile {
+interface IndexedFile {
   readonly path: string
   readonly relativePath: string
   readonly fileName: string

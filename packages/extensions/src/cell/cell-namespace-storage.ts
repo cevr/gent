@@ -7,12 +7,12 @@ import { CellSnapshot } from "./cell-snapshot.js"
 const SnapshotJson = Schema.fromJsonString(CellSnapshot)
 const NamespaceRow = Schema.Struct({ snapshot_json: Schema.String })
 
-export interface CellNamespaceAddress {
+interface CellNamespaceAddress {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
 
-export interface CellNamespaceStorageService {
+interface CellNamespaceStorageService {
   readonly get: (
     address: CellNamespaceAddress,
   ) => Effect.Effect<Option.Option<CellSnapshot>, StorageError>

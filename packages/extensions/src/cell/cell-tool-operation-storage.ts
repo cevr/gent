@@ -19,7 +19,7 @@ export const CellToolOperationId = Schema.NonEmptyString.check(Schema.isMaxLengt
 const OperationAddressRow = Schema.Struct({
   operation_id: CellToolOperationId,
 })
-export const CellToolOperationState = Schema.TaggedUnion({
+const CellToolOperationState = Schema.TaggedUnion({
   Started: {},
   Waiting: { requestId: InteractionRequestId },
   Resuming: { requestId: InteractionRequestId, decision: ApprovalDecisionSchema },

@@ -148,7 +148,7 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     exempt: [],
     outsideOf: [],
     testsCount: true,
-    ownFileCounts: true,
+    ownFileCounts: false,
     specifier: Option.none(),
     enforced: true,
   },

@@ -70,7 +70,7 @@ export interface AcpSessionManager {
 
 // ── ACP → Response part mapping ──
 
-export interface AcpResponsePartMapper {
+interface AcpResponsePartMapper {
   readonly toolNamesById: Map<string, string>
 }
 

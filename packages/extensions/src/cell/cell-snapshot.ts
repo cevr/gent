@@ -8,7 +8,7 @@ import { Predicate, Schema } from "effect"
  * restored dates, maps, sets, and errors carry the context's own intrinsics.
  */
 export const maximumSnapshotBindingBytes = 256 * 1024
-export const maximumSnapshotBytes = 768 * 1024
+const maximumSnapshotBytes = 768 * 1024
 const maximumSnapshotDepth = 64
 
 export const SnapshotOmission = Schema.Struct({

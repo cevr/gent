@@ -22,7 +22,7 @@ import { AnthropicPlatform } from "./platform-adapter.js"
 import { buildBillingHeaderValue } from "./signing.js"
 import { getModelOverride } from "./model-config.js"
 
-export type KeychainTransformRequirements = GentPlatform | AnthropicPlatform
+type KeychainTransformRequirements = GentPlatform | AnthropicPlatform
 
 // ── Constants ──
 

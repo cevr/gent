@@ -88,7 +88,7 @@ const cellMigrations: FeatureMigrations = {
  * would be written to a store nothing reads back.
  */
 /** What the cell's storage installs. Core merges it without naming it. */
-export type CellStorageTags = DispatchingToolStorage | RetainedBindings | ToolCallRecoveryService
+type CellStorageTags = DispatchingToolStorage | RetainedBindings | ToolCallRecoveryService
 
 const cellStorageLayer = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
@@ -111,7 +111,7 @@ const cellStorageLayer = <E, R>(
 /**
  * The cell's answer to core's retained-names question: its namespace bindings.
  */
-export const cellRetainedBindings = Layer.effect(
+const cellRetainedBindings = Layer.effect(
   RetainedBindings,
   Effect.gen(function* () {
     const namespaces = yield* CellNamespaceStorage

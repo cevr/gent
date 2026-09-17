@@ -27,7 +27,7 @@ const childOverrides = (overrides: (typeof DelegateParams.Type)["overrides"]) =>
 })
 
 /** One self-contained task for a child that inherits this agent. Cells compose parallel and chained delegations. */
-export const DelegateParams = Schema.Struct({
+const DelegateParams = Schema.Struct({
   todo: Schema.String,
   description: Schema.optionalKey(Schema.String),
   background: Schema.optionalKey(
@@ -57,7 +57,7 @@ const DelegateMetadata = Schema.Struct({
  * child (its result arrives later as a message), `completed` is a foreground
  * child's output. `agent-child` and `agent-children` inspect the running ones.
  */
-export const DelegateResult = Schema.TaggedUnion({
+const DelegateResult = Schema.TaggedUnion({
   Running: ChildAgentHandle.fields,
   Completed: { output: Schema.String, metadata: DelegateMetadata },
   Error: { error: Schema.String },

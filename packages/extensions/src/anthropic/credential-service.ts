@@ -36,7 +36,7 @@ import {
 
 // ── IO seam ──
 
-export type AnthropicCredentialIORequirements =
+type AnthropicCredentialIORequirements =
   | AnthropicPlatform
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem

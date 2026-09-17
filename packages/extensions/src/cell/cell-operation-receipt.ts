@@ -5,15 +5,15 @@ import type * as Prompt from "effect/unstable/ai/Prompt"
 import { CellToolOperationStorage, type CellToolOperation } from "./cell-tool-operation-storage.js"
 
 /** Compact record of one admitted inner call. It stays in the saved cell result. */
-export const CellOperationReceipt = Schema.Struct({
+const CellOperationReceipt = Schema.Struct({
   toolCallId: ToolCallId,
   tool: Schema.String,
   outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
   summary: Schema.String,
 })
-export type CellOperationReceipt = typeof CellOperationReceipt.Type
+type CellOperationReceipt = typeof CellOperationReceipt.Type
 
-export const CELL_OPERATIONS_KEY = "operations"
+const CELL_OPERATIONS_KEY = "operations"
 
 const decodeJsonObject = Schema.decodeUnknownOption(Schema.JsonObject)
 const encodeReceipts = Schema.encodeSync(Schema.Array(CellOperationReceipt))

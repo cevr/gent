@@ -34,7 +34,7 @@ export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official
  * CLI version: the live env wins, otherwise the `MODEL_CONFIG.ccVersion`
  * baseline. Pure function — env comes from the caller's `AnthropicPlatform`.
  */
-export const getCliVersion = (env: AnthropicKeychainEnv): string => env.cliVersion ?? getCcVersion()
+const getCliVersion = (env: AnthropicKeychainEnv): string => env.cliVersion ?? getCcVersion()
 
 export const getUserAgent = (env: AnthropicKeychainEnv): string =>
   env.userAgent ?? `claude-cli/${getCliVersion(env)} (external, cli)`

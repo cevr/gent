@@ -10,7 +10,7 @@ import { Schema } from "effect"
 
 // ── Shared ──
 
-export class Implementation extends Schema.Class<Implementation>("AcpImplementation")({
+class Implementation extends Schema.Class<Implementation>("AcpImplementation")({
   name: Schema.String,
   title: Schema.optional(Schema.NullOr(Schema.String)),
   version: Schema.String,
@@ -18,12 +18,12 @@ export class Implementation extends Schema.Class<Implementation>("AcpImplementat
 
 // ── Initialize ──
 
-export class FsCapabilities extends Schema.Class<FsCapabilities>("AcpFsCapabilities")({
+class FsCapabilities extends Schema.Class<FsCapabilities>("AcpFsCapabilities")({
   readTextFile: Schema.optional(Schema.Boolean),
   writeTextFile: Schema.optional(Schema.Boolean),
 }) {}
 
-export class ClientCapabilities extends Schema.Class<ClientCapabilities>("AcpClientCapabilities")({
+class ClientCapabilities extends Schema.Class<ClientCapabilities>("AcpClientCapabilities")({
   fs: Schema.optional(FsCapabilities),
   terminal: Schema.optional(Schema.Boolean),
 }) {}
@@ -34,12 +34,12 @@ export class InitializeRequest extends Schema.Class<InitializeRequest>("AcpIniti
   clientInfo: Schema.optional(Implementation),
 }) {}
 
-export class McpCapabilities extends Schema.Class<McpCapabilities>("AcpMcpCapabilities")({
+class McpCapabilities extends Schema.Class<McpCapabilities>("AcpMcpCapabilities")({
   http: Schema.optional(Schema.Boolean),
   sse: Schema.optional(Schema.Boolean),
 }) {}
 
-export class AgentCapabilities extends Schema.Class<AgentCapabilities>("AcpAgentCapabilities")({
+class AgentCapabilities extends Schema.Class<AgentCapabilities>("AcpAgentCapabilities")({
   loadSession: Schema.optional(Schema.Boolean),
   mcpCapabilities: Schema.optional(McpCapabilities),
 }) {}
@@ -97,7 +97,7 @@ export class SessionNotification extends Schema.Class<SessionNotification>(
 
 // ── Request Permission (agent → client request) ──
 
-export class PermissionOption extends Schema.Class<PermissionOption>("AcpPermissionOption")({
+class PermissionOption extends Schema.Class<PermissionOption>("AcpPermissionOption")({
   optionId: Schema.String,
   name: Schema.String,
   kind: Schema.Literals(["allow_once", "allow_always", "reject_once", "reject_always"]),

@@ -41,7 +41,7 @@ export const withHeaders = (
  * `transformClient` signature requires, so credential unavailability
  * reaches the caller through the standard transport channel.
  */
-export const asTransportError = (
+const asTransportError = (
   req: HttpClientRequest.HttpClientRequest,
   cause: ProviderAuthError,
 ): HttpClientError =>
@@ -62,7 +62,7 @@ export const freshCredentials = <C>(
  * fill and wire send. Typed so the recovery fires only on this signal, not on
  * other 4xx that callers should see verbatim.
  */
-export class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
+class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
   "@gent/extensions/src/provider-http/Unauthorized401Error",
 )("Unauthorized401Error", {
   response: Schema.declare<HttpClientResponse.HttpClientResponse>(
