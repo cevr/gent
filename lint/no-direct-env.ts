@@ -6,10 +6,6 @@
  * - no-extension-internal-imports: keeps extension code on the public
  *   @gent/core/extensions/api surface and off @gent/core internals, with
  *   narrow builtin platform exceptions.
- * - no-projection-writes: heuristic AST-string-match fence on
- *   `QueryContribution.handler` AND read-intent `CapabilityContribution.effect`
- *   for write-shaped method names. Projection coverage is enforced
- *   structurally by `ProjectionContribution<A, R extends ReadOnlyTag>`.
  * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`,
  *   `await`, and Promise chains in test files.
  *   Test resources should live in Effect scopes (`Effect.scoped`,
@@ -17,16 +13,12 @@
  *
  * Six-primitive substrate rules:
  * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
- *   in *-boundary.ts files OR when consuming an SdkBoundary value via runSdkBoundary
+ *   in *-boundary.ts files
  * - no-define-extension-throw: definePackage/defineExtension factories may not
  *   throw — must return Effect with typed error channel
- * - no-r-equals-never-comment: flag inline R-channel annotation comments
- *   at provider/SDK edges; require SdkBoundary<E> brand instead
  * - no-dynamic-imports: bans dynamic `import(...)`, `require(...)`, and
  *   createRequire bridges unless the exact expression opts in with an
  *   architectural allow comment. Compiled-binary safety.
- * - no-make-unsafe: bans `.makeUnsafe(...)` constructors; model validation
- *   and allocation through Effectful/Option-returning APIs instead.
  * - no-die-in-test-helpers: bans `Effect.die`/`dieMessage` in test code when the
  *   message describes a *timeout*. A timeout is an expected outcome, so dying
  *   on it escapes as "Unhandled error between tests" attributed to no test.
@@ -52,34 +44,6 @@ const LOG_METHODS = new Set([
   "logDebug",
   "logTrace",
   "logFatal",
-])
-
-// The `projection` / `capability` identity smart constructors are gone; only
-// `query` and `mutation` survive as real lowering helpers. The projection arm
-// is gone too: `ProjectionContribution<A, R extends ReadOnlyTag>` enforces the
-// read-only fence at the type level. The
-// CallExpression detection branch below uses these sets for factory-call
-// matching; type-annotation and `satisfies` paths still cover direct
-// `CapabilityContribution` / `QueryContribution` object literals.
-/** Query factory names — `QueryContribution.handler` is enforced read-only by this rule. */
-const QUERY_FACTORY_NAMES = new Set(["query"])
-/** Capability factory names — `CapabilityContribution.effect` is enforced
- *  read-only by this rule when `intent: "read"`. */
-const CAPABILITY_FACTORY_NAMES = new Set<string>()
-
-const PROJECTION_WRITE_METHODS = new Set([
-  "create",
-  "update",
-  "delete",
-  "set",
-  "write",
-  "add",
-  "remove",
-  "insert",
-  "upsert",
-  "clear",
-  "put",
-  "save",
 ])
 
 interface AstNode {
@@ -138,32 +102,6 @@ const isTestFilename = (filename: string): boolean =>
   /\.test\.tsx?$/.test(filename) || /\/tests\/.*\.[cm]?tsx?$/.test(filename)
 
 const isTestBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
-
-/** Return the call's function name (Identifier or MemberExpression property). */
-const calleeName = (node: AstNode): string | undefined => {
-  const callee = getNodeField(node, "callee")
-  if (callee === undefined) return undefined
-  if (callee.type === "Identifier") {
-    return getStringField(callee, "name")
-  }
-  if (callee.type === "MemberExpression") {
-    const prop = getNodeField(callee, "property")
-    if (prop !== undefined && prop.type === "Identifier") {
-      return getStringField(prop, "name")
-    }
-  }
-  return undefined
-}
-
-const queryFactoryName = (node: AstNode): string | undefined => {
-  const name = calleeName(node)
-  return name !== undefined && QUERY_FACTORY_NAMES.has(name) ? name : undefined
-}
-
-const capabilityFactoryName = (node: AstNode): string | undefined => {
-  const name = calleeName(node)
-  return name !== undefined && CAPABILITY_FACTORY_NAMES.has(name) ? name : undefined
-}
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
 const PROMISE_STATIC_METHODS = new Set(["all", "allSettled", "any", "race", "resolve", "reject"])
@@ -258,42 +196,6 @@ const isPromiseConstructor = (node: AstNode): boolean => {
   return callee?.type === "Identifier" && getStringField(callee, "name") === "Promise"
 }
 
-/**
- * Locate the string-valued `intent` property in an object literal — used to
- * decide whether a CapabilityContribution should be enforced read-only. Only
- * `"read"` triggers the read-only fence; `"write"` (or missing/dynamic) opts
- * out, mirroring the type-level intent semantics.
- */
-const intentLiteral = (objExpr: AstNode): string | undefined => {
-  if (objExpr.type !== "ObjectExpression") return undefined
-  const properties = objExpr.properties
-  if (!Array.isArray(properties)) return undefined
-  for (const propRaw of properties) {
-    if (!isAstNode(propRaw) || propRaw.type !== "Property") continue
-    const key = getNodeField(propRaw, "key")
-    if (key === undefined) continue
-    const isIntent =
-      (key.type === "Identifier" && getStringField(key, "name") === "intent") ||
-      (key.type === "StringLiteral" && getStringField(key, "value") === "intent")
-    if (!isIntent) continue
-    const value = getNodeField(propRaw, "value")
-    if (value === undefined) continue
-    if (value.type === "StringLiteral" || value.type === "Literal") {
-      return getStringField(value, "value")
-    }
-  }
-  return undefined
-}
-
-/** Returns the intent literal of the first object-literal arg, if any. */
-const intentLiteralInFirstArg = (node: AstNode): string | undefined => {
-  const args = node.arguments
-  if (!Array.isArray(args) || args.length === 0) return undefined
-  const arg = args[0]
-  if (!isAstNode(arg)) return undefined
-  return intentLiteral(arg)
-}
-
 /** Locate a named property's arrow-function value inside an object literal. */
 const findArrowInObject = (objExpr: AstNode, propName: string): AstNode | undefined => {
   if (objExpr.type !== "ObjectExpression") return undefined
@@ -323,49 +225,6 @@ const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefin
   const arg = args[0]
   if (!isAstNode(arg)) return undefined
   return findArrowInObject(arg, propName)
-}
-
-const QUERY_TYPE_NAMES = new Set(["QueryContribution", "AnyQueryContribution"])
-const CAPABILITY_TYPE_NAMES = new Set(["CapabilityContribution", "AnyCapabilityContribution"])
-
-/** Detect whether a TypeScript type reference matches one of the given names. */
-const isTypeRefIn = (typeNode: AstNode | undefined, names: ReadonlySet<string>): boolean => {
-  if (typeNode === undefined) return false
-  if (typeNode.type === "TSTypeAnnotation") {
-    return isTypeRefIn(getNodeField(typeNode, "typeAnnotation"), names)
-  }
-  if (typeNode.type === "TSTypeReference") {
-    const name = getNodeField(typeNode, "typeName")
-    if (name === undefined) return false
-    if (name.type === "Identifier") {
-      const n = getStringField(name, "name")
-      return n !== undefined && names.has(n)
-    }
-    return false
-  }
-  return false
-}
-
-const isQueryTypeRef = (typeNode: AstNode | undefined): boolean =>
-  isTypeRefIn(typeNode, QUERY_TYPE_NAMES)
-const isCapabilityTypeRef = (typeNode: AstNode | undefined): boolean =>
-  isTypeRefIn(typeNode, CAPABILITY_TYPE_NAMES)
-
-/** If `node` is `expr.<method>(...)` and method is a known write, return the method name. */
-const writeCallMethod = (node: AstNode): string | undefined => {
-  if (node.type !== "CallExpression") return undefined
-  const callee = getNodeField(node, "callee")
-  if (callee === undefined || callee.type !== "MemberExpression") return undefined
-  const methodNode = getNodeField(callee, "property")
-  if (methodNode === undefined) return undefined
-  let methodName: string | undefined
-  if (methodNode.type === "Identifier") {
-    methodName = getStringField(methodNode, "name")
-  } else if (methodNode.type === "StringLiteral") {
-    methodName = getStringField(methodNode, "value")
-  }
-  if (methodName === undefined || !PROJECTION_WRITE_METHODS.has(methodName)) return undefined
-  return methodName
 }
 
 /** Classification for a CallExpression that smells like dynamic loading. */
@@ -608,15 +467,9 @@ const plugin: Plugin = {
      *
      * Sanctioned call sites:
      *   - File path matches `*-boundary.ts`
-     *   - File path is in {@link KNOWN_BOUNDARY_FILES} (legacy boundaries
-     *     pending migration to `*-boundary.ts`)
      *   - File path under `tests/**`, `**\/*.test.ts`, `**\/*.test.tsx`
-     *   - File is the `SdkBoundary` consumer module itself
      *
      * Anywhere else: error. SDK edges must be explicit.
-     *
-     * Migration plan: each entry in `KNOWN_BOUNDARY_FILES` is removed when
-     * the corresponding file is renamed to `*-boundary.ts`.
      */
     "no-runpromise-outside-boundary": {
       create(context) {
@@ -624,21 +477,11 @@ const plugin: Plugin = {
 
         // Allow inside any *-boundary.ts file (the convention for SDK edges)
         if (/-boundary\.ts$/.test(filename)) return {}
-        // Allow inside the SdkBoundary consumer itself
-        if (/\/domain\/sdk-boundary\.ts$/.test(filename)) return {}
         // Allow tests
         if (/\/tests\//.test(filename)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
         // Allow lint plugin file itself (rule definitions reference the API in messages)
         if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
-
-        // Known SDK boundaries pending migration to *-boundary.ts file naming.
-        // Each entry is a documented Effect→Promise edge that currently uses
-        // `Effect.runPromise` with a closed-over `R = never` Effect. Migration
-        // tracked in the v2 redesign plan; remove from this list when the file
-        // is renamed or split into a `*-boundary.ts`.
-        const KNOWN_BOUNDARY_FILES = []
-        if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
 
         // Effect static methods that exit the Effect world via Promise/fiber
         // — the boundary contract treats these as edges that must live in
@@ -664,7 +507,7 @@ const plugin: Plugin = {
             if (obj.type === "Identifier" && obj.name === "Effect") {
               if (!EFFECT_RUN_METHODS.has(prop.name)) return
               context.report({
-                message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Wrap the Effect with \`sdkBoundary("label", effect)\` and call it from a boundary module.`,
+                message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file. Move the Promise edge into a boundary module.`,
                 node,
               })
               return
@@ -694,7 +537,7 @@ const plugin: Plugin = {
               /Runtime$/.test(runtimeName)
             if (!isRuntimeName) return
             context.report({
-              message: `\`${runtimeName}.${prop.name}\` is a runtime-instance Promise edge — it may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Move the call into a boundary module.`,
+              message: `\`${runtimeName}.${prop.name}\` is a runtime-instance Promise edge — it may only be called inside a \`*-boundary.ts\` file. Move the call into a boundary module.`,
               node,
             })
           },
@@ -766,200 +609,6 @@ const plugin: Plugin = {
                 message: `${factoryName}'s \`setup\` callback must surface failures via the Effect channel, not throw synchronously. Use \`Effect.fail(new ExtensionLoadError({ ... }))\` so the loader can route the error.`,
                 node: n,
               })
-            })
-          },
-        }
-      },
-    },
-
-    /**
-     * Flags `// R = never` and `// R: never` comments at provider/SDK edges.
-     * The presence of such a comment is a smell that the file is crossing into
-     * Promise-land without using the typed `SdkBoundary<E>` brand.
-     *
-     * Migration: wrap the Effect with `sdkBoundary("label", effect)` and call
-     * `runSdkBoundary(boundary)` (or move the call site into `*-boundary.ts`).
-     *
-     * NOTE: AST-only inspection of leading comments on the program. Comments
-     * deep in function bodies are caught by walking the program's `comments`
-     * array if the parser surfaces it.
-     */
-    "no-r-equals-never-comment": {
-      create(context) {
-        const filename = context.filename
-        // Allow inside any *-boundary.ts file (the convention for SDK edges)
-        if (/-boundary\.ts$/.test(filename)) return {}
-        // Allow the lint plugin file itself (rule definition references the matched pattern in messages)
-        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
-        // Allow the SdkBoundary domain module itself (its docstring describes the migration target)
-        if (/\/domain\/sdk-boundary\.ts$/.test(filename)) return {}
-        // Allow tests
-        if (/\/tests\//.test(filename)) return {}
-        if (/\.test\.tsx?$/.test(filename)) return {}
-        // The SDK-boundary allow-list previously sat here as well. Every
-        // Promise edge now lives behind a `*-boundary.ts` file (caught by the
-        // `-boundary.ts$` allow above), so the list is empty. New
-        // boundary helpers should follow the same convention rather than
-        // re-introduce an allow-list.
-        return {
-          Program(node) {
-            // Comments live on `sourceCode.getAllComments()` in the oxlint plugin
-            // surface, not on the Program node directly.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
-            const ctx = context as unknown as {
-              sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
-            }
-            const getAll = ctx.sourceCode?.getAllComments
-            if (typeof getAll !== "function") return
-            const comments = getAll.call(ctx.sourceCode)
-            for (const c of comments) {
-              if (!isAstNode(c)) continue
-              const value = getStringField(c, "value")
-              if (typeof value !== "string") continue
-              if (/\bR\s*[:=]\s*never\b/.test(value)) {
-                context.report({
-                  message: `Drop the inline R-channel annotation comment at SDK edges. Wrap the Effect with \`sdkBoundary("label", effect)\` and consume via \`runSdkBoundary(boundary)\` so the boundary is structurally enforced.`,
-                  node: c,
-                })
-              }
-            }
-            // `node` parameter intentionally unused — comments are global to the file.
-            void node
-          },
-        }
-      },
-    },
-
-    /**
-     * Restrict scope-brand constructors (`brandServerScope`, `brandCwdScope`,
-     * `brandEphemeralScope`) to their authorised composition-root files.
-     *
-     * The brand constructors in `runtime/scope-brands.ts` are plain casts —
-     * TypeScript cannot prevent a foreign caller from forging a brand. Lint
-     * fences calls to these functions at the file level: only the documented
-     * composition root for each scope may call its brander.
-     *
-     * Authorised callers:
-     *   - `brandServerScope`     → `packages/core/src/server/dependencies.ts`
-     *   - `brandCwdScope`        → `packages/core/src/runtime/session-profile.ts`
-     *   - `brandEphemeralScope`  → `packages/core/src/runtime/composer.ts`
-     *     (the only sanctioned ephemeral-profile factory; `agent-runner.ts`
-     *     calls it via `buildEphemeralRuntime(...)`)
-     *
-     * The rule also exempts the `scope-brands.ts` module itself (where the
-     * functions are defined) and tests.
-     */
-    "brand-constructor-callers": {
-      create(context) {
-        const filename = context.filename
-        if (/\/runtime\/scope-brands\.ts$/.test(filename)) return {}
-        if (/\/tests\//.test(filename)) return {}
-        if (/\.test\.tsx?$/.test(filename)) return {}
-
-        const ALLOWED: Record<string, RegExp> = {
-          brandServerScope: /\/server\/dependencies\.ts$/,
-          brandCwdScope: /\/runtime\/session-profile\.ts$/,
-          brandEphemeralScope: /\/runtime\/composer\.ts$/,
-        }
-        return {
-          CallExpression(node) {
-            if (node.callee.type !== "Identifier") return
-            const name = node.callee.name
-            const allowedPattern = ALLOWED[name]
-            if (allowedPattern === undefined) return
-            if (allowedPattern.test(filename)) return
-            context.report({
-              message: `\`${name}\` may only be called from its authorised composition-root file (${allowedPattern.source}). Brand constructors are casts; lint enforces what the type system cannot.`,
-              node,
-            })
-          },
-        }
-      },
-    },
-
-    /**
-     * Sibling fence to `brand-constructor-callers`: catches the
-     * `as ServerProfile|CwdProfile|EphemeralProfile` escape hatch.
-     *
-     * The brand types are nominal *casts*, so a caller can bypass the
-     * brand-constructor lint by writing `someObj as ServerProfile`. The
-     * brand-constructor rule only fences direct identifier calls; this rule
-     * fences the type-assertion form. Together they close the loop.
-     *
-     * Same allow-list as the constructor rule, plus the scope-brands module
-     * itself (it owns the type definitions).
-     */
-    "no-scope-brand-cast": {
-      create(context) {
-        const filename = context.filename
-        if (/\/runtime\/scope-brands\.ts$/.test(filename)) return {}
-        if (/\/tests\//.test(filename)) return {}
-        if (/\.test\.tsx?$/.test(filename)) return {}
-
-        const ALLOWED: Record<string, RegExp> = {
-          ServerProfile: /\/server\/dependencies\.ts$/,
-          CwdProfile: /\/runtime\/session-profile\.ts$/,
-          EphemeralProfile: /\/runtime\/composer\.ts$/,
-        }
-        const SCOPE_TYPES = new Set([
-          "ServerProfile",
-          "CwdProfile",
-          "EphemeralProfile",
-          "ServerScope",
-          "CwdScope",
-          "EphemeralScope",
-        ])
-
-        const checkTypeAnnotation = (typeAnnNode: AstNode | undefined, reportNode: AstNode) => {
-          if (typeAnnNode === undefined) return
-          // Walk down: `TSAsExpression.typeAnnotation` is a TSType node like TSTypeReference
-          if (typeAnnNode.type !== "TSTypeReference") return
-          const name = getNodeField(typeAnnNode, "typeName")
-          if (name === undefined || name.type !== "Identifier") return
-          const typeName = getStringField(name, "name")
-          if (typeName === undefined || !SCOPE_TYPES.has(typeName)) return
-          const allowedPattern = ALLOWED[typeName]
-          if (allowedPattern !== undefined && allowedPattern.test(filename)) return
-          context.report({
-            message: `Cast to scope-brand type \`${typeName}\` is forbidden — call the authorised brand constructor instead. The brand types are nominal proofs-of-origin; bypassing the constructor defeats the type-system fence \`gent/brand-constructor-callers\` enforces at the function-call level.`,
-            node: reportNode,
-          })
-        }
-
-        return {
-          TSAsExpression(node) {
-            checkTypeAnnotation(getNodeField(node, "typeAnnotation"), node)
-          },
-          TSTypeAssertion(node) {
-            checkTypeAnnotation(getNodeField(node, "typeAnnotation"), node)
-          },
-        }
-      },
-    },
-
-    /**
-     * Bans `.makeUnsafe(...)` constructors.
-     *
-     * Why: unsafe constructors erase exactly the validation boundary Effect
-     * and Schema are supposed to make visible. If construction can fail, use
-     * an Effectful or Option-returning constructor and thread the failure /
-     * absence through the caller. If the value is impossible to fail by
-     * construction, encode that as a small safe helper in the owning module
-     * rather than scattering unsafe calls at use sites.
-     */
-    "no-make-unsafe": {
-      create(context) {
-        return {
-          CallExpression(node) {
-            const callee = getNodeField(node, "callee")
-            if (callee?.type !== "MemberExpression") return
-            const prop = getNodeField(callee, "property")
-            if (prop?.type !== "Identifier") return
-            if (getStringField(prop, "name") !== "makeUnsafe") return
-            context.report({
-              message:
-                "Do not call `.makeUnsafe(...)`. Use the safe Effectful/Option-returning constructor and thread construction through Effect instead of bypassing validation.",
-              node,
             })
           },
         }
@@ -1149,107 +798,6 @@ const plugin: Plugin = {
                 "Do not construct raw Promises in tests. Import `it` from `effect-bun-test`; use `Deferred` for coordination, `Effect.sleep` for delays, `Effect.async` for callback APIs, or `Effect.promise` only at a real external async boundary.",
               node,
             })
-          },
-        }
-      },
-    },
-
-    /**
-     * Heuristic AST-name-match fence on `QueryContribution.handler` AND
-     * read-intent `CapabilityContribution.effect` for write-shaped method
-     * calls (`.create(`, `.update(`, `.delete(`, `.set(`, `.write(`, etc.).
-     *
-     * Projections are NOT covered here: they use a structural type fence via
-     * `ProjectionContribution<A, R extends ReadOnlyTag>`, which makes
-     * write-capable Tags fail to compile in the projection R channel. See
-     * `domain/read-only.ts` and `domain/projection.ts`.
-     *
-     * Query/capability coverage stays heuristic until read-intent request
-     * factories can brand the R channel the same way.
-     *
-     * Valid:   handler: () => MyService.get(id)
-     * Invalid: handler: () => MyService.update(id, ...)
-     *
-     * Limitations: AST-only, no symbol resolution. False positives possible
-     * (e.g. `Set#add`, `Map#set` on local collections). Suppress with
-     * `// eslint-disable-next-line gent/no-projection-writes` when the call is
-     * provably local. Doesn't follow handlers defined as external function refs.
-     */
-    "no-projection-writes": {
-      create(context) {
-        const reportWritesIn = (kind: "Query" | "Capability", fn: AstNode): void => {
-          const bodyNameByKind: Record<"Query" | "Capability", string> = {
-            Query: "`handler`",
-            Capability: "`effect`",
-          }
-          const remediationByKind: Record<"Query" | "Capability", string> = {
-            Query: "Use a Mutation or Workflow contribution for state changes.",
-            Capability: 'Switch `intent` to `"write"` for state changes.',
-          }
-          walkAst(fn.body, (inner) => {
-            const methodName = writeCallMethod(inner)
-            if (methodName === undefined) return
-            context.report({
-              message: `${kind} ${bodyNameByKind[kind]} must be read-only — call to \`.${methodName}(\` looks like a write. ${remediationByKind[kind]}`,
-              node: inner,
-            })
-          })
-        }
-        // Locate the read-only body of an object literal — `handler` for
-        // queries, `effect` for read capabilities. Returns undefined when
-        // the literal is not a recognized authoring shape (e.g., a write
-        // capability, which is opted out of the fence).
-        const findCapabilityReadEffect = (objExpr: AstNode): AstNode | undefined => {
-          const intent = intentLiteral(objExpr)
-          if (intent !== "read") return undefined
-          return findArrowInObject(objExpr, "effect")
-        }
-        return {
-          // Query / read-intent capability — factory call form
-          CallExpression(node) {
-            if (!isAstNode(node)) return
-            if (queryFactoryName(node) !== undefined) {
-              const handlerFn = findArrowInFirstArg(node, "handler")
-              if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
-              return
-            }
-            if (capabilityFactoryName(node) !== undefined) {
-              if (intentLiteralInFirstArg(node) !== "read") return
-              const effectFn = findArrowInFirstArg(node, "effect")
-              if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
-            }
-          },
-          VariableDeclarator(node) {
-            if (!isAstNode(node)) return
-            const id = getNodeField(node, "id")
-            if (id === undefined) return
-            const typeAnn = getNodeField(id, "typeAnnotation")
-            const init = getNodeField(node, "init")
-            if (init === undefined) return
-            if (isQueryTypeRef(typeAnn)) {
-              const handlerFn = findArrowInObject(init, "handler")
-              if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
-              return
-            }
-            if (isCapabilityTypeRef(typeAnn)) {
-              const effectFn = findCapabilityReadEffect(init)
-              if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
-            }
-          },
-          TSSatisfiesExpression(node) {
-            if (!isAstNode(node)) return
-            const typeAnn = getNodeField(node, "typeAnnotation")
-            const expr = getNodeField(node, "expression")
-            if (expr === undefined) return
-            if (isQueryTypeRef(typeAnn)) {
-              const handlerFn = findArrowInObject(expr, "handler")
-              if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
-              return
-            }
-            if (isCapabilityTypeRef(typeAnn)) {
-              const effectFn = findCapabilityReadEffect(expr)
-              if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
-            }
           },
         }
       },
