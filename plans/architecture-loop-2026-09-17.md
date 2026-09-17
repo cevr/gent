@@ -112,3 +112,29 @@ a capability trade, so it stays.
 
 Measured sizes: pi `runLoop` 118 lines (no persistence); opencode v2 5,064 lines
 with its durable layer; codex 8,891; gent 8,368.
+
+## Pass 3 (read-only sweeps, then two agents on this branch)
+
+Reports: the loop has no structural candidate left. `loop-inbox.ts` held: no file
+outside it reads the queue compartments. `classifyStep` is already one pure
+function with a table test.
+
+| #            | Candidate                                                                                                 | Status                                                                            |
+| ------------ | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| G12          | `gent -p` sent its prompt two times: the session mount was keyed on the session record, a rename remounts | done `143f05f7`: mount keyed on the identity; the shell hands the prompt out once |
+| R1           | `packages/sdk/src/transport-headers.ts` is a re-export barrel                                             | done `387847ee`                                                                   |
+| R2           | Five extension files import `GentPlatform` from core-internal; no guard on `packages/extensions/src/`     | done `40d39bb3`: guard with one allowlisted file                                  |
+| R3           | `buildTopRightLabels` takes positional arguments                                                          | done `89a925a4`                                                                   |
+| R4           | `apps/server/src/` is outside the dead-export guard                                                       | done `b2569846`                                                                   |
+| R5           | Render-local `_tag` unions in the TUI                                                                     | kept; the exemption is written in `apps/tui/AGENTS.md`                            |
+| C1           | The relative `dbPath` default is dead                                                                     | done `09df87d5`: `StateLocation.Disk` carries the path                            |
+| C3-C5, C7-C9 | Double phase read, far-off wrappers, two hand-copied host structs, dead re-export, alias, identities      | done `09df87d5`                                                                   |
+| C2, C10      | Comments that name deleted symbols                                                                        | done `e04373d6`                                                                   |
+| C6           | The disabled-extension set has two readers on the server path                                             | done `b1755b8d`, regression test first                                            |
+| C11          | `SCOPE_PRECEDENCE` copied into the TUI                                                                    | done `d20c05a4`: exported from `@gent/core/protocol`                              |
+| C12          | `profile.ts` has one consumer                                                                             | rejected: `runtime-profile.test.ts` tests it as a subject                         |
+| Guard        | The dead-export guard cannot see `export { X } from`                                                      | done `5fcf2b6a`: 29 dead re-exports deleted                                       |
+
+Counsel on `deaa3d32` (the inbox): no defect. Counsel on pass 3: one defect, a
+startup prompt whose send failed was lost; fixed in the commit after `5fcf2b6a`
+(the shell takes the prompt back, and the next send keeps the request id).

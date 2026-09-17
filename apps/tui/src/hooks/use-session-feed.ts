@@ -35,6 +35,7 @@ import { randomId } from "../utils/random-id"
 import { formatConnectionIssue } from "../utils/format-error"
 import type { ClientLog } from "../utils/client-logger"
 import type { ClientContextValue } from "../client/context"
+import type { StartupPrompt } from "../session-shell"
 
 interface ReconnectOptions<E> {
   readonly label?: string
@@ -468,7 +469,7 @@ export function useSessionFeed(
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
   callbacks: SessionFeedCallbacks,
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
-  takeInitialPrompt?: () => Option.Option<string>,
+  takeInitialPrompt?: () => Option.Option<StartupPrompt>,
   canSendPrompt?: () => boolean,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
@@ -667,8 +668,10 @@ export function useSessionFeed(
       ([active, key, readyKey, canSend]) => {
         if (Option.isNone(active) || active.value !== key) return
         if (Option.isNone(readyKey) || readyKey.value !== key || !canSend) return
-        const initialPromptValue = Option.flatMap(takeInitialPromptValue, (take) => take())
-        if (Option.isNone(initialPromptValue) || initialPromptValue.value === "") return
+        const startup = Option.flatMap(takeInitialPromptValue, (take) => take())
+        if (Option.isNone(startup)) return
+        const prompt = startup.value
+        if (prompt.content === "") return
 
         const session = sessionId()
         const branch = branchId()
@@ -677,20 +680,25 @@ export function useSessionFeed(
           branchId: branch,
         })
         client.runtime.cast(
-          client.client.message
-            .send({
-              sessionId: session,
-              branchId: branch,
-              content: initialPromptValue.value,
+          Effect.gen(function* () {
+            const requestId = yield* Option.match(prompt.requestId, {
+              onNone: () => randomId,
+              onSome: Effect.succeed,
             })
-            .pipe(
-              Effect.catchEager((err) =>
-                Effect.sync(() => {
-                  if (Option.isNone(currentKey) || currentKey.value !== key) return
-                  client.setConnectionIssue(formatConnectionIssue(err))
-                }),
-              ),
-            ),
+            yield* client.client.message
+              .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
+              .pipe(
+                Effect.andThen(Effect.sync(() => prompt.settle(true, requestId))),
+                Effect.catchEager((err) =>
+                  Effect.sync(() => {
+                    // The shell holds the prompt again; the next ready stream sends it.
+                    prompt.settle(false, requestId)
+                    if (Option.isNone(currentKey) || currentKey.value !== key) return
+                    client.setConnectionIssue(formatConnectionIssue(err))
+                  }),
+                ),
+              )
+          }),
         )
       },
     ),

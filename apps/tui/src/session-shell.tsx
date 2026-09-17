@@ -26,12 +26,22 @@ import { Option } from "effect"
 import type { SessionId } from "@gent/core/protocol"
 import { useRequiredContext } from "./utils/solid-context"
 
+/** One startup prompt, held by one send at a time. */
+export interface StartupPrompt {
+  readonly content: string
+  /** The id of a send that failed. The next send uses it, so the prompt cannot run twice. */
+  readonly requestId: Option.Option<string>
+  /** Report the send's end. A failed send gives the prompt back to the shell. */
+  readonly settle: (sent: boolean, requestId: string) => void
+}
+
 interface SessionShellValue {
   /**
-   * The `-p` prompt, if this is the session the startup flags named. It is
-   * handed out once: a session view that mounts again must not send it again.
+   * The `-p` prompt, if this is the session the startup flags named and no
+   * send holds it. A session view that mounts again gets nothing while a send
+   * is in flight or after one landed.
    */
-  readonly takePrompt: (sessionId: SessionId) => Option.Option<string>
+  readonly takePrompt: (sessionId: SessionId) => Option.Option<StartupPrompt>
 }
 
 const SessionShellContext = createContext<SessionShellValue>()
@@ -43,13 +53,23 @@ interface SessionShellProviderProps {
 }
 
 export function SessionShellProvider(props: ParentProps<SessionShellProviderProps>) {
-  let taken = false
+  let failedRequestId = Option.none<string>()
+  let held = false
   const value: SessionShellValue = {
     takePrompt: (sessionId) => {
       const owns = Option.exists(props.initialSessionId, (boot) => boot === sessionId)
-      if (!owns || taken) return Option.none()
-      taken = true
-      return props.initialPrompt
+      if (!owns || held) return Option.none()
+      return Option.map(props.initialPrompt, (content) => {
+        held = true
+        return {
+          content,
+          requestId: failedRequestId,
+          settle: (sent, requestId) => {
+            held = sent
+            failedRequestId = Option.some(requestId)
+          },
+        }
+      })
     },
   }
 

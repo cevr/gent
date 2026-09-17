@@ -1096,4 +1096,64 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
+  it.live("a startup prompt whose send failed is sent again under the same request id", () =>
+    Effect.gen(function* () {
+      let ctx: Option.Option<ClientContextValue> = Option.none()
+      const attempts: Array<{ readonly content: string; readonly requestId?: string }> = []
+      const initialPrompt = "survive one failure"
+      const client = createMockClient({
+        message: {
+          send: (input: { readonly content: string; readonly requestId?: string }) =>
+            Effect.suspend(() => {
+              attempts.push(input)
+              if (attempts.length === 1) {
+                return Effect.fail(new ProviderAuthError({ message: "connection lost" }))
+              }
+              return Effect.void
+            }),
+        },
+      })
+      const runtime = createMockRuntime()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime,
+            initialAgent: AgentName.make("cowork"),
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+            initialPrompt: Option.some(initialPrompt),
+          },
+        ),
+      )
+      const clientContext = yield* requireClient(ctx)
+      yield* Effect.promise(() => waitForMessage(setup, attempts, initialPrompt))
+      // A new stream for the same session is the next chance to send.
+      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "A")
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => attempts.length >= 2, "second send"),
+      )
+      // The send landed; one more mount must not send again.
+      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-a"), "A")
+      yield* Effect.promise(() => setup.renderOnce())
+      // gent/no-sleep: allow real-clock gap so a third send, if one starts, lands before the assertion
+      yield* Effect.sleep("50 millis")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(attempts).toHaveLength(2)
+      expect(attempts[0]?.requestId).toBeDefined()
+      expect(attempts[1]?.requestId).toBe(attempts[0]?.requestId)
+      setup.renderer.destroy()
+    }),
+  )
 })
