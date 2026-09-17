@@ -160,7 +160,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      clientContext.selectAgent(AgentName.make("deepwork"))
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -986,7 +986,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
       )
-      clientContext.steer({ _tag: "SwitchAgent", agent: AgentName.make("deepwork") })
+      clientContext.selectAgent(AgentName.make("deepwork"))
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,

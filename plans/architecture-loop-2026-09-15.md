@@ -1001,4 +1001,51 @@ interjection as an unfinished user turn. `incompleteUserTurn`
 context-window, and model-change. An interjection is none of those. The code
 supports the concern; no restart test reproduces it yet.
 
+## The last two reductions, one applied and one refused (2026-09-16)
+
+Two items were still open after the sweep: counsel's `SwitchAgent` finding, and
+candidate 2 from the architecture report. One was a real reduction. The other
+was not, and the numbers say why.
+
+**`SwitchAgent` was wire vocabulary the UI never sent.** The domain carries it
+(`steer.ts:38`) and the loop honours it (`agent-loop.actor.ts:759`), but the
+three product `client.steer(...)` call sites are `Interject`
+(`session-controller.ts:609`) and `Cancel` (`:651`, `:700`). Nothing in the UI
+ever built one. Six tests did, as a shortcut to move the agent store.
+
+The case was not dead weight alone, though — it was a local capability wearing
+a steer command's clothes. Its handler set `agent` on the store twice, once for
+the no-session path and once "for responsive UI", and only then sent an RPC.
+Choosing an agent names what the _next_ turn starts with; there is no running
+turn to instruct. So the capability stays as `selectAgent` on
+`ClientActionValue` and the wire case goes. Counsel proposed driving the tests
+with a new `AgentSwitched` event; that would have added a concept to remove
+one. `initialAgent` could not replace the six sites either — every one switches
+mid-test, after render.
+
+The probe: neuter `selectAgent` to a no-op and the two auth suites report 13
+pass, 6 fail, every failure an "after the selected agent changes" case. The
+substitution kept the behaviour the vehicle provided rather than quietly
+neutering six tests.
+
+**Candidate 2 — extract `TurnReplay` — is refused.** The report proposed
+lifting ~306 lines of replay out of `agent-loop.turn-execution.ts` (1,325
+lines). Replay is already extracted: `process-local-tool-replay.ts` (94),
+`tool-binding-replay.ts` (136), and `tool-binding-resolution.ts` (182) hold 412
+lines of it behind their own interfaces.
+
+What remains inside the turn is closure-bound, not a module waiting to be
+pulled. The result-caching region (`:296-381`) reads `scope` ten times and six
+closure locals — `closeTurnStep`, `executeToolCalls`, `findPersistedToolResults`,
+`messageStorage`, `processLocalReplay`, `recordToolOutcome` — interleaved with
+the turn's own writes. `captureReplayToolBindings` (`:188`) injects three
+services off `scope`. `resolveReplayHostBindings` (`:779`) needs four fields of
+`RunningState` plus `turnProfile`, and calls `resolveTurnContext`.
+
+Extracting means threading `scope` and six dependencies back as parameters,
+which the no-context-params rule forbids, and which moves complexity instead of
+concentrating it. That is a failed deletion test: deleting the proposed module
+would not make complexity reappear across callers, because the callers are one
+closure that already holds it. A future pass should not re-propose it.
+
 Gate `GATE EXIT 0` on the rift.

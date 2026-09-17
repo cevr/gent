@@ -95,6 +95,12 @@ const isReconnectingState = (state: ConnectionState): boolean =>
  * and `wake` on an interjection, which this UI never needs: it interjects only
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
+ *
+ * `SwitchAgent` is absent for a different reason. The domain carries it and
+ * the loop honours it, but no path in this UI ever sent one: choosing an agent
+ * here changes which agent the next turn starts with, which is local state,
+ * not an instruction to a turn already running. `selectAgent` does that
+ * directly.
  */
 export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
@@ -102,7 +108,6 @@ export const SteerCommandInput = Schema.TaggedUnion({
     message: Schema.String,
     agent: Schema.optional(AgentNameSchema),
   },
-  SwitchAgent: { agent: AgentNameSchema },
 })
 export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 
@@ -233,6 +238,14 @@ interface ClientActionValue {
   sendMessage: (content: string) => void
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
+  /**
+   * Choose the agent the next turn starts with.
+   *
+   * Local to this UI: it names what a new turn begins as, so there is no
+   * running turn to instruct and nothing to send. A turn already streaming
+   * keeps the agent it started with.
+   */
+  selectAgent: (agent: AgentName) => void
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -984,19 +997,14 @@ export function ClientProvider(props: ClientProviderProps) {
         ),
       )
     },
+    selectAgent: (agent) => {
+      setAgentStore({ agent: Option.some(agent) })
+    },
+
     steer: (command) => {
       const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) {
-        if (command._tag === "SwitchAgent") {
-          setAgentStore({ agent: Option.some(command.agent) })
-        }
-        return
-      }
+      if (Option.isNone(currentSession)) return
       const s = currentSession.value
-      // Update local agent immediately for responsive UI
-      if (command._tag === "SwitchAgent") {
-        setAgentStore({ agent: Option.some(command.agent) })
-      }
       cast(
         Effect.gen(function* () {
           const requestId = yield* randomId
