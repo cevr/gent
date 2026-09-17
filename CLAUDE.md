@@ -168,7 +168,8 @@ assertSequence(calls, [
 
 ## Documentation
 
-| Path                 | Focus                       |
-| -------------------- | --------------------------- |
-| `ARCHITECTURE.md`    | Package structure, concepts |
-| `apps/tui/AGENTS.md` | OpenTUI, Solid patterns     |
+| Path                       | Focus                                                          |
+| -------------------------- | -------------------------------------------------------------- |
+| `ARCHITECTURE.md`          | Package structure, concepts                                    |
+| `apps/tui/AGENTS.md`       | OpenTUI, Solid patterns                                        |
+| `testbeds/gamut/README.md` | Live TUI check: `bun run gamut up <preset>`, isolated database |
