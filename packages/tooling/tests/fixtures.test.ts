@@ -167,6 +167,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     // Direct withX(innerCall()) + higher-order withX(...)(innerCall())
     expectedCount: 2,
   },
+  {
+    rule: "gent/no-inert-it",
+    invalid: "no-inert-it.invalid.test.ts",
+    valid: "no-inert-it.valid.test.ts",
+    // Arrow body + function reference + the renamed import
+    expectedCount: 3,
+  },
 ]
 
 const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {

@@ -33,6 +33,9 @@
  * - no-with-wrapper-call: bans `withX(otherCall(...))` and
  *   `withX(...)(otherCall(...))` wrapper-call style; pipe the inner Effect/value
  *   through the adapter instead.
+ * - no-inert-it: bans a bare `it(...)` call where `it` came from
+ *   `effect-bun-test`. That `it` is an object, not a function, so the call
+ *   throws during module load and the file registers no tests at all.
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -1125,6 +1128,67 @@ const plugin: Plugin = {
             if (hasAllowComment(node)) return
             context.report({
               message: `\`${objectName}.sleep(...)\` in test code — replace fixed delays with deterministic synchronisation: \`Deferred\` for coordination, \`controls.waitForCall(...)\` / \`controls.waitForStreamStart()\` for sequence-provider gating, or \`waitFor\` polling helpers for projection convergence. If this site is a real-clock timing assertion, OS-level fiber pacing, or a retry/backoff test, add \`// gent/no-sleep: allow <reason>\` on the line directly above the call.`,
+              node,
+            })
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags a bare `it(...)` call in a file that imports `it` from
+     * `effect-bun-test`.
+     *
+     * That `it` is a plain object holding the four runners — `it.live`,
+     * `it.scopedLive`, `it.effect`, `it.scoped` — and has no call signature.
+     * Calling it throws a `TypeError` while the module body is still
+     * evaluating, so Bun registers nothing from the file: every test the file
+     * declares, not just the bare one, disappears. The run reports the loss as
+     * "Unhandled error between tests" with `0 fail`, attributed to no test, so
+     * the assertions inside look like they passed.
+     *
+     * A synchronous test belongs on `test(...)` from `bun:test`. A test that
+     * returns an Effect belongs on one of the four runners.
+     *
+     * What is reported: a `CallExpression` whose callee is the identifier
+     * bound by an `effect-bun-test` import, under whatever local name that
+     * import gives it. A member call such as `it.live(...)` is the correct
+     * form and is untouched, and so is a file that never imports `it` from
+     * `effect-bun-test` — the `it` from `bun:test` is callable.
+     */
+    "no-inert-it": {
+      create(context) {
+        // The local name `it` is bound to, which `import { it as spec }`
+        // makes something other than "it". Empty until an import binds it,
+        // so a file that never imports from effect-bun-test reports nothing.
+        const inertNames = new Set<string>()
+        return {
+          ImportDeclaration(node) {
+            if (!isAstNode(node)) return
+            const source = getNodeField(node, "source")
+            if (getStringField(source ?? { type: "" }, "value") !== "effect-bun-test") return
+            for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
+              if (specifier.type !== "ImportSpecifier") continue
+              const imported = getNodeField(specifier, "imported")
+              if (imported === undefined) continue
+              const importedName =
+                imported.type === "Identifier"
+                  ? getStringField(imported, "name")
+                  : getStringField(imported, "value")
+              if (importedName !== "it") continue
+              const local = getNodeField(specifier, "local")
+              const localName = local === undefined ? undefined : getStringField(local, "name")
+              inertNames.add(localName ?? "it")
+            }
+          },
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "Identifier") return
+            const name = getStringField(callee, "name")
+            if (name === undefined || !inertNames.has(name)) return
+            context.report({
+              message: `\`${name}(...)\` from "effect-bun-test" is not callable — it is the object holding \`${name}.live\`, \`${name}.scopedLive\`, \`${name}.effect\` and \`${name}.scoped\`. Calling it throws while the module loads, so Bun registers none of this file's tests and reports the loss as an error attributed to no test. Use \`test(...)\` from "bun:test" for a synchronous body, or \`${name}.live\` / \`${name}.scopedLive\` for one that returns an Effect.`,
               node,
             })
           },
