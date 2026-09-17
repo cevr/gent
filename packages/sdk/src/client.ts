@@ -9,27 +9,9 @@ import {
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
-  type Branch,
-  type BranchId,
-  type BranchTreeNode,
-  type ExtensionHealth,
-  type ExtensionHealthIssue,
-  type ExtensionHealthSnapshot,
-  type GentClientRpcError,
   type GentLifecycle,
   type GentRpcClient,
-  type Message,
-  type MessageId,
   type MessagePart,
-  type MessageSegment,
-  type ProjectedMessage,
-  type QueueEntryInfo,
-  type QueueSnapshot,
-  type Session,
-  type SessionId,
-  type SessionSnapshot,
-  type SteerCommand,
-  type ToolInteraction,
 } from "@gent/core/protocol"
 import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
 import {
@@ -45,39 +27,8 @@ import {
   provider as providerFactories,
   type GentServer,
   type GentServerOptions,
-  type IdleShutdownSpec,
 } from "./server.js"
 import { workspaceHeadersForCwd } from "./transport-headers.js"
-
-export type {
-  MessageSegment,
-  Message,
-  SessionId,
-  BranchId,
-  MessageId,
-  QueueEntryInfo,
-  QueueSnapshot,
-  ProjectedMessage,
-  ToolInteraction,
-}
-export type {
-  GentLifecycle,
-  SteerCommand,
-  Session,
-  Branch,
-  BranchTreeNode,
-  SessionSnapshot,
-  ExtensionHealth,
-  ExtensionHealthIssue,
-  ExtensionHealthSnapshot,
-}
-export { ConnectionState, GentConnectionError }
-export type { GentNamespacedClient, GentRuntime }
-export type { GentServer, GentServerOptions, IdleShutdownSpec }
-
-// Re-export RPC errors. SDK clients can fail with both server-declared RPC errors
-// and transport-level RpcClientError values from the Effect RPC client.
-export type { GentClientRpcError }
 
 // ---------------------------------------------------------------------------
 // Utility functions (unchanged)

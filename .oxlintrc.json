@@ -15,18 +15,10 @@
     "gent/no-positional-log-error": "error",
     // Custom — extensions must not import from runtime/, storage/, server/
     "gent/no-extension-internal-imports": "error",
-    // Custom — projection.query Effects must be read-only
-    "gent/no-projection-writes": "error",
     // Custom — Effect.runPromise only in *-boundary.ts files or via runSdkBoundary
     "gent/no-runpromise-outside-boundary": "error",
     // Custom — definePackage/defineExtension factories must not throw
     "gent/no-define-extension-throw": "error",
-    // Custom — `// R = never` comments at SDK edges; require SdkBoundary brand
-    "gent/no-r-equals-never-comment": "error",
-    // Custom — scope-brand constructors only callable from authorised files
-    "gent/brand-constructor-callers": "error",
-    // Custom — `as ServerProfile|CwdProfile|EphemeralProfile` casts forbidden
-    "gent/no-scope-brand-cast": "error",
     // Custom — no dynamic `import(...)` or `require(...)` (compiled-binary safety)
     "gent/no-dynamic-imports": "error",
     // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
@@ -134,13 +126,6 @@
     "typescript/no-duplicate-type-constituents": "off",
     "typescript/no-unnecessary-template-expression": "off"
   },
-  "ignorePatterns": [
-    "**/dist/**",
-    "**/node_modules/**",
-    "**/*.d.ts",
-    "**/scripts/**",
-    "packages/tooling/fixtures/**"
-  ],
   "overrides": [
     {
       // GentPlatform implements Bun/OS capabilities at the runtime boundary.
@@ -197,18 +182,6 @@
       }
     },
     {
-      "files": ["packages/tooling/src/workspace-test-runner.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
-      "files": ["packages/tooling/src/test-diagnose.ts"],
-      "rules": {
-        "effect/noGlobals": "off"
-      }
-    },
-    {
       "files": ["packages/tooling/tests/fixtures.test.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
@@ -224,12 +197,6 @@
         "typescript/no-non-null-assertion": "off",
         "typescript/no-explicit-any": "off",
         "typescript/no-unsafe-type-assertion": "off"
-      }
-    },
-    {
-      "files": ["**/sdk/src/supervisor.ts"],
-      "rules": {
-        "node/no-process-env": "off"
       }
     }
   ]

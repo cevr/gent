@@ -176,11 +176,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     scope: "next-line",
     text: "strictEffectProvide:off",
   },
-  {
-    file: "packages/tooling/src/workspace-test-runner.ts",
-    scope: "next-line",
-    text: "strictEffectProvide:off entrypoint layer provision",
-  },
 ]
 
 const approvedSuppression = (file: string, text: string): boolean =>

@@ -1,5 +1,5 @@
 import { BunRuntime } from "@effect/platform-bun"
-import { Console, Effect, Option } from "effect"
+import { Console, Effect, Option, Schema } from "effect"
 import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "./blanket-eslint-disable"
 import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
 import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
@@ -15,6 +15,12 @@ import {
   type PackageJson,
 } from "./export-consumers"
 import { findE2eFixtureImportFindings } from "./e2e-fixture-imports"
+import {
+  findReadersWithoutWriters,
+  findUnenabledPluginRules,
+  findUnmatchedOverrideGlobs,
+  OxlintConfigSchema,
+} from "./lint-config-guards"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
 import {
   findSuppressionInventoryFindings,
@@ -34,6 +40,71 @@ const readTrackedFile = Effect.fn("Tooling.readTrackedFile")(function* (file: st
 
 const readJsonFile = Effect.fn("Tooling.readJsonFile")(function* (path: string) {
   return yield* Effect.promise(() => Bun.file(path).json())
+})
+
+const OXLINT_CONFIG = ".oxlintrc.json"
+const LINT_PLUGIN = "lint/no-direct-env.ts"
+
+/** The two findings that read the lint config rather than one source file. */
+const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
+  trackedFiles: ReadonlyArray<string>,
+  sourceTexts: ReadonlyMap<string, string>,
+) {
+  const configText = yield* Effect.promise(() => Bun.file(OXLINT_CONFIG).text())
+  // The config is JSONC: it carries a `//` note above most rules.
+  const config = yield* Schema.decodeEffect(Schema.fromJsonString(OxlintConfigSchema))(
+    configText.replace(/^\s*\/\/.*$/gm, ""),
+  )
+  const rootRules = new Set(Object.keys(config.rules ?? {}))
+  const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
+  return [
+    ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
+    ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, rootRules),
+  ]
+})
+
+/** Every finding one file answers on its own, without the rest of the tree. */
+const singleFileFailures = (file: string, text: string): ReadonlyArray<string> => {
+  const blanket = [
+    ...findBlanketEslintDisables(file, text),
+    ...findBannedEslintDisableBlocks(file, text),
+  ].map(
+    (finding) =>
+      `${finding.file}:${finding.line}: blanket eslint-disable comments and block eslint-disable comments are banned; use line-local suppressions with exact rules`,
+  )
+  const suppressions = findSuppressionInventoryFindings(file, text).map(
+    (finding) => `${finding.file}:${finding.line}: unreviewed suppression ${finding.kind}`,
+  )
+  if (!/\.[cm]?[jt]sx?$/.test(file)) return [...blanket, ...suppressions]
+  const sourceOnly = [
+    ...findPlatformDuplicationViolations(file, text),
+    ...findCoreFeatureIndependenceFindings(file, text),
+    ...findRetiredReconcilerFindings(file, text),
+    ...findCoreVendorModelPins(file, text),
+    ...findAliasTestLayers(file, text),
+    ...findE2eFixtureImportFindings(file, text),
+    ...findUnadmittedChildSessionWriters(file, text),
+    ...findIdentityEncodes(file, text),
+  ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
+  return [...blanket, ...suppressions, ...sourceOnly]
+}
+
+/** The findings that read the package manifests and the root tsconfig. */
+const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* () {
+  const packageJsonPaths = [
+    "packages/core/package.json",
+    "packages/core-internal/package.json",
+    "packages/extensions/package.json",
+    "packages/sdk/package.json",
+  ]
+  const [tsconfigJson, ...packageJsons] = yield* Effect.all(
+    [readJsonFile("tsconfig.json"), ...packageJsonPaths.map(readJsonFile)],
+    { concurrency: "unbounded" },
+  )
+  const packageJsonByPath = new Map<string, PackageJson>(
+    packageJsonPaths.map((path, index) => [path, packageJsons[index]]),
+  )
+  return findPackageSurfaceFindings(packageJsonByPath, tsconfigJson)
 })
 
 const program = Effect.gen(function* () {
@@ -73,36 +144,8 @@ const program = Effect.gen(function* () {
   for (const maybeEntry of textFiles) {
     if (Option.isNone(maybeEntry)) continue
     const { file, text } = maybeEntry.value
-
-    for (const finding of [
-      ...findBlanketEslintDisables(file, text),
-      ...findBannedEslintDisableBlocks(file, text),
-    ]) {
-      pushFailure(
-        `${finding.file}:${finding.line}: blanket eslint-disable comments and block eslint-disable comments are banned; use line-local suppressions with exact rules`,
-      )
-    }
-
-    for (const finding of findSuppressionInventoryFindings(file, text)) {
-      pushFailure(`${finding.file}:${finding.line}: unreviewed suppression ${finding.kind}`)
-    }
-
-    if (/\.[cm]?[jt]sx?$/.test(file)) {
-      for (const finding of [
-        ...findPlatformDuplicationViolations(file, text),
-        ...findCoreFeatureIndependenceFindings(file, text),
-        ...findRetiredReconcilerFindings(file, text),
-        ...findCoreVendorModelPins(file, text),
-        ...findAliasTestLayers(file, text),
-        ...findE2eFixtureImportFindings(file, text),
-        ...findUnadmittedChildSessionWriters(file, text),
-        ...findIdentityEncodes(file, text),
-      ]) {
-        pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-      }
-
-      collectWholeTreeFacts(file, text)
-    }
+    for (const failure of singleFileFailures(file, text)) pushFailure(failure)
+    if (/\.[cm]?[jt]sx?$/.test(file)) collectWholeTreeFacts(file, text)
   }
 
   for (const finding of findUnusedSuppressionApprovals(sourceTexts)) {
@@ -122,21 +165,17 @@ const program = Effect.gen(function* () {
     pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 
-  const packageJsonPaths = [
-    "packages/core/package.json",
-    "packages/core-internal/package.json",
-    "packages/extensions/package.json",
-    "packages/sdk/package.json",
-  ]
-  const [tsconfigJson, ...packageJsons] = yield* Effect.all(
-    [readJsonFile("tsconfig.json"), ...packageJsonPaths.map(readJsonFile)],
-    { concurrency: "unbounded" },
-  )
-  const packageJsonByPath = new Map<string, PackageJson>(
-    packageJsonPaths.map((path, index) => [path, packageJsons[index]]),
-  )
+  // A GENT_* variable whose writer left: its reader is a branch nothing takes.
+  for (const finding of findReadersWithoutWriters(sourceTexts)) {
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+  }
 
-  for (const finding of findPackageSurfaceFindings(packageJsonByPath, tsconfigJson)) {
+  // The lint config must not name a file or a rule that is gone.
+  for (const finding of yield* lintConfigFindings(trackedFiles, sourceTexts)) {
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+  }
+
+  for (const finding of yield* packageSurfaceFindings()) {
     pushFailure(`${finding.path}: ${finding.message}`)
   }
 

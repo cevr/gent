@@ -17,7 +17,6 @@ import {
   Runtime,
   Schema,
   Scope,
-  Tracer,
 } from "effect"
 import { clientTraceLogger } from "./utils/client-trace-logger"
 import { LinkOpener } from "./services/link-opener"
@@ -125,22 +124,6 @@ const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 // keeping it in the output context for downstream consumers.
 const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
 
-const resolveParentSpan = () =>
-  Effect.gen(function* () {
-    const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
-    const parentSpanIdOpt = yield* Config.option(Config.string("GENT_PARENT_SPAN_ID"))
-
-    if (!Option.isSome(traceIdOpt) || !Option.isSome(parentSpanIdOpt)) return Option.none()
-
-    return Option.some(
-      Tracer.externalSpan({
-        traceId: traceIdOpt.value,
-        spanId: parentSpanIdOpt.value,
-        sampled: true,
-      }),
-    )
-  })
-
 const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
@@ -174,7 +157,6 @@ const runHeadlessTurn = (
   })
 
   return Effect.gen(function* () {
-    const parentSpan = yield* resolveParentSpan()
     const toolRenderers = yield* Effect.promise(() =>
       loadExtensionUi(clientRuntime, {
         builtins: builtinClientModules,
@@ -200,7 +182,7 @@ const runHeadlessTurn = (
       ),
     )
 
-    const headlessEffect = runHeadless(
+    yield* runHeadless(
       bundle.client,
       state.session.id,
       resolvedBranchId,
@@ -209,10 +191,6 @@ const runHeadlessTurn = (
       Option.getOrUndefined(runSpec),
       toolRenderers,
     ).pipe(Effect.withSpan("Headless.run"))
-    yield* Option.match(parentSpan, {
-      onNone: () => headlessEffect,
-      onSome: (span) => headlessEffect.pipe(Effect.withParentSpan(span)),
-    })
   })
 }
 

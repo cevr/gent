@@ -69,7 +69,6 @@ const readTypeScriptConfig = (relativePath: string) =>
   )
 
 const LIVE_RULES_REQUIRING_FIXTURES = [
-  "gent/no-projection-writes",
   "gent/no-runpromise-outside-boundary",
   "gent/no-define-extension-throw",
 ] satisfies ReadonlyArray<string>
@@ -114,27 +113,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 1,
   },
   {
-    rule: "gent/no-r-equals-never-comment",
-    invalid: "no-r-equals-never-comment.invalid.ts",
-    valid: "no-r-equals-never-comment.valid.ts",
-  },
-  {
-    rule: "gent/brand-constructor-callers",
-    invalid: "brand-constructor-callers.invalid.ts",
-    valid: "brand-constructor-callers.valid.ts",
-  },
-  {
-    rule: "gent/no-scope-brand-cast",
-    invalid: "no-scope-brand-cast.invalid.ts",
-    valid: "no-scope-brand-cast.valid.ts",
-  },
-  {
-    rule: "gent/no-make-unsafe",
-    invalid: "no-make-unsafe.invalid.ts",
-    valid: "no-make-unsafe.valid.ts",
-    expectedCount: 3,
-  },
-  {
     rule: "gent/no-dynamic-imports",
     invalid: "no-dynamic-imports.invalid.ts",
     valid: "no-dynamic-imports.valid.ts",
@@ -151,13 +129,6 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.invalid.module.ts",
     valid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts",
     expectedCount: 10,
-  },
-  {
-    rule: "gent/no-projection-writes",
-    invalid: "no-projection-writes.invalid.ts",
-    valid: "no-projection-writes.valid.ts",
-    // 3 forms × 1 write each = 3 reports
-    expectedCount: 3,
   },
   {
     rule: "gent/no-bun-outside-adapter",

@@ -73,8 +73,26 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   },
   {
     pattern:
-      /\b(?:eraseLayer|restoreErasedLayer|ServerProfile|CwdProfile|EphemeralProfile|ServerProfileService)\b/,
+      /\b(?:eraseLayer|restoreErasedLayer|ServerProfile|CwdProfile|EphemeralProfile|ServerProfileService|brandServerScope|brandCwdScope|brandEphemeralScope)\b/,
     message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+  },
+  {
+    pattern: /\b(?:sdkBoundary|runSdkBoundary|SdkBoundary)\b/,
+    message: "The SdkBoundary brand is deleted; keep Promise edges in a *-boundary.ts file",
+  },
+  {
+    pattern: /\bGENT_(?:TRACE_ID|PARENT_SPAN_ID)\b/,
+    message:
+      "The subprocess trace handoff is deleted with its supervisor; nothing sets these variables",
+  },
+  {
+    pattern: /\b(?:positiveIntegerOr|tcpPortOr|knownModeOr|LaunchConfigError)\b/,
+    message: "Hand-written launch decoders are deleted; read the environment through LaunchConfig",
+  },
+  {
+    pattern: /\b(?:Any)?(?:Query|Capability)Contribution\b/,
+    message:
+      "Query/Capability contribution authoring is deleted; extensions contribute tools and requests",
   },
   {
     pattern: /\bProvider\.(?:Sequence|Signal|Debug|Failing)\b/,

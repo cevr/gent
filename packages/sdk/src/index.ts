@@ -13,16 +13,17 @@ export type {
   BranchTreeNode,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
+  GentClientRpcError,
+  Message,
+  MessageSegment,
+  ProjectedMessage,
   SteerCommand,
+  ToolInteraction,
 } from "@gent/core/protocol"
 
 // Client constructors
-export {
-  Gent,
-  type IdleShutdownSpec,
-  type GentClientRpcError,
-  type GentClientBundle,
-} from "./client.js"
+export { Gent, type GentClientBundle } from "./client.js"
+export type { IdleShutdownSpec } from "./server.js"
 
 // Namespaced client + runtime types
 export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
@@ -31,7 +32,7 @@ export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 export { probeServerLockEntryIdentity } from "./server.js"
 // Launch-value decoders: a launcher reads strings from its environment,
 // and these turn one into a value `Gent.server` accepts, or fail at startup.
-export { knownModeOr, positiveIntegerOr, tcpPortOr } from "./server.js"
+export { LaunchConfig } from "./server.js"
 // Server discovery: the shared lock file clients read to find a running server
 export {
   getLocalHostname,
@@ -45,9 +46,6 @@ export {
 // The log paths a client shares with its server, and the JSON line format both write
 export { buildLogPaths, classifyLogFile, ensureLogDir, LOG_DIR } from "./log-paths.js"
 export { makeJsonFileLogger } from "./logger.js"
-
-// Part types (re-exported from @gent/core)
-export type { Message, MessageSegment, ProjectedMessage, ToolInteraction } from "./client.js"
 
 // Utility functions
 export { extractText, extractReasoning, extractImages, type ImageInfo } from "./client.js"

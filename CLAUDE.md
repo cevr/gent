@@ -9,7 +9,6 @@ bun install
 bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean
 bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
-bun run test:diagnose # Print slowest chunks without failing on duration
 bun run smoke      # Headless mode smoke test
 bun run clean      # Remove dist and tsbuildinfo files
 ```
@@ -97,8 +96,7 @@ apps/server/             # BunHttpServer
 ## Testing
 
 ```bash
-bun run test              # unit/integration (~2s)
-bun run test:diagnose     # timing diagnostics; does not fail on duration
+bun run test              # unit/integration, one turbo task per package
 bun run test:e2e          # PTY + focused server-process lifecycle coverage (slow)
 bun run gate              # typecheck + lint + fmt + build + test
 ```
