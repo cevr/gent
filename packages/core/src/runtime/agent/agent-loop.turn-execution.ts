@@ -1271,6 +1271,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         while (true) {
           step++
           if (step > MAX_TURN_STEPS) {
+            // A turn that burns the whole step budget never reached an answer:
+            // every step it ran asked for more tools. Leaving the flags false
+            // publishes a `TurnCompleted` no caller can tell from a reply, and
+            // `headless-runner.ts` reads exactly that flag to pick its exit
+            // code, so `gent -H` would exit 0 having printed nothing.
+            unanswered = true
             yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
               Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
             )

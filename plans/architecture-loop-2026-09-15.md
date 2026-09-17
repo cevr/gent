@@ -1049,3 +1049,65 @@ would not make complexity reappear across callers, because the callers are one
 closure that already holds it. A future pass should not re-propose it.
 
 Gate `GATE EXIT 0` on the rift.
+
+## The prior-art comparison, and the one bug it found (2026-09-16)
+
+The goal asked to compare our loop against the priors and reduce it. The
+comparison is done. It did not produce a reduction; it produced a bug.
+
+**The ledger's LOC table from 2026-09-13 is wrong and should not be cited.**
+It lists pi's loop at 110 lines and exo's at 70. Measured directly:
+`pi/packages/agent/src/agent-loop.ts` is **803** lines,
+`prime-agent/packages/agent/src/agent-loop.ts` is **963**,
+`deepseek-harness/packages/core/agent-loop/src/agent.ts` is **619** (with a
+930-line `index.ts` beside it), and exo's `harness.ts` (162) is not a loop at
+all — it is prompt text that delegates to
+`exo/exoharness/typescript/model-runtime/turn-loop.ts`, **194** lines. The old
+table measured a single function and called it the loop. Every prior's real
+loop is within one order of magnitude of ours; none is 110 lines.
+
+**Our step policy already is the design the comparison recommends.**
+opencode-v2 is the closest prior and the best structured: `step.ts:32` declares
+a five-case `Data.TaggedEnum` `Outcome` (`Completed`/`Retry`/`Continue`/
+`RecoverFull`/`Compacted`), `step.ts` owns one attempt, and `llm.ts:266` owns
+policy as a `$match` over those cases. That split — classify once, match
+exhaustively, keep policy out of the attempt — is Rule 8, shipped:
+`classifyStep` at `agent-loop.turn-execution.ts:97` is a pure function over the
+collected response, and the two exhaustive `Match.tagsExhaustive` blocks
+(`:628` persistence, `:1197` policy) are its only readers. Ours is arguably
+tighter than the prior's: `classifyStep` takes no services and the tag travels
+on `StreamEnded.outcome`, so the boundary event carries the classification.
+There is nothing to copy back.
+
+**What the comparison did find: our step bound reports a lie.** opencode-v2
+handles its step ceiling by *re-prompting* — at `llm.ts:221` a reached limit
+appends `MAX_STEPS_PROMPT` and sets `toolChoice: "none"`, forcing the model to
+produce a text answer. Ours, at `agent-loop.turn-execution.ts:1273`, logged a
+warning and `break`. That exit left `interrupted`, `streamFailed` and
+`unanswered` all `false`, so `finalizeTurn` published a `TurnCompleted`
+indistinguishable from an ordinary reply. `headless-runner.ts:122` picks its
+exit code from exactly that field — `Deferred.succeed(done, event.unanswered
+!== true)` — so `gent -H` against a model that asks for tools forever exited
+**0 having printed nothing**.
+
+This is the same failure `agent-loop-empty-final-step.test.ts` was written to
+prevent, at the other exit from the same loop. The three `MAX_TURN_STEPS` sites
+(`:467` external, `:862` replay scan, `:1273` runaway) had no test between
+them.
+
+The fix sets `unanswered = true` at the runaway break. The receipt now
+distinguishes a turn that gave up from a turn that replied, which is all the
+flag has ever meant.
+
+The probe: `agent-loop-max-steps.test.ts` drives an always-tool-call model
+through the full budget. With the fix, 1 pass — the wide event records
+`toolCallCount: 200, unanswered: true`. With the fix reverted and nothing else
+changed, it fails on the flag: `Expected: true, Received: false`.
+
+Not adopted: opencode's re-prompt-with-tools-disabled. It is the better product
+behaviour, but it needs a per-step `toolChoice` seam that `ResolvedTurnContext`
+does not carry (`turn-resolve.ts:251`), and the honest receipt is the
+prerequisite either way. Recorded here so a later pass can take it up knowing
+the seam is the work, not the prompt.
+
+Gate `GATE EXIT 0` on the rift.

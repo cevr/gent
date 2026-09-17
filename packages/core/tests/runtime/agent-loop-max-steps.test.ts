@@ -1,0 +1,78 @@
+/**
+ * A turn that spends the whole step budget must not report success.
+ *
+ * `runTurn` bounds a turn at `MAX_TURN_STEPS` so a model that asks for tools
+ * forever cannot run without end. That exit left `interrupted`, `streamFailed`
+ * and `unanswered` all false, so the turn published a `TurnCompleted` that
+ * reads exactly like an ordinary reply. `headless-runner.ts:122` picks its exit
+ * code from `event.unanswered !== true`, so `gent -H` against a looping model
+ * exited 0 having printed no answer at all.
+ *
+ * Same failure as `agent-loop-empty-final-step.test.ts` guards, at the other
+ * exit from the same loop: a turn that gave up must say so.
+ */
+
+import { describe, expect, it } from "effect-bun-test"
+import { Effect, Ref, Schema, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { LanguageModelLayers, finishPart, toolCallPart } from "../../src/test-utils/language-model"
+import { dateFromMillis, Message } from "../../src/domain/message"
+import { tool } from "@gent/core/extensions/api"
+import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
+import type { AgentEvent } from "../../src/domain/event"
+import { makeAgentLoopService, makeLayerWithEvents, runAgentLoop } from "./agent-loop/helpers"
+
+describe("max turn steps", () => {
+  const sessionId = SessionId.make("max-steps-session")
+  const branchId = BranchId.make("max-steps-branch")
+
+  const userMessage = (text: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make("max-steps-msg-0"),
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(1_767_225_600_000),
+    })
+
+  const echoTool = tool({
+    id: "echo",
+    description: "Echoes input",
+    params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
+    execute: (params) => Effect.succeed({ text: params.text }),
+  })
+
+  /**
+   * A model that asks for the same tool on every step and never answers. Real
+   * providers stop on their own; this one does not, which is the case the step
+   * bound exists for.
+   */
+  const alwaysToolCalls = LanguageModelLayers.testStream(() =>
+    Effect.succeed(
+      Stream.make(
+        toolCallPart("echo", { text: "again" }),
+        finishPart({ finishReason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+      ),
+    ),
+  )
+
+  it.live("a turn that spends the whole step budget is marked unanswered", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("loop forever"))
+
+        const events = yield* Ref.get(eventsRef)
+        const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+        expect(turnCompleted.length).toBeGreaterThan(0)
+        // Without the flag this reads as a successful turn with an empty
+        // transcript, and headless mode exits 0 on it.
+        expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
+    }),
+  )
+})
