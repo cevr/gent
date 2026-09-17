@@ -14,7 +14,11 @@ import {
 } from "@gent/core-internal/test-utils/language-model.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures.js"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness.js"
+import {
+  testLeafContext,
+  testToolContext,
+} from "@gent/core-internal/test-utils/extension-harness.js"
+import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,
   main,
@@ -28,6 +32,12 @@ const systemText = (prompt: Prompt.Prompt): string =>
     .filter((message): message is Prompt.SystemMessage => message.role === "system")
     .map((message) => message.content)
     .join("\n")
+
+/** The helpers read the paths and Files facade off the context, as a turn does. */
+const instructionsIn = (home: string, cwd: string) =>
+  readProjectInstructions().pipe(
+    Effect.provideService(ExtensionContext, testLeafContext(testToolContext({ home, cwd }))),
+  )
 
 const writeFile = (path: string, content: string) =>
   Effect.gen(function* () {
@@ -63,8 +73,7 @@ describe("project instructions", () => {
       yield* writeFile(`${home}/.gent/AGENTS.md`, "home rules\n")
       yield* writeFile(`${cwd}/CLAUDE.md`, "project rules")
       yield* writeFile(`${cwd}/.gent/AGENTS.md`, "local rules")
-      const files = testToolContext({ home, cwd }).Files
-      expect(yield* readProjectInstructions(files, { cwd, home })).toBe(
+      expect(yield* instructionsIn(home, cwd)).toBe(
         "home rules\n---\nproject rules\n---\nlocal rules",
       )
     }).pipe(Effect.provide(BunFileSystem.layer)),
@@ -76,8 +85,7 @@ describe("project instructions", () => {
       const cwd = yield* makeTempDirectoryScoped("instructions-cwd-")
       yield* writeFile(`${cwd}/AGENTS.md`, "  \n")
       yield* writeFile(`${cwd}/CLAUDE.md`, "fallback rules")
-      const files = testToolContext({ home, cwd }).Files
-      expect(yield* readProjectInstructions(files, { cwd, home })).toBe("fallback rules")
+      expect(yield* instructionsIn(home, cwd)).toBe("fallback rules")
     }).pipe(Effect.provide(BunFileSystem.layer)),
   )
 
@@ -86,10 +94,9 @@ describe("project instructions", () => {
       const home = yield* makeTempDirectoryScoped("instructions-home-")
       const cwd = yield* makeTempDirectoryScoped("instructions-cwd-")
       yield* writeFile(`${home}/.claude/CLAUDE.md`, "global rules")
-      const files = testToolContext({ home, cwd }).Files
-      expect(yield* readProjectInstructions(files, { cwd, home })).toBe("global rules")
+      expect(yield* instructionsIn(home, cwd)).toBe("global rules")
       yield* writeFile(`${cwd}/AGENTS.md`, "project rules")
-      expect(yield* readProjectInstructions(files, { cwd, home })).toBe("project rules")
+      expect(yield* instructionsIn(home, cwd)).toBe("project rules")
     }).pipe(Effect.provide(BunFileSystem.layer)),
   )
 
@@ -97,8 +104,7 @@ describe("project instructions", () => {
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("instructions-home-")
       const cwd = yield* makeTempDirectoryScoped("instructions-cwd-")
-      const files = testToolContext({ home, cwd }).Files
-      const text = yield* readProjectInstructions(files, { cwd, home })
+      const text = yield* instructionsIn(home, cwd)
       expect(text).toBe("")
       expect(projectInstructionsSection(text)).toEqual([])
     }).pipe(Effect.provide(BunFileSystem.layer)),
