@@ -5,7 +5,7 @@ import { Match } from "effect"
  * - `padded`: whole seconds under a minute, then `2m05s` (fixed-width detail rows).
  * - `precise`: `12ms` under a second, tenths under a minute, then `2m 5s` (tool receipts).
  */
-export type DurationStyle = "compact" | "padded" | "precise"
+type DurationStyle = "compact" | "padded" | "precise"
 
 const wholeSeconds = (ms: number): number => Math.floor(ms / 1000)
 

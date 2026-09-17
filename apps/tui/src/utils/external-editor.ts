@@ -31,7 +31,7 @@ const EditorProcessOutcome = Schema.TaggedUnion({
   SpawnError: { message: Schema.String },
 })
 
-export type EditorResult =
+type EditorResult =
   | { _tag: "applied"; content: string }
   | { _tag: "cancelled" }
   | { _tag: "error"; message: string }

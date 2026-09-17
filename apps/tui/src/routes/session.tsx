@@ -46,7 +46,7 @@ import { useClient } from "../client/index"
 import { Auth } from "./auth"
 import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.js"
 
-export interface SessionProps {
+interface SessionProps {
   sessionId: SessionId
   branchId: BranchId
   /** Branches to dock the picker over at boot; `None` resumes straight in. */

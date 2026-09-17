@@ -21,7 +21,7 @@ import {
   type PromptSearchState,
 } from "./prompt-search-state"
 
-export interface PromptSearchPaletteProps {
+interface PromptSearchPaletteProps {
   state: PromptSearchState
   entries: readonly string[]
   onEvent: (event: PromptSearchEvent) => void

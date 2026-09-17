@@ -8,7 +8,7 @@
 import { renderMermaidASCII, type AsciiRenderOptions } from "beautiful-mermaid"
 import { Effect, Option, Schema } from "effect"
 
-export interface MermaidBlock {
+interface MermaidBlock {
   /** Original mermaid source code */
   source: string
   /** Start index in the original text */

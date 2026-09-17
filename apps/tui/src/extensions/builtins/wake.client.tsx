@@ -38,7 +38,7 @@ export const formatRemaining = (millis: number): string => {
   return `${rest}s`
 }
 
-export interface WakeTrayLine {
+interface WakeTrayLine {
   readonly glyph: string
   readonly text: string
 }

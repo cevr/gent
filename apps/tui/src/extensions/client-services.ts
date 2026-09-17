@@ -105,7 +105,7 @@ export const makeClientLifecycleLayer = (
 
 type ActiveClientSession = NonNullable<ReturnType<ClientTransportDefinition["currentSession"]>>
 
-export interface ClientSessionResource<A> {
+interface ClientSessionResource<A> {
   // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
   readonly read: () => A | undefined
   readonly refetch: () => void
@@ -126,7 +126,7 @@ export interface ClientSessionResource<A> {
  * clears the load state, or a pane that lost a race would say "loading" until
  * the next refresh.
  */
-export interface ClientSessionQuery<A, Q> {
+interface ClientSessionQuery<A, Q> {
   readonly value: () => A
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean

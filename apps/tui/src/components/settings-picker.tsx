@@ -8,7 +8,7 @@ import { truncate } from "../utils/truncate"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 
 /** One selectable row: the id goes back to the caller, name and detail render. */
-export interface PickerRow {
+interface PickerRow {
   readonly id: string
   readonly name: string
   readonly detail: string
@@ -40,7 +40,7 @@ export const filterRows = (rows: readonly PickerRow[], query: string): readonly 
   )
 }
 
-export interface SettingsPickerProps {
+interface SettingsPickerProps {
   open: boolean
   title: string
   rows: readonly PickerRow[]

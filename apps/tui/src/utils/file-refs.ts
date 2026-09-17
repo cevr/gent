@@ -5,7 +5,7 @@
 
 import { FileSystem, Effect, Option, Path } from "effect"
 
-export interface FileRef {
+interface FileRef {
   path: string
   startLine?: number
   endLine?: number

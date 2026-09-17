@@ -65,7 +65,7 @@ export function formatToolInput(
 // ── RLM activity summary ──
 // The collapsed transcript group describes what the cell did, not that a tool ran.
 
-export type ActivityOutcome = "succeeded" | "failed" | "incomplete" | "running"
+type ActivityOutcome = "succeeded" | "failed" | "incomplete" | "running"
 
 export interface ActivityOperation {
   readonly tool: string
@@ -259,7 +259,7 @@ export const formatAge = (ms: number): string => {
   return `${Math.floor(hours / 24)}d`
 }
 
-export interface OutputPreview {
+interface OutputPreview {
   readonly lines: readonly string[]
   readonly hidden: number
 }

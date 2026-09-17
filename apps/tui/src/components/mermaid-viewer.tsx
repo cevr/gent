@@ -15,7 +15,7 @@ import {
   transitionMermaidViewer,
 } from "./mermaid-viewer-state"
 
-export interface MermaidDiagram {
+interface MermaidDiagram {
   source: string
   rendered: string
 }

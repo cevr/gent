@@ -32,7 +32,7 @@ import { AuthAuthorization, AuthMethod, AuthProviderInfo } from "@gent/core/prot
  * screen: a provider's `hasKey` changes under a screen that is already
  * open, and the screen should not show a stale copy.
  */
-export interface AuthCatalog {
+interface AuthCatalog {
   readonly providers: ReadonlyArray<AuthProviderInfo>
   readonly methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>
 }
@@ -61,7 +61,7 @@ const AuthScreen = Schema.TaggedUnion({
     waiting: Schema.Boolean,
   },
 })
-export type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
+type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
 
 export interface AuthState {
   /**

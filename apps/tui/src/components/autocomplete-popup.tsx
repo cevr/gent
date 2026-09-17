@@ -29,7 +29,7 @@ import { Option } from "effect"
 
 export type { AutocompleteState }
 
-export interface AutocompletePopupProps {
+interface AutocompletePopupProps {
   state: AutocompleteState
   /**
    * Enter on the selected row. A slash command name completed this way runs;

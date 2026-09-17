@@ -45,9 +45,9 @@ const PromptSearchEffect = Schema.TaggedUnion({
   Preview: { text: Schema.String },
   Close: {},
 })
-export type PromptSearchEffect = Schema.Schema.Type<typeof PromptSearchEffect>
+type PromptSearchEffect = Schema.Schema.Type<typeof PromptSearchEffect>
 
-export interface PromptSearchTransitionResult {
+interface PromptSearchTransitionResult {
   readonly state: PromptSearchState
   readonly effects: readonly PromptSearchEffect[]
 }

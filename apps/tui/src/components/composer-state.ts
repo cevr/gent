@@ -40,7 +40,7 @@ export type ComposerEffect = {
   readonly result: ApprovalResult
 }
 
-export interface TransitionResult {
+interface TransitionResult {
   readonly state: ComposerState
   readonly effect?: ComposerEffect
 }

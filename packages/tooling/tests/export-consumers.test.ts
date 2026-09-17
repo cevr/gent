@@ -180,12 +180,13 @@ describe("the TUI app surface", () => {
     ).toEqual([])
   })
 
-  test("a TUI export nothing reaches is reported", () => {
+  test("a TUI export nothing reaches is reported and fails the guard", () => {
     const findings = findingsFor([
       { file: TUI_FILE, text: `export const formatTokens = 1\nexport const orphan = 2\n` },
       { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils/format-tool"\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
+    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`orphan`")
   })
 

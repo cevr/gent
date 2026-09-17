@@ -3,7 +3,7 @@ import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { getSessionEventLabel, type SessionEvent } from "./session-event-label"
 import { DateTime } from "effect"
 
-export interface SessionEventIndicatorProps {
+interface SessionEventIndicatorProps {
   event: SessionEvent
 }
 

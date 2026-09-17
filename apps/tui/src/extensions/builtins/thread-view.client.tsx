@@ -249,7 +249,7 @@ interface Loaded {
   readonly windows: ReadonlyArray<ThreadWindow>
 }
 
-export interface ThreadController {
+interface ThreadController {
   readonly windows: () => ReadonlyArray<ThreadWindow>
   readonly sessions: () => number
   readonly current: () => Option.Option<{ sessionId: string; branchId: string }>
@@ -334,7 +334,7 @@ export const makeThreadController = (
 }
 
 /** The list as drawn: a heading opens each session, windows keep their index for selection. */
-export type ThreadItem =
+type ThreadItem =
   | { readonly kind: "heading"; readonly sessionName: string; readonly count: number }
   | { readonly kind: "window"; readonly window: ThreadWindow; readonly index: number }
 

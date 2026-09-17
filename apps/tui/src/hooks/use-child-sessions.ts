@@ -18,7 +18,7 @@ import type { ClientContextValue } from "../client/context"
 // Re-export types for consumers
 export type { ChildToolCall, ChildSessionEntry }
 
-export interface UseChildSessionsReturn {
+interface UseChildSessionsReturn {
   getChildren: (toolCallId: string) => ChildSessionEntry[]
 }
 

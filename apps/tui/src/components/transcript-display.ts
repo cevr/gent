@@ -16,7 +16,7 @@ interface MessageBoundary {
   readonly tools: ReadonlyMap<string, string>
 }
 
-export interface TranscriptDisplayBoundary {
+interface TranscriptDisplayBoundary {
   readonly items: ReadonlySet<string>
   readonly messages: ReadonlyMap<string, MessageBoundary>
 }

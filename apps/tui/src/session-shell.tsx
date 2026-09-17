@@ -26,14 +26,14 @@ import { Option } from "effect"
 import type { SessionId } from "@gent/core/protocol"
 import { useRequiredContext } from "./utils/solid-context"
 
-export interface SessionShellValue {
+interface SessionShellValue {
   /** The `-p` prompt, if this is the session the startup flags named. */
   readonly promptFor: (sessionId: SessionId) => Option.Option<string>
 }
 
 const SessionShellContext = createContext<SessionShellValue>()
 
-export interface SessionShellProviderProps {
+interface SessionShellProviderProps {
   readonly initialPrompt: Option.Option<string>
   /** The session the startup flags resolved to, if there was one. */
   readonly initialSessionId: Option.Option<SessionId>

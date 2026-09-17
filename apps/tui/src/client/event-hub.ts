@@ -1,14 +1,14 @@
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import type { ClientLog } from "../utils/client-logger"
 
-export type ExtensionStatePulse = {
+type ExtensionStatePulse = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly extensionId: string
 }
 
-export type ExtensionPulseCallback = (pulse: ExtensionStatePulse) => void
-export type SessionEventCallback = (envelope: EventEnvelope) => void
+type ExtensionPulseCallback = (pulse: ExtensionStatePulse) => void
+type SessionEventCallback = (envelope: EventEnvelope) => void
 
 const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
 type ThrownInput = Parameters<typeof decodeError>[0]

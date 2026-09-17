@@ -19,7 +19,7 @@ export const herdrEnvironment = Config.all({
   }),
 )
 
-export interface HerdrTarget {
+interface HerdrTarget {
   readonly socketPath: string
   readonly paneId: string
 }

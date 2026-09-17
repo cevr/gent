@@ -76,7 +76,7 @@ const runWithReconnect = <E, R>(
 
 // ── Types ──
 
-export interface SessionFeedCallbacks {
+interface SessionFeedCallbacks {
   onInteraction: (interaction: ActiveInteraction) => void
   onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
@@ -85,7 +85,7 @@ export interface SessionFeedCallbacks {
 
 type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCallFailed" }>
 
-export interface SessionFeed {
+interface SessionFeed {
   items: () => SessionItem[]
   messages: () => Message[]
   turnCount: () => number

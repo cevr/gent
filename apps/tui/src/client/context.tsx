@@ -36,7 +36,7 @@ import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { createClientEventHub } from "./event-hub"
 
-export interface AgentLifecycleUpdate {
+interface AgentLifecycleUpdate {
   readonly status?: AgentStatus
 }
 

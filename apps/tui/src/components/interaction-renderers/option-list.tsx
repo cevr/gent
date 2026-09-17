@@ -16,7 +16,7 @@ import { textWidth } from "../../platform/text-width-adapter"
 
 const markdownSyntaxStyle = SyntaxStyle.create()
 
-export interface OptionListProps {
+interface OptionListProps {
   readonly header?: string
   readonly question: string
   readonly markdown?: string

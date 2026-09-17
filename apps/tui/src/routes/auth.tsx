@@ -50,7 +50,7 @@ import {
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
 import { useTerminalDimensions } from "../terminal-dimensions"
 
-export interface AuthProps {
+interface AuthProps {
   // eslint-disable-next-line effect/noNullish -- route props omit a session outside an active session.
   sessionId?: SessionId
   // eslint-disable-next-line effect/noNullish -- route props omit this policy when it is not enforced.

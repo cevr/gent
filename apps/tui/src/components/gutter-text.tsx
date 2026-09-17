@@ -14,7 +14,7 @@
 import { For } from "solid-js"
 import { useTheme } from "../theme/index"
 
-export interface GutterTextProps {
+interface GutterTextProps {
   /** Lines to display */
   lines: string[]
   /** Starting line number (1-based). Default: 1 */

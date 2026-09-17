@@ -10,7 +10,7 @@ import { KeyboardScopeProvider, useScopedKeyboard } from "./keyboard/context"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./env/context"
 
-export interface AppProps {
+interface AppProps {
   missingAuthProviders?: readonly string[]
   debugMode?: boolean
   initialThemeMode?: "dark" | "light"

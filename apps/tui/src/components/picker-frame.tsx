@@ -55,7 +55,7 @@ export const pickerLines = (drawnItems: number, extraLines: number): number => {
  * terminal, and a row that fills its last column wraps the tail — a
  * right-aligned age lands on a line of its own.
  */
-export interface PickerGeometry {
+interface PickerGeometry {
   /**
    * Columns a row may use: the list body pads 1 each side and the row itself
    * pads 1 more on the left, so a row spends 3 of the rule's columns.

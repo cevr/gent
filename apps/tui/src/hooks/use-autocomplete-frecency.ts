@@ -40,7 +40,7 @@ import { useRuntime } from "./use-runtime"
 /** Wall-clock millis, in the house style for a Solid callback outside Effect. */
 const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
-export interface AutocompleteFrecency {
+interface AutocompleteFrecency {
   /** The reader's decayed pick weights, fixed at the moment of the call. */
   readonly lookup: () => FrecencyLookup
   /** Records that the reader chose `id` from the `prefix` popup. */

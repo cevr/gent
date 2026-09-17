@@ -22,7 +22,7 @@ import {
   makeClientWorkspaceLayer,
 } from "./client-services"
 
-export interface ClientRuntimeDeps {
+interface ClientRuntimeDeps {
   readonly transport: ClientShellTransportDefinition
   readonly workspace: ClientWorkspaceDefinition
   /** `run`/`cast` are required; every UI callback defaults to a no-op. */

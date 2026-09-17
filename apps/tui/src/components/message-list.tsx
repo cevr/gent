@@ -135,7 +135,7 @@ const rowCounts = (call: ToolCall): string => {
   })
 }
 
-export interface MessageMetadataInfo {
+interface MessageMetadataInfo {
   customType?: string
   extensionId?: string
   hidden?: boolean
@@ -148,7 +148,7 @@ export type AssistantSegment =
   | { _tag: "tool-call"; toolCall: ToolCall }
   | { _tag: "image"; image: ImageInfo }
 
-export interface MessageBase {
+interface MessageBase {
   id: string
   role: "user" | "assistant" | "system" | "tool"
   pendingMode?: "queued" | "steer"
@@ -165,11 +165,11 @@ export interface MessageBase {
   metadata?: MessageMetadataInfo
 }
 
-export interface RegularMessage extends MessageBase {
+interface RegularMessage extends MessageBase {
   _tag: "regular-message"
 }
 
-export interface InterjectionMessage extends MessageBase {
+interface InterjectionMessage extends MessageBase {
   _tag: "interjection-message"
   role: "user"
 }

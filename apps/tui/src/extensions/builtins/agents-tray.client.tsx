@@ -20,7 +20,7 @@ import { workingIconFrame } from "../../components/message-list-utils"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import type { AgentsController } from "./agents-view.client"
 
-export interface SubtreeCounts {
+interface SubtreeCounts {
   readonly total: number
   readonly running: number
   readonly idle: number

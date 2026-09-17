@@ -13,7 +13,7 @@ interface PromptSearchOverlayState {
   readonly state: PromptSearchState
 }
 
-export type SessionOverlayState =
+type SessionOverlayState =
   | { readonly _tag: "none" }
   | { readonly _tag: "fork"; readonly messages: readonly Message[] }
   | { readonly _tag: "mermaid" }
@@ -79,7 +79,7 @@ export type SessionUiEvent = Schema.Schema.Type<typeof SessionUiEvent>
 
 export type SessionUiEffect = { readonly _tag: "RestoreComposer"; readonly text: string }
 
-export interface SessionUiTransitionResult {
+interface SessionUiTransitionResult {
   readonly state: SessionUiState
   readonly effects: readonly SessionUiEffect[]
 }

@@ -17,7 +17,7 @@ export interface Command {
   onSlash?: (args: string) => void
 }
 
-export interface Keybind {
+interface Keybind {
   key: string
   ctrl: boolean
   shift: boolean

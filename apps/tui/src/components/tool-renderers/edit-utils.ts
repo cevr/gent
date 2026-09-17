@@ -31,7 +31,7 @@ export function getFiletype(path: string): string | undefined {
 /**
  * Count lines added/removed from old and new strings
  */
-export interface DiffLineCount {
+interface DiffLineCount {
   readonly added: number
   readonly removed: number
 }
@@ -56,7 +56,7 @@ export function countDiffLines(oldStr: string, newStr: string): DiffLineCount {
   return { added: changed, removed: changed }
 }
 
-export interface EditDiffResult {
+interface EditDiffResult {
   diff: string
   // eslint-disable-next-line effect/noNullish -- syntax highlighting has no filetype for unknown extensions.
   filetype: string | undefined

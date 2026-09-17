@@ -33,7 +33,7 @@ import { useScopedKeyboard } from "../../keyboard/context"
 
 const BTW_OVERLAY_ID = "btw"
 
-export interface SideQuestionPaneState {
+interface SideQuestionPaneState {
   readonly turns: ReadonlyArray<SideTurnType>
   readonly pending: Option.Option<string>
   /** Answer text streamed so far for the pending question. */
@@ -48,7 +48,7 @@ const emptyPane: SideQuestionPaneState = {
   error: Option.none(),
 }
 
-export interface SideQuestionPaneController {
+interface SideQuestionPaneController {
   readonly state: () => SideQuestionPaneState
   readonly ask: (question: string) => void
   /** Applies the server's view of the run: streamed text, the answer, or an error. */
