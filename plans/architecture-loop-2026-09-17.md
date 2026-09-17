@@ -89,3 +89,21 @@ wiring, one-adapter seams (all guarded), SDK wrappers, tooling guards, e2e fixtu
 Noted, not changed: `dbPath` has two defaults (`packages/sdk/src/server.ts:263`
 absolute, `packages/core/src/server/dependencies.ts:126` relative); only test
 compositions reach the core default.
+
+### Pass 2, the loop (`plans/loop-review-pass2-2026-09-17.md`)
+
+Candidates P1 to P11 (step address, duplicate `resolveTurnContext` call, actor
+lifecycle as one tagged Ref, `Object.assign` field building, a one-caller
+wrapper, eight error-mapping blocks, history comments, single-caller exports,
+`ToolRunner.Test`, the tri-state `interactive`) are with the agent on
+`arch-loop2`. P12 (one `LoopInbox` module for about 715 lines of queue code
+spread over four files; opencode `inbox.ts` and codex `input_queue.rs` both have
+this shape) waits until P1 to P11 land.
+
+Owner decision, not taken: no prior art persists a step position or replays
+in-flight tool calls. Dropping exact mid-turn resume for "replay the transcript
+and nudge" would remove about 200 lines of `agent-loop.turn-execution.ts`. It is
+a capability trade, so it stays.
+
+Measured sizes: pi `runLoop` 118 lines (no persistence); opencode v2 5,064 lines
+with its durable layer; codex 8,891; gent 8,368.
