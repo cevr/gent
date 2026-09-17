@@ -34,10 +34,8 @@ import {
   type CollectedTurnResponse,
   collectExternalTurnResponse,
   collectModelTurnResponse,
-  emptyTurnMetrics,
   isObservableModelOutputPart,
   makeActiveStreamHandle,
-  type TurnMetrics,
 } from "./turn-response.js"
 import {
   type AssistantResponsePart,
@@ -70,6 +68,7 @@ import {
 import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import { resolveReplayToolBinding } from "./tool-binding-resolution.js"
 import type { TurnInterruption } from "./turn-interruption.js"
+import type { TurnLedger } from "./turn-ledger.js"
 import {
   computeStreamEndedCost,
   type ExternalToolPersistence,
@@ -161,12 +160,32 @@ const StepResult = Schema.TaggedUnion({
 })
 type StepResult = Schema.Schema.Type<typeof StepResult>
 
+/**
+ * End the turn after this step. The three flags default to false, so a caller
+ * names only the one that happened — and a step that simply finished names
+ * none.
+ */
+const endStep = (
+  currentTurnAgent: AgentNameType,
+  reason: {
+    readonly interrupted?: boolean
+    readonly streamFailed?: boolean
+    readonly unanswered?: boolean
+  },
+) =>
+  StepResult.cases.Stop.make({
+    currentTurnAgent,
+    interrupted: reason.interrupted ?? false,
+    streamFailed: reason.streamFailed ?? false,
+    unanswered: reason.unanswered ?? false,
+  })
+
 type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
-  readonly turnMetricsRef: Ref.Ref<TurnMetrics>
+  readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
   readonly clearInFlightTurn: (
     messageId: QueuedTurnItem["message"]["id"],
@@ -230,9 +249,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * The turn's durable position.
      *
      * One row per turn, keyed by the user message that opened it. The row is
-     * written at each step boundary in the same transaction as that step's
-     * messages, so a resumed turn reads one row instead of probing derived
-     * message ids.
+     * written at each step boundary, after that step's messages and in its own
+     * transaction, so a resumed turn reads one row instead of probing derived
+     * message ids. A crash between the two writes leaves the row behind the
+     * messages, so every read confirms it against them.
      */
     const turnRecordKey = (messageId: RunningState["message"]["id"]) => ({
       sessionId: scope.sessionId,
@@ -607,26 +627,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             toolCallCount,
           }),
         )
-        const usableCount = (count: number) => Number.isSafeInteger(count) && count >= 0
-        yield* Ref.update(scope.turnMetricsRef, (m) => {
-          const totalInput = m.inputTokens + inputTokens
-          const totalOutput = m.outputTokens + outputTokens
-          return {
-            ...m,
-            agent: params.resolved.currentTurnAgent,
-            model: params.resolved.modelId,
-            inputTokens: totalInput,
-            outputTokens: totalOutput,
-            toolCallCount: m.toolCallCount + toolCallCount,
-            steps: m.steps + 1,
-            usageKnown:
-              m.usageKnown &&
-              Option.isSome(usage) &&
-              usableCount(inputTokens) &&
-              usableCount(outputTokens) &&
-              usableCount(totalInput) &&
-              usableCount(totalOutput),
-          }
+        yield* scope.turnLedger.noteStep({
+          agent: params.resolved.currentTurnAgent,
+          model: params.resolved.modelId,
+          usage,
+          toolCallCount,
         })
         yield* persistAssistantPartsWithBindingsAt(responseStep, assistantParts)
         const stepToolCalls = assistantParts.filter(
@@ -734,7 +739,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       turnInterrupted: boolean
       streamFailed: boolean
       unanswered: boolean
-      currentAgent: AgentNameType
+      turnAgent: AgentNameType
     }) {
       const extensionRegistry = yield* ExtensionRegistry
       const existingMessage = yield* messageStorage.getMessage(params.messageId)
@@ -754,7 +759,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
-      const metrics = yield* Ref.get(scope.turnMetricsRef)
+      const metrics = yield* scope.turnLedger.total
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
@@ -787,7 +792,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         durationMs: Number(turnDurationMs),
-        agentName: params.currentAgent,
+        agentName: params.turnAgent,
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
         usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
@@ -844,7 +849,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const resolved = yield* resolveTurnContext({
           agentOverride: params.state.agentOverride,
           runSpec: params.state.runSpec,
-          currentAgent: params.state.currentAgent,
           branchId: scope.branchId,
           sessionId: scope.sessionId,
           baseSections: params.turnProfile.turnBaseSections,
@@ -899,7 +903,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }
         }
       } else if (record.step > 0 || record.continuations > 0) {
-        return { ...noPendingStep, step: record.step }
+        // The row names no unsettled call. That is only true if the next step
+        // never committed its messages: the row is written after them, and in
+        // its own transaction, so a crash in between leaves a step's assistant
+        // message durable while the row still names the step before it. Ask
+        // the messages before believing the row, exactly as the branch above
+        // does — otherwise the probe is skipped and the turn re-issues a step
+        // whose tool calls are already on disk and will never be answered.
+        const nextAssistant = yield* messageStorage.getMessage(
+          assistantMessageIdForTurn(messageId, record.step + 1),
+        )
+        if (Predicate.isUndefined(nextAssistant)) {
+          return { ...noPendingStep, step: record.step }
+        }
       }
 
       // No usable row. Derive the position from the messages once, then adopt
@@ -1149,31 +1165,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const resolved = yield* resolveTurnContext({
         agentOverride: params.state.agentOverride,
         runSpec: params.state.runSpec,
-        currentAgent: params.state.currentAgent,
         branchId: scope.branchId,
         sessionId: scope.sessionId,
         baseSections: params.turnProfile.turnBaseSections,
         interactive: params.state.interactive,
       })
-      const stopWith = (
-        currentTurnAgent: AgentNameType,
-        flags: { interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean },
-      ) =>
-        StepResult.cases.Stop.make({
-          currentTurnAgent,
-          interrupted: false,
-          streamFailed: false,
-          unanswered: false,
-          ...flags,
-        })
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.
       if (Predicate.isUndefined(resolved)) {
-        return stopWith(params.currentTurnAgent, { unanswered: true })
+        return endStep(params.currentTurnAgent, { unanswered: true })
       }
 
       const currentTurnAgent = resolved.currentTurnAgent
+      const stop = (reason: {
+        readonly interrupted?: boolean
+        readonly streamFailed?: boolean
+        readonly unanswered?: boolean
+      }) => endStep(currentTurnAgent, reason)
+      const proceed = StepResult.cases.Continue.make({ currentTurnAgent })
+
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
         // Only reachable when the final step said nothing at all: it ran with
@@ -1184,7 +1195,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )
-        return stopWith(currentTurnAgent, { unanswered: true })
+        return stop({ unanswered: true })
       }
       // The last step the budget allows. Rather than cut the turn off mid-plan,
       // tell the model its tools are gone and let it spend this step writing
@@ -1208,14 +1219,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
       }
       if (params.step === 1) {
-        yield* Ref.update(scope.turnMetricsRef, (m) => ({
-          ...m,
-          agent: currentTurnAgent,
-          model: resolved.modelId,
-        }))
+        yield* scope.turnLedger.noteModel({ agent: currentTurnAgent, model: resolved.modelId })
       }
       if (yield* scope.turnInterruption.interrupted) {
-        return stopWith(currentTurnAgent, { interrupted: true })
+        return stop({ interrupted: true })
       }
 
       const attempt = yield* Effect.scoped(
@@ -1246,12 +1253,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         })
       }
       const { collected, outcome } = attempt.success
-      const stop = (flags: {
-        interrupted?: boolean
-        streamFailed?: boolean
-        unanswered?: boolean
-      }) => stopWith(currentTurnAgent, flags)
-      const proceed = StepResult.cases.Continue.make({ currentTurnAgent })
       // Whatever the model did produce stays; a durable instruction follows it
       // and the same turn runs one more step. Once the budget is spent, stop.
       const continueOr = (instruction: string, otherwise: StepResult) =>
@@ -1325,7 +1326,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
-      yield* Ref.set(scope.turnMetricsRef, emptyTurnMetrics())
+      yield* scope.turnLedger.beginTurn
       const cancelled = yield* operations
         .isTurnCancelled({
           sessionId: scope.sessionId,
@@ -1352,65 +1353,59 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
 
       let preserveReplayBindings = false
+      const turnAgent = state.agentOverride ?? DEFAULT_AGENT_NAME
+
+      /**
+       * Run model steps until one says stop, the branch is interrupted, or a
+       * tool parks the turn on an interaction.
+       *
+       * Returns the `Stop` that ends the turn, or the `Interaction` that
+       * suspends it. Everything `finalizeTurn` needs already rides on `Stop`,
+       * so the loop hands that value up instead of unpacking it into flags.
+       */
+      const runSteps = Effect.fn("AgentLoop.runSteps")(function* (from: number) {
+        let step = from
+        let agent = turnAgent
+        while (true) {
+          step++
+          if (yield* scope.turnInterruption.interrupted) {
+            return endStep(agent, { interrupted: true })
+          }
+          const result = yield* runTurnStep({ state, step, currentTurnAgent: agent, turnProfile })
+          if (result._tag !== "Continue") return result
+          agent = result.currentTurnAgent
+        }
+      })
+
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
         yield* scope.clearInFlightTurn(state.message.id)
-        let interrupted = yield* scope.turnInterruption.interrupted
-        let streamFailed = false
-        let unanswered = false
-        let currentTurnAgent: AgentNameType = Option.getOrElse(
-          Option.fromUndefinedOr(state.currentAgent),
-          () => DEFAULT_AGENT_NAME,
-        )
 
         const resumed = yield* resumeTurn({
           state,
           messageId: state.message.id,
-          interrupted,
-          currentTurnAgent,
+          interrupted: yield* scope.turnInterruption.interrupted,
+          currentTurnAgent: turnAgent,
           turnProfile,
         })
-        let step = resumed.step
         if (Option.isSome(resumed.interaction)) {
           preserveReplayBindings = true
           return resumed.interaction.value
         }
 
-        while (true) {
-          step++
-          if (yield* scope.turnInterruption.interrupted) {
-            interrupted = true
-            break
-          }
-
-          const stepResult = yield* runTurnStep({
-            state,
-            step,
-            currentTurnAgent,
-            turnProfile,
-          })
-          if (stepResult._tag === "Stop") {
-            currentTurnAgent = stepResult.currentTurnAgent
-            interrupted = stepResult.interrupted
-            streamFailed = stepResult.streamFailed
-            unanswered = stepResult.unanswered
-            break
-          }
-          if (stepResult._tag === "Continue") {
-            currentTurnAgent = stepResult.currentTurnAgent
-            continue
-          }
+        const ended = yield* runSteps(resumed.step)
+        if (ended._tag === "Interaction") {
           preserveReplayBindings = true
-          return stepResult.outcome
+          return ended.outcome
         }
 
         yield* finalizeTurn({
           startedAtMs: state.startedAtMs,
           messageId: state.message.id,
-          turnInterrupted: interrupted,
-          streamFailed,
-          unanswered,
-          currentAgent: currentTurnAgent,
+          turnInterrupted: ended.interrupted,
+          streamFailed: ended.streamFailed,
+          unanswered: ended.unanswered,
+          turnAgent: ended.currentTurnAgent,
         })
         return TurnOutcome.cases.Done.make({})
       })

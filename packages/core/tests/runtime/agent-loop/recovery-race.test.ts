@@ -107,7 +107,6 @@ describe("agent-loop recovery race", () => {
         const sessionId = SessionId.make("recovery-start-fail-session")
         const branchId = BranchId.make("recovery-start-fail-branch")
         const storedQueueRef = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
-        const putCount = yield* Ref.make(0)
 
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.succeed(
@@ -120,16 +119,13 @@ describe("agent-loop recovery race", () => {
           AgentLoopQueueStorage,
           AgentLoopQueueStorage.of({
             getQueueState: () => Ref.get(storedQueueRef),
-            putQueueState: (_sessionId, _branchId, queue) =>
-              Effect.gen(function* () {
-                const count = yield* Ref.updateAndGet(putCount, (n) => n + 1)
-                if (count >= 2) {
-                  return yield* new StorageError({
-                    message: "injected recovery start persistence failure",
-                    cause: "test",
-                  })
-                }
-                yield* Ref.set(storedQueueRef, queue)
+            // The loop reads its queue, then writes it back as the branch's
+            // first row. That write is what fails here: the startup path
+            // must close the loop and release its semaphore, not park.
+            putQueueState: () =>
+              new StorageError({
+                message: "injected recovery start persistence failure",
+                cause: "test",
               }),
           }),
         )

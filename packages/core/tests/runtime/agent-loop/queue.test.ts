@@ -73,7 +73,7 @@ describe("turn admission", () => {
   })
 
   test("a running branch may not start another turn", () => {
-    const running = buildRunningState({}, item("running"), { startedAtMs: 0 })
+    const running = buildRunningState(item("running"), { startedAtMs: 0 })
     expect(canStartTurnNow(buildInitialAgentLoopState({ state: running }))).toBe(false)
   })
 
@@ -82,7 +82,7 @@ describe("turn admission", () => {
   // only `state` would take a turn past the reservation, and the reserved item
   // would then be in neither the queue nor the transcript.
   test("an idle branch holding a reservation may not start a turn", () => {
-    const reserved = buildRunningState({}, item("reserved"), { startedAtMs: 0 })
+    const reserved = buildRunningState(item("reserved"), { startedAtMs: 0 })
     const state = {
       ...buildInitialAgentLoopState({ state: buildIdleState() }),
       startingState: reserved,

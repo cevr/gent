@@ -1014,7 +1014,9 @@ Other notes:
   Scheduler failures remain extension health diagnostics. The graph host
   owns resource stop order and scoped cleanup.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
-- Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
+- Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent
+  for one turn and nothing else. A branch holds no agent of its own, so there
+  is no steering command, loop state field, or durable event for switching one.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 
 ### EventPublisher

@@ -594,7 +594,7 @@ const buildAgentLoopActorHandlers = (config: {
 
       const exit = yield* Effect.exit(
         handle.start.pipe(
-          Effect.andThen(handle.refreshRuntimeState),
+          Effect.andThen(handle.writeInitialQueue),
           Effect.andThen(
             Effect.gen(function* () {
               const incompleteMessage = yield* handle.incompleteUserTurn
@@ -753,17 +753,11 @@ const buildAgentLoopActorHandlers = (config: {
         )
       }
       const handle = yield* ensureStarted
-      const projectedState = yield* handle.runtimeState
 
       switch (command._tag) {
-        case "SwitchAgent":
-          yield* handle.switchAgent(command.agent).pipe(orCleanup(handle))
-          return
-
         case "Cancel":
         case "Interrupt":
-          // The projection can lag the machine by a step; the snapshot is authoritative.
-          if (isActiveLoopState(projectedState) || isActiveLoopState(yield* handle.snapshot)) {
+          if (isActiveLoopState(yield* handle.snapshot)) {
             yield* handle.interrupt(command.messageId).pipe(orCleanup(handle))
           }
           return
@@ -839,9 +833,7 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            const waiting = (state: { readonly _tag: string }) =>
-              state._tag === "WaitingForInteraction"
-            if (waiting(yield* handle.runtimeState) || waiting(yield* handle.snapshot)) {
+            if ((yield* handle.snapshot)._tag === "WaitingForInteraction") {
               return yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
             }
             // A reply to a loop that lost its turn (a restart mid-interaction)

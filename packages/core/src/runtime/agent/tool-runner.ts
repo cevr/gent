@@ -56,7 +56,6 @@ type ToolCapabilityContext = ExtensionHostContext & {
 export interface ResolvedToolCapability {
   readonly extensionId: ExtensionId
   readonly capability: ToolCapability
-  readonly origin: "static"
   readonly binding?: ToolBindingIdentity
 }
 
@@ -258,7 +257,6 @@ export const staticToolEntries = (
       entries.push({
         extensionId: extension.manifest.id,
         capability,
-        origin: "static",
       })
     }
   }

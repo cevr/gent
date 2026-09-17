@@ -33,12 +33,7 @@ import { Entity, Sharding } from "effect/unstable/cluster"
 import { BranchToolWork, CurrentBranchToolFeature } from "./branch-tool-feature.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import {
-  AgentName,
-  DEFAULT_AGENT_NAME,
-  type AgentName as AgentNameType,
-} from "../../domain/agent.js"
-import { AgentSwitched, type AgentEvent } from "../../domain/event.js"
+import type { AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { isRuntimeUserMessage, type Message, type MessageMetadata } from "../../domain/message.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
@@ -81,7 +76,6 @@ import {
   queueSnapshotFromQueueState,
   removeQueuedFollowUp,
   takeNextQueuedTurn,
-  updateCurrentAgentOnState,
   buildInitialAgentLoopState,
   AgentLoopError,
   type AgentLoopState,
@@ -93,7 +87,8 @@ import {
   turnFailureEpoch,
 } from "./agent-loop.state.js"
 import type { QueueSnapshot } from "../../domain/queue.js"
-import { emptyTurnMetrics, type ActiveStreamHandle } from "./turn-response.js"
+import type { ActiveStreamHandle } from "./turn-response.js"
+import { makeTurnLedger } from "./turn-ledger.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import type { ProcessLocalToolReplay } from "./process-local-tool-replay.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
@@ -123,7 +118,7 @@ type AgentLoopQueue = {
   readonly runtimeState: Effect.Effect<SessionRuntimeState>
   readonly queueSnapshot: Effect.Effect<QueueSnapshot>
   readonly currentLoopState: Effect.Effect<LoopState>
-  readonly refreshRuntimeState: Effect.Effect<void, AgentLoopError>
+  readonly writeInitialQueue: Effect.Effect<void, AgentLoopError>
   readonly reserveStartOrQueueFollowUp: (
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
@@ -153,7 +148,7 @@ type AgentLoopQueue = {
   readonly removeFollowUp: (
     messageId: QueuedTurnItem["message"]["id"],
   ) => Effect.Effect<boolean, AgentLoopError>
-  readonly saveCheckpoint: (next: LoopState) => Effect.Effect<void, AgentLoopError>
+  readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
 }
 
 const mergeConcurrentLoopMetadata = (
@@ -217,34 +212,24 @@ const makeAgentLoopQueue = (
         return decision.value
       }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
 
-    const persistRuntimeState = (state: LoopState) =>
-      TxSubscriptionRef.get(scope.loopRef)
-        .pipe(
-          Effect.flatMap((s) =>
-            queueStorage.putQueueState(scope.sessionId, scope.branchId, s.queue).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AgentLoopError({
-                    message: `Failed to persist loop queue for ${scope.sessionId}/${scope.branchId}`,
-                    cause,
-                  }),
-              ),
-              Effect.andThen(
-                TxSubscriptionRef.update(scope.loopRef, (current) => {
-                  const next: AgentLoopState = {
-                    state,
-                    queue: current.queue,
-                  }
-                  if (!Predicate.isUndefined(current.turnFailure)) {
-                    return Object.assign(next, { turnFailure: current.turnFailure })
-                  }
-                  return next
-                }),
-              ),
-            ),
-          ),
-        )
-        .pipe(scope.queuePersistenceSemaphore.withPermits(1))
+    /**
+     * Move the loop to its next phase.
+     *
+     * Storage holds the queue and nothing else, and a phase move never
+     * changes the queue: every caller has already run its
+     * `commitQueueTransaction`, which wrote the row when — and only when —
+     * the queue actually changed. So this is a memory write. Dropping
+     * `startingState` is the point: the reservation this phase consumed is
+     * spent, and it was never durable to begin with.
+     */
+    const moveToPhase = (state: LoopState): Effect.Effect<void> =>
+      TxSubscriptionRef.update(scope.loopRef, (current) => {
+        const next: AgentLoopState = { state, queue: current.queue }
+        if (!Predicate.isUndefined(current.turnFailure)) {
+          return Object.assign(next, { turnFailure: current.turnFailure })
+        }
+        return next
+      }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
 
     const currentLoopState = TxSubscriptionRef.get(scope.loopRef).pipe(Effect.map((s) => s.state))
     const readState = TxSubscriptionRef.get(scope.loopRef)
@@ -291,7 +276,7 @@ const makeAgentLoopQueue = (
               }
             }
 
-            const reservedRunningState = buildRunningState(current.state, item, { startedAtMs })
+            const reservedRunningState = buildRunningState(item, { startedAtMs })
             return {
               value: Option.some(reservedRunningState),
               next: { ...current, startingState: reservedRunningState },
@@ -310,10 +295,22 @@ const makeAgentLoopQueue = (
       },
     )
 
-    const refreshRuntimeState = Effect.suspend(
-      Effect.fn("AgentLoop.refreshRuntimeState")(function* () {
+    /**
+     * Write the branch its queue row once the loop is started.
+     *
+     * A branch that has never queued anything has no row, and every later
+     * write is a conditional update inside a queue transaction. This is the
+     * one unconditional write, so a fresh branch has a row from its first
+     * open onward.
+     */
+    const writeInitialQueue = Effect.suspend(
+      Effect.fn("AgentLoop.writeInitialQueue")(function* () {
         if (!(yield* Ref.get(scope.startedRef))) return
-        yield* persistRuntimeState(yield* currentLoopState)
+        const current = yield* TxSubscriptionRef.get(scope.loopRef)
+        yield* persistCommittedQueue(current.queue, "initial queue").pipe(
+          Effect.tapError(recordPersistenceFailure),
+          scope.queuePersistenceSemaphore.withPermits(1),
+        )
       }),
     )
 
@@ -396,24 +393,13 @@ const makeAgentLoopQueue = (
         }),
     )
 
-    const saveCheckpoint = (next: LoopState): Effect.Effect<void, AgentLoopError> =>
-      persistRuntimeState(next).pipe(
-        Effect.catchEager((error) =>
-          Deferred.fail(scope.persistenceFailure, error).pipe(
-            Effect.asVoid,
-            Effect.andThen(Effect.fail(error)),
-          ),
-        ),
-        Effect.withSpan("AgentLoop.durability.save"),
-      )
-
     return {
       readState,
       stateChanges,
       runtimeState,
       queueSnapshot,
       currentLoopState,
-      refreshRuntimeState,
+      writeInitialQueue,
       reserveStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle: takeNextQueuedTurnFromState({ onlyIfIdle: true }),
       takeNextQueuedTurn: takeNextQueuedTurnFromState({ onlyIfIdle: false }),
@@ -423,7 +409,7 @@ const makeAgentLoopQueue = (
       dropSteeringDelivered,
       drainQueue,
       removeFollowUp,
-      saveCheckpoint,
+      moveToPhase,
     }
   })
 
@@ -454,26 +440,6 @@ const provideAgentLoopRuntimeContext =
   ): Effect.Effect<A, E, Exclude<R, AgentLoopRuntimeServices>> =>
     Effect.provideContext(effect, ctx)
 
-const resolveStoredAgent = Effect.fn("AgentLoop.resolveStoredAgent")(function* (params: {
-  sessionId: SessionId
-  branchId: BranchId
-}) {
-  const eventStorage = yield* EventStorage
-  const latestAgentEvent = yield* eventStorage
-    .getLatestEvent({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      tags: ["AgentSwitched"],
-    })
-    .pipe(Effect.option, Effect.map(Option.flatMap(Option.fromUndefinedOr)))
-
-  if (Option.isSome(latestAgentEvent) && latestAgentEvent.value._tag === "AgentSwitched") {
-    const name = latestAgentEvent.value.toAgent
-    if (Schema.is(AgentName)(name)) return name
-  }
-  return DEFAULT_AGENT_NAME
-})
-
 export type AgentLoopBehavior = {
   persistenceFailure: Effect.Effect<void, AgentLoopError>
   readState: Effect.Effect<AgentLoopState>
@@ -500,12 +466,11 @@ export type AgentLoopBehavior = {
    * context, or a branch Resource resolves as "Service not found".
    */
   branchContext: Context.Context<never>
-  refreshRuntimeState: Effect.Effect<void, AgentLoopError>
+  writeInitialQueue: Effect.Effect<void, AgentLoopError>
   /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
   snapshot: Effect.Effect<LoopState>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
-  switchAgent: (agent: AgentNameType) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
@@ -681,15 +646,11 @@ export const makeAgentLoopBehavior = (
     ).pipe(Scope.provide(loopScope))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
-    const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
+    const turnLedger = yield* makeTurnLedger
     // A tool holding branch-scoped work exposes how to cancel it. A branch
     // whose tools are all stateless has nothing to cancel.
     const branchWork = Context.getOption(branchContext, BranchToolWork)
-    const currentAgent = yield* resolveStoredAgent({
-      sessionId,
-      branchId,
-    })
-    const initialLoopState = buildIdleState({ currentAgent })
+    const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
     )
@@ -722,7 +683,7 @@ export const makeAgentLoopBehavior = (
       runtimeState,
       queueSnapshot,
       currentLoopState,
-      refreshRuntimeState,
+      writeInitialQueue,
       reserveStartOrQueueFollowUp,
       takeNextQueuedTurnIfIdle,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
@@ -732,42 +693,15 @@ export const makeAgentLoopBehavior = (
       dropSteeringDelivered,
       drainQueue,
       removeFollowUp,
-      saveCheckpoint,
+      moveToPhase,
     } = queue
-
-    const switchAgentOnState = (state: LoopState, next: AgentNameType): Effect.Effect<LoopState> =>
-      Effect.gen(function* () {
-        const previous = state.currentAgent ?? DEFAULT_AGENT_NAME
-        if (previous === next) return state
-        const { turnExtensionRegistry: switchRegistry } = yield* resolveTurnProfile
-        const agents = [...switchRegistry.getResolved().agents.values()]
-        const resolved = agents.find((agent) => agent.name === next)
-        if (Predicate.isUndefined(resolved)) return state
-
-        yield* publishEvent(
-          AgentSwitched.make({
-            sessionId,
-            branchId,
-            fromAgent: previous,
-            toAgent: next,
-          }),
-        ).pipe(
-          Effect.catchEager((error) =>
-            Effect.logWarning("failed to publish AgentSwitched").pipe(
-              Effect.annotateLogs({ error: String(error) }),
-            ),
-          ),
-        )
-
-        return updateCurrentAgentOnState(state, next)
-      }).pipe(Effect.orDie)
 
     const { runTurn } = yield* makeAgentLoopTurnExecution({
       sessionId,
       branchId,
       resolveTurnProfile,
       activeStreamRef,
-      turnMetricsRef,
+      turnLedger,
       turnInterruption,
       clearInFlightTurn,
       peekSteeringForStep,
@@ -787,7 +721,7 @@ export const makeAgentLoopBehavior = (
         onSome: (work) => work.cancel,
       }),
       currentLoopState,
-      saveCheckpoint,
+      moveToPhase,
       takeNextQueuedTurn: takeNextQueuedTurnCommitted,
       clearInFlightTurn,
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
@@ -799,7 +733,6 @@ export const makeAgentLoopBehavior = (
           () => runTurn(state).pipe(Effect.provideContext(branchContext)),
           () => keepAlive(false),
         ),
-      switchAgentOnState,
     })
 
     const startTurnWorker = Effect.forkIn(
@@ -880,11 +813,10 @@ export const makeAgentLoopBehavior = (
         ),
       resolveTurnProfile,
       branchContext,
-      refreshRuntimeState,
+      writeInitialQueue,
       snapshot: currentLoopState,
       startTurn: worker.startTurn,
       interrupt: worker.interrupt,
-      switchAgent: worker.switchAgent,
       respondInteraction: worker.respondInteraction,
       withSideMutation: worker.withSideMutation,
       start,
