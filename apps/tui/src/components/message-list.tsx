@@ -13,6 +13,7 @@ import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
+import { reasoningMarkdown } from "./reasoning-text"
 import { decodeToolOutputOption, getString } from "../utils/parse-tool-output"
 import { toolArgSummary } from "../utils/format-tool"
 import { formatDuration } from "../utils/format-duration"
@@ -385,11 +386,13 @@ function AssistantMessage(props: {
               Match.tagsExhaustive({
                 reasoning: (segment) => (
                   <box flexDirection="column" marginBottom={1}>
-                    <text>
-                      <span style={{ fg: theme.textMuted, dim: true }}>
-                        <i>{segment.content}</i>
-                      </span>
-                    </text>
+                    <markdown
+                      syntaxStyle={props.syntaxStyle()}
+                      streaming
+                      content={reasoningMarkdown(segment.content)}
+                      fg={theme.textMuted}
+                      conceal
+                    />
                   </box>
                 ),
                 image: (segment) => (
@@ -452,11 +455,13 @@ function AssistantMessageLegacy(props: {
     <>
       <Show when={props.reasoning.length > 0}>
         <box flexDirection="column" marginBottom={1}>
-          <text>
-            <span style={{ fg: theme.textMuted, dim: true }}>
-              <i>{props.reasoning}</i>
-            </span>
-          </text>
+          <markdown
+            syntaxStyle={props.syntaxStyle()}
+            streaming
+            content={reasoningMarkdown(props.reasoning)}
+            fg={theme.textMuted}
+            conceal
+          />
         </box>
       </Show>
       <Show when={props.images.length > 0}>
