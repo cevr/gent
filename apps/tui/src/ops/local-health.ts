@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
 import { DateTime, Effect, FileSystem, Match, Option } from "effect"
-import { classifyLogFile, LOG_DIR } from "@gent/sdk"
+import { classifyLogFile, dataPaths, LOG_DIR } from "@gent/sdk"
 import type { ExtensionHealthIssue, ExtensionHealthSnapshot, ServerLockEntry } from "@gent/sdk"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
@@ -51,14 +51,6 @@ interface DoctorReport {
 interface StorageResetResult {
   readonly archiveDir?: string
   readonly archived: ReadonlyArray<string>
-}
-
-export const storagePaths = (home: string) => {
-  const dbPath = `${home}/.gent/data.db`
-  return {
-    dbPath,
-    files: [dbPath, `${dbPath}-shm`, `${dbPath}-wal`] satisfies ReadonlyArray<string>,
-  }
 }
 
 type SqliteHealth = Omit<StorageHealth, "dbPath" | "exists" | "sizeBytes">
@@ -114,7 +106,7 @@ export const inspectStorage = (
 ): Effect.Effect<StorageHealth, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const { dbPath } = storagePaths(home)
+    const { dbPath } = yield* dataPaths(home)
     const exists = yield* fs.exists(dbPath).pipe(Effect.orElseSucceed(() => false))
     if (!exists) {
       return {
@@ -266,16 +258,16 @@ export const resetStorage = (
 ): Effect.Effect<StorageResetResult, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const { files } = storagePaths(home)
+    const paths = yield* dataPaths(home)
     const existing = []
-    for (const file of files) {
+    for (const file of paths.files) {
       if (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) {
         existing.push(file)
       }
     }
     if (existing.length === 0) return { archived: [] }
 
-    const archiveDir = `${home}/.gent/storage-archive/${stamp()}`
+    const archiveDir = `${paths.archiveDir}/${stamp()}`
     yield* fs.makeDirectory(archiveDir, { recursive: true }).pipe(Effect.orDie)
     const archived: string[] = []
     for (const file of existing) {

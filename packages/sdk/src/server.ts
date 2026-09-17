@@ -22,7 +22,8 @@ import {
 } from "effect"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
-import { resolve as pathResolve, join as pathJoin } from "node:path"
+import { resolve as pathResolve } from "node:path"
+import { dataPaths } from "./data-paths.js"
 
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core-internal/runtime/agent/branch-tool-feature.js"
@@ -114,8 +115,9 @@ export const LaunchConfig = Config.all({
     Schema.Int.check(Schema.isGreaterThan(0)),
     "GENT_IDLE_TIMEOUT_MS",
   ).pipe(Config.withDefault(30_000)),
+  // `GENT_DATA_DIR` is not read here: `data-paths.ts` owns it, so the server
+  // and the doctor resolve the same directory from one place.
   home: Config.option(Config.string("HOME")),
-  dataDir: Config.option(Config.string("GENT_DATA_DIR")),
   authDirectory: Config.option(Config.string("GENT_AUTH_DIRECTORY")),
   shell: Config.option(Config.string("SHELL")),
 })
@@ -260,13 +262,17 @@ const resolveHome = (stateSpec: StateSpec, homeDirectory: string): string =>
     Option.getOrElse(() => homeDirectory),
   )
 
-const resolveDbPath = (home: string, stateSpec: StateSpec): string => {
+/**
+ * An explicit `dbPath` on the state spec wins; otherwise the database sits in
+ * the data directory `data-paths.ts` resolves, so the server writes where
+ * `gent doctor` and `gent storage reset` look.
+ */
+const resolveDbPath = (home: string, stateSpec: StateSpec): Effect.Effect<string> => {
   if (stateSpec._tag === "Sqlite") {
     const dbPath = Option.fromNullishOr(stateSpec.dbPath)
-    if (Option.isSome(dbPath)) return pathResolve(dbPath.value)
+    if (Option.isSome(dbPath)) return Effect.succeed(pathResolve(dbPath.value))
   }
-  const dataDir = pathJoin(home, ".gent")
-  return pathResolve(pathJoin(dataDir, "data.db"))
+  return Effect.map(dataPaths(home), (paths) => paths.dbPath)
 }
 
 /**
@@ -356,10 +362,10 @@ const buildOwnedServer = (
       const buildFingerprint = yield* (yield* BuildFingerprint).resolved
 
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
-      const dbPath = Match.value(stateSpec).pipe(
+      const dbPath = yield* Match.value(stateSpec).pipe(
         Match.tagsExhaustive({
-          Memory: () => Option.none<string>(),
-          Sqlite: (sqliteSpec) => Option.some(resolveDbPath(home, sqliteSpec)),
+          Memory: () => Effect.succeed(Option.none<string>()),
+          Sqlite: (sqliteSpec) => Effect.asSome(resolveDbPath(home, sqliteSpec)),
         }),
       )
       const serverRoot = yield* buildServerRoot({
@@ -521,7 +527,7 @@ const resolveServerInternal = (
     // SQLite state: shared-server aware
     const platform = yield* GentPlatform
     const home = resolveHome(stateSpec, yield* platform.homeDirectory)
-    const dbPath = resolveDbPath(home, stateSpec)
+    const dbPath = yield* resolveDbPath(home, stateSpec)
     const fingerprint = yield* (yield* BuildFingerprint).local
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid

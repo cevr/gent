@@ -1,8 +1,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
-import { Effect, FileSystem, Layer, Option, Path } from "effect"
-import { ServerLockEntry } from "@gent/sdk"
+import { ConfigProvider, Effect, FileSystem, Layer, Option, Path } from "effect"
+import { dataPaths, dataPathsIn, ServerLockEntry } from "@gent/sdk"
 import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform, SignalError } from "@gent/core-internal/runtime/gent-platform"
 import { ExtensionHealth, ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
@@ -13,7 +13,6 @@ import {
   inspectStorage,
   makeDoctorReport,
   resetStorage,
-  storagePaths,
 } from "../src/ops/local-health"
 
 const absentServerEntry = Option.none<ServerLockEntry>()
@@ -39,6 +38,16 @@ const deadPidPlatform = Layer.effect(
     }),
   ),
 ).pipe(Layer.provide(GentPlatform.Test()))
+
+/** Run the effect against an environment that redirects the data directory. */
+const withDataDir =
+  (dataDir: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.provideService(
+      effect,
+      ConfigProvider.ConfigProvider,
+      ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
+    )
 
 const createDb = (dbPath: string, ...statements: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -68,7 +77,7 @@ describe("local health", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const home = yield* fs.makeTempDirectoryScoped()
-      const { dbPath } = storagePaths(home)
+      const { dbPath } = yield* dataPaths(home)
       yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true })
       yield* createDb(
         dbPath,
@@ -127,7 +136,7 @@ describe("local health", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const home = yield* fs.makeTempDirectoryScoped()
-      const { dbPath } = storagePaths(home)
+      const { dbPath } = yield* dataPaths(home)
       yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true })
       yield* createDb(
         dbPath,
@@ -151,6 +160,48 @@ describe("local health", () => {
       const result = yield* resetStorage(home)
       expect(result.archiveDir).toBeUndefined()
       expect(result.archived).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("the doctor reads the database GENT_DATA_DIR names, not the one under home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      // `home` holds no database; the server wrote to `dataDir` instead.
+      const home = yield* fs.makeTempDirectoryScoped()
+      const dataDir = yield* fs.makeTempDirectoryScoped()
+      const { dbPath } = dataPathsIn(dataDir)
+      yield* createDb(
+        dbPath,
+        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+        "INSERT INTO gent_storage_migrations (migration_id, name) VALUES (1, 'initial')",
+      )
+
+      const storage = yield* inspectStorage(home).pipe(withDataDir(dataDir))
+      expect(storage.dbPath).toBe(dbPath)
+      expect(storage.exists).toBe(true)
+      expect(storage.status).toBe("ok")
+      expect(storage.migrationCount).toBe(1)
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("storage reset archives the database GENT_DATA_DIR names", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const dataDir = yield* fs.makeTempDirectoryScoped()
+      const { dbPath } = dataPathsIn(dataDir)
+      yield* createDb(
+        dbPath,
+        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+      )
+
+      const result = yield* resetStorage(home).pipe(withDataDir(dataDir))
+      expect(result.archived.length).toBeGreaterThan(0)
+      expect(yield* fs.exists(dbPath)).toBe(false)
+      for (const file of result.archived) {
+        expect(file.startsWith(dataDir)).toBe(true)
+        expect(yield* fs.exists(file)).toBe(true)
+      }
     }).pipe(Effect.provide(BunServices.layer)),
   )
 })

@@ -82,6 +82,11 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing",
   },
   {
+    file: "packages/sdk/src/data-paths.ts",
+    scope: "file",
+    text: "nodeBuiltinImport:off — this module owns path resolution for gent's data directory",
+  },
+  {
     file: "packages/sdk/src/server.ts",
     scope: "file",
     text: "nodeBuiltinImport:off — server primitive owns filesystem path resolution",

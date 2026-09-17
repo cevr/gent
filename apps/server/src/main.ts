@@ -7,8 +7,6 @@ import { BunRuntime } from "@effect/platform-bun"
 import { Console, Effect, Option } from "effect"
 import { Gent, LaunchConfig, type IdleShutdownSpec } from "@gent/sdk"
 
-const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
-
 /** `GENT_PROVIDER_MODE=debug-scripted` picks the scripted language model. */
 const resolveProvider = (mode: "live" | "debug-scripted") => {
   if (mode === "debug-scripted") return Gent.provider.mock()
@@ -23,12 +21,8 @@ const resolveLaunch = Effect.gen(function* () {
   let idleShutdown = Option.none<IdleShutdownSpec>()
   if (isManaged) idleShutdown = Option.some({ idleMs: launch.idleTimeoutMs })
 
-  // `GENT_DATA_DIR` names the directory holding `data.db`.
-  const dbPath = Option.map(launch.dataDir, (dataDir) => joinPath(dataDir, "data.db"))
-  let state = Gent.state.sqlite({
-    home: Option.getOrUndefined(launch.home),
-    dbPath: Option.getOrUndefined(dbPath),
-  })
+  // `GENT_DATA_DIR` reaches the database path through the SDK, which owns it.
+  let state = Gent.state.sqlite({ home: Option.getOrUndefined(launch.home) })
   if (launch.persistenceMode === "memory") state = Gent.state.memory()
 
   return {
