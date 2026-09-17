@@ -457,3 +457,9 @@ Preview is not a sandbox or a general side-effect-free operation.
   not a read/write or capability declaration.
 - Runtime services such as `GentPlatform`, `ToolRunner`,
   storage Tags, event stores, and process helpers are not public extension API.
+- Tagged-union variant tags are PascalCase. `ctx.Agent.run` resolves to
+  `AgentRunResult` with `_tag` of `"Success"` or `"Error"`, and extension
+  health reports `"Healthy"`, `"Degraded"`, or `"ActivationFailed"`. An
+  extension written against the earlier lowercase spellings (`"success"`,
+  `"healthy"`, `"activation-failed"`) must be updated; match on the tag through
+  the exported schema rather than a string literal where possible.

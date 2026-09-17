@@ -10,7 +10,8 @@ import {
   Schema,
   SynchronizedRef,
 } from "effect"
-import { AgentName, AgentRunOverridesSchema, DriverRef } from "../domain/agent.js"
+import { AgentName, AgentRunOverridesSchema, DriverRefFromConfig } from "../domain/agent.js"
+import type { DriverRef } from "../domain/agent.js"
 import { omitUndefined } from "../domain/guards.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 
@@ -29,7 +30,7 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * `{ main: { _tag: "External", id: "acp-claude-code" } }` makes
    * `main` dispatch through the Claude Code SDK executor.
    */
-  driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),
+  driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRefFromConfig)),
   /**
    * Per-agent definition overrides: model, reasoning effort, tool lists and
    * a prompt addendum. Project config shadows user config key-by-key; a

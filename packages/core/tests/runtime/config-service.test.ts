@@ -223,6 +223,48 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
+    // A config written before the PascalCase variant rename holds
+    // `{"_tag":"external"}`. `readConfigOrEmpty` turns ANY decode failure into
+    // an empty config, and the next `set()` encodes that empty config over the
+    // user's file — so a rejected tag silently destroys unrelated settings.
+    it.scopedLive("a config written with the pre-rename lowercase driver tag still loads", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        // Written by hand, exactly as a pre-rename gent left it on disk.
+        yield* fs.writeFileString(
+          userConfigPath,
+          '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"}},"disabledExtensions":["@gent/skills"]}',
+        )
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const result = yield* cfg.get()
+          const cowork = result.driverOverrides?.[AgentName.make("cowork")]
+          if (Predicate.isUndefined(cowork))
+            return yield* Effect.die(new Error("expected cowork override"))
+          expect(cowork._tag).toBe("External")
+          expect(cowork.id).toBe("acp-claude-code")
+          // The sibling setting must survive: a dropped config takes it too.
+          expect(result.disabledExtensions).toEqual(["@gent/skills"])
+          // Re-encoding writes only the new spelling back.
+          yield* cfg.set({ trustedProjects: [cwd] })
+          const persisted = yield* fs.readFileString(userConfigPath)
+          expect(persisted).toContain('"External"')
+          expect(persisted).not.toContain('"external"')
+          expect(persisted).toContain("@gent/skills")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.live("re-setting an agent's driver replaces the prior override", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService

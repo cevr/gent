@@ -1401,10 +1401,52 @@ rename would turn a pending alarm into a hard read error.
 PascalCase, which is why `MessageReceived` and `StreamChunk` appear verbatim in
 the events table.
 
-`DriverRef` was checked against the same standard and cleared: the test
-fixtures write `_tag` into a `.gent/config.json`, so the shape is genuinely
-persisted, but no `config.json` on this machine carries a driver tag at all.
-The rename is safe; only the fixtures needed updating.
+`DriverRef` was checked against the same standard and **wrongly cleared**. The
+reasoning was "no `config.json` on this machine carries a driver tag", which is
+the wrong test for a durable format: the question is whether a user _can_ have
+written one, not whether one exists today. Counsel caught it and a decode probe
+confirmed the failure:
+
+```
+old lowercase 'external': FAILURE
+   SchemaError(Expected { readonly "_tag": "Model", ... } | { readonly "_tag":
+   "External", ... }   at ["driverOverrides"]["main"])
+new PascalCase 'External': SUCCESS
+```
+
+The blast radius is larger than a dropped override. `readConfigOrEmpty`
+(`config-service.ts:181`) maps **any** decode failure to `new UserConfig({})`,
+and `saveUserConfig` (`:205`) encodes that empty config back over the file on
+the next `set()`. One unmigrated tag therefore discards `disabledExtensions`,
+`trustedProjects`, and every agent override.
+
+Fixed by `DriverRefFromConfig` (`agent.ts`): a four-member union that decodes
+both spellings through `Schema.decodeTo` into the canonical `DriverRef`, and
+encodes only PascalCase — so a stale config is migrated in place the first time
+gent saves it. `UserConfig.driverOverrides` uses it; `DriverRef` stays the
+type everywhere else.
+
+### What the persistence audit actually found
+
+Every other renamed union was checked against live data with case-sensitive
+`GLOB` (note: SQLite `LIKE` is case-insensitive for ASCII and silently reports
+PascalCase rows as lowercase matches — the first pass used `LIKE` and was
+wrong):
+
+- `agent_loop_queues` — 575 rows, all `{"steering":[],"followUp":[]}`. Queue
+  entries are transient, drained on turn completion. Clear.
+- `events.event_json` — 89,896 rows, **one** lowercase `_tag` total: a
+  `DelegateResult` `{"_tag":"completed"}` inside a `delegate` tool-result on a
+  `MessageReceived` event. Inert: `Prompt.ToolResultPart.result` is
+  `Schema.Unknown` (`effect/dist/unstable/ai/Prompt.d.ts:571`), so nothing
+  decodes it. Counsel's P2 called this "four lowercase tags from earlier
+  delegate results"; the count and the location were both off, and the payload
+  is never decoded.
+- `content_chunks` — the 10 apparent matches are already-PascalCase
+  `{"_tag":"Completed"}` cell operation records.
+- `docs/extensions.md` — contained no tag text at all. A migration note was
+  added to `## Surface Invariants` for `AgentRunResult` and `ExtensionHealth*`,
+  which are public extension contracts.
 
 ### One bulk rewrite went wrong, and the compiler caught it
 

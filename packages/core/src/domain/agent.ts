@@ -1,4 +1,4 @@
-import { Context, Option, Predicate, Schema } from "effect"
+import { Context, Option, Predicate, Schema, SchemaGetter } from "effect"
 import type * as EffectNs from "effect/Effect"
 import { branded, BranchId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import type { AgentEvent, TurnCompleted } from "./event.js"
@@ -51,7 +51,49 @@ export type ModelDriverRef = typeof DriverRef.cases.Model.Type
 export const ExternalDriverRef = DriverRef.cases.External
 export type ExternalDriverRef = typeof DriverRef.cases.External.Type
 
-/** Default agent name — used when no agent is explicitly specified. */
+/**
+ * `DriverRef` as it may appear on disk. A `.gent/config.json` written before
+ * the variant keys became PascalCase holds `{ "_tag": "external" }`, and
+ * `UserConfig` rejects it — which fails the decode of the *whole* file, not
+ * just this field. `ConfigService.readConfigOrEmpty` maps any such failure to
+ * an empty config and the next `set()` writes that empty config back, so an
+ * unmigrated tag silently discards the user's other settings.
+ *
+ * Decoding accepts both spellings; encoding emits only PascalCase, so a config
+ * is migrated in place the first time gent saves it.
+ */
+const LegacyModelDriverRefStruct = Schema.TaggedStruct("model", {
+  id: Schema.optional(Schema.String),
+})
+const LegacyExternalDriverRefStruct = Schema.TaggedStruct("external", { id: Schema.String })
+
+type LegacyDriverRef =
+  | typeof LegacyModelDriverRefStruct.Type
+  | typeof LegacyExternalDriverRefStruct.Type
+
+const canonicalDriverRef = (ref: DriverRef | LegacyDriverRef): DriverRef => {
+  if (ref._tag === "model") {
+    return Option.match(Option.fromUndefinedOr(ref.id), {
+      onNone: () => ModelDriverRefStruct.make({}),
+      onSome: (id) => ModelDriverRefStruct.make({ id }),
+    })
+  }
+  if (ref._tag === "external") return ExternalDriverRefStruct.make({ id: ref.id })
+  return ref
+}
+
+export const DriverRefFromConfig = Schema.Union([
+  ModelDriverRefStruct,
+  ExternalDriverRefStruct,
+  LegacyModelDriverRefStruct,
+  LegacyExternalDriverRefStruct,
+]).pipe(
+  Schema.decodeTo(DriverRef, {
+    decode: SchemaGetter.transform(canonicalDriverRef),
+    encode: SchemaGetter.transform((ref: DriverRef): DriverRef => ref),
+  }),
+)
+
 export const DEFAULT_AGENT_NAME = AgentName.make("main")
 
 /**
