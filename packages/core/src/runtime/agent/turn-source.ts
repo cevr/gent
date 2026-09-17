@@ -143,7 +143,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       ),
     )
   const resolvedDriver = resolved.driver
-  if (Predicate.isNotUndefined(resolvedDriver) && resolvedDriver._tag === "external") {
+  if (Predicate.isNotUndefined(resolvedDriver) && resolvedDriver._tag === "External") {
     if (Option.isSome(yield* reserveAttempt)) {
       return yield* new ProviderError({
         message: "Admitted child model budgets do not support external drivers",

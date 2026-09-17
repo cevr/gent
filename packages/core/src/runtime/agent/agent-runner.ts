@@ -417,7 +417,7 @@ export const InProcessRunner: Layer.Layer<
         }).pipe(Effect.exit)
         if (Exit.isFailure(admitted)) {
           if (Cause.hasInterruptsOnly(admitted.cause)) return yield* Effect.interrupt
-          return AgentRunResult.cases.error.make({
+          return AgentRunResult.cases.Error.make({
             error: Cause.pretty(admitted.cause),
             agentName,
           })
@@ -495,7 +495,7 @@ export const InProcessRunner: Layer.Layer<
             Option.some(messagesToolCalls(childMessages)),
             (calls) => calls.length > 0,
           )
-          const success = AgentRunResult.cases.success.make({
+          const success = AgentRunResult.cases.Success.make({
             text: latestAssistantText(childMessages),
             sessionId,
             agentName,
@@ -529,7 +529,7 @@ export const InProcessRunner: Layer.Layer<
                     ),
                   )
               }
-              return AgentRunResult.cases.error.make({ error, sessionId, agentName })
+              return AgentRunResult.cases.Error.make({ error, sessionId, agentName })
             })
           }),
         )

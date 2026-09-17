@@ -170,7 +170,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       }).pipe(
         Effect.flatMap((result) =>
           finish((run) => {
-            if (result._tag === "error") return { ...run, done: true, error: result.error }
+            if (result._tag === "Error") return { ...run, done: true, error: result.error }
             return { ...run, done: true, answer: result.text }
           }),
         ),

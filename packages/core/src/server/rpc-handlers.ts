@@ -231,8 +231,8 @@ const invalidateExternalDriversFor = (
   Effect.gen(function* () {
     const registry = yield* DriverRegistry
     const ids = new Set<string>()
-    if (Option.isSome(prev) && prev.value._tag === "external") ids.add(prev.value.id)
-    if (Option.isSome(next) && next.value._tag === "external") ids.add(next.value.id)
+    if (Option.isSome(prev) && prev.value._tag === "External") ids.add(prev.value.id)
+    if (Option.isSome(next) && next.value._tag === "External") ids.add(next.value.id)
     for (const id of ids) {
       const driver = yield* registry.getExternal(id)
       if (!Predicate.isUndefined(driver)) yield* driver.invalidate
@@ -486,13 +486,13 @@ const RpcHandlers = GentRpcs.toLayer(
           const agents = [...extensionRegistry.getResolved().agents.values()]
           const drivers = [
             ...models.map((driver) =>
-              DriverInfo.cases.model.make({
+              DriverInfo.cases.Model.make({
                 id: driver.id,
                 description: driver.name,
               }),
             ),
             ...externals.map((driver) =>
-              DriverInfo.cases.external.make({
+              DriverInfo.cases.External.make({
                 id: driver.id,
               }),
             ),
@@ -511,7 +511,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
           const driverRegistry = yield* DriverRegistry
-          if (driver._tag === "model" && !Predicate.isUndefined(driver.id)) {
+          if (driver._tag === "Model" && !Predicate.isUndefined(driver.id)) {
             const found = yield* driverRegistry.getModel(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
@@ -519,7 +519,7 @@ const RpcHandlers = GentRpcs.toLayer(
               })
             }
           }
-          if (driver._tag === "external") {
+          if (driver._tag === "External") {
             const found = yield* driverRegistry.getExternal(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({

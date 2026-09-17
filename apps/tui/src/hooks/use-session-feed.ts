@@ -130,12 +130,12 @@ const buildSegments = (
   return projected.flatMap((segment) =>
     Match.value(segment).pipe(
       Match.tagsExhaustive({
-        text: (value): AssistantSegment[] => [{ _tag: "text", content: value.content }],
-        reasoning: (value): AssistantSegment[] => [{ _tag: "reasoning", content: value.content }],
-        image: (value): AssistantSegment[] => [
+        Text: (value): AssistantSegment[] => [{ _tag: "text", content: value.content }],
+        Reasoning: (value): AssistantSegment[] => [{ _tag: "reasoning", content: value.content }],
+        Image: (value): AssistantSegment[] => [
           { _tag: "image", image: { mediaType: value.mediaType } },
         ],
-        "tool-call": (value): AssistantSegment[] => {
+        ToolCall: (value): AssistantSegment[] => {
           const toolCall = Option.fromNullishOr(interactionsById.get(String(value.toolCallId)))
           if (Option.isNone(toolCall)) return []
           return [{ _tag: "tool-call", toolCall: toolCall.value }]

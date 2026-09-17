@@ -239,7 +239,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
    * (`DriverRegistry.listModels`) and per-session routing
    * (`resolveDefaultAgentModel` + resolved extension agents) to compute
    * which providers are required *and* present. External-routed
-   * agents (driver._tag === "external") own their own auth, so model
+   * agents (driver._tag === "External") own their own auth, so model
    * auth is short-circuited for them.
    */
   static Live: Layer.Layer<AuthGuard, never, Auth | ExtensionRegistry | DriverRegistry> =
@@ -263,7 +263,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
             const selectedAgent = agents.find((agent) => agent.name === query.agentName)
             if (!Predicate.isUndefined(selectedAgent)) {
               const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
-              if (resolved.driver?._tag === "external") {
+              if (resolved.driver?._tag === "External") {
                 return providers
               }
               if (!Predicate.isUndefined(selectedAgent.model)) {

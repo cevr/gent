@@ -59,17 +59,17 @@ type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : n
 type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
 
 export const StateSpec = Schema.Union([
-  Schema.TaggedStruct("sqlite", {
+  Schema.TaggedStruct("Sqlite", {
     home: Schema.optional(Schema.String),
     dbPath: Schema.optional(Schema.String),
   }),
-  Schema.TaggedStruct("memory", {}),
+  Schema.TaggedStruct("Memory", {}),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type StateSpec = Schema.Schema.Type<typeof StateSpec>
 
 export const ProviderSpec = Schema.Union([
-  Schema.TaggedStruct("live", {}),
-  Schema.TaggedStruct("mock", {
+  Schema.TaggedStruct("Live", {}),
+  Schema.TaggedStruct("Mock", {
     /** Finish every step having produced nothing — drives the unanswered turn. */
     empty: Schema.optional(Schema.Boolean),
   }),
@@ -196,11 +196,11 @@ export interface GentServerOptions {
 
 /** Public opaque server handle. */
 export const GentServer = Schema.Union([
-  Schema.TaggedStruct("owned", {
+  Schema.TaggedStruct("Owned", {
     url: Schema.String,
     workspaceId: Schema.String,
   }),
-  Schema.TaggedStruct("attached", {
+  Schema.TaggedStruct("Attached", {
     url: Schema.String,
     workspaceId: Schema.String,
   }),
@@ -251,14 +251,14 @@ export const awaitServerShutdown = (server: GentServer): Effect.Effect<void> =>
 
 export const state = {
   sqlite: (options?: { readonly home?: string; readonly dbPath?: string }): StateSpec =>
-    StateSpec.cases["sqlite"].make(options ?? {}),
-  memory: (): StateSpec => StateSpec.cases["memory"].make({}),
+    StateSpec.cases.Sqlite.make(options ?? {}),
+  memory: (): StateSpec => StateSpec.cases.Memory.make({}),
 }
 
 export const provider = {
-  live: (): ProviderSpec => ProviderSpec.cases["live"].make({}),
+  live: (): ProviderSpec => ProviderSpec.cases.Live.make({}),
   mock: (options?: { readonly empty?: boolean }): ProviderSpec =>
-    ProviderSpec.cases["mock"].make(options ?? {}),
+    ProviderSpec.cases.Mock.make(options ?? {}),
 }
 
 // ── Language model layer from spec ──
@@ -270,8 +270,8 @@ const resolveLanguageModelLayer = (
 ): Option.Option<Layer.Layer<LanguageModel.LanguageModel, never, never>> =>
   Match.value(spec).pipe(
     Match.tagsExhaustive({
-      live: () => Option.none(),
-      mock: (mockSpec) => {
+      Live: () => Option.none(),
+      Mock: (mockSpec) => {
         if (mockSpec.empty === true) return Option.some(LanguageModelLayers.empty)
         return Option.some(LanguageModelLayers.debug())
       },
@@ -295,14 +295,14 @@ const LocalPlatformLayer = Layer.merge(
 const resolveHome = (stateSpec: StateSpec, homeDirectory: string): string =>
   Match.value(stateSpec).pipe(
     Match.tagsExhaustive({
-      memory: () => Option.none<string>(),
-      sqlite: (sqliteSpec) => Option.fromNullishOr(sqliteSpec.home),
+      Memory: () => Option.none<string>(),
+      Sqlite: (sqliteSpec) => Option.fromNullishOr(sqliteSpec.home),
     }),
     Option.getOrElse(() => homeDirectory),
   )
 
 const resolveDbPath = (home: string, stateSpec: StateSpec): string => {
-  if (stateSpec._tag === "sqlite") {
+  if (stateSpec._tag === "Sqlite") {
     const dbPath = Option.fromNullishOr(stateSpec.dbPath)
     if (Option.isSome(dbPath)) return pathResolve(dbPath.value)
   }
@@ -399,8 +399,8 @@ const buildOwnedServer = (
       const languageModelLayer = resolveLanguageModelLayer(providerSpec)
       const dbPath = Match.value(stateSpec).pipe(
         Match.tagsExhaustive({
-          memory: () => Option.none<string>(),
-          sqlite: (sqliteSpec) => Option.some(resolveDbPath(home, sqliteSpec)),
+          Memory: () => Option.none<string>(),
+          Sqlite: (sqliteSpec) => Option.some(resolveDbPath(home, sqliteSpec)),
         }),
       )
       const serverRoot = yield* buildServerRoot({
@@ -415,8 +415,8 @@ const buildOwnedServer = (
           authDirectory: options.authDirectory,
           persistenceMode: Match.value(stateSpec).pipe(
             Match.tagsExhaustive({
-              memory: (): "memory" => "memory",
-              sqlite: (): "disk" => "disk",
+              Memory: (): "memory" => "memory",
+              Sqlite: (): "disk" => "disk",
             }),
           ),
           extensions: options.extensions ?? BuiltinExtensions,
@@ -471,7 +471,7 @@ const buildOwnedServer = (
         awaitShutdown = Deferred.await(shutdown)
       }
 
-      const server: GentServer = GentServer.cases["owned"].make({
+      const server: GentServer = GentServer.cases.Owned.make({
         url,
         workspaceId: workspaceIdForCwd(options.cwd),
       })
@@ -558,7 +558,7 @@ const resolveServerInternal = (
 
     // Memory state has nothing to share; a fixed port is already the address
     // the caller hands its clients. Both are owned outright, no registry.
-    if (stateSpec._tag === "memory" || Predicate.isNotNullish(options.port)) {
+    if (stateSpec._tag === "Memory" || Predicate.isNotNullish(options.port)) {
       return yield* buildOwnedServer(options, stateSpec, providerSpec)
     }
 
@@ -585,7 +585,7 @@ const resolveServerInternal = (
           buildFingerprint: fingerprint,
         })
         if (alive) {
-          return GentServer.cases["attached"].make({
+          return GentServer.cases.Attached.make({
             url: existing.rpcUrl,
             workspaceId: workspaceIdForCwd(options.cwd),
           })

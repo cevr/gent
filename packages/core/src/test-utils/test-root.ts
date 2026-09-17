@@ -55,7 +55,7 @@ export const testAgentsExtension = (
 const defaultRun: Pick<AgentRunner, "run"> = {
   run: () =>
     Effect.succeed(
-      AgentRunResult.cases.success.make({
+      AgentRunResult.cases.Success.make({
         text: "",
         sessionId: SessionId.make("test-subagent-session"),
         agentName: DEFAULT_AGENT_NAME,

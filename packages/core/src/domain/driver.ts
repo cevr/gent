@@ -188,7 +188,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
  * pre- `ProviderContribution` — `id` doubles as the driver id, the model
  * returned by `resolveModel` provides an `effect/unstable/ai` LanguageModel,
  * `listModels` filters/extends the catalog, and `auth` wires the OAuth/API
- * key flow. The driver registry routes a `DriverRef({ _tag: "model", id })`
+ * key flow. The driver registry routes a `DriverRef({ _tag: "Model", id })`
  * to the matching contribution.
  */
 export interface ModelDriverContribution {
@@ -270,10 +270,10 @@ export interface TurnExecutor {
  * Registers an external execution loop as a driver. The wrapped
  * `TurnExecutor` streams Effect AI response parts; the agent loop collects them into an
  * assistant draft. The driver registry routes a
- * `DriverRef({ _tag: "external", id })` to the matching contribution.
+ * `DriverRef({ _tag: "External", id })` to the matching contribution.
  */
 export interface ExternalDriverContribution {
-  /** Driver id — referenced by `agent.driver: DriverRef({ _tag: "external", id })`. */
+  /** Driver id — referenced by `agent.driver: DriverRef({ _tag: "External", id })`. */
   readonly id: string
   /** The turn executor implementation. */
   readonly executor: TurnExecutor

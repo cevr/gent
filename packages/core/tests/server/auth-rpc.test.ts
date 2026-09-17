@@ -128,7 +128,7 @@ describe("auth.listProviders", () => {
           yield* fs.makeDirectory(path.join(sessionCwd, ".gent"), { recursive: true })
           yield* fs.writeFileString(
             path.join(sessionCwd, ".gent", "config.json"),
-            '{"driverOverrides":{"main":{"_tag":"external","id":"acp-claude-code"}}}',
+            '{"driverOverrides":{"main":{"_tag":"External","id":"acp-claude-code"}}}',
           )
           const runtimeEnvironmentLive = RuntimeEnvironment.Live({
             cwd: launch,
@@ -174,7 +174,7 @@ describe("auth.listProviders", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
-        const externalDriver = drivers.find((d) => d._tag === "external")
+        const externalDriver = drivers.find((d) => d._tag === "External")
         if (Predicate.isUndefined(externalDriver)) return
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,

@@ -26,15 +26,15 @@ export const isReasoningEffort = Schema.is(ReasoningEffort)
 //
 // Optional: when omitted, the loop resolves a model driver from the agent's
 // model id (`provider/model` parses out the driver id). Specify
-// `{ _tag: "external", id }` to route through an `ExternalDriverContribution`
+// `{ _tag: "External", id }` to route through an `ExternalDriverContribution`
 // (e.g. ACP agents) instead of a model provider.
 
-const ModelDriverRefStruct = Schema.TaggedStruct("model", {
+const ModelDriverRefStruct = Schema.TaggedStruct("Model", {
   /** Optional model-driver id override. When omitted, the loop derives it
    *  from the agent's model id segment. */
   id: Schema.optional(Schema.String),
 })
-const ExternalDriverRefStruct = Schema.TaggedStruct("external", {
+const ExternalDriverRefStruct = Schema.TaggedStruct("External", {
   /** External driver id — must match a registered
    *  `ExternalDriverContribution.id`. */
   id: Schema.String,
@@ -46,10 +46,10 @@ export const DriverRef = Schema.Union([ModelDriverRefStruct, ExternalDriverRefSt
 export type DriverRef = Schema.Schema.Type<typeof DriverRef>
 
 // Per-variant aliases — same TaggedStruct identity, convenience names.
-export const ModelDriverRef = DriverRef.cases.model
-export type ModelDriverRef = typeof DriverRef.cases.model.Type
-export const ExternalDriverRef = DriverRef.cases.external
-export type ExternalDriverRef = typeof DriverRef.cases.external.Type
+export const ModelDriverRef = DriverRef.cases.Model
+export type ModelDriverRef = typeof DriverRef.cases.Model.Type
+export const ExternalDriverRef = DriverRef.cases.External
+export type ExternalDriverRef = typeof DriverRef.cases.External.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = AgentName.make("main")
@@ -155,7 +155,7 @@ export const effectiveModelDriver = (
 ): EffectiveModelDriver => {
   const parsed = parseModelId(modelId)
   const override = Option.flatMap(driver, (ref) => {
-    if (ref._tag !== "model") return Option.none()
+    if (ref._tag !== "Model") return Option.none()
     return Option.fromUndefinedOr(ref.id)
   })
   return Option.match(override, {
@@ -264,14 +264,14 @@ export const agentRunUsage = (usage: {
   readonly outputTokens: number
 }): AgentRunUsage => ({ input: usage.inputTokens, output: usage.outputTokens })
 
-const AgentRunSuccessStruct = Schema.TaggedStruct("success", {
+const AgentRunSuccessStruct = Schema.TaggedStruct("Success", {
   text: Schema.String,
   sessionId: SessionId,
   agentName: AgentName,
   usage: Schema.optional(AgentRunUsageSchema),
   toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
 })
-const AgentRunFailureStruct = Schema.TaggedStruct("error", {
+const AgentRunFailureStruct = Schema.TaggedStruct("Error", {
   error: Schema.String,
   sessionId: Schema.optional(SessionId),
   agentName: Schema.optional(AgentName),

@@ -345,7 +345,7 @@ export function createSessionController(props: {
     if (
       client.isLoading() ||
       client.isReconnecting() ||
-      (Option.isSome(connection) && connection.value._tag === "disconnected")
+      (Option.isSome(connection) && connection.value._tag === "Disconnected")
     )
       return { sessionId, state: "unknown" }
     if (

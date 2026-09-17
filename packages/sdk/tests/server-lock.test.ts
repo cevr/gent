@@ -172,7 +172,7 @@ describe("Server Lock", () => {
           state: Gent.state.sqlite({ home, dbPath: `${home}/other.db` }),
           provider: Gent.provider.mock(),
         })
-        expect(server._tag).toBe("attached")
+        expect(server._tag).toBe("Attached")
         expect(server.url).toBe(entryWithEndpoint.rpcUrl)
       }),
     ),
@@ -190,11 +190,11 @@ describe("Server Lock", () => {
         }
 
         const owner = yield* Gent.server(options)
-        expect(owner._tag).toBe("owned")
+        expect(owner._tag).toBe("Owned")
         const ownerStatus = yield* (yield* Gent.client(owner)).client.runtime.status()
 
         const attached = yield* Gent.server(options)
-        expect(attached._tag).toBe("attached")
+        expect(attached._tag).toBe("Attached")
         expect(attached.url).toBe(owner.url)
 
         const response = yield* Effect.promise(() =>

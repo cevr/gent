@@ -291,7 +291,7 @@ describe("extension command RPCs", () => {
             expect(queue.steering).toEqual([])
             expect(queue.followUp).toEqual([
               expect.objectContaining({
-                _tag: "follow-up",
+                _tag: "FollowUp",
                 content: "queued through public rpc",
               }),
             ])
@@ -505,7 +505,7 @@ describe("extension command RPCs", () => {
             const queue = yield* client.queue.get({ sessionId, branchId })
             expect(queue.followUp).toEqual([
               expect.objectContaining({
-                _tag: "follow-up",
+                _tag: "FollowUp",
                 content: "queued through slash request",
               }),
             ])
@@ -786,14 +786,14 @@ describe("extension command RPCs", () => {
               cwd: "/tmp",
             })
             const status = yield* client.extension.listStatus({ sessionId })
-            expect(status._tag).toBe("degraded")
-            if (status._tag !== "degraded") return
+            expect(status._tag).toBe("Degraded")
+            if (status._tag !== "Degraded") return
             expect(status.healthyExtensions).toEqual([])
             expect(status.degradedExtensions).toHaveLength(1)
             expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
             expect(status.degradedExtensions[0]?.issues).toEqual([
               {
-                _tag: "activation-failed",
+                _tag: "ActivationFailed",
                 phase: "setup",
                 error: "setup boom",
               },

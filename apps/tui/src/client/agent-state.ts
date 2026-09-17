@@ -3,9 +3,9 @@ import type * as Option from "effect/Option"
 import type { AgentName, ModelId, ReasoningEffort } from "@gent/core/protocol"
 
 export const AgentStatus = Schema.Union([
-  Schema.TaggedStruct("idle", {}),
-  Schema.TaggedStruct("streaming", {}),
-  Schema.TaggedStruct("error", { error: Schema.String }),
+  Schema.TaggedStruct("Idle", {}),
+  Schema.TaggedStruct("Streaming", {}),
+  Schema.TaggedStruct("Error", { error: Schema.String }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 
 export type AgentStatus = Schema.Schema.Type<typeof AgentStatus>

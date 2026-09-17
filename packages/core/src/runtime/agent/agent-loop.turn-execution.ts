@@ -504,7 +504,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (Predicate.isUndefined(source)) {
         let driverKind: "model" | "external" = "model"
         const driver = params.resolved.driver
-        if (Predicate.isNotUndefined(driver) && driver._tag === "external") driverKind = "external"
+        if (Predicate.isNotUndefined(driver) && driver._tag === "External") driverKind = "external"
         const collected: CollectedTurnResponse = {
           responseParts: [],
           messageProjection: { assistant: [], tool: [] },

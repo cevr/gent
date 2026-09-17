@@ -94,15 +94,15 @@ describe("local health", () => {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
       const extensionHealth = extensionHealthFromSnapshot(
-        ExtensionHealthSnapshot.cases.degraded.make({
+        ExtensionHealthSnapshot.cases.Degraded.make({
           healthyExtensions: [],
           degradedExtensions: [
-            ExtensionHealth.cases.degraded.make({
+            ExtensionHealth.cases.Degraded.make({
               manifest: { id: "@test/broken-resource" },
               scope: "builtin",
               sourcePath: "builtin",
               issues: [
-                ExtensionHealthIssue.cases["activation-failed"].make({
+                ExtensionHealthIssue.cases.ActivationFailed.make({
                   phase: "startup",
                   error: "resource start boom",
                 }),

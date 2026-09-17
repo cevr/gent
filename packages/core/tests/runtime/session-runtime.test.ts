@@ -369,7 +369,7 @@ describe("SessionRuntime", () => {
           expect(queue.steering).toEqual([])
           expect(queue.followUp).toEqual([
             expect.objectContaining({
-              _tag: "follow-up",
+              _tag: "FollowUp",
               id: expect.stringContaining(":direct-follow-up"),
               content: "direct follow-up",
             }),
@@ -701,7 +701,7 @@ describe("SessionRuntime", () => {
             requestId: "req-drain-follow-up",
           })
           expect(drained.followUp).toEqual([
-            expect.objectContaining({ _tag: "follow-up", content: "drain me" }),
+            expect.objectContaining({ _tag: "FollowUp", content: "drain me" }),
           ])
           expect(retried).toEqual(drained)
           expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({

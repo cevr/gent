@@ -46,7 +46,7 @@ describe("ExtensionRpcs", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
-        const someModel = drivers.find((d) => d._tag === "model")
+        const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
@@ -55,7 +55,7 @@ describe("ExtensionRpcs", () => {
           driver: ModelDriverRef.make({ id: someModel.id }),
         })
         const after = yield* client.driver.list()
-        expect(after.overrides[DEFAULT_AGENT_NAME]?._tag).toBe("model")
+        expect(after.overrides[DEFAULT_AGENT_NAME]?._tag).toBe("Model")
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -82,7 +82,7 @@ describe("ExtensionRpcs", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
-        const someModel = drivers.find((d) => d._tag === "model")
+        const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }

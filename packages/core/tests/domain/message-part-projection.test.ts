@@ -63,12 +63,12 @@ describe("message part projection", () => {
       ]),
     ])
     expect(projected?.segments).toEqual([
-      { _tag: "reasoning", content: "thinking" },
-      { _tag: "text", content: "before" },
-      { _tag: "tool-call", toolCallId: ToolCallId.make("tc-1") },
-      { _tag: "text", content: "after" },
+      { _tag: "Reasoning", content: "thinking" },
+      { _tag: "Text", content: "before" },
+      { _tag: "ToolCall", toolCallId: ToolCallId.make("tc-1") },
+      { _tag: "Text", content: "after" },
       // A call still running carries a segment; its interaction says "running".
-      { _tag: "tool-call", toolCallId: ToolCallId.make("tc-2") },
+      { _tag: "ToolCall", toolCallId: ToolCallId.make("tc-2") },
     ])
     expect(projected?.toolInteractions.map((entry) => entry.status)).toEqual([
       "completed",
@@ -98,7 +98,7 @@ describe("message part projection", () => {
     })
     const projected = projectMessagesWithToolInteractions([assistant, user])
     // A non-image file carries no transcript segment.
-    expect(projected[0]?.segments).toEqual([{ _tag: "image", mediaType: "image/png" }])
+    expect(projected[0]?.segments).toEqual([{ _tag: "Image", mediaType: "image/png" }])
     expect(projected[1]?.segments).toEqual([])
   })
 

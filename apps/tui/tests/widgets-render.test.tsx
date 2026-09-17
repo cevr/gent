@@ -40,20 +40,20 @@ const nextSession: Session = {
 }
 
 const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnapshot => ({
-  _tag: "degraded",
+  _tag: "Degraded",
   healthyExtensions: [],
   degradedExtensions: [
     {
       manifest: { id },
       scope: "builtin",
       sourcePath: "builtin",
-      _tag: "degraded",
-      issues: [{ _tag: "activation-failed", phase: "startup", error }],
+      _tag: "Degraded",
+      issues: [{ _tag: "ActivationFailed", phase: "startup", error }],
     },
   ],
 })
 
-const healthyHealth: ExtensionHealthSnapshot = { _tag: "healthy", extensions: [] }
+const healthyHealth: ExtensionHealthSnapshot = { _tag: "Healthy", extensions: [] }
 
 const runWithEmptyContext = <A, E, R>(effect: Effect.Effect<A, E, R>): Promise<A> =>
   runEffectBoundary(Effect.provideContext(effect, Context.makeUnsafe<R>(new Map<string, never>())))
@@ -79,9 +79,9 @@ const HealthControlsProbe = (props: {
   })
   const failedActivation = () => {
     const health = client.extensionHealth()
-    if (health._tag !== "degraded") return []
+    if (health._tag !== "Degraded") return []
     return health.degradedExtensions
-      .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
       .map((extension) => extension.manifest.id)
   }
   return <text>{failedActivation().join(",")}</text>
@@ -164,7 +164,7 @@ describe("TUI renderer surfaces", () => {
     Effect.gen(function* () {
       const steerMessages: QueueEntryInfo[] = [
         {
-          _tag: "steering",
+          _tag: "Steering",
           id: MessageId.make("m1"),
           content: "switch to deepwork",
           createdAt: 0,
@@ -172,7 +172,7 @@ describe("TUI renderer surfaces", () => {
       ]
       const queuedMessages: QueueEntryInfo[] = [
         {
-          _tag: "follow-up",
+          _tag: "FollowUp",
           id: MessageId.make("m2"),
           content: "line one\nline two\nline three",
           createdAt: 0,
@@ -207,17 +207,17 @@ describe("TUI renderer surfaces", () => {
             extension: {
               listStatus: () =>
                 Effect.succeed({
-                  _tag: "degraded",
+                  _tag: "Degraded",
                   healthyExtensions: [],
                   degradedExtensions: [
                     {
                       manifest: { id: "@gent/memory" },
                       scope: "builtin",
                       sourcePath: "builtin",
-                      _tag: "degraded",
+                      _tag: "Degraded",
                       issues: [
                         {
-                          _tag: "activation-failed",
+                          _tag: "ActivationFailed",
                           phase: "startup",
                           error: "startup boom",
                         },
@@ -245,17 +245,17 @@ describe("TUI renderer surfaces", () => {
               listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
                 expect(sessionId).toBe(testSession.id)
                 return Effect.succeed({
-                  _tag: "degraded",
+                  _tag: "Degraded",
                   healthyExtensions: [],
                   degradedExtensions: [
                     {
                       manifest: { id: "@gent/plan" },
                       scope: "builtin",
                       sourcePath: "builtin",
-                      _tag: "degraded",
+                      _tag: "Degraded",
                       issues: [
                         {
-                          _tag: "activation-failed",
+                          _tag: "ActivationFailed",
                           phase: "startup",
                           error: "launchd boom",
                         },
@@ -277,21 +277,21 @@ describe("TUI renderer surfaces", () => {
   it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
     Effect.gen(function* () {
       const lifecycle = createMutableRuntime(
-        ConnectionState.cases.connected.make({ generation: 0 }),
+        ConnectionState.cases.Connected.make({ generation: 0 }),
       )
       let callCount = 0
       let currentHealth: ExtensionHealthSnapshot = {
-        _tag: "degraded",
+        _tag: "Degraded",
         healthyExtensions: [],
         degradedExtensions: [
           {
             manifest: { id: "@gent/plan" },
             scope: "builtin",
             sourcePath: "builtin",
-            _tag: "degraded",
+            _tag: "Degraded",
             issues: [
               {
-                _tag: "activation-failed",
+                _tag: "ActivationFailed",
                 phase: "startup",
                 error: "launchd boom",
               },
@@ -317,13 +317,13 @@ describe("TUI renderer surfaces", () => {
       expect(renderFrame(setup)).toContain("failed extensions")
       expect(callCount).toBe(1)
       currentHealth = {
-        _tag: "healthy",
+        _tag: "Healthy",
         extensions: [],
       }
-      lifecycle.emit(ConnectionState.cases.reconnecting.make({ attempt: 1, generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
-      lifecycle.emit(ConnectionState.cases.connected.make({ generation: 1 }))
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.yieldNow

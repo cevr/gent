@@ -209,7 +209,7 @@ export const extensionHealthError = (error: string): ExtensionDoctorHealth => ({
 export const extensionHealthFromSnapshot = (
   snapshot: ExtensionHealthSnapshot,
 ): ExtensionDoctorHealth => {
-  if (snapshot._tag === "healthy") {
+  if (snapshot._tag === "Healthy") {
     let suffix = "s"
     if (snapshot.extensions.length === 1) suffix = ""
     return {
@@ -290,7 +290,7 @@ const formatBytes = (bytes: number): string => {
 const formatIssue = (issue: ExtensionHealthIssue): string =>
   Match.value(issue).pipe(
     Match.tagsExhaustive({
-      "activation-failed": (issue) => `activation failed during ${issue.phase}: ${issue.error}`,
+      ActivationFailed: (issue) => `activation failed during ${issue.phase}: ${issue.error}`,
     }),
   )
 
@@ -299,7 +299,7 @@ const formatExtensions = (extensions: ExtensionDoctorHealth): ReadonlyArray<stri
   const error = Option.fromNullishOr(extensions.error)
   if (Option.isSome(error)) lines.push(`  Error: ${error.value}`)
   const snapshot = Option.fromNullishOr(extensions.snapshot)
-  if (Option.isNone(snapshot) || snapshot.value._tag !== "degraded") return lines
+  if (Option.isNone(snapshot) || snapshot.value._tag !== "Degraded") return lines
 
   for (const extension of snapshot.value.degradedExtensions) {
     lines.push(`  ${extension.manifest.id}:`)

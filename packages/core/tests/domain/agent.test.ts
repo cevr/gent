@@ -22,18 +22,18 @@ describe("AgentName brand", () => {
 })
 
 describe("AgentRunResult", () => {
-  test("Success uses the stable wire tag 'success'", () => {
-    const result = AgentRunResult.cases.success.make({
+  test("Success uses the stable wire tag 'Success'", () => {
+    const result = AgentRunResult.cases.Success.make({
       text: "ok",
       sessionId: SessionId.make("s1"),
       agentName: AgentName.make("cowork"),
     })
-    expect(result._tag).toBe("success")
+    expect(result._tag).toBe("Success")
   })
 
-  test("Failure uses the stable wire tag 'error'", () => {
-    const result = AgentRunResult.cases.error.make({ error: "boom" })
-    expect(result._tag).toBe("error")
+  test("Failure uses the stable wire tag 'Error'", () => {
+    const result = AgentRunResult.cases.Error.make({ error: "boom" })
+    expect(result._tag).toBe("Error")
   })
 
   test("decode rejects unknown variant tags", () => {

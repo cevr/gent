@@ -29,8 +29,8 @@ describe("buildExtensionHealthSnapshot", () => {
       },
     ])
 
-    expect(snapshot._tag).toBe("degraded")
-    if (snapshot._tag !== "degraded") return
+    expect(snapshot._tag).toBe("Degraded")
+    if (snapshot._tag !== "Degraded") return
 
     expect(snapshot.healthyExtensions).toEqual([])
     expect(snapshot.degradedExtensions).toEqual([
@@ -38,10 +38,10 @@ describe("buildExtensionHealthSnapshot", () => {
         manifest: { id: "@gent/memory" },
         scope: "builtin",
         sourcePath: "builtin",
-        _tag: "degraded",
+        _tag: "Degraded",
         issues: [
           {
-            _tag: "activation-failed",
+            _tag: "ActivationFailed",
             phase: "startup",
             error: "startup boom",
           },
@@ -51,10 +51,10 @@ describe("buildExtensionHealthSnapshot", () => {
         manifest: { id: "@gent/plan" },
         scope: "builtin",
         sourcePath: "builtin",
-        _tag: "degraded",
+        _tag: "Degraded",
         issues: [
           {
-            _tag: "activation-failed",
+            _tag: "ActivationFailed",
             phase: "setup",
             error: "setup boom",
           },
@@ -74,10 +74,10 @@ describe("buildExtensionHealthSnapshot", () => {
     ])
 
     expect(snapshot).toEqual({
-      _tag: "healthy",
+      _tag: "Healthy",
       extensions: [
         {
-          _tag: "healthy",
+          _tag: "Healthy",
           manifest: { id: ExtensionId.make("@gent/memory") },
           scope: "builtin",
           sourcePath: "builtin",
@@ -88,12 +88,12 @@ describe("buildExtensionHealthSnapshot", () => {
 
   test("health issue constructors preserve typed failure categories", () => {
     expect(
-      ExtensionHealthIssue.cases["activation-failed"].make({
+      ExtensionHealthIssue.cases.ActivationFailed.make({
         phase: "startup",
         error: "startup boom",
       }),
     ).toEqual({
-      _tag: "activation-failed",
+      _tag: "ActivationFailed",
       phase: "startup",
       error: "startup boom",
     })
@@ -101,25 +101,25 @@ describe("buildExtensionHealthSnapshot", () => {
 
   test("degraded constructor requires non-empty issues", () => {
     expect(
-      ExtensionHealth.cases.degraded.make({
+      ExtensionHealth.cases.Degraded.make({
         manifest: { id: "@gent/plan" },
         scope: "builtin",
         sourcePath: "builtin",
         issues: [
-          ExtensionHealthIssue.cases["activation-failed"].make({
+          ExtensionHealthIssue.cases.ActivationFailed.make({
             phase: "startup",
             error: "launchd boom",
           }),
         ],
       }),
     ).toEqual({
-      _tag: "degraded",
+      _tag: "Degraded",
       manifest: { id: "@gent/plan" },
       scope: "builtin",
       sourcePath: "builtin",
       issues: [
         {
-          _tag: "activation-failed",
+          _tag: "ActivationFailed",
           phase: "startup",
           error: "launchd boom",
         },
@@ -129,17 +129,17 @@ describe("buildExtensionHealthSnapshot", () => {
 
   test("transport uses tagged extension health states and issues", () => {
     const wire = {
-      _tag: "degraded",
+      _tag: "Degraded",
       healthyExtensions: [],
       degradedExtensions: [
         {
           manifest: { id: "@gent/plan" },
           scope: "builtin",
           sourcePath: "builtin",
-          _tag: "degraded",
+          _tag: "Degraded",
           issues: [
             {
-              _tag: "activation-failed",
+              _tag: "ActivationFailed",
               phase: "startup",
               error: "launchd boom",
             },
@@ -149,23 +149,23 @@ describe("buildExtensionHealthSnapshot", () => {
     }
 
     const decoded = Schema.decodeUnknownSync(ExtensionHealthSnapshot)(wire)
-    expect(decoded._tag).toBe("degraded")
-    if (decoded._tag !== "degraded") return
+    expect(decoded._tag).toBe("Degraded")
+    if (decoded._tag !== "Degraded") return
     expect(decoded.degradedExtensions[0]?.issues[0]).toEqual({
-      _tag: "activation-failed",
+      _tag: "ActivationFailed",
       phase: "startup",
       error: "launchd boom",
     })
 
     const encoded = Schema.encodeSync(ExtensionHealthSnapshot)(decoded)
     expect(encoded).toMatchObject({
-      _tag: "degraded",
+      _tag: "Degraded",
       degradedExtensions: [
         {
-          _tag: "degraded",
+          _tag: "Degraded",
           issues: [
             {
-              _tag: "activation-failed",
+              _tag: "ActivationFailed",
               phase: "startup",
               error: "launchd boom",
             },
@@ -178,14 +178,14 @@ describe("buildExtensionHealthSnapshot", () => {
   test("transport rejects healthy snapshots containing degraded rows", () => {
     expect(() =>
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
-        _tag: "healthy",
+        _tag: "Healthy",
         extensions: [
           {
             manifest: { id: ExtensionId.make("@gent/memory") },
             scope: "builtin",
             sourcePath: "builtin",
-            _tag: "degraded",
-            issues: [{ _tag: "activation-failed", phase: "startup", error: "startup boom" }],
+            _tag: "Degraded",
+            issues: [{ _tag: "ActivationFailed", phase: "startup", error: "startup boom" }],
           },
         ],
       }),
@@ -195,7 +195,7 @@ describe("buildExtensionHealthSnapshot", () => {
   test("transport rejects degraded snapshots without degraded rows", () => {
     expect(() =>
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
-        _tag: "degraded",
+        _tag: "Degraded",
         healthyExtensions: [],
         degradedExtensions: [],
       }),
@@ -205,14 +205,14 @@ describe("buildExtensionHealthSnapshot", () => {
   test("transport rejects degraded rows without issues", () => {
     expect(() =>
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
-        _tag: "degraded",
+        _tag: "Degraded",
         healthyExtensions: [],
         degradedExtensions: [
           {
             manifest: { id: ExtensionId.make("@gent/memory") },
             scope: "builtin",
             sourcePath: "builtin",
-            _tag: "degraded",
+            _tag: "Degraded",
             issues: [],
           },
         ],

@@ -224,7 +224,7 @@ describe("ListAuthProvidersPayload schema", () => {
     // This test documents intent: callers shouldn't include driverOverrides.
     const query = decode({
       sessionId: SessionId.make("019d-test-session-id"),
-      driverOverrides: { [DEFAULT_AGENT_NAME]: { _tag: "external", id: "evil" } },
+      driverOverrides: { [DEFAULT_AGENT_NAME]: { _tag: "External", id: "evil" } },
     })
     expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
     // The decoded type intentionally has no `driverOverrides` field.

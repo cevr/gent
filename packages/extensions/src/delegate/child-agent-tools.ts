@@ -15,8 +15,8 @@ export const ChildAgentHandle = Schema.Struct({
 })
 
 const ChildObservation = Schema.TaggedUnion({
-  pending: ChildAgentHandle.fields,
-  completed: {
+  Pending: ChildAgentHandle.fields,
+  Completed: {
     ...ChildAgentHandle.fields,
     interrupted: Schema.optionalKey(Schema.Boolean),
     streamFailed: Schema.optionalKey(Schema.Boolean),
@@ -48,8 +48,8 @@ export const ControlChildAgent = tool({
       sessionId: observation.sessionId,
       branchId: observation.branchId,
     }
-    if (Option.isNone(observation.completion)) return ChildObservation.cases.pending.make(handle)
-    return ChildObservation.cases.completed.make({
+    if (Option.isNone(observation.completion)) return ChildObservation.cases.Pending.make(handle)
+    return ChildObservation.cases.Completed.make({
       ...handle,
       ...Record.filter(
         {

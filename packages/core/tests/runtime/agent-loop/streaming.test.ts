@@ -681,10 +681,10 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
           })
           expect(snapshot.steering).toEqual([
-            expect.objectContaining({ _tag: "steering", content: "steer now" }),
+            expect.objectContaining({ _tag: "Steering", content: "steer now" }),
           ])
           expect(snapshot.followUp).toEqual([
-            expect.objectContaining({ _tag: "follow-up", content: "queued a\nqueued b" }),
+            expect.objectContaining({ _tag: "FollowUp", content: "queued a\nqueued b" }),
           ])
           const secondSnapshot = yield* agentLoop.getQueue({
             sessionId: SessionId.make("s1"),
@@ -763,7 +763,7 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
           })
           expect(snapshotWhileRunning.followUp).toEqual([
-            expect.objectContaining({ _tag: "follow-up", content: "queued after failure" }),
+            expect.objectContaining({ _tag: "FollowUp", content: "queued after failure" }),
           ])
           // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, undefined)

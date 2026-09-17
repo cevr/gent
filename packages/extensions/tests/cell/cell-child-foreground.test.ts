@@ -29,7 +29,7 @@ describe("foreground child cell", () => {
         // turn admitted from inside the parent's cell operation.
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", {
-            code: "const r = await tools.call('delegate', { todo: 'compute' }); r._tag === 'completed' && r.output.includes('child says 2') && r.metadata.toolCalls.length === 1 && r.metadata.toolCalls[0].toolName === 'cell' && r.metadata.toolCalls[0].isError === false",
+            code: "const r = await tools.call('delegate', { todo: 'compute' }); r._tag === 'Completed' && r.output.includes('child says 2') && r.metadata.toolCalls.length === 1 && r.metadata.toolCalls[0].toolName === 'cell' && r.metadata.toolCalls[0].isError === false",
           }),
           toolCallStep("cell", { code: "1 + 1" }),
           textStep("child says 2"),

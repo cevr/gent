@@ -29,7 +29,7 @@ describe("agent driver precedence", () => {
       [AgentName.make("special")]: ExternalDriverRef.make({ id: "acp-opencode" }),
     } satisfies Record<string, DriverRef>
     const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver?._tag).toBe("external")
+    expect(result.driver?._tag).toBe("External")
     expect(result.driver).toEqual(ExternalDriverRef.make({ id: "acp-claude-code" }))
     expect(result.source).toBe("agent")
   })
@@ -40,7 +40,7 @@ describe("agent driver precedence", () => {
       [AgentName.make("cowork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
     } satisfies Record<string, DriverRef>
     const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver?._tag).toBe("external")
+    expect(result.driver?._tag).toBe("External")
     expect(result.driver).toEqual(ExternalDriverRef.make({ id: "acp-claude-code" }))
     expect(result.source).toBe("config")
   })
@@ -75,7 +75,7 @@ describe("agent driver precedence", () => {
       [AgentName.make("cowork")]: ModelDriverRef.make({ id: "anthropic" }),
     } satisfies Record<string, DriverRef>
     const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver?._tag).toBe("model")
+    expect(result.driver?._tag).toBe("Model")
     expect(result.source).toBe("config")
   })
 })

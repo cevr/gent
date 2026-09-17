@@ -1330,3 +1330,95 @@ Probes, each reverting one line and nothing else:
   distinct from the shared-staleness candidate refused above — that refusal
   stands. Two queries for the _same_ session can still land out of order
   (`client-services.ts:145`, `:157`; `agents-view.client.tsx:528`). Open.
+
+## Schema enum variant keys are PascalCase (2026-09-17)
+
+`.cases["follow-up"]` and `.cases["activation-failed"]` forced bracket syntax at
+every call site. Every `Schema.TaggedUnion` / `TaggedStruct` variant key is now
+PascalCase, so the accessor is `.cases.FollowUp`.
+
+Method: rename the **definition** only, then let `tsc` name every call site.
+The compiler even suggests the spelling ("Did you mean 'Open'?"). Renaming
+definitions one union at a time keeps the error list attributable — several of
+these unions share tag spellings (`model`/`external` in both `DriverRef` and
+`DriverInfo`; `error` in three separate unions), so a repo-wide string rewrite
+cannot tell them apart.
+
+The method has one blind spot, and it cost two red gates: **a tag written
+inside a string literal is invisible to `tsc`.** Typecheck, lint, and fmt all
+passed clean while thirteen such strings still held the old spelling. Only the
+runtime assertions caught them. Three sub-cases appeared:
+
+- **Cell script source.** `cell-child-foreground.test.ts:32` and
+  `cell-lifetime.test.ts:78,83` compare `_tag` inside a `code:` string the cell
+  evaluates at runtime. The predicate silently returned false and the cell
+  reported `display: "false"`.
+- **Hand-written config JSON.** `auth-rpc.test.ts:131` writes
+  `'{"driverOverrides":{"main":{"_tag":"external",…}}}'` to a real
+  `.gent/config.json`; `config-service.test.ts:379` and `auth-guard.test.ts:227`
+  build the same shape as an object. `ConfigService` decoded the file, found no
+  matching variant, and dropped the override — surfacing as `required: true`
+  and "expected cowork override", neither of which names a tag.
+- **Partial matchers.** Six `expect.objectContaining({ _tag: "follow-up" })`
+  assertions across `streaming.test.ts`, `session-runtime.test.ts`, and
+  `extension-commands-rpc.test.ts`.
+
+After any tag rename, grep the string literals directly, matching on the tag
+values actually renamed rather than on `_tag` alone:
+
+```
+command grep -rnE "_tag[\"']?[[:space:]]*:[[:space:]]*[\"'](model|external|…)[\"']" \
+  --include="*.ts" --include="*.tsx" --include="*.json" . | command grep -v node_modules
+```
+
+Two near-misses that must **not** be rewritten: `{_tag: 'save'}` / `{_tag:
+'get'}` in `cell-lifetime.test.ts` belong to the fixture's own hand-rolled
+`child-handle` tool, and `agent.test.ts:41` feeds `{ _tag: "pending" }` to
+assert that decode _rejects_ an unknown variant. Both are correct lowercase.
+
+Renamed: `QueueEntryInfo`, `AgentStatus`, ACP `ConnState`, `StateSpec`,
+`ProviderSpec`, `GentServer`, `ConnectionState`, `DriverInfo`, `DriverRef`,
+`AgentRunResult`, `ExtensionHealth` / `ExtensionHealthSnapshot` /
+`ExtensionHealthIssue`, `MessageSegment`, `DelegateResult`, `ChildObservation`.
+
+### Two unions keep lowercase tags, because the tag is persisted
+
+**`Message` / `ProjectedMessage` (regular, interjection).**
+`message-storage.ts:132` and `:152` write `message._tag` directly into the
+SQLite `kind` column, and `rows.ts:176` reads it back. `~/.gent/data.db` holds
+**7,129 rows** with `kind = "regular"`. That is 157 of the 214 lowercase
+accessors in the repo, and renaming them is a data migration, not a rename.
+
+**`WakeEntry` (alarm, monitor).** Renamed, then reverted on evidence. The store
+serializes entries to `~/.gent/wakes/<branch>.json`
+(`wake/index.ts:116`), a live file on this machine holds
+`[{"_tag":"alarm","wakeId":"01a0a3d7-…","note":"say hi"}]`, and
+`branch-state-store.ts:41` maps a decode failure through the `invalid:` hook
+into a raised `WakeError` — it does not drop the entry and carry on. The
+rename would turn a pending alarm into a hard read error.
+
+`events.event_tag` was never at risk: `AgentEvent` variants were already
+PascalCase, which is why `MessageReceived` and `StreamChunk` appear verbatim in
+the events table.
+
+`DriverRef` was checked against the same standard and cleared: the test
+fixtures write `_tag` into a `.gent/config.json`, so the shape is genuinely
+persisted, but no `config.json` on this machine carries a driver tag at all.
+The rename is safe; only the fixtures needed updating.
+
+### One bulk rewrite went wrong, and the compiler caught it
+
+A `_tag === "model"` → `"Model"` pass also rewrote `session.tsx:305`, whose
+`overlay._tag` belongs to the hand-rolled union in `session-ui-state.ts`
+(`"auth" | "branches" | … | "prompt-search"`) and has nothing to do with
+`DriverRef`. Reverted. Anchor such rewrites on the union's own accessor, never
+on the bare tag string.
+
+### Open finding, not fixed here
+
+`session-ui-state.ts:12` and `message-list.tsx:144` declare hand-rolled
+`{ readonly _tag: "x" } | …` unions. `CLAUDE.md` forbids exactly that, and
+`packages/tooling/fixtures/no-hand-rolled-tagged-union.{valid,invalid}.ts`
+carries a lint fixture for it, so the rule exists and these are not covered by
+it. Converting them to `Schema.TaggedUnion` is a separate change with its own
+call-site fallout.

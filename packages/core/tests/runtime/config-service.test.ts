@@ -218,7 +218,7 @@ describe("user configuration", () => {
         const cowork = result.driverOverrides?.[AgentName.make("cowork")]
         if (Predicate.isUndefined(cowork))
           return yield* Effect.die(new Error("expected cowork override"))
-        expect(cowork._tag).toBe("external")
+        expect(cowork._tag).toBe("External")
         expect(cowork.id).toBe("acp-claude-code")
       }).pipe(Effect.provide(ConfigService.Test())),
     )
@@ -235,7 +235,7 @@ describe("user configuration", () => {
           ModelDriverRef.make({ id: "anthropic" }),
         )
         const result = yield* cfg.get()
-        expect(result.driverOverrides?.[AgentName.make("cowork")]?._tag).toBe("model")
+        expect(result.driverOverrides?.[AgentName.make("cowork")]?._tag).toBe("Model")
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
@@ -376,7 +376,7 @@ describe("user configuration", () => {
         Effect.gen(function* () {
           const configDir = path.join(cwd, ".gent")
           const configText = encodeJson({
-            driverOverrides: { [agent]: { _tag: "external", id: driverId } },
+            driverOverrides: { [agent]: { _tag: "External", id: driverId } },
           })
           yield* fs.makeDirectory(configDir, { recursive: true })
           yield* fs.writeFileString(path.join(configDir, "config.json"), configText)
@@ -398,7 +398,7 @@ describe("user configuration", () => {
       if (Predicate.isUndefined(override)) {
         return Effect.runSync(Effect.die(new Error(`expected ${agent} override`)))
       }
-      if (override._tag !== "external") {
+      if (override._tag !== "External") {
         return Effect.runSync(Effect.die(new Error("expected external driver")))
       }
       expect(override.id).toBe(expectedId)

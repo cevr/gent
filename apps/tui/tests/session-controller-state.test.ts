@@ -54,10 +54,10 @@ describe("session controller state", () => {
 
   test("queued draft text preserves steering before follow-up entries", () => {
     const queue = {
-      steering: [queueEntry("steering", "m1", "switch agents")],
+      steering: [queueEntry("Steering", "m1", "switch agents")],
       followUp: [
-        queueEntry("follow-up", "m2", "then continue"),
-        queueEntry("follow-up", "m3", "and summarize"),
+        queueEntry("FollowUp", "m2", "then continue"),
+        queueEntry("FollowUp", "m3", "and summarize"),
       ],
     }
 

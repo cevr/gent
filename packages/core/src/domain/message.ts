@@ -114,10 +114,10 @@ export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
  * still reads `parts`. `tool-call` names an interaction on the same projected
  * message, so a client resolves it by id instead of copying the payload.
  */
-const TextSegmentStruct = Schema.TaggedStruct("text", { content: Schema.String })
-const ReasoningSegmentStruct = Schema.TaggedStruct("reasoning", { content: Schema.String })
-const ImageSegmentStruct = Schema.TaggedStruct("image", { mediaType: Schema.String })
-const ToolCallSegmentStruct = Schema.TaggedStruct("tool-call", { toolCallId: ToolCallId })
+const TextSegmentStruct = Schema.TaggedStruct("Text", { content: Schema.String })
+const ReasoningSegmentStruct = Schema.TaggedStruct("Reasoning", { content: Schema.String })
+const ImageSegmentStruct = Schema.TaggedStruct("Image", { mediaType: Schema.String })
+const ToolCallSegmentStruct = Schema.TaggedStruct("ToolCall", { toolCallId: ToolCallId })
 
 export const MessageSegment = Schema.Union([
   TextSegmentStruct,
@@ -191,22 +191,20 @@ const messageSegments = (
   const segments: MessageSegment[] = []
   for (const part of message.parts) {
     if (part.type === "text") {
-      segments.push(MessageSegment.cases.text.make({ content: part.text }))
+      segments.push(MessageSegment.cases.Text.make({ content: part.text }))
       continue
     }
     if (part.type === "reasoning") {
-      segments.push(MessageSegment.cases.reasoning.make({ content: part.text }))
+      segments.push(MessageSegment.cases.Reasoning.make({ content: part.text }))
       continue
     }
     if (part.type === "file" && part.mediaType.startsWith("image/")) {
-      segments.push(MessageSegment.cases.image.make({ mediaType: part.mediaType }))
+      segments.push(MessageSegment.cases.Image.make({ mediaType: part.mediaType }))
       continue
     }
     // A call without a projected interaction has no payload to show yet.
     if (part.type === "tool-call" && interactionIds.has(part.id)) {
-      segments.push(
-        MessageSegment.cases["tool-call"].make({ toolCallId: ToolCallId.make(part.id) }),
-      )
+      segments.push(MessageSegment.cases.ToolCall.make({ toolCallId: ToolCallId.make(part.id) }))
     }
   }
   return segments

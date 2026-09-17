@@ -74,9 +74,9 @@ describe("acp agents extension", () => {
       // "External driver not found" at turn time, not at load time.
       for (const agent of agents) {
         const driver = agent.driver
-        expect(Predicate.isNotUndefined(driver) && driver._tag === "external").toBe(true)
+        expect(Predicate.isNotUndefined(driver) && driver._tag === "External").toBe(true)
         const routed =
-          Predicate.isNotUndefined(driver) && driver._tag === "external" && driverIds.has(driver.id)
+          Predicate.isNotUndefined(driver) && driver._tag === "External" && driverIds.has(driver.id)
         expect(routed).toBe(true)
       }
     }).pipe(Effect.provide(fsLayer)),

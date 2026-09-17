@@ -75,12 +75,12 @@ describe("branch cell lifetime", () => {
           },
           {
             send: true,
-            code: "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'pending'",
+            code: "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'Pending'",
           },
           {
             send: true,
             reset: true,
-            code: "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'pending'",
+            code: "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'Pending'",
           },
           {
             send: true,

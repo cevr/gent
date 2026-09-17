@@ -173,7 +173,7 @@ describe("server lifecycle", () => {
           serverRef.current = yield* spawnServerOnPort({ dataDir, port })
 
           const reconnected = yield* waitUntil(
-            () => bundle.runtime.lifecycle.getState()._tag === "connected",
+            () => bundle.runtime.lifecycle.getState()._tag === "Connected",
             10_000,
           )
           expect(reconnected).toBe(true)

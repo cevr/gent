@@ -183,7 +183,7 @@ const connectWs = (
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     let generation = 0
-    let currentState: ConnectionState = ConnectionState.cases.connecting.make({})
+    let currentState: ConnectionState = ConnectionState.cases.Connecting.make({})
     const listeners = new Set<(state: ConnectionState) => void>()
 
     const emit = (state: ConnectionState) => {
@@ -193,11 +193,11 @@ const connectWs = (
 
     const hooksLayer = Layer.succeed(RpcClient.ConnectionHooks, {
       onConnect: Effect.sync(() => {
-        emit(ConnectionState.cases.connected.make({ generation }))
+        emit(ConnectionState.cases.Connected.make({ generation }))
       }),
       onDisconnect: Effect.sync(() => {
         generation++
-        emit(ConnectionState.cases.reconnecting.make({ attempt: generation, generation }))
+        emit(ConnectionState.cases.Reconnecting.make({ attempt: generation, generation }))
       }),
     })
 
@@ -224,12 +224,12 @@ const connectWs = (
         }),
       ),
       waitForReady: Effect.callback<void>((resume, signal) => {
-        if (currentState._tag === "connected") {
+        if (currentState._tag === "Connected") {
           resume(Effect.void)
           return
         }
         const unsubscribe = lifecycle.subscribe((state) => {
-          if (state._tag !== "connected") return
+          if (state._tag !== "Connected") return
           unsubscribe()
           resume(Effect.void)
         })
@@ -268,7 +268,7 @@ export const Gent = {
         client: makeNamespacedClient(rpcClient, workspaceHeadersForCwd(process.cwd())),
         runtime: makeRuntime(
           services,
-          staticLifecycle(ConnectionState.cases.connected.make({ generation: 0 })),
+          staticLifecycle(ConnectionState.cases.Connected.make({ generation: 0 })),
         ),
       }
     }),
@@ -303,7 +303,7 @@ export const Gent = {
 
       return yield* Match.value(serverOrUrl).pipe(
         Match.tagsExhaustive({
-          owned: (ownedServer) =>
+          Owned: (ownedServer) =>
             Effect.gen(function* () {
               const internal = yield* Effect.fromOption(getOwnedInternal(ownedServer)).pipe(
                 Effect.mapError(
@@ -329,11 +329,11 @@ export const Gent = {
                 client: makeNamespacedClient(rpcClient, headers),
                 runtime: makeRuntime(
                   services,
-                  staticLifecycle(ConnectionState.cases.connected.make({ generation: 0 })),
+                  staticLifecycle(ConnectionState.cases.Connected.make({ generation: 0 })),
                 ),
               }
             }),
-          attached: (attachedServer) =>
+          Attached: (attachedServer) =>
             connectWs(attachedServer.url, {
               "x-gent-workspace-id": attachedServer.workspaceId,
             }),

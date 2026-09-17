@@ -230,7 +230,7 @@ const ExtensionManifestInfo = Schema.Struct({
 })
 
 export const ExtensionHealthIssue = Schema.Union([
-  Schema.TaggedStruct("activation-failed", {
+  Schema.TaggedStruct("ActivationFailed", {
     phase: ExtensionActivationPhase,
     error: Schema.String,
   }),
@@ -244,10 +244,10 @@ const ExtensionHealthIdentityFields = {
 }
 
 export const ExtensionHealth = Schema.Union([
-  Schema.TaggedStruct("healthy", {
+  Schema.TaggedStruct("Healthy", {
     ...ExtensionHealthIdentityFields,
   }),
-  Schema.TaggedStruct("degraded", {
+  Schema.TaggedStruct("Degraded", {
     ...ExtensionHealthIdentityFields,
     issues: Schema.NonEmptyArray(ExtensionHealthIssue),
   }),
@@ -255,12 +255,12 @@ export const ExtensionHealth = Schema.Union([
 export type ExtensionHealth = Schema.Schema.Type<typeof ExtensionHealth>
 
 export const ExtensionHealthSnapshot = Schema.Union([
-  Schema.TaggedStruct("healthy", {
-    extensions: Schema.Array(ExtensionHealth.cases.healthy),
+  Schema.TaggedStruct("Healthy", {
+    extensions: Schema.Array(ExtensionHealth.cases.Healthy),
   }),
-  Schema.TaggedStruct("degraded", {
-    healthyExtensions: Schema.Array(ExtensionHealth.cases.healthy),
-    degradedExtensions: Schema.NonEmptyArray(ExtensionHealth.cases.degraded),
+  Schema.TaggedStruct("Degraded", {
+    healthyExtensions: Schema.Array(ExtensionHealth.cases.Healthy),
+    degradedExtensions: Schema.NonEmptyArray(ExtensionHealth.cases.Degraded),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthSnapshot>
@@ -271,11 +271,11 @@ export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthS
 
 /** Per-driver descriptor returned by `driver.list`. The `_tag` matches `DriverRef`. */
 export const DriverInfo = Schema.Union([
-  Schema.TaggedStruct("model", {
+  Schema.TaggedStruct("Model", {
     id: Schema.String,
     description: Schema.optional(Schema.String),
   }),
-  Schema.TaggedStruct("external", {
+  Schema.TaggedStruct("External", {
     id: Schema.String,
     description: Schema.optional(Schema.String),
   }),
@@ -312,16 +312,16 @@ export class GentConnectionError extends Schema.TaggedError<GentConnectionError>
 ) {}
 
 export const ConnectionState = Schema.Union([
-  Schema.TaggedStruct("connecting", {}),
-  Schema.TaggedStruct("connected", {
+  Schema.TaggedStruct("Connecting", {}),
+  Schema.TaggedStruct("Connected", {
     pid: Schema.optional(Schema.Finite),
     generation: Schema.Finite,
   }),
-  Schema.TaggedStruct("reconnecting", {
+  Schema.TaggedStruct("Reconnecting", {
     attempt: Schema.Finite,
     generation: Schema.Finite,
   }),
-  Schema.TaggedStruct("disconnected", {
+  Schema.TaggedStruct("Disconnected", {
     reason: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))

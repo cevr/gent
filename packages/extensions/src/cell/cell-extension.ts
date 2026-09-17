@@ -28,7 +28,7 @@ export const CellExtension = defineExtension({
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         if (
-          ctx.turn?.agent.driver?._tag === "external" ||
+          ctx.turn?.agent.driver?._tag === "External" ||
           ctx.turn?.agent.deniedTools?.includes("cell")
         ) {
           return {}
@@ -39,7 +39,7 @@ export const CellExtension = defineExtension({
     yield* host.on("systemPrompt", (input) =>
       Effect.sync(() => {
         if (
-          input.agent.driver?._tag === "external" ||
+          input.agent.driver?._tag === "External" ||
           input.tools?.length !== 1 ||
           !input.tools.some((tool) => getToolId(tool) === "cell")
         ) {

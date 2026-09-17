@@ -117,7 +117,7 @@ describe("ClientProvider contract", () => {
       })
       expect(client.connectionGeneration()).toBe(0)
       expect(client.isActive()).toBe(false)
-      expect(client.agentStatus()._tag).toBe("idle")
+      expect(client.agentStatus()._tag).toBe("Idle")
       expect(client.isStreaming()).toBe(false)
 
       // An action writes; the agent facet on the same value reports it.
@@ -130,7 +130,7 @@ describe("ClientProvider contract", () => {
       yield* settle(setup)
       expect(client.isActive()).toBe(true)
       // switchSession also resets the agent facet, from the same value.
-      expect(client.agentStatus()._tag).toBe("idle")
+      expect(client.agentStatus()._tag).toBe("Idle")
       expect(client.cost()).toBe(0)
 
       unsubscribe()

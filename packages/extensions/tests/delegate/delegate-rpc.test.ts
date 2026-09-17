@@ -30,7 +30,7 @@ describe("DelegateExtension via model turn", () => {
           const subagentRunner = {
             run: (params: { prompt: string; agent: { name: AgentName } }) =>
               Effect.succeed(
-                AgentRunResult.cases.success.make({
+                AgentRunResult.cases.Success.make({
                   text: `subagent:${params.agent.name}:${params.prompt}`,
                   sessionId: SessionId.make("delegate-child-session"),
                   agentName: params.agent.name,

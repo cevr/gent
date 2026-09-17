@@ -369,8 +369,8 @@ describe("helper run spec propagation", () => {
               return Ref.update(observed, (chunks) => [...chunks, event.chunk])
             },
           })
-          expect(result._tag).toBe("success")
-          if (result._tag === "success") expect(result.text).toContain("pelican")
+          expect(result._tag).toBe("Success")
+          if (result._tag === "Success") expect(result.text).toContain("pelican")
           // The observer saw the child's stream as it happened.
           expect((yield* Ref.get(observed)).join("")).toContain("pelican")
           // The parent branch keeps its three messages; the child never writes there.
@@ -433,8 +433,8 @@ describe("helper run spec propagation", () => {
             },
           },
         })
-        expect(result._tag).toBe("success")
-        if (result._tag === "success") {
+        expect(result._tag).toBe("Success")
+        if (result._tag === "Success") {
           expect(result.text).toContain("child result")
         }
         yield* controls.assertDone
@@ -1217,8 +1217,8 @@ describe("AgentRunner", () => {
         parentBranchId: BranchId.make("missing-branch"),
         cwd: "/tmp",
       })
-      expect(result._tag).toBe("error")
-      if (result._tag === "error")
+      expect(result._tag).toBe("Error")
+      if (result._tag === "Error")
         expect(result.error).toContain("ancestry is missing or incomplete")
       expect(yield* (yield* RelationshipStorage).getChildSessions(parentSessionId)).toEqual([])
     }).pipe(
@@ -1374,7 +1374,7 @@ describe("AgentRunner", () => {
           parentBranchId: branch.id,
           cwd: process.cwd(),
         })
-        expect(result._tag).toBe("error")
+        expect(result._tag).toBe("Error")
         const sessionsResult = yield* sessions.listSessions
         expect(
           sessionsResult.filter((candidate) => candidate.parentSessionId === session.id),
@@ -1433,7 +1433,7 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
         })
         // Without retry, failure propagates as error result
-        expect(result._tag).toBe("error")
+        expect(result._tag).toBe("Error")
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
@@ -1487,8 +1487,8 @@ describe("AgentRunner", () => {
         return { runResult, sessionsResult }
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-      expect(result.runResult._tag).toBe("success")
-      if (result.runResult._tag === "success") {
+      expect(result.runResult._tag).toBe("Success")
+      if (result.runResult._tag === "Success") {
       }
       expect(result.sessionsResult).toHaveLength(2)
     }),
@@ -1564,8 +1564,8 @@ describe("AgentRunner", () => {
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-      expect(result._tag).toBe("success")
-      if (result._tag === "success") {
+      expect(result._tag).toBe("Success")
+      if (result._tag === "Success") {
         expect(result.text).toBe("I analyzed the repository")
       }
     }),
@@ -1643,8 +1643,8 @@ describe("AgentRunner", () => {
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
-      expect(result._tag).toBe("success")
-      if (result._tag === "success") {
+      expect(result._tag).toBe("Success")
+      if (result._tag === "Success") {
         expect(result.text).toBe("the actual answer")
       }
     }),

@@ -133,7 +133,7 @@ const appendFollowUpItem = (
 }
 
 const toQueueEntry = (
-  tag: "steering" | "follow-up",
+  tag: "Steering" | "FollowUp",
   item: QueuedTurnItem,
 ): Option.Option<QueueEntryInfo> => {
   const content = messagePartsTextLines(item.message.parts).join("\n")
@@ -146,7 +146,7 @@ const toQueueEntry = (
   if (!Predicate.isUndefined(item.agentOverride)) {
     Object.assign(fields, { agentOverride: item.agentOverride })
   }
-  if (tag === "steering") {
+  if (tag === "Steering") {
     return Option.some(SteeringQueueEntryInfo.make(fields))
   }
   return Option.some(FollowUpQueueEntryInfo.make(fields))
@@ -158,13 +158,13 @@ const toQueueSnapshot = (
 ): QueueSnapshot =>
   new QueueSnapshot({
     steering: steeringItems.flatMap((item) =>
-      Option.match(toQueueEntry("steering", item), {
+      Option.match(toQueueEntry("Steering", item), {
         onNone: () => [],
         onSome: (entry) => [entry],
       }),
     ),
     followUp: followUpItems.flatMap((item) =>
-      Option.match(toQueueEntry("follow-up", item), {
+      Option.match(toQueueEntry("FollowUp", item), {
         onNone: () => [],
         onSome: (entry) => [entry],
       }),

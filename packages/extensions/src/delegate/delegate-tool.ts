@@ -58,9 +58,9 @@ const DelegateMetadata = Schema.Struct({
  * child's output. `agent-child` and `agent-children` inspect the running ones.
  */
 export const DelegateResult = Schema.TaggedUnion({
-  running: ChildAgentHandle.fields,
-  completed: { output: Schema.String, metadata: DelegateMetadata },
-  error: { error: Schema.String },
+  Running: ChildAgentHandle.fields,
+  Completed: { output: Schema.String, metadata: DelegateMetadata },
+  Error: { error: Schema.String },
 })
 
 export const DelegateTool = tool({
@@ -103,7 +103,7 @@ export const DelegateTool = tool({
         requestId,
         runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
       })
-      return DelegateResult.cases.running.make({ requestId, ...child })
+      return DelegateResult.cases.Running.make({ requestId, ...child })
     }
 
     // Foreground mode: a child session in this runtime, awaited here.
@@ -116,8 +116,8 @@ export const DelegateTool = tool({
       }),
     })
 
-    if (result._tag === "error") {
-      return DelegateResult.cases.error.make({
+    if (result._tag === "Error") {
+      return DelegateResult.cases.Error.make({
         error: appendSessionRef(result.error, result.sessionId),
       })
     }
@@ -127,7 +127,7 @@ export const DelegateTool = tool({
     if (Predicate.isNotUndefined(sessionId)) {
       parts.push(`\n\nFull session: session://${sessionId}`)
     }
-    return DelegateResult.cases.completed.make({
+    return DelegateResult.cases.Completed.make({
       output: parts.join(""),
       metadata: Record.filter(
         {

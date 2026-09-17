@@ -9,7 +9,7 @@ export function ConnectionWidget() {
   const disconnectedReason = () => {
     const state = Option.fromNullishOr(client.connectionState())
     if (Option.isNone(state)) return Option.none<string>()
-    if (state.value._tag !== "disconnected" || state.value.reason === "stopped") {
+    if (state.value._tag !== "Disconnected" || state.value.reason === "stopped") {
       return Option.none<string>()
     }
     return Option.some(state.value.reason)
@@ -17,12 +17,12 @@ export function ConnectionWidget() {
   const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
   const degradedExtensions = () => {
     const health = client.extensionHealth()
-    if (health._tag === "degraded") return health.degradedExtensions
+    if (health._tag === "Degraded") return health.degradedExtensions
     return []
   }
   const failedExtensions = () =>
     degradedExtensions()
-      .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
       .map((extension) => extension.manifest.id)
   const hasFailedExtensions = () => failedExtensions().length > 0
   const visible = () =>

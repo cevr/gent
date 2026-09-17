@@ -134,7 +134,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       listSlashCommands: () => noRpcError([]),
       listStatus: () =>
         noRpcError({
-          _tag: "healthy",
+          _tag: "Healthy",
           extensions: [],
         }),
     },
@@ -172,9 +172,9 @@ export const createMockRuntime = (): GentRuntime => ({
   run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.runPromiseWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
   lifecycle: {
-    getState: () => ConnectionState.cases.connected.make({ generation: 0 }),
+    getState: () => ConnectionState.cases.Connected.make({ generation: 0 }),
     subscribe: (listener) => {
-      listener(ConnectionState.cases.connected.make({ generation: 0 }))
+      listener(ConnectionState.cases.Connected.make({ generation: 0 }))
       return () => {}
     },
     restart: Effect.void,

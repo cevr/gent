@@ -116,7 +116,7 @@ export function Session(props: SessionProps) {
     const conn = client.connectionState()
     if (client.isReconnecting()) {
       items.push({ text: "reconnecting", color: theme.warning })
-    } else if (conn?._tag === "connected" && conn.generation > 0) {
+    } else if (conn?._tag === "Connected" && conn.generation > 0) {
       items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
     }
 

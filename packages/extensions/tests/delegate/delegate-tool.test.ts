@@ -33,7 +33,7 @@ const makeCtx = (overrides: {
         overrides.agentRun ??
         (() =>
           Effect.succeed(
-            AgentRunResult.cases.success.make({
+            AgentRunResult.cases.Success.make({
               text: "",
               sessionId: SessionId.make("s1"),
               agentName: AgentName.make("test"),
@@ -48,7 +48,7 @@ describe("Delegate Tool", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
         Effect.succeed(
-          AgentRunResult.cases.success.make({
+          AgentRunResult.cases.Success.make({
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
@@ -79,7 +79,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) =>
         Effect.sync(() => {
           runs.push(params.runSpec?.overrides?.deniedTools ?? [])
-          return AgentRunResult.cases.success.make({
+          return AgentRunResult.cases.Success.make({
             text: "done",
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
@@ -100,7 +100,7 @@ describe("Delegate Tool", () => {
       agentName: helperAgent.name,
       agentRun: (params) =>
         Effect.succeed(
-          AgentRunResult.cases.success.make({
+          AgentRunResult.cases.Success.make({
             text: `${params.agent.name}:${params.prompt}`,
             sessionId: SessionId.make("child-session"),
             agentName: params.agent.name,
@@ -125,7 +125,7 @@ describe("Delegate Tool", () => {
       agentRun: (params) => {
         capturedRunSpec = Option.fromUndefinedOr(params.runSpec)
         return Effect.succeed(
-          AgentRunResult.cases.success.make({
+          AgentRunResult.cases.Success.make({
             text: "ok",
             sessionId: SessionId.make("s"),
             agentName: params.agent.name,

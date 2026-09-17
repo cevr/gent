@@ -20,7 +20,7 @@ const makeCtx = (overrides: {
         overrides.agentRun ??
         ((params) =>
           Effect.succeed(
-            AgentRunResult.cases.success.make({
+            AgentRunResult.cases.Success.make({
               text: `response from ${params.agent.name}`,
               sessionId: SessionId.make("child-session"),
               agentName: params.agent.name,

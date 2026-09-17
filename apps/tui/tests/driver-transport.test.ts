@@ -26,7 +26,7 @@ const agentName = AgentName.make("main")
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
 
 const driverListReply = {
-  drivers: [{ _tag: "model", id: "model:sonnet" }],
+  drivers: [{ _tag: "Model", id: "model:sonnet" }],
   overrides: {},
   agents: AllBuiltinAgents,
 }

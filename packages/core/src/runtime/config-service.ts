@@ -26,7 +26,7 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    *
    * Used by `resolveAgentDriver` (domain/agent.ts) to route an agent
    * through an alternative backend without editing its definition. E.g.
-   * `{ main: { _tag: "external", id: "acp-claude-code" } }` makes
+   * `{ main: { _tag: "External", id: "acp-claude-code" } }` makes
    * `main` dispatch through the Claude Code SDK executor.
    */
   driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),

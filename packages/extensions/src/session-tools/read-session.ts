@@ -140,7 +140,7 @@ export const ReadSessionTool = tool({
         }),
       })
 
-      if (result._tag === "error") {
+      if (result._tag === "Error") {
         return {
           sessionId: params.sessionId,
           content: markdown,

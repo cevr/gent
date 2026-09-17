@@ -13,7 +13,7 @@ export const buildExtensionHealthSnapshot = (
     let activationFailure = Option.none<ExtensionHealthIssue>()
     if (status.status === "failed") {
       activationFailure = Option.some(
-        ExtensionHealthIssue.cases["activation-failed"].make({
+        ExtensionHealthIssue.cases.ActivationFailed.make({
           phase: status.phase,
           error: status.error,
         }),
@@ -32,22 +32,22 @@ export const buildExtensionHealthSnapshot = (
 
     const [firstIssue, ...remainingIssues] = issues
     if (Predicate.isUndefined(firstIssue)) {
-      return ExtensionHealth.cases.healthy.make(payload)
+      return ExtensionHealth.cases.Healthy.make(payload)
     }
-    return ExtensionHealth.cases.degraded.make({
+    return ExtensionHealth.cases.Degraded.make({
       ...payload,
       issues: [firstIssue, ...remainingIssues],
     })
   })
 
-  const healthyExtensions = extensions.filter(ExtensionHealth.guards.healthy)
-  const degradedExtensions = extensions.filter(ExtensionHealth.guards.degraded)
+  const healthyExtensions = extensions.filter(ExtensionHealth.guards.Healthy)
+  const degradedExtensions = extensions.filter(ExtensionHealth.guards.Degraded)
   const [firstDegraded, ...remainingDegraded] = degradedExtensions
 
   if (Predicate.isUndefined(firstDegraded)) {
-    return ExtensionHealthSnapshot.cases.healthy.make({ extensions: healthyExtensions })
+    return ExtensionHealthSnapshot.cases.Healthy.make({ extensions: healthyExtensions })
   }
-  return ExtensionHealthSnapshot.cases.degraded.make({
+  return ExtensionHealthSnapshot.cases.Degraded.make({
     healthyExtensions,
     degradedExtensions: [firstDegraded, ...remainingDegraded],
   })

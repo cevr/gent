@@ -37,9 +37,9 @@ describe("reduceAgentLifecycle", () => {
     })
 
     expect(reduceAgentLifecycle(event)).toEqual({
-      status: { _tag: "streaming" },
+      status: { _tag: "Streaming" },
     })
-    expect(Schema.is(AgentStatus.cases["streaming"])(reduceAgentLifecycle(event).status)).toBe(true)
+    expect(Schema.is(AgentStatus.cases.Streaming)(reduceAgentLifecycle(event).status)).toBe(true)
   })
 
   test("keeps streaming until TurnCompleted", () => {
@@ -59,11 +59,9 @@ describe("reduceAgentLifecycle", () => {
     expect(reduceAgentLifecycle(streamEnded)).toEqual({})
     expect(reduceAgentLifecycle(assistantMessage)).toEqual({})
     expect(reduceAgentLifecycle(turnCompleted)).toEqual({
-      status: { _tag: "idle" },
+      status: { _tag: "Idle" },
     })
-    expect(Schema.is(AgentStatus.cases["idle"])(reduceAgentLifecycle(turnCompleted).status)).toBe(
-      true,
-    )
+    expect(Schema.is(AgentStatus.cases.Idle)(reduceAgentLifecycle(turnCompleted).status)).toBe(true)
   })
 
   test("uses user messages to enter streaming immediately", () => {
@@ -72,11 +70,11 @@ describe("reduceAgentLifecycle", () => {
     })
 
     expect(reduceAgentLifecycle(userMessage)).toEqual({
-      status: { _tag: "streaming" },
+      status: { _tag: "Streaming" },
     })
-    expect(
-      Schema.is(AgentStatus.cases["streaming"])(reduceAgentLifecycle(userMessage).status),
-    ).toBe(true)
+    expect(Schema.is(AgentStatus.cases.Streaming)(reduceAgentLifecycle(userMessage).status)).toBe(
+      true,
+    )
   })
 
   test("surfaces agent switches and errors", () => {
@@ -96,8 +94,8 @@ describe("reduceAgentLifecycle", () => {
       preferredAgent: AgentName.make("deepwork"),
     })
     expect(reduceAgentLifecycle(errored)).toEqual({
-      status: { _tag: "error", error: "boom" },
+      status: { _tag: "Error", error: "boom" },
     })
-    expect(Schema.is(AgentStatus.cases["error"])(reduceAgentLifecycle(errored).status)).toBe(true)
+    expect(Schema.is(AgentStatus.cases.Error)(reduceAgentLifecycle(errored).status)).toBe(true)
   })
 })

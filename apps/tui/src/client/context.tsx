@@ -44,16 +44,16 @@ export interface AgentLifecycleUpdate {
 export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate => {
   switch (event._tag) {
     case "StreamStarted":
-      return { status: AgentStatus.cases["streaming"].make({}) }
+      return { status: AgentStatus.cases.Streaming.make({}) }
     case "TurnCompleted":
-      return { status: AgentStatus.cases["idle"].make({}) }
+      return { status: AgentStatus.cases.Idle.make({}) }
     case "ErrorOccurred":
-      return { status: AgentStatus.cases["error"].make({ error: event.error }) }
+      return { status: AgentStatus.cases.Error.make({ error: event.error }) }
     case "AgentSwitched":
       return { preferredAgent: event.toAgent }
     case "MessageReceived":
       if (event.message.role === "user") {
-        return { status: AgentStatus.cases["streaming"].make({}) }
+        return { status: AgentStatus.cases.Streaming.make({}) }
       }
       return {}
     default:
@@ -266,7 +266,7 @@ export type ClientContextValue = ClientTransportValue &
 const ClientContext = createContext<ClientContextValue>()
 
 const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
-  _tag: "healthy",
+  _tag: "Healthy",
   extensions: [],
 }
 
@@ -345,7 +345,7 @@ export function ClientProvider(props: ClientProviderProps) {
             const agentsByName: Record<string, AgentDefinition> = {}
             for (const agent of drivers.agents) agentsByName[agent.name] = agent
             const driverIds = drivers.drivers
-              .filter((driver) => driver._tag === "model")
+              .filter((driver) => driver._tag === "Model")
               .map((driver) => driver.id)
             setModelStore({ modelsById, agentsByName, driverIds })
           }),
@@ -354,7 +354,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             const error = formatError(err)
             log.error("model.list.failed", { error })
-            setAgentStore({ status: AgentStatus.cases["error"].make({ error }) })
+            setAgentStore({ status: AgentStatus.cases.Error.make({ error }) })
           }),
         ),
       ),
@@ -364,7 +364,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
     agent: initialAgent,
-    status: AgentStatus.cases["idle"].make({}),
+    status: AgentStatus.cases.Idle.make({}),
     cost: 0,
     resolvedModelId: Option.none(),
     resolvedReasoningLevel: Option.none(),
@@ -436,7 +436,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const workerEpoch = createMemo<Option.Option<number>>(() => {
     const state = connectionState()
-    if (Option.isNone(state) || state.value._tag !== "connected") return Option.none()
+    if (Option.isNone(state) || state.value._tag !== "Connected") return Option.none()
     return Option.some(state.value.generation)
   })
 
@@ -492,11 +492,11 @@ export function ClientProvider(props: ClientProviderProps) {
     if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
       return
     if (input.runtime._tag === "Idle") {
-      if (agentStore.status._tag === "streaming") {
-        setAgentStore({ status: AgentStatus.cases["idle"].make({}) })
+      if (agentStore.status._tag === "Streaming") {
+        setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
       }
     } else {
-      setAgentStore({ status: AgentStatus.cases["streaming"].make({}) })
+      setAgentStore({ status: AgentStatus.cases.Streaming.make({}) })
     }
   }
 
@@ -534,8 +534,8 @@ export function ClientProvider(props: ClientProviderProps) {
       dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
     }
     const rt = snapshot.runtime
-    let status: AgentStatus = AgentStatus.cases["streaming"].make({})
-    if (rt._tag === "Idle") status = AgentStatus.cases["idle"].make({})
+    let status: AgentStatus = AgentStatus.cases.Streaming.make({})
+    if (rt._tag === "Idle") status = AgentStatus.cases.Idle.make({})
     setAgentStore({
       agent: Option.fromNullishOr(rt.agent),
       status,
@@ -661,8 +661,8 @@ export function ClientProvider(props: ClientProviderProps) {
     connectionGeneration: () => {
       const state = connectionState()
       if (Option.isNone(state)) return 0
-      if (state.value._tag === "connected") return state.value.generation
-      if (state.value._tag === "reconnecting") return state.value.generation
+      if (state.value._tag === "Connected") return state.value.generation
+      if (state.value._tag === "Reconnecting") return state.value.generation
       return 0
     },
     connectionIssue: connectionIssueValue,
@@ -697,7 +697,7 @@ export function ClientProvider(props: ClientProviderProps) {
             // "none"), so the extensionHealth reset is unconditional.
             setAgentStore({
               agent: Option.some(defaultAgent),
-              status: AgentStatus.cases["idle"].make({}),
+              status: AgentStatus.cases.Idle.make({}),
               cost: 0,
               resolvedModelId: Option.none(),
               resolvedReasoningLevel: Option.none(),
@@ -723,7 +723,7 @@ export function ClientProvider(props: ClientProviderProps) {
             log.error("createSession.failed", { error: String(err) })
             dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
             setAgentStore({
-              status: AgentStatus.cases["error"].make({ error: formatError(err) }),
+              status: AgentStatus.cases.Error.make({ error: formatError(err) }),
             })
           }),
         ),
@@ -755,7 +755,7 @@ export function ClientProvider(props: ClientProviderProps) {
       const nextAgent = Option.fromNullishOr(agent)
       setAgentStore({
         agent: nextAgent,
-        status: AgentStatus.cases["idle"].make({}),
+        status: AgentStatus.cases.Idle.make({}),
         cost: 0,
         resolvedModelId: Option.none(),
         resolvedReasoningLevel: Option.none(),
@@ -782,7 +782,7 @@ export function ClientProvider(props: ClientProviderProps) {
       dispatchSession(SessionStateEvent.cases.Clear.make({}))
       setAgentStore({
         agent: Option.some(defaultAgent),
-        status: AgentStatus.cases["idle"].make({}),
+        status: AgentStatus.cases.Idle.make({}),
         cost: 0,
         resolvedModelId: Option.none(),
         resolvedReasoningLevel: Option.none(),
@@ -905,7 +905,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.tapError((err) =>
             Effect.sync(() => {
               setAgentStore({
-                status: AgentStatus.cases["error"].make({ error: formatError(err) }),
+                status: AgentStatus.cases.Error.make({ error: formatError(err) }),
               })
             }),
           ),
@@ -941,10 +941,10 @@ export function ClientProvider(props: ClientProviderProps) {
       ),
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
-    isStreaming: () => agentStore.status._tag === "streaming",
-    isError: () => agentStore.status._tag === "error",
+    isStreaming: () => agentStore.status._tag === "Streaming",
+    isError: () => agentStore.status._tag === "Error",
     error: () => {
-      if (agentStore.status._tag === "error") return agentStore.status.error
+      if (agentStore.status._tag === "Error") return agentStore.status.error
       return Option.getOrNull(Option.none<string>())
     },
     latestInputTokens,
@@ -957,10 +957,10 @@ export function ClientProvider(props: ClientProviderProps) {
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {
-        setAgentStore({ status: AgentStatus.cases["error"].make({ error: nextError.value }) })
+        setAgentStore({ status: AgentStatus.cases.Error.make({ error: nextError.value }) })
         return
       }
-      setAgentStore({ status: AgentStatus.cases["idle"].make({}) })
+      setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
     },
     surfaceError: (effect) =>
       effect.pipe(

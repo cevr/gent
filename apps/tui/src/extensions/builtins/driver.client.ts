@@ -81,7 +81,7 @@ export default defineClientExtension("@gent/driver-ui", {
               const match = Option.fromNullishOr(matches[0])
               if (Option.isNone(match)) return false
               const driver = (() => {
-                if (match.value._tag === "external") {
+                if (match.value._tag === "External") {
                   return ExternalDriverRef.make({ id: match.value.id })
                 }
                 return ModelDriverRef.make({ id: match.value.id })

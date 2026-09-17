@@ -98,8 +98,8 @@ const PendingRequests = Schema.declare<PendingRequestMap>(
  * "check-open-and-register" a single transaction.
  */
 const ConnState = Schema.Union([
-  Schema.TaggedStruct("open", { pending: PendingRequests }),
-  Schema.TaggedStruct("closed", {}),
+  Schema.TaggedStruct("Open", { pending: PendingRequests }),
+  Schema.TaggedStruct("Closed", {}),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type ConnState = typeof ConnState.Type
 
@@ -171,7 +171,7 @@ export const makeAcpConnection = (
   Effect.gen(function* () {
     const nextIdRef = yield* Ref.make<RequestId>(1)
     const stateRef = yield* Ref.make<ConnState>(
-      ConnState.cases.open.make({
+      ConnState.cases.Open.make({
         pending: HashMap.empty<RequestId, PendingRequest>(),
       }),
     )
@@ -193,8 +193,8 @@ export const makeAcpConnection = (
     const sealAndClaimPending = Ref.modify(
       stateRef,
       (s): [Option.Option<PendingRequestMap>, ConnState] => {
-        if (s._tag === "closed") return [Option.none(), s]
-        return [Option.some(s.pending), ConnState.cases.closed.make({})]
+        if (s._tag === "Closed") return [Option.none(), s]
+        return [Option.some(s.pending), ConnState.cases.Closed.make({})]
       },
     )
 
@@ -243,12 +243,12 @@ export const makeAcpConnection = (
         const claimed = yield* Ref.modify(
           stateRef,
           (s): [Option.Option<PendingRequest>, ConnState] => {
-            if (s._tag === "closed") return [Option.none(), s]
+            if (s._tag === "Closed") return [Option.none(), s]
             const found = HashMap.get(s.pending, id)
             if (found._tag === "None") return [Option.none(), s]
             return [
               Option.some(found.value),
-              ConnState.cases.open.make({
+              ConnState.cases.Open.make({
                 pending: HashMap.remove(s.pending, id),
               }),
             ]
@@ -413,10 +413,10 @@ export const makeAcpConnection = (
         const id = yield* Ref.getAndUpdate(nextIdRef, (n) => n + 1)
         const deferred = yield* Deferred.make<unknown, AcpError | AcpClosedError>()
         const registered = yield* Ref.modify(stateRef, (s): [boolean, ConnState] => {
-          if (s._tag === "closed") return [false, s]
+          if (s._tag === "Closed") return [false, s]
           return [
             true,
-            ConnState.cases.open.make({
+            ConnState.cases.Open.make({
               pending: HashMap.set(s.pending, id, { resolve: deferred }),
             }),
           ]
