@@ -249,9 +249,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * The turn's durable position.
      *
      * One row per turn, keyed by the user message that opened it. The row is
-     * written at each step boundary in the same transaction as that step's
-     * messages, so a resumed turn reads one row instead of probing derived
-     * message ids.
+     * written at each step boundary, after that step's messages and in its own
+     * transaction, so a resumed turn reads one row instead of probing derived
+     * message ids. A crash between the two writes leaves the row behind the
+     * messages, so every read confirms it against them.
      */
     const turnRecordKey = (messageId: RunningState["message"]["id"]) => ({
       sessionId: scope.sessionId,
@@ -902,7 +903,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }
         }
       } else if (record.step > 0 || record.continuations > 0) {
-        return { ...noPendingStep, step: record.step }
+        // The row names no unsettled call. That is only true if the next step
+        // never committed its messages: the row is written after them, and in
+        // its own transaction, so a crash in between leaves a step's assistant
+        // message durable while the row still names the step before it. Ask
+        // the messages before believing the row, exactly as the branch above
+        // does — otherwise the probe is skipped and the turn re-issues a step
+        // whose tool calls are already on disk and will never be answered.
+        const nextAssistant = yield* messageStorage.getMessage(
+          assistantMessageIdForTurn(messageId, record.step + 1),
+        )
+        if (Predicate.isUndefined(nextAssistant)) {
+          return { ...noPendingStep, step: record.step }
+        }
       }
 
       // No usable row. Derive the position from the messages once, then adopt

@@ -475,8 +475,9 @@ const turnRecordsMigration = Effect.gen(function* () {
 
   // One row per turn: the step whose messages committed, the continuations
   // the turn has spent, and the tool calls the current step has not settled.
-  // The row is written with the step's messages, so a resumed turn reads its
-  // position instead of probing derived message ids.
+  // The row is written after the step's messages, in its own transaction, so
+  // a resumed turn reads it as a hint and confirms it against the messages
+  // instead of probing every derived message id.
   yield* sql
     .unsafe(`
     CREATE TABLE turn_records (

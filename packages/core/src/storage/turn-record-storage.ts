@@ -8,8 +8,11 @@
  * many continuation instructions the turn has spent, and the tool calls the
  * current step issued and has not settled.
  *
- * The row is written in the same transaction as the step's messages, so a
- * reader never sees a step's messages without the position that names them.
+ * The row is written after the step's messages commit, in its own
+ * transaction. A reader can therefore see a step's messages without the
+ * position that names them, so the row is a hint and the messages decide:
+ * `resolveTurnPosition` cross-checks both branches against the assistant
+ * message before it trusts the step this row reports.
  */
 import { Context, DateTime, Effect, Layer, Predicate, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"

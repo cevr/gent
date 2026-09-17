@@ -325,4 +325,96 @@ describe("turn record", () => {
       }),
     60_000,
   )
+
+  it.scopedLive(
+    "trusts the messages over a record left behind by a crash mid-step",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-stale-")
+        const dbPath = `${tempDir}/gent.db`
+        const finalReply = "STALE-RECORD-RESUMED"
+
+        // First process: step 1 completes a tool call and closes. Step 2 issues
+        // a second call whose messages commit before the gate holds it open.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("resume_probe", { label: "first" }),
+          toolCallStep("resume_probe", { label: "settled" }),
+          { ...textStep("never emitted"), gated: true },
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message
+              .send({ sessionId, branchId, content: "run the probe" })
+              .pipe(Effect.forkScoped)
+            yield* firstProvider.controls.waitForCall(2)
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              () => probeRunsFor("settled") >= 1,
+              10_000,
+              "the second step's tool call settled",
+            )
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("15 seconds")),
+        )
+        expect(probeRunsFor("settled")).toBe(1)
+
+        // Stage the crash window. The record is written after the step's
+        // messages, in its own transaction, so a crash in between leaves step
+        // 2's assistant message durable while the row still names step 1 with
+        // nothing pending. Rewind the row to exactly that state.
+        yield* Effect.sync(() => {
+          const db = new Database(dbPath)
+          db.query(
+            "UPDATE turn_records SET step = 1, pending_tool_calls_json = '[]' WHERE session_id = ? AND branch_id = ?",
+          ).run(started.sessionId, started.branchId)
+          db.close()
+        })
+
+        // Second process: the stale row says step 0 with nothing pending. If
+        // the resolver believes it, the turn re-issues the step whose tool call
+        // already ran, and the probe fires a second time.
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            yield* client.message.send({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+              content: "continue",
+            })
+            yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (messages) =>
+                messages.some((message) =>
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text.includes(finalReply),
+                  ),
+                ),
+              15_000,
+              "resumed turn produced its reply",
+            )
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+
+        expect(probeRunsFor("settled")).toBe(1)
+      }),
+    60_000,
+  )
 })
