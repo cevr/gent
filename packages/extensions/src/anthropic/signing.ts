@@ -22,7 +22,7 @@
  * @module
  */
 import { Effect, Option, Schema } from "effect"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core/extensions/branch-tools"
 
 const BILLING_SALT = "59cf53e54c78"
 

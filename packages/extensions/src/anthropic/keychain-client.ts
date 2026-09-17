@@ -13,7 +13,7 @@
 
 import { Predicate, Effect, Layer, Option, Schema, Stream } from "effect"
 import { isRecord, isRecordArray } from "@gent/core/extensions/api"
-import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import type { GentPlatform } from "@gent/core/extensions/branch-tools"
 import { Generated } from "@effect/ai-anthropic"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 

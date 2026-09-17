@@ -1,6 +1,7 @@
 import { MessageId, SessionId, ToolCallId, type BranchId } from "@gent/core/extensions/api"
 import {
   ApprovalDecisionSchema,
+  GentPlatform,
   InteractionRequestId,
   InteractionStorage,
   StorageError,
@@ -13,7 +14,6 @@ import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { canonicalJsonString } from "effect-encore"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 export const CellToolOperationId = Schema.NonEmptyString.check(Schema.isMaxLength(128))
 const OperationAddressRow = Schema.Struct({

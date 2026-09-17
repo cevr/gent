@@ -318,6 +318,32 @@ const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
 
 const launcherFiles = new Set(["apps/server/src/main.ts"])
 
+/**
+ * Shipped extensions author against the same public surface a user extension
+ * gets: `@gent/core/extensions/api` and `@gent/core/extensions/branch-tools`.
+ * Reaching into `@gent/core-internal/` gives one name two owners and lets a
+ * Tag drift out from under the published API.
+ */
+const bannedShippedExtensionPatterns: ReadonlyArray<BannedPattern> = [
+  {
+    pattern: /@gent\/core-internal\//,
+    message:
+      "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
+  },
+]
+
+/** Names with no public entry point, each already exempt from a platform rule above. */
+const shippedExtensionCoreInternalFiles = new Set([
+  // `BunGentPlatformLive` is exported by no public entry point; the Anthropic
+  // extension needs the live Bun platform to satisfy `GentPlatform` inside its
+  // request-signing transform. Same file, same reason as the platform root
+  // exemption in `platformProviderRootFiles`.
+  "packages/extensions/src/anthropic/index.ts",
+])
+
+const shippedExtensionFile = (file: string): boolean =>
+  file.startsWith("packages/extensions/src/") && !shippedExtensionCoreInternalFiles.has(file)
+
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   const patterns = bannedActiveSourcePatterns.filter(
     ({ pattern }) =>
@@ -340,6 +366,7 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
   if (serverRootConsumerFiles.has(file)) patterns.push(...bannedServerRootConsumerPatterns)
   if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
+  if (shippedExtensionFile(file)) patterns.push(...bannedShippedExtensionPatterns)
   if (file === "packages/core/src/server/transport-contract.ts") {
     patterns.push(...bannedTransportContractPatterns)
   }

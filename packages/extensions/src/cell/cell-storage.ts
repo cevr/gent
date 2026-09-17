@@ -11,6 +11,7 @@ import {
   type BranchToolFeature,
   type BranchToolLayerFactory,
   type FeatureMigrations,
+  type GentPlatform,
   type InteractionStorage,
   type ToolCallRecoveryService,
   eraseResourceLayer,
@@ -22,7 +23,6 @@ import { CellExecution } from "./cell-execution.js"
 import { CellExecutionStorage } from "./cell-execution-storage.js"
 import { CellNamespaceStorage } from "./cell-namespace-storage.js"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
-import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import type { DispatchingToolStorage } from "./dispatching-tool-storage.js"
 import { cellToolCallRecovery } from "./cell-tool-call-recovery.js"
 

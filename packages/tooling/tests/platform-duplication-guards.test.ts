@@ -55,6 +55,38 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
+  test("flags core-internal imports in shipped extensions", () => {
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/cell/cell-storage.ts",
+        'import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"',
+      ),
+    ).toEqual([
+      {
+        file: "packages/extensions/src/cell/cell-storage.ts",
+        line: 1,
+        message:
+          "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
+      },
+    ])
+
+    // The public path is clean.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/cell/cell-storage.ts",
+        'import type { GentPlatform } from "@gent/core/extensions/branch-tools"',
+      ),
+    ).toEqual([])
+
+    // The Anthropic root is allowlisted: `BunGentPlatformLive` has no public path.
+    expect(
+      findPlatformDuplicationViolations(
+        "packages/extensions/src/anthropic/index.ts",
+        'import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"',
+      ),
+    ).toEqual([])
+  })
+
   test("flags deleted runtime bridge names in active source", () => {
     expect(
       findPlatformDuplicationViolations(

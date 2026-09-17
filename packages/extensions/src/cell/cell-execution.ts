@@ -1,6 +1,7 @@
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/extensions/api"
 import {
   BranchToolWork,
+  GentPlatform,
   ModelContextLedger,
   StorageError,
   neverInterrupted,
@@ -35,7 +36,6 @@ import {
   CellEvaluationError,
   type CellRestoreReport,
 } from "./cell-protocol.js"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 /** The worker binary this build ships next to the executable. */
 const CELL_WORKER_BINARY = "gent-cell"
