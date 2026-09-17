@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  Ref,
   Scope,
   Schema,
   Stream,
@@ -26,6 +27,7 @@ import {
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import {
   testToolContext,
   type TestToolContext,
@@ -685,6 +687,62 @@ describe("BashTool execution", () => {
         expect(message.sourceId).toBe("bash:tc-restart:failure")
         expect(message.content).toContain("Background command interrupted by server restart")
         expect(message.content).not.toContain("Background command completed")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
+    "starting a finished background job again notifies the parent only once",
+    () =>
+      Effect.gen(function* () {
+        // The durable row survives the job, so a repeated start would find a
+        // Terminal claim and replay its notice. The supervisor remembers which
+        // keys it already notified about and stays silent for the second call.
+        const notices = yield* Ref.make<Array<{ sourceId: string; content: string }>>([])
+        const ctx = withSession(
+          { ...stubCtx, toolCallId: ToolCallId.make("tc-replay") },
+          {
+            ...stubCtx.Session,
+            getSession: () =>
+              Effect.succeed(
+                new Session({
+                  id: stubCtx.sessionId,
+                  activeBranchId: stubCtx.branchId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              ),
+            listBranches: Effect.succeed([
+              new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
+            ]),
+            queueFollowUp: (params) => Ref.update(notices, (all) => [...all, params]),
+          },
+        )
+
+        yield* Effect.gen(function* () {
+          const first = yield* runToolWithCtx(
+            BashTool,
+            { command: "printf replayed-output", run_in_background: true },
+            ctx,
+          )
+          expect(first.exitCode).toBe(0)
+          yield* waitFor(Ref.get(notices), (all) => all.length === 1, 2_000, "first notice")
+
+          const second = yield* runToolWithCtx(
+            BashTool,
+            { command: "printf replayed-output", run_in_background: true },
+            ctx,
+          )
+          expect(second.exitCode).toBe(0)
+          // The replay path is synchronous: a Terminal claim queues its notice
+          // before `start` returns, so a second entry would already be here.
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makePlatformLayer()))
+
+        const all = yield* Ref.get(notices)
+        expect(all.map((notice) => notice.sourceId)).toEqual(["bash:tc-replay:complete"])
+        expect(all[0]?.content).toContain("Background command completed (exit code 0)")
+        expect(all[0]?.content).toContain("replayed-output")
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
