@@ -471,6 +471,18 @@ export const InProcessRunner: Layer.Layer<
             agentName,
             runSpec: makeRunSpec({ ...runSpec, parentToolCallId: toolCallId }),
           }).pipe(
+            // A foreground child belongs to this call. Left running after the
+            // caller is interrupted, it has no owner to await or cancel it.
+            Effect.onInterrupt(() =>
+              sessionRuntime
+                .steer({
+                  _tag: "Interrupt",
+                  sessionId,
+                  branchId,
+                  requestId: RequestId.make(`agent-run-interrupt:${sessionId}`),
+                })
+                .pipe(Effect.ignore),
+            ),
             Effect.ensuring(
               Option.match(observer, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
             ),

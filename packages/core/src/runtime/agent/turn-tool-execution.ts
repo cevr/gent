@@ -9,6 +9,7 @@ import {
 } from "./current-extension-host-context.js"
 import { ToolRunner, type ResolvedToolCapability } from "./tool-runner"
 import { CurrentToolCall } from "./current-tool-call.js"
+import { TurnInterruptSignal } from "./turn-interruption.js"
 
 const TOOL_CONCURRENCY = 8
 
@@ -29,6 +30,8 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   currentTurnAgent: AgentNameType
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
+  /** Completes when the turn is interrupted; a call still running then stops. */
+  interruption: Effect.Effect<void>
 }) {
   const toolRunner = yield* ToolRunner
   const hostCtx = yield* CurrentExtensionHostContext
@@ -66,6 +69,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                 assistantMessageId: params.assistantMessageId,
                 toolCallId: toolCallInput.toolCallId,
               }),
+              Effect.provideService(TurnInterruptSignal, params.interruption),
             )
         }),
       ),

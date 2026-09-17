@@ -315,6 +315,66 @@ describe("interaction", () => {
         )
       }),
   )
+  it.live("an interrupt stops a tool that is still running and gives its call a result", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const stopped = yield* Deferred.make<void>()
+      const stuck = tool({
+        id: "stuck-tool",
+        description: "Never returns",
+        params: Schema.Struct({}),
+        output: Schema.String,
+        execute: () =>
+          Deferred.succeed(started, void 0).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(stopped, void 0)),
+          ),
+      })
+      let calls = 0
+      const provider = LanguageModelLayers.testStream(() => {
+        calls += 1
+        if (calls > 1) {
+          return Effect.succeed(
+            Stream.fromIterable([
+              textDeltaPart("after stop"),
+              finishPart({ finishReason: "stop" }),
+            ]),
+          )
+        }
+        return Effect.succeed(
+          Stream.fromIterable([
+            toolCallPart("stuck-tool", {}),
+            finishPart({ finishReason: "tool-calls" }),
+          ]),
+        )
+      })
+      const layer = makeLiveToolLayer(provider, [stuck])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const first = makeIntMessage("run the stuck tool")
+          const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
+          yield* Deferred.await(started)
+          yield* steerAgentLoop({
+            _tag: "Interrupt",
+            sessionId: intSessionId,
+            branchId: intBranchId,
+            requestId: "req-interrupt-running-tool",
+          })
+          yield* Deferred.await(stopped)
+          yield* Fiber.join(running)
+          const result = yield* (yield* MessageStorage).getMessage(
+            toolResultMessageIdForTurn(first.id, 1),
+          )
+          expect(result?.parts).toMatchObject([
+            { type: "tool-result", isFailure: true, result: { reason: "Interrupted" } },
+          ])
+          expect(calls).toBe(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+      )
+    }),
+  )
   it.live(
     "a stream that fails after a tool call arrived leaves a transcript the re-prompt reads",
     () =>

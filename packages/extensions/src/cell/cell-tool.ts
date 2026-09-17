@@ -39,5 +39,7 @@ export const CellTool = tool({
       return yield* new ToolResultFailure({ message: "Cell execution failed", result })
     }
     return result
-  }),
+    // The cell cancels its own work through `BranchToolWork` and reports what
+    // the cancel cost. A fiber interrupt would cut that report short.
+  }, Effect.uninterruptible),
 })

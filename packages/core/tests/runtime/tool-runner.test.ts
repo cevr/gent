@@ -181,6 +181,7 @@ describe("tool execution", () => {
         const hiddenTurn = yield* run("replacement-hidden", Option.none<ResolvedToolCapability>())
         const hostEntry = yield* Effect.fromOption(currentEntry)
         const hiddenOuterTurn = yield* executeToolCalls({
+          interruption: Effect.never,
           assistantMessageId: MessageId.make("outer-message"),
           sessionId,
           branchId,

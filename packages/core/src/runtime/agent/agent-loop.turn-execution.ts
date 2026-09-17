@@ -364,6 +364,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
       const pendingToolCalls = params.toolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
       const executedResults = yield* executeToolCalls({
+        interruption: scope.turnInterruption.awaitInterrupt,
         hostToolBindings: params.hostToolBindings,
         assistantMessageId,
         toolCalls: pendingToolCalls,

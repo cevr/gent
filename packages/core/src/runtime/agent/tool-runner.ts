@@ -30,6 +30,7 @@ import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 import { CurrentDispatchingCall } from "./current-dispatching-call.js"
 import { CurrentToolCall } from "./current-tool-call.js"
+import { stopWithTurn } from "./turn-interruption.js"
 import {
   CurrentExtensionHostContext,
   provideCurrentHostCtx,
@@ -171,7 +172,7 @@ const makeExecutionToolkit = (params: {
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off
         metadata
           .effect(decodedInput)
-          .pipe(Effect.mapError(normalizeToolExecutionError))
+          .pipe(stopWithTurn, Effect.mapError(normalizeToolExecutionError))
           .pipe(provideExtensionLeaf({}))
           .pipe(
             provideCurrentHostCtx(params.ctx),

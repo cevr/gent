@@ -34,3 +34,25 @@ the code proves it.
 | L11 | The spine reads bottom-up: flags, wrappers, `Object.assign`             | open               |
 | L12 | `systemPrompt` hook repeats `turnProjection.promptSections`             | open               |
 | L13 | The child result is built twice                                         | open               |
+
+## Live gamut findings (sol-luna, `/private/tmp/gent-gamut-0917`, pane `wZ:p1A`)
+
+| #   | Finding                                                                                                                                                 | Status                                                                                                   |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| G1  | Reasoning text renders raw `**Title**`; `message-list.tsx:386` prints it as plain italic                                                                | open, after the TUI branch merges                                                                        |
+| G2  | An interrupt during a foreground `delegate` leaves its children running with no owner: the next turn cannot await them and falls back to a file monitor | done: each tool call races the turn's interrupt latch; a foreground child is interrupted with its caller |
+| G3  | Interrupt during a tool, then a new message: the next turn ran (L5 path holds live)                                                                     | verified                                                                                                 |
+
+## fx survey (vercel-labs/fx), adopt list
+
+| #   | Candidate                                                                        | Status                                  |
+| --- | -------------------------------------------------------------------------------- | --------------------------------------- |
+| F1  | Settle-then-capture probe and grid in `packages/e2e/src/pty-fixture.ts`          | open                                    |
+| F2  | Scrollback-ownership invariants on top of F1                                     | open                                    |
+| F3  | Byte tape (stdout, stdin, resize) with replay                                    | parked: new capability, not a reduction |
+| F4  | `MAX_TURN_STEPS` and `maximumModelToolResultChars` on `UserConfig`               | open                                    |
+| F5  | Palette folded into `SessionOverlayState` (`session.tsx:237` has a second owner) | open                                    |
+| F6  | Byte cap on the retained TUI feed (`use-session-feed.ts:248,279`)                | open                                    |
+
+Rejected from fx: LLM permission reviewer, static tool table, mutex event
+queue, unbounded steps, whole-log replay, text-blob compaction.
