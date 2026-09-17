@@ -7,8 +7,8 @@
  * server owns the projection, so this file only renders and navigates.
  *
  * Replaces the former `session-tree.tsx` overlay: this shows every loop rather
- * than one session's descendants, adds liveness, and is keyed per branch. The
- * shared reducer lives in `filter-list-state`.
+ * than one session's descendants, adds liveness, and is keyed per branch.
+ * Filtering and cursor movement belong to `SelectList`.
  *
  * @module
  */
