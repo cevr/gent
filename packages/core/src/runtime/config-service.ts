@@ -319,7 +319,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       ConfigService,
       Effect.gen(function* () {
         const userConfigRef = yield* Ref.make(initialConfig)
-        const projectConfigRef = yield* Ref.make(new UserConfig({}))
+        // No filesystem, so there is no project config to read: the merge runs
+        // against the empty one for its normalizing half.
+        const emptyProjectConfig = new UserConfig({})
 
         return ConfigService.of({
           // Test impl: `cwd` is ignored — no filesystem to read. Tests that
@@ -328,14 +330,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           get: () =>
             Effect.gen(function* () {
               const user = yield* Ref.get(userConfigRef)
-              const project = yield* Ref.get(projectConfigRef)
-              return mergeConfigsImpl(user, project)
+              return mergeConfigsImpl(user, emptyProjectConfig)
             }),
           getFresh: () =>
             Effect.gen(function* () {
               const user = yield* Ref.get(userConfigRef)
-              const project = yield* Ref.get(projectConfigRef)
-              return mergeConfigsImpl(user, project)
+              return mergeConfigsImpl(user, emptyProjectConfig)
             }),
           setDriverOverride: (agent, driver) =>
             Ref.update(userConfigRef, (current) =>

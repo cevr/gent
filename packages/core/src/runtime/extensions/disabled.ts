@@ -1,7 +1,8 @@
 /**
  * Shared disabled-extension config reader.
  * Effect-based — requires FileSystem and Path from the platform.
- * Used by both server (dependencies.ts) and TUI (context.tsx).
+ * Read by the runtime profile loader (`runtime/profile.ts`) and by the TUI's
+ * extension context boundary (`apps/tui/src/services/extension-context-boundary.ts`).
  */
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
 

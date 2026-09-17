@@ -117,7 +117,11 @@ export { WakeExtension }
     const source = `export const tool = 1\n`
     expect(declaredNames(API_FILE, source)).toEqual([])
     expect(declaredNames("packages/core/src/protocol.ts", source)).toEqual([])
-    expect(declaredNames("packages/core/src/test-utils/fixtures.ts", source)).toEqual([])
+  })
+
+  test("test-utils declares its own names: the directory is a surface, not an exemption", () => {
+    expect(declaredNames("packages/core/src/test-utils/fixtures.ts", `export const tool = 1\n`)) //
+      .toEqual(["tool"])
   })
 
   test("a branch-tool name an extension imports through the specifier is live", () => {
@@ -309,6 +313,49 @@ export type SessionUpdate = typeof SessionUpdate.Type
         },
       ]),
     ).toEqual([])
+  })
+})
+
+describe("core test-utils surface", () => {
+  const TEST_UTILS_FILE = "packages/core/src/test-utils/language-model.ts"
+
+  test("a helper a core test imports is live", () => {
+    expect(
+      findingsFor([
+        { file: TEST_UTILS_FILE, text: `export const LanguageModelLayers = {}\n` },
+        {
+          file: "packages/core/tests/runtime/session-runtime.test.ts",
+          text: `import { LanguageModelLayers } from "../../src/test-utils/language-model"\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a type its own file reads off the declaration is live", () => {
+    const source = `interface SignalControls { readonly emitNext: number }
+export const signal = () => {
+  const controls: SignalControls = { emitNext: 1 }
+  return controls
+}
+`
+    expect(
+      findingsFor([
+        { file: TEST_UTILS_FILE, text: source },
+        {
+          file: "packages/core/tests/runtime/session-runtime.test.ts",
+          text: `import { signal } from "../../src/test-utils/language-model"\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a constant nothing names, not even its own file, is reported and enforced", () => {
+    const findings = findingsFor([
+      { file: TEST_UTILS_FILE, text: `export const DebugSlowLanguageModelDelayMs = 250\n` },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([1])
+    expect(findings[0]?.enforced).toBe(true)
+    expect(findings[0]?.message).toContain("`DebugSlowLanguageModelDelayMs`")
   })
 })
 

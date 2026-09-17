@@ -11,7 +11,7 @@ import type { AgentDefinition } from "../domain/agent.js"
 import { LanguageModelLayers } from "./language-model.js"
 import { createE2ELayer } from "./e2e-layer.js"
 
-export interface InProcessLayerConfig {
+interface InProcessLayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
