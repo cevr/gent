@@ -1,6 +1,6 @@
 import { createMemo, For, Show, type JSX } from "solid-js"
 import type { BorderLabelItem } from "../utils/session-labels"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { textWidth } from "../platform/text-width-adapter"
 import { truncate } from "../utils/truncate"

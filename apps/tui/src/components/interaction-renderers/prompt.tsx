@@ -7,7 +7,7 @@ import { createEffect, createSignal, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "../../env/context"
 import { useRuntime } from "../../hooks/use-runtime"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { openExternalEditor, resolveEditor } from "../../utils/external-editor"
 
 const decodeMetadata = Schema.decodeUnknownOption(

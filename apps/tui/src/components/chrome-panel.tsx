@@ -23,7 +23,7 @@
 import { Show, type JSX } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal-dimensions"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 
 // ── Root ──────────────────────────────────────────────────────────
 

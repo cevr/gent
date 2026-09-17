@@ -1,4 +1,4 @@
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { getSessionEventLabel, type SessionEvent } from "./session-event-label"
 import { DateTime } from "effect"

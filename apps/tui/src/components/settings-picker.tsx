@@ -1,7 +1,7 @@
 import { createSignal, Show } from "solid-js"
 import { Option } from "effect"
 import { ReasoningEffort, type Model } from "@gent/core/protocol"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { PickerFrame, pickerHeight, usePickerGeometry } from "./picker-frame"
 import { truncate } from "../utils/truncate"

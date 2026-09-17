@@ -16,7 +16,7 @@
 
 import type { JSX } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 
 /**
  * Rows the frame occupies: the items it shows, capped at six, plus its own

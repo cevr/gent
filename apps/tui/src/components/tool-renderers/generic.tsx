@@ -1,5 +1,5 @@
 import { Show } from "solid-js"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { formatToolInput } from "../message-list-utils"
 import { ToolFrame } from "../tool-frame"
 import {

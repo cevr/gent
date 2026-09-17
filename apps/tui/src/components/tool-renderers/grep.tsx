@@ -7,7 +7,7 @@
 
 import { Option, Schema } from "effect"
 import { For, Show, createMemo } from "solid-js"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"

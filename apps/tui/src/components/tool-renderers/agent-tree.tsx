@@ -11,7 +11,7 @@
 import { Option, Schema } from "effect"
 import { Show, For, createMemo, createResource } from "solid-js"
 import type { JSX } from "solid-js"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { useClient } from "../../client/index"
 import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolFrame } from "../tool-frame"

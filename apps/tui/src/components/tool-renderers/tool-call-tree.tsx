@@ -1,7 +1,7 @@
 import { Option } from "effect"
 import type { Schema } from "effect"
 import { Show, For } from "solid-js"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { toolArgSummary } from "../../utils/format-tool.js"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 

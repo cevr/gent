@@ -20,7 +20,7 @@ import { ComposerFrame } from "../components/composer-frame"
 import { truncate } from "../utils/truncate"
 import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
-import { useTheme, buildSyntaxStyle } from "../theme/index"
+import { useTheme, buildSyntaxStyle } from "../theme"
 import { BranchPicker } from "../components/branch-picker"
 import { MessagePicker } from "../components/message-picker"
 import {

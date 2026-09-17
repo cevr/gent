@@ -116,7 +116,7 @@ Gent source root: `/Users/cvr/Developer/personal/.rifts/gent/fx-ui`.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: transcript, composer, status, and extension slots.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/bordered-input.tsx`: composer rules and padding.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer.tsx`: input rendering and controls.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/context.tsx`: default theme selection.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme.tsx`: default theme selection.
 
 ## Progress
 

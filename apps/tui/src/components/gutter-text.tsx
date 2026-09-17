@@ -12,7 +12,7 @@
  */
 
 import { For } from "solid-js"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 
 interface GutterTextProps {
   /** Lines to display */

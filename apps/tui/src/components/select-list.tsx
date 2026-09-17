@@ -27,7 +27,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
 import { ChromePanel } from "./chrome-panel"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 
 // ── State ─────────────────────────────────────────────────────────
 //

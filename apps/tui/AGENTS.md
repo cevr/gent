@@ -36,7 +36,7 @@ Ported from opencode. Key patterns:
 
 - `renderer.getPalette({ size: 16 })` queries terminal's ANSI palette via OSC
 - System theme generated from terminal colors; fallback to the `fx` theme
-- JSON themes in `src/theme/themes/*.json` with `defs` + dark/light variants
+- JSON themes in `src/themes/*.json` with `defs` + dark/light variants
 - `resolveTheme(themeJson, mode)` resolves refs to RGBA values
 - The palette's "Theme" level enumerates `all()`; "Mode" is the separate Dark/Light toggle. A ported theme may omit `selectedListItemText`/`backgroundMenu`; `resolveTheme` supplies both.
 

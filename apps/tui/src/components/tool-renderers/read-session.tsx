@@ -1,6 +1,6 @@
 import { Option, Schema } from "effect"
 import { Show } from "solid-js"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
 import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
 import type { ToolInput } from "../../utils/parse-tool-output"

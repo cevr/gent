@@ -1,6 +1,6 @@
 import { Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 import { ChromePanel } from "./chrome-panel"
 import { MessageId, type Message } from "@gent/core/protocol"
 import { extractImages, extractText } from "@gent/sdk"

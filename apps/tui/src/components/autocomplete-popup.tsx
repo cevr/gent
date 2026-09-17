@@ -13,7 +13,7 @@
 
 import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
 import { SelectList, selectable, type SelectListRow } from "./select-list"

@@ -19,7 +19,7 @@ import { PickerFrame, pickerHeight } from "./picker-frame"
 import { SelectList, selectable, type SelectListApi, type SelectListRow } from "./select-list"
 import { truncate, truncateStart } from "../utils/truncate"
 import { textWidth } from "../platform/text-width-adapter"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
   if (query.length === 0) return items

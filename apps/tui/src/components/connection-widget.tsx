@@ -1,6 +1,6 @@
 import { Show } from "solid-js"
 import { Option } from "effect"
-import { useTheme } from "../theme/index"
+import { useTheme } from "../theme"
 import { useClient } from "../client/index"
 
 export function ConnectionWidget() {

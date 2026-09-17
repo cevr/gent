@@ -27,7 +27,7 @@ import {
 import { ClientTransport } from "../client-transport"
 import { ClientLifecycle, ClientShell } from "../client-services"
 import { ChromePanel } from "../../components/chrome-panel"
-import { useTheme } from "../../theme/index"
+import { useTheme } from "../../theme"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useScopedKeyboard } from "../../keyboard/context"
 
