@@ -10,7 +10,7 @@
  * tab run commands instead of completing them.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { AutocompletePopup } from "../../src/components/autocomplete-popup"
 import { useExtensionUI } from "../../src/extensions/context"
 import { useScopedKeyboard } from "../../src/keyboard/context"
@@ -80,6 +80,42 @@ describe("AutocompletePopup renderer", () => {
     }),
   )
 
+  it.live("the ghost names the row tab completes after the cursor moves", () =>
+    Effect.gen(function* () {
+      const items: ReadonlyArray<AutocompleteItem> = [
+        { id: "model", label: "/model" },
+        { id: "monitor", label: "/monitor" },
+      ]
+      const ghosts: Array<string> = []
+      const completed: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <Contribute items={items} />
+              <AutocompletePopup
+                state={{ type: "/", filter: "mo", triggerPos: 0 }}
+                onSelect={() => {}}
+                onComplete={(value) => completed.push(value)}
+                onClose={() => {}}
+                onGhostChange={(ghost) => ghosts.push(Option.getOrElse(ghost, () => ""))}
+              />
+            </>
+          ),
+          { width: 80, height: 24 },
+        ),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("/monitor"), "items"),
+      )
+      expect(ghosts.at(-1)).toBe("model")
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressTab()
+      expect(completed).toEqual(["monitor"])
+      expect(ghosts.at(-1)).toBe("monitor")
+    }),
+  )
   it.live("leaves every key to the composer while it has nothing to select", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []

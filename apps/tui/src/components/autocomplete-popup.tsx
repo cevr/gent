@@ -11,7 +11,7 @@
  * binds and unbinds those keys; escape closes the popup either way.
  */
 
-import { createEffect, createMemo, createResource, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
@@ -85,15 +85,22 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const hasItems = () => visibleItems().length > 0
 
   /**
-   * The ghost tracks the top row, which is the row Tab completes.
+   * The ghost tracks the row under the cursor, which is the row Tab completes.
+   * The list opens on the top row and reports every cursor move, so the offer
+   * and the key never name two different rows.
    *
-   * It is reported on every change of rows or filter, and cleared when the
-   * popup unmounts — a ghost outliving its popup would offer a completion the
-   * composer can no longer perform.
+   * It is cleared when the popup unmounts — a ghost outliving its popup would
+   * offer a completion the composer can no longer perform.
    */
+  const [cursor, setCursor] = createSignal<Option.Option<AutocompleteItem>>(Option.none())
   createEffect(() => {
     const top = Option.fromNullishOr(visibleItems()[0])
-    props.onGhostChange(ghostCompletion(top, props.state.filter))
+    props.onGhostChange(
+      ghostCompletion(
+        Option.orElse(cursor(), () => top),
+        props.state.filter,
+      ),
+    )
   })
 
   onCleanup(() => {
@@ -196,6 +203,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
         rows={rows}
         sticky={() => Option.some(0)}
         empty={emptyRow}
+        onCursor={setCursor}
         extraKeys={(event, selected) => {
           // Tab completes without running. The popup is the last place that
           // still knows which key arrived, so it is where the two intents part
