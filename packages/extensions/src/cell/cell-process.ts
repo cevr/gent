@@ -8,6 +8,8 @@ import {
   makeCellFrameReader,
   makeCellOutputScanner,
   type CellOutputSegment,
+  makeBoundedOutput,
+  maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
 } from "./cell-protocol.js"
 
@@ -29,29 +31,9 @@ export const cellRequestFd = 4
  */
 const cellOutputRedirect = 'exec "$0" "$1" 2>&1'
 
-/** Keeps the first `limit` characters and counts the rest. */
-const makeOutputBuffer = (limit: number) => {
-  let text = ""
-  let omitted = 0
-  const read = () => {
-    if (omitted === 0) return text
-    return `${text}\n... [${omitted} characters omitted] ...`
-  }
-  return {
-    append: (chunk: string) => {
-      const room = Math.max(0, limit - text.length)
-      text += chunk.slice(0, room)
-      omitted += Math.max(0, chunk.length - room)
-    },
-    read,
-    take: () => {
-      const result = read()
-      text = ""
-      omitted = 0
-      return result
-    },
-  }
-}
+/** Launch diagnostics stay small; the tail carries whatever the worker said last. */
+const diagnosticsLimit = 8192
+const diagnosticsHeadLimit = 6144
 
 /** The caller owns an immutable trusted worker artifact and the returned process scope.
  * The worker runs with the host's working directory, environment, and OS permissions,
@@ -94,7 +76,10 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     },
   ).pipe(Effect.mapError(launchError))
 
-  const diagnosticsBuffer = makeOutputBuffer(8192)
+  const diagnosticsBuffer = makeBoundedOutput({
+    limit: diagnosticsLimit,
+    headLimit: diagnosticsHeadLimit,
+  })
   const diagnostics = () => diagnosticsBuffer.read()
   const ioError = (cause: unknown) =>
     new CellProcessError({ phase: "io", message: String(cause), diagnostics: diagnostics() })
@@ -144,7 +129,10 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   // before its result frame. Text before the boundary belongs to the cell. Text after
   // it is dropped when the next Evaluate is sent, and text after that belongs to the
   // next cell.
-  const cellOutput = makeOutputBuffer(maximumCellDisplayLength)
+  const cellOutput = makeBoundedOutput({
+    limit: maximumCellDisplayLength,
+    headLimit: maximumCellDisplayHeadLength,
+  })
   let expectedToken = Option.none<string>()
   let finished = Option.none<{ readonly token: string; readonly text: string }>()
   let outputClosed = false
