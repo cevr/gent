@@ -117,6 +117,8 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Input window in tokens. Overrides the model catalog's limit; a smaller value hands off sooner. */
   contextLength: Schema.optional(Schema.Natural),
+  /** Model steps one turn may take. Lowers the loop's own ceiling; it cannot raise it. */
+  maxSteps: Schema.optional(Schema.Natural),
   driver: Schema.optional(DriverRef),
 }) {}
 
@@ -231,6 +233,7 @@ export const AgentRunOverridesSchema = Schema.Struct({
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
   reasoningEffort: Schema.optional(ReasoningEffort),
   contextLength: Schema.optional(Schema.Natural),
+  maxSteps: Schema.optional(Schema.Natural),
   systemPromptAddendum: Schema.optional(Schema.String),
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type

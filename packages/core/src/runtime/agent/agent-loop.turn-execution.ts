@@ -1143,12 +1143,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const runTurnStep = Effect.fn("AgentLoop.runTurnStep")(function* (params: {
       readonly state: RunningState
       readonly step: number
-      /**
-       * The last step this turn may run. Set by `runTurn` when the step budget
-       * is down to its final step, so the model answers instead of being cut
-       * off mid-plan.
-       */
-      readonly finalStep: boolean
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
@@ -1180,6 +1174,39 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
 
       const currentTurnAgent = resolved.currentTurnAgent
+      const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
+      if (params.step > maxSteps) {
+        // Only reachable when the final step said nothing at all: it ran with
+        // tools disabled, so it had no way to ask for another. Leaving the
+        // flags false publishes a `TurnCompleted` no caller can tell from a
+        // reply, and `headless-runner.ts` reads exactly that flag to pick its
+        // exit code, so `gent -H` would exit 0 having printed nothing.
+        yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
+          Effect.annotateLogs({ step: params.step, max: maxSteps }),
+        )
+        return stopWith(currentTurnAgent, { unanswered: true })
+      }
+      // The last step the budget allows. Rather than cut the turn off mid-plan,
+      // tell the model its tools are gone and let it spend this step writing
+      // the answer. Prior art: opencode-v2 does the same at its ceiling
+      // (`runner/llm.ts:221`).
+      const finalStep = params.step === maxSteps
+      if (finalStep) {
+        yield* persistMessageReceived({
+          message: Message.cases.regular.make({
+            id: finalStepMessageIdForTurn(params.state.message.id),
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: MAX_STEPS_INSTRUCTION })],
+            createdAt: yield* DateTime.nowAsDate,
+            metadata: { customType: "max-steps", details: { step: params.step } },
+          }),
+        })
+        yield* Effect.logWarning("turn.max-steps-final").pipe(
+          Effect.annotateLogs({ step: params.step, max: maxSteps }),
+        )
+      }
       if (params.step === 1) {
         yield* Ref.update(scope.turnMetricsRef, (m) => ({
           ...m,
@@ -1198,7 +1225,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return yield* collectTurnStream({
             messageId: params.state.message.id,
             step: params.step,
-            finalStep: params.finalStep,
+            finalStep,
             resolved,
             activeStream,
           })
@@ -1346,51 +1373,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
         while (true) {
           step++
-          if (step > MAX_TURN_STEPS) {
-            // Only reachable when the final step below said nothing at all: it
-            // ran with tools disabled, so it had no way to ask for another.
-            // Leaving the flags false publishes a `TurnCompleted` no caller can
-            // tell from a reply, and `headless-runner.ts` reads exactly that
-            // flag to pick its exit code, so `gent -H` would exit 0 having
-            // printed nothing.
-            unanswered = true
-            yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
-              Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
-            )
-            break
-          }
-
           if (yield* scope.turnInterruption.interrupted) {
             interrupted = true
             break
           }
 
-          // The last step the budget allows. Rather than cut the turn off
-          // mid-plan, tell the model its tools are gone and let it spend this
-          // step writing the answer. Prior art: opencode-v2 does the same at
-          // its ceiling (`runner/llm.ts:221`).
-          const finalStep = step === MAX_TURN_STEPS
-          if (finalStep) {
-            yield* persistMessageReceived({
-              message: Message.cases.regular.make({
-                id: finalStepMessageIdForTurn(state.message.id),
-                sessionId: scope.sessionId,
-                branchId: scope.branchId,
-                role: "user",
-                parts: [Prompt.textPart({ text: MAX_STEPS_INSTRUCTION })],
-                createdAt: yield* DateTime.nowAsDate,
-                metadata: { customType: "max-steps", details: { step } },
-              }),
-            })
-            yield* Effect.logWarning("turn.max-steps-final").pipe(
-              Effect.annotateLogs({ step, max: MAX_TURN_STEPS }),
-            )
-          }
-
           const stepResult = yield* runTurnStep({
             state,
             step,
-            finalStep,
             currentTurnAgent,
             turnProfile,
           })

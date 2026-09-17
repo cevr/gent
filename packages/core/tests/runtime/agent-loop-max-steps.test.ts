@@ -18,7 +18,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers, finishPart, toolCallPart } from "../../src/test-utils/language-model"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
-import { AgentName } from "../../src/domain/agent"
+import { AgentName, makeRunSpec } from "../../src/domain/agent"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import type { AgentEvent } from "../../src/domain/event"
 import { makeAgentLoopService, makeLayerWithEvents, runAgentLoop } from "./agent-loop/helpers"
@@ -64,9 +64,14 @@ describe("max turn steps", () => {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        yield* runAgentLoop(agentLoop, userMessage("loop forever"))
+        // The budget is the agent's to lower; three steps prove the same exit
+        // the default two hundred do.
+        yield* runAgentLoop(agentLoop, userMessage("loop forever"), {
+          runSpec: makeRunSpec({ overrides: { maxSteps: 3 } }),
+        })
 
         const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "StreamStarted")).toHaveLength(3)
         const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
         expect(turnCompleted.length).toBeGreaterThan(0)
         // Without the flag this reads as a successful turn with an empty
