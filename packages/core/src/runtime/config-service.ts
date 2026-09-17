@@ -13,6 +13,7 @@ import {
 import { AgentName, AgentRunOverridesSchema, DriverRefFromConfig } from "../domain/agent.js"
 import type { DriverRef } from "../domain/agent.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
+import { GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME } from "./extensions/disabled.js"
 
 // User config schema - stored at ~/.gent/config.json
 
@@ -121,10 +122,12 @@ export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("Conf
 export class ConfigService extends Context.Service<ConfigService, ConfigServiceService>()(
   "@gent/core/src/runtime/config-service/ConfigService",
 ) {
-  /** Relative path from $HOME for user config */
-  static USER_CONFIG_RELATIVE = ".gent/config.json"
-  /** Relative path from project root for project config */
-  static PROJECT_CONFIG_RELATIVE = ".gent/config.json"
+  /**
+   * Where a config file sits, relative to $HOME for the user config and to
+   * the project root for the project config. One path, because both files
+   * carry the same schema at the same place under their own root.
+   */
+  static CONFIG_RELATIVE = `${GENT_CONFIG_DIRECTORY}/${GENT_CONFIG_FILENAME}`
 
   static Live: Layer.Layer<
     ConfigService,
@@ -137,11 +140,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const path = yield* Path.Path
       const runtimeEnvironment = yield* RuntimeEnvironment
       const home = runtimeEnvironment.home
-      const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
-      const projectConfigPath = path.join(
-        runtimeEnvironment.cwd,
-        ConfigService.PROJECT_CONFIG_RELATIVE,
-      )
+      const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+      const projectConfigPath = path.join(runtimeEnvironment.cwd, ConfigService.CONFIG_RELATIVE)
 
       const UserConfigJson = Schema.fromJsonString(UserConfig)
       const defaultUserConfig = new UserConfig({})
@@ -238,7 +238,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // cwd. Falls back to an empty UserConfig on missing / unparsable
       // file so a misconfigured project never blocks dispatch.
       const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> =>
-        readConfigOrEmpty(path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE))
+        readConfigOrEmpty(path.join(cwd, ConfigService.CONFIG_RELATIVE))
 
       const mutateUserConfig = (
         decide: (current: UserConfig) => {
@@ -275,9 +275,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
         getFresh: Effect.fn("ConfigService.getFresh")(function* (cwd) {
           const user = yield* readConfigFresh(userConfigPath)
-          const project = yield* readConfigFresh(
-            path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE),
-          )
+          const project = yield* readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE))
           // Publish only a fully decoded snapshot. User config is shared by
           // all profile keys. The cached project snapshot is launch-cwd only;
           // arbitrary session cwds continue to use their own fresh file on

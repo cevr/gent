@@ -17,7 +17,7 @@ import {
   type ExtensionActivationResult,
 } from "./extensions/activation.js"
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
-import { readDisabledExtensions } from "./extensions/disabled.js"
+import { GENT_CONFIG_DIRECTORY } from "./extensions/disabled.js"
 import { environmentSection } from "../domain/prompt.js"
 import type { ProcessGenerationId } from "../domain/process-generation.js"
 
@@ -34,7 +34,11 @@ export interface RuntimeProfileInputs {
   readonly shell?: string
   readonly osVersion?: string
   readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
-  /** Fresh config supplied by an explicit refresh. */
+  /**
+   * Every extension this profile must not activate. The caller has already
+   * merged the user and project config into it, so this loader reads no
+   * config file of its own.
+   */
   readonly disabledExtensions?: ReadonlyArray<string>
 }
 
@@ -86,16 +90,12 @@ export const loadRuntimeProfileDeclarations = (
     const fs = yield* FileSystem.FileSystem
     const canonicalCwd = path.resolve(inputs.cwd)
 
-    // 1. Disabled set (file-based + caller-provided)
-    const disabledSet = yield* readDisabledExtensions({
-      home: inputs.home,
-      cwd: canonicalCwd,
-      extra: inputs.disabledExtensions,
-    })
+    // 1. Disabled set, already merged by the caller
+    const disabledSet = new Set(inputs.disabledExtensions ?? [])
 
     // 2. Discover external extensions (user + project dirs)
-    const userExtensionsDir = path.join(inputs.home, ".gent", "extensions")
-    const projectExtensionsDir = path.join(canonicalCwd, ".gent", "extensions")
+    const userExtensionsDir = path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions")
+    const projectExtensionsDir = path.join(canonicalCwd, GENT_CONFIG_DIRECTORY, "extensions")
     const discovery = yield* discoverExtensions({
       userDir: userExtensionsDir,
       projectDir: projectExtensionsDir,

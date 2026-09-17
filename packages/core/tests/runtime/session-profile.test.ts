@@ -169,6 +169,38 @@ describe("session profile resolution", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  it.scopedLive("a project-only disabledExtensions entry keeps that extension out", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const kept = markerExtension("@gent/test-session-profile/kept", "live")
+      const dropped = defineExtension({
+        id: "@gent/test-session-profile/dropped",
+        setup: Effect.void,
+      })
+      // Only the project config names it; the user config stays silent.
+      yield* fs.makeDirectory(path.join(launch, ".gent"), { recursive: true })
+      yield* fs.writeFileString(
+        path.join(launch, ".gent", "config.json"),
+        '{"disabledExtensions":["@gent/test-session-profile/dropped"]}',
+      )
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const profile = yield* cache.resolve(launch)
+        expect(profile.resolved.extensions.map((extension) => extension.manifest.id)).toEqual([
+          ExtensionId.make("@gent/test-session-profile/kept"),
+        ])
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, dropped] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("d".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

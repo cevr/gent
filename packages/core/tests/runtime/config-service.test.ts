@@ -55,11 +55,11 @@ describe("user configuration", () => {
         const path = yield* Path.Path
         const cwd = yield* fs.makeTempDirectoryScoped()
         const home = yield* fs.makeTempDirectoryScoped()
-        const projectConfigPath = path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE)
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
         // The project asks for its own trust; only the user config may grant it.
         yield* fs.writeFileString(projectConfigPath, encodeJson({ trustedProjects: [cwd] }))
-        const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         const live = ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
           Layer.provide(BunServices.layer),
@@ -106,7 +106,7 @@ describe("user configuration", () => {
               ...realFs,
               writeFileString: (filePath, content, options) =>
                 Effect.gen(function* () {
-                  if (filePath === path.join(home, ConfigService.USER_CONFIG_RELATIVE)) {
+                  if (filePath === path.join(home, ConfigService.CONFIG_RELATIVE)) {
                     yield* Ref.update(observedConfigWrites, (count) => count + 1)
                     const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
                       content,
@@ -146,7 +146,7 @@ describe("user configuration", () => {
           expect(result.sort()).toEqual([...agents].sort())
           expect(yield* Ref.get(observedConfigWrites)).toBeGreaterThan(0)
           const persistedText = yield* fs.readFileString(
-            path.join(home, ConfigService.USER_CONFIG_RELATIVE),
+            path.join(home, ConfigService.CONFIG_RELATIVE),
           )
           const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
             persistedText,
@@ -216,7 +216,7 @@ describe("user configuration", () => {
         const path = yield* Path.Path
         const cwd = yield* fs.makeTempDirectoryScoped()
         const home = yield* fs.makeTempDirectoryScoped()
-        const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
         // Written by hand, exactly as a pre-rename gent left it on disk.
         yield* fs.writeFileString(
@@ -261,7 +261,7 @@ describe("user configuration", () => {
         const path = yield* Path.Path
         const cwd = yield* fs.makeTempDirectoryScoped()
         const home = yield* fs.makeTempDirectoryScoped()
-        const userConfigPath = path.join(home, ConfigService.USER_CONFIG_RELATIVE)
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
         // Valid JSON, invalid against the schema: `disabledExtensions` must be
         // an array of strings. Everything else here is a real user setting.
