@@ -13,6 +13,7 @@ bun run gamut list                  # the presets and the models each one pins
 bun run gamut up sol-luna           # fresh scratch run in a new herdr pane
 bun run gamut up mixed --prompt ./my-prompt.md --no-build
 bun run gamut read 80               # the pane tail
+bun run gamut wait                  # block until idle with no working child; use this, the transcript echoes the prompt
 bun run gamut send "also run typecheck"   # types into the TUI composer, then Enter
 bun run gamut interrupt             # one Ctrl-C
 bun run gamut status                # what the run actually did (below)

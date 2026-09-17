@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   decodeState,
+  isSettled,
   encodeState,
   paneIdFromSplit,
   presetConfigJson,
@@ -48,7 +49,8 @@ describe("gamut roster block", () => {
   })
 
   test("a rewrite replaces only the block and keeps the prose around it", () => {
-    const before = "# rules\n\nprose above\n\n<!-- roster -->\n- stale\n<!-- /roster -->\n\nprose below\n"
+    const before =
+      "# rules\n\nprose above\n\n<!-- roster -->\n- stale\n<!-- /roster -->\n\nprose below\n"
     const after = rewriteRoster(before, preset)
     expect(after).toContain("prose above")
     expect(after).toContain("prose below")
@@ -102,11 +104,33 @@ describe("gamut shell quoting", () => {
 describe("gamut pane id", () => {
   test("reads the pane id out of a herdr split reply", () => {
     expect(
-      paneIdFromSplit(`{"id":"cli:pane:split","result":{"pane":{"pane_id":"wZ:pH"},"type":"pane"}}`),
+      paneIdFromSplit(
+        `{"id":"cli:pane:split","result":{"pane":{"pane_id":"wZ:pH"},"type":"pane"}}`,
+      ),
     ).toBe("wZ:pH")
   })
 
   test("a reply with no pane id is refused", () => {
     expect(() => paneIdFromSplit(`{"result":{}}`)).toThrow("no pane id")
+  })
+})
+
+describe("a settled pane", () => {
+  test("an idle status line with no working child is settled", () => {
+    expect(isSettled("  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n")).toBe(true)
+  })
+  test("an idle root with a working background child is not settled", () => {
+    expect(
+      isSettled(
+        "idle · work (main) · GPT-5.6 Sol\n ◆ main working · Task 2. Read-only audit  ^t agents\n",
+      ),
+    ).toBe(false)
+  })
+  test("a generating turn is not settled, whatever words the transcript echoes", () => {
+    expect(
+      isSettled(
+        "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n",
+      ),
+    ).toBe(false)
   })
 })

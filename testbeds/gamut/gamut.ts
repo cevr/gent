@@ -196,8 +196,7 @@ export const paneIdFromSplit = (stdout: string): string => {
  * arguments and gent rejects it. Quoting here is what survives that round
  * trip; the embedded-quote form closes the quote, escapes the `'`, reopens.
  */
-export const shellQuote = (argument: string): string =>
-  `'${argument.replaceAll("'", `'\\''`)}'`
+export const shellQuote = (argument: string): string => `'${argument.replaceAll("'", `'\\''`)}'`
 
 /** Ctrl-C as the raw byte. `send-keys` does not deliver Ctrl chords. */
 const CTRL_C = "\x03"
@@ -299,7 +298,9 @@ interface SessionRow {
 }
 
 /** Indent a session by its depth in the parent chain. */
-const sessionTree = (rows: ReadonlyArray<SessionRow>): ReadonlyArray<{ row: SessionRow; depth: number }> => {
+const sessionTree = (
+  rows: ReadonlyArray<SessionRow>,
+): ReadonlyArray<{ row: SessionRow; depth: number }> => {
   const byParent = new Map<string | null, Array<SessionRow>>()
   for (const row of rows) {
     const key = row.parent_session_id
@@ -400,6 +401,34 @@ const read = async (lines: string) => {
   console.log(await $`herdr pane read ${state.pane} --lines ${lines}`.text())
 }
 
+/**
+ * Whether the pane shows a finished run: the status line reads idle and the
+ * agents tray lists no working child. The prompt text is echoed in the
+ * transcript, so matching on a word the reply should contain proves nothing.
+ */
+export const isSettled = (paneText: string): boolean => {
+  const lines = paneText.split("\n").map((line) => line.trim())
+  return (
+    lines.some((line) => line.startsWith("idle ·")) &&
+    !lines.some((line) => / working · /.test(line))
+  )
+}
+
+const wait = async (timeoutSeconds: string) => {
+  const state = await readState()
+  const deadline = Date.now() + Number(timeoutSeconds) * 1000
+  let settledReads = 0
+  while (Date.now() < deadline) {
+    const text = await $`herdr pane read ${state.pane} --lines 12`.text()
+    settledReads = isSettled(text) ? settledReads + 1 : 0
+    // Two reads in a row: a background child's result starts a new turn by itself.
+    if (settledReads >= 2) return
+    await Bun.sleep(3000)
+  }
+  console.error(`not settled after ${timeoutSeconds}s`)
+  process.exitCode = 1
+}
+
 const restart = async () => {
   const state = await readState()
   await quitTui(state)
@@ -434,6 +463,7 @@ const USAGE = `usage: bun run gamut <command>
   send <text>                                       type text + Enter into the pane
   interrupt                                         send one Ctrl-C
   read [lines]                                      print the pane tail (default 60)
+  wait [seconds]                                    block until the run is idle with no working child (default 600)
   status                                            sessions, models, prompts, tool calls, bun test
   restart                                           quit the TUI and resume the session
   down                                              quit, close the pane, remove the scratch dir
@@ -455,6 +485,8 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
       return interrupt()
     case "read":
       return read(rest[0] ?? "60")
+    case "wait":
+      return wait(rest[0] ?? "600")
     case "status":
       return status()
     case "restart":
