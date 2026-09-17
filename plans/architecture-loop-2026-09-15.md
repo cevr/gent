@@ -1542,10 +1542,16 @@ leak handles that serialize the workers, so the fresh-global mode wins.
 `dependsOn: ["^typecheck"]` cut a cold typecheck from 10511ms to 4240ms, and
 the tasks do not need the ordering: nothing uses project references or
 composite builds. The edge is still load-bearing for the _hash_. Without it
-`turbo run typecheck --dry-run=json` reports `dependencies: []` and
-`hashOfInternalDependencies: null` for `@gent/sdk` and `@gent/tui`, so a core
-API change leaves their task hash unchanged and turbo replays an old success.
-The gate would miss a downstream type error. Reverted; the 5.9s stays spent.
+`turbo run typecheck --dry-run=json` reports `dependencies: []` for
+`@gent/sdk` and `@gent/tui`; with it they carry
+`['@gent/core#typecheck', '@gent/core-internal#typecheck',
+'@gent/extensions#typecheck']`. A missing edge leaves the downstream task hash
+unchanged when a core API changes, and turbo replays an old success, so the
+gate would miss a downstream type error. Reverted; the 5.9s stays spent.
+
+An earlier draft of this note cited `hashOfInternalDependencies: null` as the
+receipt. Turbo 2.10.12 does not emit that field at all, so the reading was an
+absent key, not a null value. The `dependencies` edges above are the receipt.
 
 **Parallel workers exposed a shared production path.** `LOG_DIR` is
 `/tmp/gent/logs` (`packages/sdk/src/log-paths.ts:13`), the directory a live
@@ -1555,10 +1561,33 @@ into it. One process serialized them. Three workers did not: two failures in
 ten repetitions, in both directions.
 
 Bun's isolation unit is the file, and tests inside one file run in one worker,
-so the two files became `apps/tui/tests/client-logs.test.ts` with every
-assertion carried over. Twenty repetitions produced no failure. The removal
-proof still holds: dropping `ensureLogDir` from `clientTraceLogger` fails both
-client trace logger tests.
+so the two files first became `apps/tui/tests/client-logs.test.ts` with every
+assertion carried over. Twenty repetitions produced no failure.
+
+A second counsel pass showed that was only a local fix. `packages/sdk/tests/logger.test.ts:28`
+writes into the same directory, and the workspace runner starts sdk beside tui
+(`packages/tooling/src/workspace-test-runner.ts:51`), so the removal could still
+take another package's file — or a running gent's logs. The machine had one live
+`-client.log` in `/tmp/gent/logs` while the suite was deleting that directory.
+
+So the directory became a parameter. `inspectLogs(dir = LOG_DIR)` and a new
+`makeClientTraceLogger(dir, path)` keep the production bindings as defaults, and
+both production call sites (`apps/tui/src/ops/local-health.ts:251`,
+`apps/tui/src/main.tsx:743`) are unchanged. Every case now runs against a
+directory from `makeTempDirectoryScoped`. The live log file survives a full run.
+
+Two assertions were wrong and are now exact. `expect([client, logs.latestClient]).toContain(client)`
+holds for every value, because the array literal contains `client` by
+construction. The replacements are `expect(logs.latestServer).toBe(newer)` and
+`expect(logs.latestClient).toBe(client)`, which only became sound once the
+directory held nothing else. They also needed real ordering: four writes land in
+one millisecond and `inspectLogs` sorts by millisecond mtime, so `writeLog`
+stamps each fixture through `fs.utimes`. Effect's `FileSystem` carries `utimes`
+(`FileSystem.d.ts:264`), so no `node:fs` import and no suppression entry.
+
+The proofs: inverting one fixture's stamped age fails
+`expect(logs.latestServer).toBe(newer)` with the exact pair, and dropping
+`ensureLogDir` from `clientTraceLogger` fails both client trace logger tests.
 
 ### Result
 

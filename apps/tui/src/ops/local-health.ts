@@ -137,16 +137,22 @@ export const inspectStorage = (
     }
   })
 
-export const inspectLogs: Effect.Effect<LogHealth, never, FileSystem.FileSystem> = Effect.gen(
-  function* () {
+/**
+ * Read a log directory. `dir` defaults to the one a live gent writes to; tests
+ * pass a directory they own, so they never read or remove real logs.
+ */
+export const inspectLogs = (
+  dir: string = LOG_DIR,
+): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const exists = yield* fs.exists(LOG_DIR).pipe(Effect.orElseSucceed(() => false))
-    if (!exists) return { dir: LOG_DIR }
+    const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
+    if (!exists) return { dir }
 
-    const names = yield* fs.readDirectory(LOG_DIR).pipe(Effect.orElseSucceed(() => []))
+    const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))
     const entries = yield* Effect.forEach(names, (name) =>
       Effect.gen(function* () {
-        const path = `${LOG_DIR}/${name}`
+        const path = `${dir}/${name}`
         const stat = yield* fs.stat(path).pipe(Effect.option)
         let mtimeMs = 0
         if (stat._tag === "Some" && stat.value.mtime._tag === "Some") {
@@ -168,12 +174,11 @@ export const inspectLogs: Effect.Effect<LogHealth, never, FileSystem.FileSystem>
       )
 
     return {
-      dir: LOG_DIR,
+      dir,
       latestServer: latest("server"),
       latestClient: latest("client"),
     }
-  },
-)
+  })
 
 /** The entry is the SDK's decoded lock record; `readServerLock` already rejected malformed files. */
 export const inspectServer = (
@@ -243,7 +248,7 @@ export const makeDoctorReport = (
       home,
       storage,
       server,
-      logs: yield* inspectLogs,
+      logs: yield* inspectLogs(),
       extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
     }
   })
