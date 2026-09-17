@@ -751,8 +751,12 @@ const isNamesake = (
   facts: ExportFacts,
   declaration: Declaration,
   declaredIn: ReadonlySet<string>,
+  targets: ReadonlyArray<string>,
 ): boolean => {
   if (Option.isSome(declaration.surface.specifier)) return false
+  // A file that imports from the declaring module reads it, under an alias or
+  // a namespace if not by name, whatever it binds beside the import.
+  if (targets.some((target) => facts.importsByTarget.has(target))) return false
   return declaredIn.has(candidate) || facts.localNames.has(declaration.name)
 }
 
@@ -777,7 +781,7 @@ export const findUnconsumedExports = (
         return true
       }
       if (!mentions(facts, declaration.surface, declaration.name)) continue
-      if (isNamesake(candidate, facts, declaration, declaredIn)) continue
+      if (isNamesake(candidate, facts, declaration, declaredIn, targets)) continue
       return true
     }
     if (!declaration.surface.ownFileCounts) return false

@@ -925,6 +925,32 @@ describe("a namesake does not vouch for an export", () => {
     expect(findings).toEqual([])
   })
 
+  test("an aliased import from the declaring module is a read, with a namesake beside it", () => {
+    const stem = CORE_FILE.slice(CORE_FILE.lastIndexOf("/") + 1).replace(/\.ts$/, "")
+    const findings = findingsFor([
+      coreDeclaration,
+      {
+        file: TUI_FILE,
+        text: `import { isClientFile as coreIsClientFile } from '../${stem}.js'\nconst isClientFile = () => true\nexport const use = () => coreIsClientFile('a') && isClientFile()\n`,
+      },
+      usedElsewhere,
+    ])
+    expect(findings).toEqual([])
+  })
+
+  test("a namespace import from the declaring module is a read, with a namesake beside it", () => {
+    const stem = CORE_FILE.slice(CORE_FILE.lastIndexOf("/") + 1).replace(/\.ts$/, "")
+    const findings = findingsFor([
+      coreDeclaration,
+      {
+        file: TUI_FILE,
+        text: `import * as Core from '../${stem}.js'\nconst isClientFile = () => true\nexport const use = () => Core.isClientFile('a') && isClientFile()\n`,
+      },
+      usedElsewhere,
+    ])
+    expect(findings).toEqual([])
+  })
+
   test("a plain mention with no local binding still vouches", () => {
     const findings = findingsFor([
       coreDeclaration,

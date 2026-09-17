@@ -460,6 +460,9 @@ const startToolCall = (
   )
 }
 
+/** A send that fails is tried again four times, from 200 ms, before the shell takes the prompt back. */
+const STARTUP_PROMPT_RETRY = { schedule: Schedule.exponential("200 millis"), times: 4 }
+
 // ── Hook ──
 
 export function useSessionFeed(
@@ -688,6 +691,9 @@ export function useSessionFeed(
             yield* client.client.message
               .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
               .pipe(
+                // One request id for every attempt, so an attempt that landed
+                // with a lost reply cannot run the prompt a second time.
+                Effect.retry(STARTUP_PROMPT_RETRY),
                 Effect.andThen(Effect.sync(() => prompt.settle(true, requestId))),
                 Effect.catchEager((err) =>
                   Effect.sync(() => {

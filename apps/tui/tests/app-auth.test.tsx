@@ -1139,13 +1139,12 @@ describe("App auth gate", () => {
       )
       const clientContext = yield* requireClient(ctx)
       yield* Effect.promise(() => waitForMessage(setup, attempts, initialPrompt))
-      // A new stream for the same session is the next chance to send.
-      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "A")
+      // Nothing else changes: the send itself goes again.
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => attempts.length >= 2, "second send"),
       )
       // The send landed; one more mount must not send again.
-      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-a"), "A")
+      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "A")
       yield* Effect.promise(() => setup.renderOnce())
       // gent/no-sleep: allow real-clock gap so a third send, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
