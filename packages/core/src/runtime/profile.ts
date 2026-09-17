@@ -19,7 +19,6 @@ import {
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
 import { environmentSection } from "../domain/prompt.js"
-import type { ConfigServiceService, UserConfig } from "./config-service.js"
 import type { ProcessRunner } from "./run-process.js"
 import type { ProcessGenerationId } from "../domain/process-generation.js"
 
@@ -171,9 +170,7 @@ export const buildSessionProfile = (params: {
   readonly cwd: string
   readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
-  readonly configService: ConfigServiceService
   readonly resourceContext: Context.Context<unknown>
-  readonly configOverride?: UserConfig
   readonly generationId: ProcessGenerationId
 }) =>
   Effect.gen(function* () {

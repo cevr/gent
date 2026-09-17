@@ -87,7 +87,7 @@ const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig =>
 
 // ConfigService
 
-export interface ConfigServiceService {
+interface ConfigServiceService {
   /**
    * Resolve the merged user + project config. Pass `cwd` whenever the
    * consumer is acting *on behalf of a specific session* — a multi-cwd

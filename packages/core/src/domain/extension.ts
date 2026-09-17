@@ -73,6 +73,16 @@ export type ExtensionStatusInfo =
 export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 }
 export type ExtensionScope = keyof typeof SCOPE_PRECEDENCE
 
+/** Resolution order: scope precedence, then id. Later extensions win service conflicts. */
+export const sortExtensionsByScope = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<LoadedExtension> =>
+  [...extensions].sort((a, b) => {
+    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
+    if (scopeDiff !== 0) return scopeDiff
+    return a.manifest.id.localeCompare(b.manifest.id)
+  })
+
 // Extension Load Error
 
 export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(

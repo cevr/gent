@@ -57,21 +57,18 @@ interface DependencyOverrides {
 }
 
 /**
- * Wiring contract failure — fires only when a Layer that depends on a
- * pre-resolved seed (the launch SessionProfile or base prompt sections)
- * is materialized before the resolver Layer that populates the seed.
+ * Wiring contract failure — fires only when a Layer that depends on the
+ * pre-resolved base prompt sections is materialized before the resolver
+ * Layer that populates that seed.
  *
  * In a correctly wired composition this is unreachable; surfacing it as
  * a typed error means the failure channel of the bootstrap layer carries
  * an explicit `BootstrapError` instead of an opaque defect.
  */
 class BootstrapError extends Schema.TaggedError<BootstrapError>()("BootstrapError", {
-  seed: Schema.Literals(["launchSessionProfile", "baseSections"]),
+  seed: Schema.Literals(["baseSections"]),
 }) {
   override get message(): string {
-    if (this.seed === "launchSessionProfile") {
-      return "Launch session profile seed was not initialized"
-    }
     return "Base prompt sections were not initialized"
   }
 }

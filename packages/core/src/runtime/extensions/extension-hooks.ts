@@ -1,6 +1,6 @@
 import { Cause, Effect, Option, Predicate } from "effect"
 import {
-  SCOPE_PRECEDENCE,
+  sortExtensionsByScope,
   type AnyExtensionHook,
   type ExtensionHook,
   type ExtensionTurnContext,
@@ -56,13 +56,6 @@ interface RegisteredHook<Input> {
   readonly extensionId: ExtensionId
   readonly handler: (input: Input) => Effect.Effect<void, unknown, unknown>
 }
-
-const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
-  [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
-    if (scopeDiff !== 0) return scopeDiff
-    return a.manifest.id.localeCompare(b.manifest.id)
-  })
 
 const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
   Effect.gen(function* () {
@@ -164,7 +157,7 @@ const collectHookSlot = (
 export const compileExtensionHooks = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledExtensionHooks => {
-  const sorted = sortExtensions(extensions)
+  const sorted = sortExtensionsByScope(extensions)
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
   const turnProjectionSlots: HookTurnProjectionSlot[] = []
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []

@@ -20,7 +20,7 @@ import {
 import { provideExtensionLeaf, sealErasedEffect } from "./extension-effect-membrane.js"
 import type { CurrentExtensionHostContext } from "../agent/current-extension-host-context.js"
 import {
-  SCOPE_PRECEDENCE,
+  sortExtensionsByScope,
   type ExtensionStatusInfo,
   type FailedExtension,
   type TurnProjection,
@@ -269,16 +269,6 @@ const compileRpcRegistry = (
     ).pipe(provideExtensionLeaf({ extensionId }))
   }),
 })
-
-/** Resolution order: scope precedence, then id. Later extensions win service conflicts. */
-export const sortExtensionsByScope = (
-  extensions: ReadonlyArray<LoadedExtension>,
-): ReadonlyArray<LoadedExtension> =>
-  [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
-    if (scopeDiff !== 0) return scopeDiff
-    return a.manifest.id.localeCompare(b.manifest.id)
-  })
 
 const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatusInfo => ({
   manifest: extension.manifest,
