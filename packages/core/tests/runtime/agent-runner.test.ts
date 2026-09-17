@@ -926,6 +926,87 @@ describe("AgentRunner", () => {
     8000,
   )
 
+  it.scopedLive(
+    "a message sent as the child finishes still gets read",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("first reply"), gated: true },
+          { ...textStep("read the correction"), gated: true },
+        ])
+        const sendReachedRuntime = yield* Deferred.make<void>()
+        const childFinished = yield* Deferred.make<void>()
+        // Holds the interjection between the runner's completion check and
+        // the actor, which is where a real child can finish.
+        const holdInterjection = (live: SessionRuntimeService): SessionRuntimeService => ({
+          ...live,
+          steer: (command) => {
+            if (command._tag !== "Interject") return live.steer(command)
+            return Deferred.succeed(sendReachedRuntime, void 0).pipe(
+              Effect.andThen(Deferred.await(childFinished)),
+              Effect.andThen(live.steer(command)),
+            )
+          },
+        })
+        const context = yield* Layer.build(
+          makeLiveAgentRunnerLayer(providerLayer, "silent", holdInterjection),
+        )
+        yield* Effect.gen(function* () {
+          const runner = yield* AgentRunnerService
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const parentSessionId = SessionId.make("send-race-parent")
+          const parentBranchId = BranchId.make("send-race-parent-branch")
+          const now = dateFromMillis(1_767_225_600_000)
+          yield* sessions.createSession(
+            new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          )
+          yield* branches.createBranch(
+            new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
+          )
+          const handle = {
+            requestId: RequestId.make("send-race-child"),
+            parentSessionId,
+            parentBranchId,
+          }
+          const child = yield* runner.start({
+            agent: builtinAgent,
+            prompt: "First task",
+            cwd: "/tmp",
+            parentSessionId,
+            parentBranchId,
+            toolCallId: ToolCallId.make("send-race-tool"),
+            requestId: handle.requestId,
+          })
+          yield* controls.waitForCall(0)
+          const sending = yield* runner
+            .send({ ...handle, message: "CORRECTION", sendId: RequestId.make("send-race-1") })
+            .pipe(Effect.forkScoped)
+          yield* Deferred.await(sendReachedRuntime)
+          yield* controls.emitAll(0)
+          yield* waitForCompletion(runner, handle)
+          yield* Deferred.succeed(childFinished, void 0)
+          yield* Fiber.join(sending)
+          yield* controls.waitForCall(1)
+          yield* controls.emitAll(1)
+          const messages = yield* waitFor(
+            (yield* MessageStorage).listMessages(child.branchId),
+            (items) =>
+              items.some((item) =>
+                item.parts.some(
+                  (part) => part.type === "text" && part.text === "read the correction",
+                ),
+              ),
+          )
+          expect(
+            messages.some((item) =>
+              item.parts.some((part) => part.type === "text" && part.text === "CORRECTION"),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.timeout("6 seconds")),
+    8000,
+  )
   it.scopedLive("reuses atomic child admission and rejects changed or deleted starts", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

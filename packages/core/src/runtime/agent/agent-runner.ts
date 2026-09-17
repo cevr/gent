@@ -417,6 +417,11 @@ export const InProcessRunner: Layer.Layer<
             branchId: child.branchId,
             requestId: params.sendId,
             message: params.message,
+            // The child can finish between the check above and the actor
+            // taking this command. An idle branch only queues steering, so
+            // without the wake the message would sit unread forever. The
+            // actor makes the idle test itself, under its own permit.
+            wake: true,
           })
           .pipe(
             Effect.mapError(

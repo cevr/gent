@@ -1303,6 +1303,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               // Steering that arrived while the answer streamed joins this
               // turn. Left for the next one, it would be answered in a turn
               // whose receipt nobody waits for: a parent hears a child once.
+              //
+              // Not on the last step of the budget: delivery takes the item
+              // off the queue, and with no step left to read it the message
+              // would be gone. It stays queued and opens the next turn.
+              if (finalStep) return Effect.succeed(stop({}))
               return deliverSteeringAtStepBoundary().pipe(
                 Effect.map((joined) => {
                   if (joined) return proceed

@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Ref, Schema, Stream } from "effect"
+import { Effect, Fiber, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { LanguageModelLayers, finishPart, toolCallPart } from "../../src/test-utils/language-model"
 import { dateFromMillis, Message } from "../../src/domain/message"
@@ -21,7 +21,13 @@ import { tool } from "@gent/core/extensions/api"
 import { AgentName, makeRunSpec } from "../../src/domain/agent"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import type { AgentEvent } from "../../src/domain/event"
-import { makeAgentLoopService, makeLayerWithEvents, runAgentLoop } from "./agent-loop/helpers"
+import {
+  makeAgentLoopService,
+  makeLayerWithEvents,
+  runAgentLoop,
+  steerAgentLoop,
+} from "./agent-loop/helpers"
+import { textStep } from "../../src/test-utils/sequence-steps"
 
 describe("max turn steps", () => {
   const sessionId = SessionId.make("max-steps-session")
@@ -80,6 +86,54 @@ describe("max turn steps", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
     }),
+  )
+
+  /**
+   * Steering joins a turn at a step boundary by leaving the queue. On the last
+   * step of the budget there is no next step, so a message delivered there
+   * would leave the queue and never reach a prompt.
+   */
+  it.live("steering that arrives during the last budgeted step opens the next turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...textStep("the budget's only answer"), gated: true },
+        {
+          ...textStep("read the steering"),
+          assertOptions: (options) => {
+            const texts = Prompt.make(options.prompt).content.flatMap((message) => {
+              if (message.role !== "user") return []
+              return message.content.flatMap((part) => {
+                if (part.type !== "text") return []
+                return [part.text]
+              })
+            })
+            expect(texts).toContain("steer late")
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const fiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, userMessage("answer once"), {
+            runSpec: makeRunSpec({ overrides: { maxSteps: 1 } }),
+          }),
+        )
+        yield* controls.waitForCall(0)
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId,
+          branchId,
+          requestId: "req-interject-last-step",
+          message: "steer late",
+        })
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        yield* controls.waitForCall(1)
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   /**
