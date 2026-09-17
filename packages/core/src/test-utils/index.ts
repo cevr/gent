@@ -28,8 +28,6 @@ import {
 } from "../domain/event.js"
 import type { EventStoreService } from "../domain/event.js"
 
-// Re-export effect-bun-test
-export { it, describe, expect } from "effect-bun-test"
 export { testExtensionFiles, testExtensionHostContext } from "./extension-host-context.js"
 import { testExtensionHostPlatform } from "./extension-host-context.js"
 
@@ -288,9 +286,6 @@ export function ensureStorageParents(input: {
     }
   })
 }
-
-// E2E test layer
-export { createE2ELayer, type E2ELayerConfig } from "./e2e-layer.js"
 
 // Extension tool test helpers
 export {

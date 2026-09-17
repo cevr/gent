@@ -40,16 +40,6 @@ import type { Model } from "./model.js"
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
 
-// Note: TurnExecutor is defined below alongside the driver primitives — no
-// external import of `TurnExecutor` is needed.
-
-// ── Driver reference re-export ──
-//
-// The canonical `DriverRef` schema lives on `AgentDefinition` (so it survives
-// JSON roundtrips through `Schema.Class`). Re-exported here for callers that
-// reach through the driver primitive.
-export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
-
 // ── Failure type ──
 
 /** Failure raised when a driver lookup or dispatch fails. */
@@ -123,14 +113,14 @@ export type PersistAuth = (
       },
 ) => Effect.Effect<void, ProviderAuthError>
 
-export interface ProviderAuthorizeContext {
+interface ProviderAuthorizeContext {
   readonly sessionId: SessionId
   readonly methodIndex: number
   readonly authorizationId: string
   readonly persist: PersistAuth
 }
 
-export interface ProviderCallbackContext extends ProviderAuthorizeContext {
+interface ProviderCallbackContext extends ProviderAuthorizeContext {
   readonly code?: string
 }
 
@@ -140,7 +130,7 @@ export interface ProviderAuthorizationResult {
   readonly instructions?: string
 }
 
-export interface ProviderAuthContribution {
+interface ProviderAuthContribution {
   readonly methods: ReadonlyArray<AuthMethod>
   readonly authorize?: (
     ctx: ProviderAuthorizeContext,

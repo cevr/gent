@@ -106,10 +106,6 @@ export const SteerCommandInput = Schema.TaggedUnion({
 })
 export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 
-export type { Session, SessionSettings, SessionState } from "./session-state"
-
-export { AgentStatus, type AgentState } from "./agent-state"
-
 // =============================================================================
 // Focused Client Surfaces
 // =============================================================================

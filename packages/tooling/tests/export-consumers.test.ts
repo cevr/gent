@@ -101,9 +101,52 @@ export { WakeExtension }
     expect(declaredNames("packages/extensions/src/index.ts", source)).toEqual([])
   })
 
-  test("a block with a from clause stays a pass-through, not a declaration", () => {
+  test("a from block on a module surface declares the name it exposes", () => {
+    // The re-export puts a second consumable name at this module path. A dead
+    // one is dead here even though the declaring file keeps its own alive.
     const source = `export { ToolRunner } from "../runtime/agent/tool-runner.js"\n`
-    expect(declaredNames(SDK_FILE, source)).toEqual([])
+    expect(declaredNames(SDK_FILE, source)).toEqual(["ToolRunner"])
+  })
+
+  test("a from block declares every shape it carries across lines", () => {
+    const source = `export {
+  Alpha,
+  type Beta,
+  Gamma as Delta,
+} from "./shapes.js"
+`
+    expect(declaredNames(SDK_FILE, source)).toEqual(["Alpha", "Beta", "Delta"])
+  })
+
+  test("a from re-export of a name the file also declares is not counted twice", () => {
+    const source = `export const shared = 1
+export { shared } from "./elsewhere.js"
+`
+    expect(declaredNames(SDK_FILE, source)).toEqual(["shared"])
+  })
+
+  test("a from re-export nothing imports is reported", () => {
+    const findings = findingsFor([
+      {
+        file: SDK_FILE,
+        text: `import { Orphan } from "./elsewhere.js"
+export { Orphan } from "./elsewhere.js"
+void Orphan
+`,
+      },
+      { file: SDK_CONSUMER, text: `const unrelated = 1\nvoid unrelated\n` },
+    ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`Orphan` is exported but"),
+    ])
+  })
+
+  test("a from re-export a sibling imports is not reported", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `export { Kept } from "./elsewhere.js"\n` },
+      { file: SDK_CONSUMER, text: `import { Kept } from "./log-paths.js"\nvoid Kept\n` },
+    ])
+    expect(findings).toEqual([])
   })
 
   test("a name only a bare block exposes, that nothing imports, is reported", () => {

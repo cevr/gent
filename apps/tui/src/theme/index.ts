@@ -1,6 +1,3 @@
-export type { Theme, ThemeColors, ThemeJson, ThemeMode, ColorValue, HexColor } from "./types"
-export { resolveTheme, generateSystemTheme } from "./resolve"
-export { DEFAULT_THEMES } from "./default-themes"
 export { ThemeProvider, useTheme } from "./context"
 export { detectColorScheme } from "./detect"
 export { buildSyntaxStyle } from "./syntax"

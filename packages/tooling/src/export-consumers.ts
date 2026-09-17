@@ -217,6 +217,12 @@ export interface Declaration {
   readonly name: string
   readonly line: number
   readonly surface: ScannedSurface
+  /**
+   * True when the name reaches this file through `export { X } from "..."`.
+   * Such a file both exposes the name and names the upstream declaration, so
+   * it stays a consumer of that declaration while being measured itself.
+   */
+  readonly passthrough?: boolean
 }
 
 const DECLARATION =
@@ -225,19 +231,26 @@ const DECLARATION =
 /**
  * `(name, line)` for every export a module surface file declares.
  *
- * Two shapes reach the same place. `export const Foo` names the value on the
+ * Three shapes reach the same place. `export const Foo` names the value on the
  * spot. A bare `export { Foo, Bar }` with no `from` clause exposes names this
  * file owns, so it is a surface too -- 26 dead names hid in one such block in
- * `packages/sdk/src/client.ts` because only the first shape was read.
+ * `packages/sdk/src/client.ts` because only the first shape was read. And
+ * `export { Foo } from "./x.js"` puts a second consumable name at this module
+ * path, so a dead one is dead here even though `./x.js` keeps its own alive --
+ * `providers/provider-auth.ts` carried such a line past three review passes.
  *
- * Two kinds of name in such a block are not this file's own, and counting
+ * Two kinds of name in a *bare* block are not this file's own, and counting
  * either would hide a real consumer: one it imported, and one it declares
- * elsewhere in the file. A block carrying `from` is a pass-through and belongs
- * to the entry-point path.
+ * elsewhere in the file. A `from` block has no such ambiguity: it names only
+ * what it exposes.
  */
 const declaredNames = (
   text: string,
-): ReadonlyArray<{ readonly name: string; readonly line: number }> => {
+): ReadonlyArray<{
+  readonly name: string
+  readonly line: number
+  readonly passthrough?: boolean
+}> => {
   const found: Array<{ name: string; line: number }> = []
   for (const [index, line] of text.split("\n").entries()) {
     const name = Option.flatMap(Option.fromNullishOr(DECLARATION.exec(line)), (match) =>
@@ -253,7 +266,14 @@ const declaredNames = (
   const bare = bareExportedNames(text).filter(
     (entry) => !declared.has(entry.name) && !imported.has(entry.name),
   )
-  return [...found, ...bare]
+  // A `from` re-export is this module's own surface entry even when the file
+  // also imports the name for its own use: the two are separate consumable
+  // paths, and only the re-export is being measured here.
+  const exposed = new Set([...declared, ...bare.map((entry) => entry.name)])
+  const passed = fromExportedNames(text)
+    .filter((entry) => !exposed.has(entry.name))
+    .map((entry) => ({ ...entry, passthrough: true }))
+  return [...found, ...bare, ...passed]
 }
 
 /** Every name this file binds with an `import { ... }` or `import X` statement. */
@@ -280,13 +300,14 @@ const importedNames = (text: string): ReadonlySet<string> => {
 }
 
 /**
- * The names every `export { ... }` block without a `from` clause exposes.
+ * The names every `export { ... }` block exposes, kept or dropped by `carries`.
  *
- * The block is collected whole before the `from` test, because a block broken
- * across lines carries its `from` on the closing line.
+ * The block is collected whole before that test, because a block broken across
+ * lines carries its `from` on the closing line.
  */
-const bareExportedNames = (
+const blockExportedNames = (
   text: string,
+  carries: (block: string) => boolean,
 ): ReadonlyArray<{ readonly name: string; readonly line: number }> => {
   const found: Array<{ name: string; line: number }> = []
   const lines = text.split("\n")
@@ -303,8 +324,7 @@ const bareExportedNames = (
     block = Option.none()
     if (Option.isNone(closed)) continue
     const open = closed.value
-    // `} from "./x.js"` makes the block a pass-through, not a declaration.
-    if (/\}\s*from\s*["']/.test(open.text)) continue
+    if (!carries(open.text)) continue
     for (const match of open.text.matchAll(
       /(?:^|[{,])\s*(?:type\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?/g,
     )) {
@@ -323,6 +343,16 @@ const bareExportedNames = (
   }
   return found
 }
+
+const HAS_FROM = /\}\s*from\s*["']/
+
+/** The names every `export { ... }` block without a `from` clause exposes. */
+const bareExportedNames = (text: string) =>
+  blockExportedNames(text, (block) => !HAS_FROM.test(block))
+
+/** The names every `export { ... } from "..."` block on a module surface exposes. */
+const fromExportedNames = (text: string) =>
+  blockExportedNames(text, (block) => HAS_FROM.test(block))
 
 /**
  * The names one `export { ... } from "..."` block exposes, with the line each
@@ -483,11 +513,63 @@ const importedThrough = (specifier: string, lines: ReadonlyArray<string>): Reado
   return names
 }
 
+/** The last path segment of an import specifier, without its extension. */
+const lastSegment = (specifier: string): string => {
+  const trimmed = specifier.replace(/\.[cm]?[jt]sx?$/, "").replace(/\/+$/, "")
+  const slash = trimmed.lastIndexOf("/")
+  if (slash === -1) return trimmed
+  return trimmed.slice(slash + 1)
+}
+
+/**
+ * The names a file answers to as an import target: its own basename, plus, for
+ * a directory index, that directory's name. `import { X } from "../theme"`
+ * reaches `theme/index.ts`.
+ */
+const importTargetsOf = (file: string): ReadonlyArray<string> => {
+  const base = lastSegment(file)
+  if (base !== "index") return [base]
+  const withoutFile = file.slice(0, file.lastIndexOf("/"))
+  return [base, lastSegment(withoutFile)]
+}
+
+/**
+ * Names this file imports from a path, keyed by that path's last segment.
+ *
+ * A `export { X } from "./x.js"` re-export puts `X` at *this* module's path,
+ * so only an import naming this path keeps it alive. Whether the tree mentions
+ * `X` anywhere says nothing: the file that declared it answers for that.
+ */
+const importsByTarget = (
+  lines: ReadonlyArray<string>,
+): ReadonlyMap<string, ReadonlySet<string>> => {
+  const byTarget = new Map<string, Set<string>>()
+  for (const [index, line] of lines.entries()) {
+    const specifier = Option.flatMap(
+      Option.fromNullishOr(/from\s*["']([^"']+)["']/.exec(line)),
+      (found) => Option.fromNullishOr(found[1]),
+    )
+    if (Option.isNone(specifier)) continue
+    const statement = statementEndingAt(lines, index)
+    if (!/^\s*import\b/.test(statement)) continue
+    const key = lastSegment(specifier.value)
+    const names = Option.getOrElse(Option.fromNullishOr(byTarget.get(key)), () => {
+      const created = new Set<string>()
+      byTarget.set(key, created)
+      return created
+    })
+    for (const name of namedImportsIn(statement)) names.add(name)
+  }
+  return byTarget
+}
+
 /** What one file contributes to the whole-tree answer. */
 export interface ExportFacts {
   readonly declarations: ReadonlyArray<Declaration>
   /** Every identifier the file mentions anywhere. */
   readonly identifiers: ReadonlySet<string>
+  /** Names imported from a path, keyed by that path's last segment. */
+  readonly importsByTarget: ReadonlyMap<string, ReadonlySet<string>>
   /** Identifiers per line with comments and strings blanked; empty unless the file's surface reads its own references. */
   readonly identifiersByLine: ReadonlyArray<ReadonlySet<string>>
   /** Names imported through each entry-point specifier. */
@@ -531,6 +613,7 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
     declarations,
     identifiers: identifiersIn(text),
     identifiersByLine,
+    importsByTarget: importsByTarget(text.split("\n")),
     imported: importsIn(file, text.split("\n")),
   }
 }
@@ -588,12 +671,32 @@ const messageFor = (file: string, declaration: Declaration): string =>
  * A re-export that names the upstream specifier is a real consumer — the
  * blanket skip would otherwise call every chained name dead.
  */
-export const findUnconsumedExports = (
+/**
+ * Whether this file imports `name` from any of the module's own import targets.
+ *
+ * A pass-through lives at *this* module's path, so only an import naming that
+ * path keeps it alive. Mentioning the name says nothing: the file that declared
+ * it answers for that.
+ */
+const importsFrom = (facts: ExportFacts, targets: ReadonlyArray<string>, name: string): boolean =>
+  targets.some((target) =>
+    Option.exists(Option.fromNullishOr(facts.importsByTarget.get(target)), (names) =>
+      names.has(name),
+    ),
+  )
+
+/**
+ * Which files declare each name, so a peer that merely declares the same name
+ * can be told apart from a real consumer. A pass-through site is not a peer
+ * declaration: it names the upstream declaration and keeps vouching for it.
+ */
+const filesDeclaringEachName = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
-): ReadonlyArray<ExportConsumerFinding> => {
+): ReadonlyMap<string, ReadonlySet<string>> => {
   const declaringFiles = new Map<string, Set<string>>()
   for (const [file, facts] of factsByFile) {
-    for (const { name } of facts.declarations) {
+    for (const { name, passthrough } of facts.declarations) {
+      if (passthrough === true) continue
       const files = Option.getOrElse(Option.fromNullishOr(declaringFiles.get(name)), () => {
         const created = new Set<string>()
         declaringFiles.set(name, created)
@@ -602,14 +705,29 @@ export const findUnconsumedExports = (
       files.add(file)
     }
   }
+  return declaringFiles
+}
+
+export const findUnconsumedExports = (
+  factsByFile: ReadonlyMap<string, ExportFacts>,
+): ReadonlyArray<ExportConsumerFinding> => {
+  const declaringFiles = filesDeclaringEachName(factsByFile)
 
   const isConsumed = (file: string, declaration: Declaration): boolean => {
     const declaredIn = Option.getOrElse(
       Option.fromNullishOr(declaringFiles.get(declaration.name)),
       () => new Set<string>(),
     )
+    const targets = importTargetsOf(file)
     for (const [candidate, facts] of factsByFile) {
       if (!mayConsume(candidate, declaration.surface)) continue
+      // The file being measured never vouches for its own export; whether its
+      // own references count at all is the `ownFileCounts` rule below.
+      if (candidate === file && Option.isNone(declaration.surface.specifier)) continue
+      if (declaration.passthrough === true) {
+        if (!importsFrom(facts, targets, declaration.name)) continue
+        return true
+      }
       if (!mentions(facts, declaration.surface, declaration.name)) continue
       // A peer that merely declares the same name does not vouch for it; one
       // that imports it through this entry point's own specifier does.

@@ -224,23 +224,9 @@ export interface TurnProjection {
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
 
-// Turn executor types — owned by the driver primitive (external drivers wrap them).
-export type { TurnExecutor, TurnContext, TurnStreamPart, TurnError } from "./driver.js"
-
-// Driver auth + hint shared types — re-exported from dedicated file
-//
-// Lives in driver.ts now. Re-exported here so existing internal consumers keep
-// their import paths through `domain/extension.js`.
-
-export type {
-  ProviderAuthInfo,
-  ProviderHints,
-  PersistAuth,
-  ProviderAuthorizeContext,
-  ProviderCallbackContext,
-  ProviderAuthContribution,
-  ProviderAuthorizationResult,
-} from "./driver.js"
+// `ProviderAuthInfo` is declared in driver.ts and reaches the model registry
+// through this module, beside the extension surface that uses it.
+export type { ProviderAuthInfo } from "./driver.js"
 import type { ProcessResult, RunProcessOptions } from "../runtime/run-process.js"
 
 // Extension — the core primitive

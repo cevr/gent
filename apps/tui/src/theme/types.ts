@@ -45,7 +45,7 @@ export type Theme = ThemeColors
 
 export type ThemeMode = "dark" | "light" | "system"
 
-export type HexColor = `#${string}`
+type HexColor = `#${string}`
 type RefName = string
 type Variant = {
   dark: HexColor | RefName
