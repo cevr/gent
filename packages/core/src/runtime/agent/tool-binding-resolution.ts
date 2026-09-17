@@ -160,7 +160,6 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
     }
     if (
       local.value.entry.extensionId !== current.value.extensionId ||
-      local.value.entry.origin !== current.value.origin ||
       local.value.entry.capability !== current.value.capability
     ) {
       return yield* fail("SourceMismatch", `Tool ${toolName} changed before same-process replay`)

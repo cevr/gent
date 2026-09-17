@@ -76,7 +76,6 @@ it.scopedLive("uses the exact selected capability and still enforces the input s
     const binding: Option.Option<ResolvedToolCapability> = Option.some({
       extensionId,
       capability: selected,
-      origin: "static",
     })
     const layer = Layer.mergeAll(base, registry)
     yield* Effect.gen(function* () {
@@ -132,7 +131,7 @@ it.scopedLive("preserves the pending request and host operation identity", () =>
     const result = yield* runCellToolCall({
       request,
       toolCallId,
-      binding: Option.some({ extensionId, capability: selected, origin: "static" }),
+      binding: Option.some({ extensionId, capability: selected }),
     }).pipe(
       provideCurrentHostCtx(host),
       Effect.provideContext(yield* Layer.build(Layer.mergeAll(base, registry))),

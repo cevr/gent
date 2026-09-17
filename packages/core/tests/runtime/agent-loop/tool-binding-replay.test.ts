@@ -381,7 +381,6 @@ describe("tool binding replay", () => {
       const entry = {
         extensionId: ExtensionId.make("@test/replay-extension"),
         capability,
-        origin: "static",
         binding: makeBinding(),
       } satisfies ResolvedToolCapability
 
