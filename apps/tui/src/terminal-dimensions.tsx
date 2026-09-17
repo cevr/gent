@@ -4,7 +4,7 @@ import { useRenderer, useTerminalDimensions as useRendererTerminalDimensions } f
 import { Option } from "effect"
 import { createContext, createMemo, useContext, type Accessor, type ParentProps } from "solid-js"
 
-export interface TerminalDimensions {
+interface TerminalDimensions {
   readonly width: number
   readonly height: number
 }

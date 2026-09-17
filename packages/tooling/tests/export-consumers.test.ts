@@ -887,3 +887,62 @@ describe("package entry points", () => {
     ])
   })
 })
+
+describe("a namesake does not vouch for an export", () => {
+  const TUI_FILE = "apps/tui/src/extensions/discovery.ts"
+  const TUI_CONSUMER = "apps/tui/src/extensions/context.tsx"
+
+  /** `use` keeps the probe file's own surface alive so only the name under test is measured. */
+  const usedElsewhere = { file: TUI_CONSUMER, text: "import { use } from './discovery'\nuse()\n" }
+  const coreDeclaration = {
+    file: CORE_FILE,
+    text: "export const isClientFile = (entry: string) => entry.length > 0\n",
+  }
+
+  test("a file that binds the same name locally is not a consumer", () => {
+    const findings = findingsFor([
+      coreDeclaration,
+      {
+        file: TUI_FILE,
+        text: "const isClientFile = (entry: string) => entry.length > 0\nexport const use = () => isClientFile('a')\n",
+      },
+      usedElsewhere,
+    ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`isClientFile` is exported but no file outside"),
+    ])
+  })
+
+  test("a file that imports the name is a consumer even with a namesake beside it", () => {
+    const findings = findingsFor([
+      coreDeclaration,
+      {
+        file: TUI_FILE,
+        text: "import { isClientFile } from '@gent/core/protocol'\nexport const use = () => isClientFile('a')\n",
+      },
+      usedElsewhere,
+    ])
+    expect(findings).toEqual([])
+  })
+
+  test("a plain mention with no local binding still vouches", () => {
+    const findings = findingsFor([
+      coreDeclaration,
+      { file: TUI_FILE, text: "export const use = () => isClientFile('a')\n" },
+      usedElsewhere,
+    ])
+    expect(findings).toEqual([])
+  })
+
+  test("a local binding in a comment does not discount the mention", () => {
+    const findings = findingsFor([
+      coreDeclaration,
+      {
+        file: TUI_FILE,
+        text: "// const isClientFile = () => true\nexport const use = () => isClientFile('a')\n",
+      },
+      usedElsewhere,
+    ])
+    expect(findings).toEqual([])
+  })
+})

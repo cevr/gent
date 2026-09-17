@@ -163,7 +163,7 @@ interface ClientTransportValue {
  * moves to another session or branch, and every consumer that needs the
  * identity rather than the record reads it.
  */
-export interface SessionIdentity {
+interface SessionIdentity {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }

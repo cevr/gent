@@ -1,7 +1,7 @@
 import type { RGBA } from "@opentui/core"
 
 // Core color palette for the application theme
-export interface ThemeColors {
+interface ThemeColors {
   primary: RGBA
   error: RGBA
   warning: RGBA

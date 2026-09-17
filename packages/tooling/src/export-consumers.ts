@@ -574,6 +574,35 @@ export interface ExportFacts {
   readonly identifiersByLine: ReadonlyArray<ReadonlySet<string>>
   /** Names imported through each entry-point specifier. */
   readonly imported: ReadonlyMap<string, ReadonlySet<string>>
+  /**
+   * Names this file binds at its own top level, exported or not, collected for
+   * every tracked file rather than only for a scanned surface.
+   *
+   * A file that declares `isClientFile` itself does not vouch for a core export
+   * of that name: its mention is its own binding. Without this, a namesake
+   * anywhere in the tree — `apps/`, an example, a test helper — fakes coverage
+   * for the declaration being measured.
+   *
+   * A name the file also imports under some spelling is left out: the import is
+   * a real read of someone else's declaration, whatever the file binds beside it.
+   */
+  readonly localNames: ReadonlySet<string>
+}
+
+/** A top-level binding, whether or not it is exported. */
+const LOCAL_BINDING =
+  /^(?:export\s+)?(?:declare\s+)?(?:const|let|var|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/
+
+const localNamesIn = (text: string): ReadonlySet<string> => {
+  const imported = importedNames(text)
+  const names = new Set<string>()
+  for (const line of withoutCommentsAndStrings(text).split("\n")) {
+    const name = Option.flatMap(Option.fromNullishOr(LOCAL_BINDING.exec(line)), (match) =>
+      Option.fromNullishOr(match[1]),
+    )
+    if (Option.isSome(name) && !imported.has(name.value)) names.add(name.value)
+  }
+  return names
 }
 
 const declarationsIn = (surface: ScannedSurface, text: string): ReadonlyArray<Declaration> =>
@@ -612,6 +641,7 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
   return {
     declarations,
     identifiers: identifiersIn(text),
+    localNames: localNamesIn(text),
     identifiersByLine,
     importsByTarget: importsByTarget(text.split("\n")),
     imported: importsIn(file, text.split("\n")),
@@ -708,6 +738,24 @@ const filesDeclaringEachName = (
   return declaringFiles
 }
 
+/**
+ * Whether a mentioning file names its own binding rather than this declaration.
+ *
+ * Two files can export the same name; neither keeps the other alive. Only
+ * an entry point's own specifier makes the mention a real read, and a file
+ * outside every scanned surface has no `declarations`, so its top-level
+ * bindings answer instead.
+ */
+const isNamesake = (
+  candidate: string,
+  facts: ExportFacts,
+  declaration: Declaration,
+  declaredIn: ReadonlySet<string>,
+): boolean => {
+  if (Option.isSome(declaration.surface.specifier)) return false
+  return declaredIn.has(candidate) || facts.localNames.has(declaration.name)
+}
+
 export const findUnconsumedExports = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
 ): ReadonlyArray<ExportConsumerFinding> => {
@@ -729,9 +777,7 @@ export const findUnconsumedExports = (
         return true
       }
       if (!mentions(facts, declaration.surface, declaration.name)) continue
-      // A peer that merely declares the same name does not vouch for it; one
-      // that imports it through this entry point's own specifier does.
-      if (declaredIn.has(candidate) && Option.isNone(declaration.surface.specifier)) continue
+      if (isNamesake(candidate, facts, declaration, declaredIn)) continue
       return true
     }
     if (!declaration.surface.ownFileCounts) return false

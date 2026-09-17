@@ -262,7 +262,7 @@ export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostP
   },
 ) {}
 
-export interface ExtensionHostFacts {
+interface ExtensionHostFacts {
   readonly osInfo: GentPlatformOsInfo
   readonly execPath: string
   readonly homeDirectory: string
