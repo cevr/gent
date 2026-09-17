@@ -380,6 +380,15 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
   )
 })
 
+/**
+ * Runs every call as a no-op that still publishes the started and completed
+ * events, so a test can drive a turn to its next step without a real tool.
+ *
+ * It stays here rather than in `test-utils` because the two publishes reach
+ * five private helpers in this file; moving it would export the whole publish
+ * path to save one layer. Thirteen services in the repo carry a `Test` layer
+ * this way, so this is the shape, not an exception to it.
+ */
 const runTestTool = (toolCall: ToolCall) =>
   Effect.gen(function* () {
     const hostCtx = yield* CurrentExtensionHostContext
