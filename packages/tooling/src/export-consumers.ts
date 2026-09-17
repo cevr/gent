@@ -181,6 +181,18 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     specifier: Option.none(),
     enforced: true,
   },
+  {
+    // The server app is a launcher and a leaf: it reads the environment and
+    // calls `Gent.server`. Nothing imports it, so a name it exports is read by
+    // its own tests or by nothing at all.
+    prefix: "apps/server/src/",
+    exempt: [],
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.none(),
+    enforced: true,
+  },
 ]
 
 /**

@@ -70,8 +70,10 @@ export type LogPaths = { readonly dir: string }
   })
 
   test("a file in an unscanned package declares nothing", () => {
-    // `apps/server/` has no surface row; `apps/tui/src/` does.
-    expect(declaredNames("apps/server/src/main.ts", `export const ServerHelper = 1\n`)).toEqual([])
+    // Reference extensions stand alone; no surface row covers `examples/`.
+    expect(
+      declaredNames("examples/extensions/session-notes.ts", `export const ExampleHelper = 1\n`),
+    ).toEqual([])
   })
 
   test("a bare export block is a surface, so its names are declared", () => {
@@ -211,6 +213,36 @@ describe("the TUI app surface", () => {
         {
           file: "apps/tui/tests/format-tool.test.ts",
           text: `import { orphan } from "../src/utils/format-tool"\nvoid orphan\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+})
+
+describe("the server app surface", () => {
+  const SERVER_FILE = "apps/server/src/main.ts"
+
+  test("the launcher exporting nothing is clean", () => {
+    expect(findingsFor([{ file: SERVER_FILE, text: `const program = 1\nvoid program\n` }])).toEqual(
+      [],
+    )
+  })
+
+  test("a server export nothing reaches is reported", () => {
+    const findings = findingsFor([
+      { file: SERVER_FILE, text: `const program = 1\nexport const orphan = program\n` },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([2])
+    expect(findings[0]?.message).toContain("`orphan`")
+  })
+
+  test("a server test file keeps a name alive", () => {
+    expect(
+      findingsFor([
+        { file: SERVER_FILE, text: `export const orphan = 1\n` },
+        {
+          file: "apps/server/tests/main.test.ts",
+          text: `import { orphan } from "../src/main"\nvoid orphan\n`,
         },
       ]),
     ).toEqual([])
