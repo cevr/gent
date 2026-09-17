@@ -19,7 +19,7 @@ export {
   type QuestionOption,
   QuestionSchema,
 } from "./domain/event.js"
-export { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./domain/ids.js"
+export { BranchId, MessageId, SessionId, ToolCallId } from "./domain/ids.js"
 export {
   Branch,
   Message,
@@ -46,7 +46,6 @@ export {
   BranchTreeNode,
   ConnectionState,
   CreateSessionInput,
-  DriverInfo,
   DriverListResult,
   ExtensionHealth,
   ExtensionHealthIssue,
@@ -54,6 +53,5 @@ export {
   GentConnectionError,
   type GentLifecycle,
   SessionSnapshot,
-  SlashCommandInfo,
   type SteerCommand,
 } from "./server/transport-contract.js"

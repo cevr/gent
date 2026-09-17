@@ -11,7 +11,6 @@ import {
   AuthAuthorization,
   AuthMethod,
   AuthProviderInfo,
-  AuthProviderQuery,
   ListAuthProvidersPayload,
 } from "../domain/auth.js"
 import { EventEnvelope } from "../domain/event.js"
@@ -184,7 +183,7 @@ export const CallbackAuthInput = Schema.Struct({
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
 
-export { AuthProviderInfo, AuthProviderQuery, ListAuthProvidersPayload }
+export { AuthProviderInfo, ListAuthProvidersPayload }
 export { EventEnvelope }
 export { QueueSnapshot }
 
