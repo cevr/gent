@@ -66,7 +66,7 @@ export const DelegateResult = Schema.TaggedUnion({
 export const DelegateTool = tool({
   id: "delegate",
   description:
-    "Delegate one self-contained task to a child that inherits this agent and model but cannot delegate further. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch.",
+    "Delegate one self-contained task to a child that inherits this agent and model but cannot delegate further. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch and starts a turn by itself, so end your turn to wait and do not set an alarm or a monitor for it.",
   promptSnippet: "Delegate work to child agents",
   promptGuidelines: [
     "Use for independent work that benefits from a fresh context or parallelism",

@@ -25,7 +25,7 @@ the code proves it.
 | L2  | Test-only and single-valued names in the tool path                      | open               |
 | L3  | `SwitchAgent` has no sender; `currentAgent` rides the loop state for it | open               |
 | L4  | `runtimeState` and `snapshot` read one ref; the double read is dead     | open               |
-| L5  | An interrupted step can persist a tool call with no result              | open, test first   |
+| L5  | An interrupted step can persist a tool call with no result              | done `0d987793`    |
 | L6  | `TurnRecord` is a non-transactional cache of the messages               | open               |
 | L7  | The process-local result cache repeats the durable tool events          | open, probe first  |
 | L8  | `saveCheckpoint` writes a queue that did not change                     | open               |
@@ -46,6 +46,7 @@ the code proves it.
 | G5  | `gent resume` opened a child session (the Task 6 worker), not the root the user ran                                                                                                                                                             | done: `apps/tui/src/app-bootstrap.ts` skips delegate children on resume                                  |
 | G6  | `apps/tui/scripts/build.ts:59` re-points the global `gent` symlink at whichever checkout ran the gate                                                                                                                                           | with G4                                                                                                  |
 | G7  | The orchestrator cannot message a running child (user request 2026-09-17)                                                                                                                                                                       | done: `agent-child` `send` steers the child; steering at an answered step joins the turn                 |
+| G8  | Second gamut: `send` reached the Task 2 child live (it added the requested test; 18 pass). The orchestrator set alarms to wait for background children, and one fired stale after they finished                                                 | done: the `delegate` description says a background result starts a turn by itself                        |
 
 ## fx survey (vercel-labs/fx), adopt list
 
