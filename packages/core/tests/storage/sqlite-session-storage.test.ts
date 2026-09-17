@@ -11,6 +11,7 @@ import { MessageStorage } from "../../src/storage/message-storage"
 import { BranchStorage } from "../../src/storage/branch-storage"
 import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
+import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
   DurableOperations,
   SessionOperationStorage,
@@ -897,5 +898,85 @@ describe("Sessions", () => {
       Effect.timeout("5 seconds"),
       Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {})),
     ),
+  )
+})
+
+describe("persisted loop queue format", () => {
+  /**
+   * The queue row is the loop's only durable memory of accepted-but-unanswered
+   * input. A field renamed, reordered into a required position, or dropped
+   * means a branch silently loses queued work on the next open, so the whole
+   * shape is pinned here as raw JSON rather than as a value built from the
+   * schema — a schema change cannot quietly move this literal with it.
+   */
+  const storedQueueJson = `{
+    "steering": [
+      {
+        "message": {
+          "_tag": "interjection",
+          "id": "steer-1",
+          "sessionId": "legacy-session",
+          "branchId": "legacy-branch",
+          "role": "user",
+          "parts": [{ "options": {}, "type": "text", "text": "steer me" }],
+          "createdAt": 1767225600000
+        },
+        "agentOverride": "main",
+        "wake": true
+      }
+    ],
+    "followUp": [
+      {
+        "message": {
+          "_tag": "regular",
+          "id": "follow-1",
+          "sessionId": "legacy-session",
+          "branchId": "legacy-branch",
+          "role": "user",
+          "parts": [{ "options": {}, "type": "text", "text": "next" }],
+          "createdAt": 1767225600000
+        },
+        "interactive": false,
+        "keyed": true
+      }
+    ],
+    "inFlight": {
+      "message": {
+        "_tag": "regular",
+        "id": "in-flight-1",
+        "sessionId": "legacy-session",
+        "branchId": "legacy-branch",
+        "role": "user",
+        "parts": [{ "options": {}, "type": "text", "text": "running" }],
+        "createdAt": 1767225600000
+      }
+    }
+  }`
+
+  it.live("a row holding every optional field still decodes after the inbox move", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const queues = yield* AgentLoopQueueStorage
+      const sql = yield* SqlClient.SqlClient
+      const now = FIXED_NOW
+      const sessionId = SessionId.make("legacy-session")
+      const branchId = BranchId.make("legacy-branch")
+      yield* sessions.createSession(new Session({ id: sessionId, createdAt: now, updatedAt: now }))
+      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at) VALUES (${DefaultWorkspaceId}, ${sessionId}, ${branchId}, ${storedQueueJson}, ${now.getTime()})`
+
+      const loaded = yield* queues.getQueueState(sessionId, branchId)
+      expect(loaded.steering).toHaveLength(1)
+      expect(loaded.steering[0]?.wake).toBe(true)
+      expect(String(loaded.steering[0]?.agentOverride)).toBe("main")
+      expect(loaded.steering[0]?.message._tag).toBe("interjection")
+      expect(loaded.followUp).toHaveLength(1)
+      // `false` is the only value this field is read for; a dropped key would
+      // hand a child the interactive tools it was denied.
+      expect(loaded.followUp[0]?.interactive).toBe(false)
+      expect(loaded.followUp[0]?.keyed).toBe(true)
+      expect(String(loaded.inFlight?.message.id)).toBe("in-flight-1")
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
 })
