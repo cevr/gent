@@ -9,7 +9,7 @@ Scope: <directories>. <Extra weight: ...>
 
 Read first: `ARCHITECTURE.md`, `<ledger path>`, `.claude/skills/architecture-loop/rejected.md`, and the earlier reports <paths>. A done or rejected item returns only with a new receipt.
 
-Vocabulary, used exactly: module, interface, depth, seam, adapter, leverage, locality, deletion test. A candidate is: a shallow module, a pass-through, one concept with two owners, a one-adapter seam with no guard, a single-caller export, dead code, a guard gap (a directory no `packages/tooling/src/` guard scans), a comment that tells history. In the TUI also: state that follows the session identity but reads the session record, and one-shot state held in a component instance.
+Vocabulary, used exactly: module, interface, depth, seam, adapter, leverage, locality, deletion test. A candidate is: a shallow module, a pass-through, one concept with two owners, a one-adapter seam with no guard, a single-caller export, dead code, a guard gap (a directory no `packages/tooling/src/` guard scans), a comment that tells history, a concern spread over `x-part.ts` fragment files (the owner wants one large file per concern). In the TUI also: state that follows the session identity but reads the session record, and one-shot state held in a component instance.
 
 <Specific questions for this area, numbered>
 

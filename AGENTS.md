@@ -75,7 +75,8 @@ Use `effect` skill. Key patterns:
 - Every service exposes a `Live` layer; add a `Test` layer only when there is a real alternative implementation worth a Tag. Language model tests use `LanguageModelLayers` instead of provider wrapper statics.
 - Schema validation at boundaries
 - **Tagged/discriminated unions use Effect Schema primitives.** Prefer `Schema.TaggedUnion` (or `Schema.TaggedStruct` + `Schema.toTaggedUnion` for kebab-case wire tags, or `Schema.TaggedError` for errors); do not hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions.
-- **File naming**: kebab-case everywhere (`agent-loop.actor.ts`, `message-list.tsx`)
+- **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
+- **One file per concern.** A concern lives in one large file with section banners (`session.ts`, `agent-loop.ts`, `tools.ts`). A new file needs a reason: a process entry, a package entry, a module two concerns share, or a lint-scoped boundary.
 
 ## Package Structure
 

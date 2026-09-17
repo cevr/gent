@@ -15,6 +15,7 @@ Work rules:
 - Sync tests use `test(...)`; effect tests use `it.live`. After adding tests, check the pass count rose.
 - Caller-count greps cover `packages/`, `apps/` and `examples/`. Before a deletion, disable the code and run the suite (the deletion test).
 - Inside `packages/core/src/` imports are relative. Services are yielded, never passed as parameters. Tagged unions use Effect Schema. `Option` where `effect/noNullish` or `effect/noTernary` fire.
+- One file per concern: new code goes into the concern's existing file under a section banner. A split into `x-part.ts` fragments is a finding, not a fix.
 - Comments describe today's behavior.
 - Commit through the hook with output to a log: `git commit -qm "..." > <scratchpad>/commit.log 2>&1; echo EXIT $?`, then grep the log for ` error `, `(fail)`. A test that fails once under load and passes on one retry is a flake: retry once and name it in the reply.
 - Finish in one run: no timers or monitors left behind.
