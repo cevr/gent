@@ -5,6 +5,6 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./src/test-log-preload.ts --reporter=dots ./tests/"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./src/test-log-preload.ts --reporter=dots ./tests/ ../../testbeds/gamut/tests/"
   }
 }

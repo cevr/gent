@@ -1,0 +1,8 @@
+{
+  "agents": {
+    "main": {
+      "modelId": "openai/gpt-5.6-sol",
+      "reasoningEffort": "medium"
+    }
+  }
+}

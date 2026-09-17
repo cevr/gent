@@ -1,0 +1,16 @@
+{
+  "name": "ledgerline",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "cli": "bun run src/cli.ts",
+    "serve": "bun run src/api/server.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}
