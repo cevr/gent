@@ -141,6 +141,13 @@ describe("TUI renderer surfaces", () => {
           images: [],
           createdAt: 0,
           toolCalls: absent,
+          // The feed spells an assistant answer as segments in part order,
+          // with the flat fields alongside for readers that want the whole
+          // text at once.
+          segments: [
+            { _tag: "reasoning", content: "Considering current todo state" },
+            { _tag: "text", content: "Switching now" },
+          ],
         } satisfies Message,
       ]
       const setup = yield* Effect.promise(() =>

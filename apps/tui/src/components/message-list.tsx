@@ -333,11 +333,6 @@ function AssistantMessage(props: {
     return (props.toolCalls ?? []).length > 0
   }
 
-  const processedContent = createMemo(() => {
-    if (props.streaming) return props.content
-    return replaceMermaidBlocks(props.content, props.dimensions().width)
-  })
-
   const contentMargin = () => {
     if (hasContent()) return 1
     return 0
@@ -362,23 +357,10 @@ function AssistantMessage(props: {
   // Replace mermaid code blocks with rendered ASCII art (skip while streaming)
   return (
     <box marginTop={contentMargin()} paddingLeft={2} flexDirection="column">
-      <Show
-        when={segments().length > 0}
-        fallback={
-          <AssistantMessageLegacy
-            content={props.content}
-            reasoning={props.reasoning}
-            images={props.images}
-            toolCalls={props.toolCalls}
-            disclosure={props.disclosure}
-            fullDetail={props.fullDetail}
-            syntaxStyle={props.syntaxStyle}
-            streaming={props.streaming}
-            processedContent={processedContent()}
-            getChildSessions={props.getChildSessions}
-          />
-        }
-      >
+      {/* The feed writes a segment for every assistant part, so an answer with
+          no segments has no text, no reasoning, no image and no tool call to
+          draw either. */}
+      <Show when={segments().length > 0}>
         <For each={groupedSegments()}>
           {({ segment, calls }) =>
             Match.value(segment).pipe(
@@ -425,68 +407,6 @@ function AssistantMessage(props: {
         </For>
       </Show>
     </box>
-  )
-}
-
-/** Fallback for snapshot-hydrated messages without segments */
-function AssistantMessageLegacy(props: {
-  content: string
-  reasoning: string
-  images: ImageInfo[]
-  // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
-  toolCalls: ToolCall[] | undefined
-  disclosure: DisclosureLevel
-  fullDetail: boolean
-  syntaxStyle: () => SyntaxStyle
-  streaming: boolean
-  processedContent: string
-  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
-}) {
-  const { theme } = useTheme()
-  const contentMargin = () => {
-    if (props.content.length > 0) return 1
-    return 0
-  }
-
-  return (
-    <>
-      <Show when={props.reasoning.length > 0}>
-        <box flexDirection="column" marginBottom={1}>
-          <text>
-            <span style={{ fg: theme.textMuted, dim: true }}>
-              <i>{props.reasoning}</i>
-            </span>
-          </text>
-        </box>
-      </Show>
-      <Show when={props.images.length > 0}>
-        <box flexDirection="column" marginBottom={contentMargin()}>
-          <For each={props.images}>
-            {(img) => (
-              <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
-            )}
-          </For>
-        </box>
-      </Show>
-      <Show when={(props.toolCalls ?? []).length > 0}>
-        <box flexDirection="column" marginBottom={contentMargin()}>
-          <ToolCallGroup
-            calls={props.toolCalls ?? []}
-            disclosure={props.disclosure}
-            fullDetail={props.fullDetail}
-            getChildSessions={props.getChildSessions}
-          />
-        </box>
-      </Show>
-      <Show when={props.content.length > 0}>
-        <markdown
-          syntaxStyle={props.syntaxStyle()}
-          streaming
-          content={props.processedContent}
-          conceal
-        />
-      </Show>
-    </>
   )
 }
 

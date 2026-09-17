@@ -5,7 +5,12 @@ import { Show, createSignal, onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/routes/session-ui-state"
 import { NativeTranscript } from "../src/components/native-transcript"
-import { MessageList, type Message, type SessionItem } from "../src/components/message-list"
+import {
+  MessageList,
+  type Message,
+  type SessionItem,
+  type ToolCall,
+} from "../src/components/message-list"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
 import { ReadToolRenderer } from "../src/components/tool-renderers/read"
 import { EditToolRenderer } from "../src/components/tool-renderers/edit"
@@ -50,97 +55,76 @@ const userMessage = (
   }
 }
 
-const unknownFailureMessage = (id: string): Message => ({
+/**
+ * One assistant message carrying one tool call.
+ *
+ * The feed writes `segments` for every assistant message, so a fixture that
+ * carries only `toolCalls` draws nothing. Both fields name the same call here,
+ * the way the feed spells it.
+ */
+const assistantToolMessage = (id: string, toolCall: ToolCall): Message => ({
   _tag: "regular-message",
-  id: "assistant-unknown-tool",
+  id,
   role: "assistant",
   content: "",
   reasoning: "",
   images: [],
   createdAt: 0,
-  toolCalls: [
-    {
-      id,
-      toolName: "unknown_fx_tool",
-      status: "error",
-      input: absent,
-      summary: "tool failed",
-      output: absent,
-    },
-  ],
+  toolCalls: [toolCall],
+  segments: [{ _tag: "tool-call", toolCall }],
 })
 
-const registeredFailureMessage = (id: string): Message => ({
-  _tag: "regular-message",
-  id: "assistant-registered-tool",
-  role: "assistant",
-  content: "",
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  toolCalls: [
-    {
-      id,
-      toolName: "read",
-      status: "error",
-      input: { path: "/tmp/failure.txt" },
-      summary: "read failed",
-      output: absent,
-    },
-  ],
-})
+const unknownFailureMessage = (id: string): Message =>
+  assistantToolMessage("assistant-unknown-tool", {
+    id,
+    toolName: "unknown_fx_tool",
+    status: "error",
+    input: absent,
+    summary: "tool failed",
+    output: absent,
+  })
 
-const cellMessage = (id: string, display = "hello from a.txt"): Message => ({
-  _tag: "regular-message",
-  id: "assistant-cell",
-  role: "assistant",
-  content: "",
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  toolCalls: [
-    {
-      id,
-      toolName: "cell",
-      status: "completed",
-      input: { code: "const note = await tools.call('read', {path: 'a.txt'})\nnote.content" },
-      summary: absent,
-      output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
-        display,
-        bindings: ["note"],
-        truncated: false,
-        operations: [
-          { toolCallId: `${id}-op`, tool: "read", outcome: "succeeded", summary: "12 lines" },
-          { toolCallId: `${id}-op2`, tool: "write", outcome: "failed", summary: "denied" },
-        ],
-      }),
-    },
-  ],
-})
+const registeredFailureMessage = (id: string): Message =>
+  assistantToolMessage("assistant-registered-tool", {
+    id,
+    toolName: "read",
+    status: "error",
+    input: { path: "/tmp/failure.txt" },
+    summary: "read failed",
+    output: absent,
+  })
 
-const bashMessage = (id: string, lines: number): Message => ({
-  _tag: "regular-message",
-  id: "assistant-bash",
-  role: "assistant",
-  content: "",
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  toolCalls: [
-    {
-      id,
-      toolName: "bash",
-      status: "completed",
-      input: { command: "seq 25" },
-      summary: absent,
-      output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
-        stdout: Array.from({ length: lines }, (_, i) => `row ${i + 1}`).join("\n"),
-        stderr: "",
-        exitCode: 0,
-      }),
-    },
-  ],
-})
+const cellMessage = (id: string, display = "hello from a.txt"): Message =>
+  assistantToolMessage("assistant-cell", {
+    id,
+    toolName: "cell",
+    status: "completed",
+    input: { code: "const note = await tools.call('read', {path: 'a.txt'})\nnote.content" },
+    summary: absent,
+    output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+      display,
+      bindings: ["note"],
+      truncated: false,
+      operations: [
+        { toolCallId: `${id}-op`, tool: "read", outcome: "succeeded", summary: "12 lines" },
+        { toolCallId: `${id}-op2`, tool: "write", outcome: "failed", summary: "denied" },
+      ],
+    }),
+  })
+
+const bashMessage = (id: string, lines: number): Message =>
+  assistantToolMessage("assistant-bash", {
+    id,
+    toolName: "bash",
+    status: "completed",
+    input: { command: "seq 25" },
+    summary: absent,
+    output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+      stdout: Array.from({ length: lines }, (_, i) => `row ${i + 1}`).join("\n"),
+      stderr: "",
+      exitCode: 0,
+    }),
+  })
 
 const compactionMessage = (): Message => ({
   _tag: "regular-message",
@@ -247,7 +231,18 @@ describe("FX transcript treatment", () => {
         const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
         const leadingCells: number[] = []
         const savedText: string[] = []
-        const items = [
+        const answer: Message = {
+          _tag: "regular-message",
+          id: "last-answer",
+          role: "assistant",
+          content: "ANSWER-END",
+          reasoning: "",
+          images: [],
+          createdAt: 0,
+          toolCalls: absent,
+          segments: [{ _tag: "text", content: "ANSWER-END" }],
+        }
+        const items: SessionItem[] = [
           userMessage(
             "regular-message",
             "long-user",
@@ -258,7 +253,7 @@ describe("FX transcript treatment", () => {
             "queued",
             [{ mediaType: "image/png" }],
           ),
-          { ...unknownFailureMessage("last-answer"), content: "ANSWER-END", toolCalls: absent },
+          answer,
         ]
         const setup = yield* Effect.promise(() =>
           renderWithProviders(
@@ -557,36 +552,32 @@ describe("FX transcript treatment", () => {
 
   it.live("shows worker recovery errors in collapsed, preview, and detail frames", () =>
     Effect.gen(function* () {
-      const message: Message = {
-        ...cellMessage("call-recovered"),
-        toolCalls: [
-          {
-            id: "call-recovered",
-            toolName: "cell",
-            status: "error",
-            input: { code: "await tools.call('ask_user', {})" },
-            summary: absent,
-            output: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({
-              error: "The cell worker state was lost. Its source was not replayed.",
-              stateLost: true,
-              operations: [
-                {
-                  _tag: "Completed",
-                  operationId: "op-1",
-                  result: {
-                    type: "tool-result",
-                    id: "inner-1",
-                    name: "ask_user",
-                    isFailure: false,
-                    providerExecuted: false,
-                    result: { answers: [["Continue"]] },
-                  },
-                },
-              ],
-            }),
-          },
-        ],
+      const recovered: ToolCall = {
+        id: "call-recovered",
+        toolName: "cell",
+        status: "error",
+        input: { code: "await tools.call('ask_user', {})" },
+        summary: absent,
+        output: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({
+          error: "The cell worker state was lost. Its source was not replayed.",
+          stateLost: true,
+          operations: [
+            {
+              _tag: "Completed",
+              operationId: "op-1",
+              result: {
+                type: "tool-result",
+                id: "inner-1",
+                name: "ask_user",
+                isFailure: false,
+                providerExecuted: false,
+                result: { answers: [["Continue"]] },
+              },
+            },
+          ],
+        }),
       }
+      const message: Message = assistantToolMessage("assistant-cell", recovered)
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <RegisteredToolMessageLists items={[message]} fullDetail />, {
           width: 110,

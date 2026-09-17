@@ -33,7 +33,7 @@ const absent = Option.getOrUndefined(Option.none())
 const noToolCalls = Option.getOrUndefined(Option.none<ToolCall[]>())
 const syntaxStyle = () => SyntaxStyle.create()
 
-/** The streaming path writes `_tag` first and carries no segments or metadata. */
+/** The streaming path writes `_tag` first and carries no metadata. */
 const streamedMessage = (id: string, content: string): Message => ({
   _tag: "regular-message",
   id,
@@ -43,6 +43,7 @@ const streamedMessage = (id: string, content: string): Message => ({
   images: [],
   createdAt: 0,
   toolCalls: noToolCalls,
+  segments: [{ _tag: "text", content }],
 })
 
 /** The rebuild path spreads the body and appends `_tag` last. */
@@ -55,7 +56,7 @@ const rebuiltMessage = (id: string, content: string): Message => {
     images: [],
     createdAt: 0,
     toolCalls: noToolCalls,
-    segments: absent,
+    segments: [{ _tag: "text", content }],
     metadata: absent,
   }
   return { ...body, _tag: "regular-message" }
