@@ -467,6 +467,10 @@ export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapsho
   toQueueSnapshot(queue.steering, queue.followUp)
 
 // ── Runtime state projection ──
+//
+// Tag for tag with `LoopState`, derived from the same `AgentLoopState` on
+// every read. The projection cannot lag the machine, so a caller that wants
+// the current phase reads either one, never both.
 
 const runtimeStateFromLoopState = (
   state: LoopState,
