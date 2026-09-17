@@ -1111,8 +1111,7 @@ One test file per source file. No god tests. Names match source owners.
 - `packages/core/src/test-utils/rpc-harness.ts` — thin RPC acceptance helper:
   `createE2ELayer` → `Gent.test` → seeded `session.create`
 - `packages/core/src/test-utils/language-model.ts` — `LanguageModelLayers.debug`, `sequence`, `signal`, `failing` + stream-part helpers
-- `apps/tui/tests/render-harness.tsx` — TUI render test harness
-- `packages/e2e/tests/transport-harness.ts` — direct transport contract harness
+- `apps/tui/tests/render-harness-boundary.tsx` — TUI render test harness
 
 ## Interaction Tools Extension
 

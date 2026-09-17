@@ -24,6 +24,7 @@ import {
   OxlintConfigSchema,
 } from "./lint-config-guards"
 import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
+import { findSteeringFilePaths, isSteeringFile } from "./steering-file-paths"
 import {
   findSuppressionInventoryFindings,
   findUnusedSuppressionApprovals,
@@ -115,7 +116,8 @@ const program = Effect.gen(function* () {
   const trackedFiles = yield* trackedFileNames
   const textFiles = yield* Effect.forEach(
     trackedFiles
-      .filter((file) => /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file))
+      // The steering files are Markdown; they join the pass for the path scan.
+      .filter((file) => /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file))
       .filter((file) => !file.includes("/dist/")),
     readTrackedFile,
     { concurrency: 32 },
@@ -149,6 +151,11 @@ const program = Effect.gen(function* () {
     if (Option.isNone(maybeEntry)) continue
     const { file, text } = maybeEntry.value
     for (const failure of singleFileFailures(file, text)) pushFailure(failure)
+    // A steering file's paths are checked against the tracked list, which the
+    // single-file scans do not receive.
+    for (const finding of findSteeringFilePaths(file, text, trackedFiles)) {
+      pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+    }
     if (/\.[cm]?[jt]sx?$/.test(file)) collectWholeTreeFacts(file, text)
   }
 
