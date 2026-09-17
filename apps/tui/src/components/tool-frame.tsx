@@ -7,7 +7,7 @@ import { formatDuration } from "../utils/format-duration"
 
 const ToolCallIdentityContext = createContext<Option.Option<string>>(Option.none())
 
-export interface ToolCallIdentityProviderProps {
+interface ToolCallIdentityProviderProps {
   id: string
   children: JSX.Element
 }
@@ -29,7 +29,7 @@ export function ToolFrameBody(props: { children: JSX.Element }) {
   )
 }
 
-export interface ToolFrameProps {
+interface ToolFrameProps {
   /** Tool display name */
   title: string
   /** Input summary shown after title */

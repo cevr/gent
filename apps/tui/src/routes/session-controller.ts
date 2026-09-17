@@ -1,12 +1,4 @@
-import {
-  createContext,
-  createEffect,
-  createMemo,
-  createSignal,
-  on,
-  onCleanup,
-  onMount,
-} from "solid-js"
+import { createContext, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../env/context"
@@ -197,14 +189,18 @@ export function createSessionController(props: {
   // on the reader's behalf: the startup prompt waits and the auth gate holds,
   // because both are about a branch the reader has not picked yet.
 
-  const [uiState, setUiState] = createSignal(SessionUiState.initial())
+  const [uiState, setUiState] = createSignal(SessionUiState.initial(props.initialBranches))
 
   /**
-   * Whether the reader still owes this session a branch. Its own signal, not a
-   * read of the overlay: the auth gate writes the overlay, so deriving the
-   * gate from the overlay would make the auth check re-run on its own effect.
+   * Whether the reader still owes this session a branch.
+   *
+   * The overlay is the one owner, so the pane and this gate cannot disagree.
+   * It is a memo rather than a plain read because the auth gate also writes
+   * the overlay: a memo only notifies when its own boolean changes, so the
+   * gate's `OpenAuth` leaves this `false` and never re-runs the auth check on
+   * its own effect.
    */
-  const [branchPickerOpen, setBranchPickerOpen] = createSignal(Option.isSome(props.initialBranches))
+  const branchPickerOpen = createMemo(() => uiState().overlay._tag === "branches")
 
   // ── Auth gate ──
   const [controllerState, setControllerState] = createSignal(
@@ -293,18 +289,6 @@ export function createSessionController(props: {
     for (const effect of result.effects) handleSessionUiEffect(effect)
   }
 
-  // The picker is the first thing a resumed multi-branch session shows.
-  // `onMount` rather than an effect: the branches come from the bootstrap and
-  // never change, so this opens once and the reader owns the pane after that.
-  onMount(() => {
-    Option.match(props.initialBranches, {
-      onNone: () => {},
-      onSome: (branches) => {
-        dispatchSessionUi(SessionUiEvent.cases.OpenBranches.make({ branches }))
-      },
-    })
-  })
-
   /**
    * Escape leaves the picker, not the list. The boot flow is where a session
    * with several branches starts, so with no branch chosen the only way out
@@ -315,7 +299,6 @@ export function createSessionController(props: {
   }
 
   const onBranchPickerSelect = (branchId: BranchId) => {
-    setBranchPickerOpen(false)
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
     if (branchId === props.branchId) return
     client.switchSession(props.sessionId, branchId, currentSessionName())

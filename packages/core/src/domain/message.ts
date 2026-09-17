@@ -104,8 +104,6 @@ export const Message = Schema.Union([RegularMessageStruct, InterjectionMessageSt
   Schema.toTaggedUnion("_tag"),
 )
 export type Message = Schema.Schema.Type<typeof Message>
-export type RegularMessage = Extract<Message, { _tag: "regular" }>
-export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
 
 /**
  * One ordered piece of an assistant answer, in the order the model produced it.

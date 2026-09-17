@@ -8,7 +8,7 @@ export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("Link
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-export interface LinkOpenerService {
+interface LinkOpenerService {
   readonly open: (
     url: string,
   ) => Effect.Effect<void, LinkOpenerError, ChildProcessSpawner.ChildProcessSpawner>

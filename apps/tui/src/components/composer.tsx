@@ -24,7 +24,7 @@ interface ComposerContextValue {
 
 const ComposerContext = createContext<ComposerContextValue>()
 
-export interface ComposerProps {
+interface ComposerProps {
   children?: JSX.Element
 }
 

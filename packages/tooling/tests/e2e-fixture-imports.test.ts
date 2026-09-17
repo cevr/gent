@@ -34,7 +34,7 @@ describe("e2e fixture import guard", () => {
     expect(
       findE2eFixtureImportFindings(
         "packages/e2e/tests/server-lifecycle.test.ts",
-        `${noFixtureSource}\nimport {\n  killProcess,\n  spawnServerOnPort,\n} from "../src/server-process-fixture.js"\n`,
+        `${noFixtureSource}\nimport {\n  killProcess,\n  spawnServer,\n} from "../src/server-process-fixture.js"\n`,
       ),
     ).toEqual([])
   })

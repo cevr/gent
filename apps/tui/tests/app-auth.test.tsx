@@ -231,6 +231,11 @@ describe("App auth gate", () => {
         agentName: AgentName.make("deepwork"),
         sessionId: SessionId.make("session-a"),
       })
+      // The gate opens the auth overlay itself, and the branch picker is read
+      // off that same overlay. A gate that re-ran on its own write would keep
+      // checking; it settles instead. (Two checks: the agent arrives after the
+      // first, which predates the overlay being the picker's owner.)
+      expect(calls.length).toBe(2)
       expect(frame).toContain("API Keys")
       setup.renderer.destroy()
     }),
@@ -426,6 +431,10 @@ describe("App auth gate", () => {
           {
             client,
             runtime,
+            // An agent is what makes the auth check runnable at all. Without one
+            // the gate short-circuits before it reads the picker, and this test
+            // proves nothing.
+            initialAgent: AgentName.make("cowork"),
             initialSession: {
               id: SessionId.make("session-a"),
               activeBranchId: BranchId.make("branch-a"),
@@ -440,6 +449,12 @@ describe("App auth gate", () => {
         waitForRenderedFrame(setup, (next) => next.includes("Resume: Session A"), "branch picker"),
       )
       expect(calls).toEqual([])
+
+      // Choosing a branch closes the picker, and only then does the gate run.
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(calls.map((call) => call.agentName)).toEqual(["cowork"])
       setup.renderer.destroy()
     }),
   )

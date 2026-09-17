@@ -70,7 +70,7 @@ export interface AutocompleteItem {
   readonly description?: string
 }
 
-export type AutocompleteItemsEffect = Effect.Effect<
+type AutocompleteItemsEffect = Effect.Effect<
   ReadonlyArray<AutocompleteItem>,
   Error,
   ClientRuntimeServices
@@ -78,13 +78,13 @@ export type AutocompleteItemsEffect = Effect.Effect<
 
 // ── Contribution shapes ──
 
-export interface RendererContribution {
+interface RendererContribution {
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
   readonly headless?: HeadlessToolRenderer
 }
 
-export interface WidgetContribution {
+interface WidgetContribution {
   readonly id: string
   readonly slot: WidgetSlot
   /** Lower = earlier; default 100. */
@@ -92,7 +92,7 @@ export interface WidgetContribution {
   readonly component: WidgetComponent
 }
 
-export interface ClientCommandContribution {
+interface ClientCommandContribution {
   readonly id: string
   readonly title: string
   readonly description?: string
@@ -109,13 +109,13 @@ export interface ClientCommandContribution {
   readonly onSlash?: (args: string) => void
 }
 
-export interface OverlayContribution {
+interface OverlayContribution {
   readonly id: string
   /** Receives `{ open, onClose }` props at render time. */
   readonly component: OverlayComponent
 }
 
-export interface InteractionRendererContribution {
+interface InteractionRendererContribution {
   /** Matches against metadata.type. undefined = default fallback renderer. */
   readonly metadataType?: string
   readonly component: InteractionRendererComponent
@@ -136,7 +136,7 @@ export interface BorderLabelItem {
   readonly color: BorderLabelColor
 }
 
-export interface BorderLabelContribution {
+interface BorderLabelContribution {
   readonly position: BorderLabelPosition
   /** Lower = earlier; default 100. */
   readonly priority?: number
@@ -272,7 +272,7 @@ export type OverlayId = string
  * the transport yields it and the per-provider `ManagedRuntime` provides
  * it. Errors flow on the typed `ClientSetupError` channel.
  */
-export type ExtensionClientSetup<R extends ClientRuntimeServices = ClientDeps> = ClientEffect<
+type ExtensionClientSetup<R extends ClientRuntimeServices = ClientDeps> = ClientEffect<
   ClientContributions,
   ClientSetupError,
   R

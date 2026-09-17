@@ -8,6 +8,7 @@ import {
   type CellCatalogEntry,
   CellEvaluation,
   CellEvaluationError,
+  makeBoundedOutput,
   maximumCellBindings,
   maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
@@ -56,33 +57,13 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns the unmatched Bun transpiler API.
   const transpiler = new Bun.Transpiler({ loader: "ts", target: "node", replMode: true })
   // Display keeps a head and a bounded tail so the end of output (usually the error) survives.
-  const tailLength = maximumCellDisplayLength - maximumCellDisplayHeadLength
-  let head = ""
-  let tail = ""
-  let omitted = 0
-  let truncated = false
-  const append = (text: string) => {
-    let separator = ""
-    if (head.length > 0 || tail.length > 0) separator = "\n"
-    const next = separator + text
-    const headRoom = maximumCellDisplayHeadLength - head.length
-    if (headRoom >= next.length) {
-      head += next
-      return
-    }
-    head += next.slice(0, headRoom)
-    const rest = next.slice(headRoom)
-    truncated = true
-    tail += rest
-    if (tail.length > tailLength) {
-      omitted += tail.length - tailLength
-      tail = tail.slice(tail.length - tailLength)
-    }
-  }
-  const rendered = () => {
-    if (!truncated) return head
-    return `${head}\n... [${omitted} characters omitted] ...\n${tail}`
-  }
+  const output = makeBoundedOutput({
+    limit: maximumCellDisplayLength,
+    headLimit: maximumCellDisplayHeadLength,
+    separator: "\n",
+  })
+  const append = output.append
+  const rendered = output.read
   // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; inspect produces bounded display text.
   const display = (value: unknown): string => {
     if (Predicate.isString(value)) return value
@@ -209,10 +190,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     )
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
-    head = ""
-    tail = ""
-    omitted = 0
-    truncated = false
+    output.reset()
     if (source.length > maximumCellSourceLength) {
       return yield* failure("source", "Cell source exceeds the length limit")
     }
@@ -239,7 +217,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         catch: (cause) => failure("execute", cause),
       })
     }
-    return CellEvaluation.make({ display: rendered(), bindings: bindingNames(), truncated })
+    return CellEvaluation.make({
+      display: rendered(),
+      bindings: bindingNames(),
+      truncated: output.truncated(),
+    })
   })
 
   /** Replace the catalog that search and describe read. It is not part of the namespace. */

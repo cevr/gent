@@ -71,14 +71,14 @@ import type { HttpClientError } from "effect/unstable/http/HttpClientError"
 import { freshCredentials, recoverUnauthorized, withHeaders } from "../provider-http.js"
 import type { AnthropicBetaCacheApi } from "./beta-cache.js"
 import type { CredentialCache } from "../provider-credentials.js"
-import type { ClaudeCredentials } from "./oauth.js"
+import type { ClaudeCredentials } from "./oauth/credentials.js"
 import {
   getLongContextBetasForWith,
-  getModelBetas,
   getUserAgent,
   isLongContextError,
   parseModelIdFromBody,
-} from "./oauth.js"
+} from "./oauth/anthropic-headers.js"
+import { getModelBetas } from "./model-config.js"
 import type { AnthropicKeychainEnv } from "./platform-adapter.js"
 
 // ── Typed errors ──

@@ -170,6 +170,17 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     specifier: Option.none(),
     enforced: true,
   },
+  {
+    // The TUI is a leaf: nothing imports it, so every export it declares is
+    // read from inside `apps/tui` or by its tests, or by nothing at all.
+    prefix: "apps/tui/src/",
+    exempt: [],
+    outsideOf: [],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.none(),
+    enforced: true,
+  },
 ]
 
 /**

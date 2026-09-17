@@ -2,7 +2,7 @@ import { For, Show } from "solid-js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import { useTheme } from "../theme/index"
 
-export interface QueueWidgetProps {
+interface QueueWidgetProps {
   queuedMessages: readonly QueueEntryInfo[]
   steerMessages: readonly QueueEntryInfo[]
 }

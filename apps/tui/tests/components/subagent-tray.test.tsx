@@ -14,7 +14,7 @@ import {
   SubagentTray,
   subtreeCounts,
   trayLines,
-} from "../../src/extensions/builtins/agents-view.client"
+} from "../../src/extensions/builtins/agents-tray.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

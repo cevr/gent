@@ -3,7 +3,7 @@ import { formatDuration } from "../utils/format-duration"
 import { DateTime } from "effect"
 
 /** What the model steps of one turn added up to, from each `StreamEnded.outcome`. */
-export type TurnSteps = {
+type TurnSteps = {
   readonly count: number
   readonly toolCalls: number
   readonly costUsd: number

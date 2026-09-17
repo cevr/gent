@@ -14,7 +14,7 @@ export interface HeadlessToolCall {
 
 export type HeadlessToolRenderer = (toolCall: HeadlessToolCall) => Option.Option<string>
 
-export interface HeadlessToolRendererEntry {
+interface HeadlessToolRendererEntry {
   readonly toolNames: ReadonlyArray<string>
   readonly render: HeadlessToolRenderer
 }

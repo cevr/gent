@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
-import { MessageId } from "@gent/core/protocol"
+import { MessageId, type ModelContextMetrics } from "@gent/core/protocol"
 import { RGBA } from "@opentui/core"
 import { buildContextLabels, buildTopRightLabels, formatCwdGit } from "../src/utils/session-labels"
 
@@ -12,6 +12,18 @@ const theme = {
   warning: RGBA.fromHex("#ffaa00"),
   info: RGBA.fromHex("#00aaff"),
 }
+
+const contextLabels = (
+  latestInputTokens: number,
+  // eslint-disable-next-line effect/noNullish -- mirrors the optional client snapshot field.
+  contextLength: number | undefined,
+  context?: ModelContextMetrics,
+) =>
+  buildContextLabels({
+    metrics: { latestInputTokens, context: Option.fromNullishOr(context) },
+    contextLength,
+    theme,
+  })
 
 describe("buildTopRightLabels", () => {
   test("empty when no data", () => {
@@ -40,24 +52,24 @@ describe("buildTopRightLabels", () => {
 
 describe("buildContextLabels", () => {
   test("shows context utilization", () => {
-    const labels = buildContextLabels(50_000, 200_000, theme, absent)
+    const labels = contextLabels(50_000, 200_000, absent)
     expect(labels.length).toBe(1)
     expect(labels[0]!.text).toBe("50k (25%)")
     expect(labels[0]!.color).toBe(theme.textMuted)
   })
 
   test("context at 70% uses warning color", () => {
-    const labels = buildContextLabels(70_000, 100_000, theme, absent)
+    const labels = contextLabels(70_000, 100_000, absent)
     expect(labels[0]!.color).toBe(theme.warning)
   })
 
   test("context at 90% uses error color", () => {
-    const labels = buildContextLabels(95_000, 100_000, theme, absent)
+    const labels = contextLabels(95_000, 100_000, absent)
     expect(labels[0]!.color).toBe(theme.error)
   })
 
   test("a projection replaces the usage estimate with what the model saw", () => {
-    const labels = buildContextLabels(50_000, 200_000, theme, {
+    const labels = contextLabels(50_000, 200_000, {
       estimatedTokens: 84_000,
       availableInputTokens: 190_000,
       contextLimitTokens: 200_000,
@@ -71,7 +83,7 @@ describe("buildContextLabels", () => {
   })
 
   test("a projection with nothing dropped shows only the percent", () => {
-    const labels = buildContextLabels(0, absent, theme, {
+    const labels = contextLabels(0, absent, {
       estimatedTokens: 180_000,
       availableInputTokens: 190_000,
       contextLimitTokens: 200_000,
@@ -83,7 +95,7 @@ describe("buildContextLabels", () => {
   })
 
   test("a summary-free projection does not label the old compaction count", () => {
-    const labels = buildContextLabels(0, absent, theme, {
+    const labels = contextLabels(0, absent, {
       estimatedTokens: 1000,
       availableInputTokens: 190000,
       contextLimitTokens: 200000,
@@ -94,11 +106,11 @@ describe("buildContextLabels", () => {
   })
 
   test("skips context when tokens are 0", () => {
-    expect(buildContextLabels(0, 200_000, theme, absent).length).toBe(0)
+    expect(contextLabels(0, 200_000, absent).length).toBe(0)
   })
 
   test("skips context when contextLength undefined", () => {
-    expect(buildContextLabels(50_000, absent, theme, absent).length).toBe(0)
+    expect(contextLabels(50_000, absent, absent).length).toBe(0)
   })
 })
 

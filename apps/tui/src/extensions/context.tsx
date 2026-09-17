@@ -42,7 +42,7 @@ import { useClient } from "../client/context"
 
 import type { ClientActivitySnapshot } from "./client-activity"
 
-export interface ExtensionUIContextValue {
+interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   readonly headlessRenderers: Accessor<Map<string, HeadlessToolRenderer>>

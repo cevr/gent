@@ -227,3 +227,72 @@ export const makeCellOutputScanner = (expected: () => Option.Option<string>) => 
     },
   }
 }
+
+/** A bounded accumulator of output text: a head, an omitted count, and a bounded tail. */
+export interface BoundedOutput {
+  /** Add text; anything past the head spills into the bounded tail. */
+  readonly append: (text: string) => void
+  /** The accumulated text, with an omission notice when anything was dropped. */
+  readonly read: () => string
+  /** `read()`, then reset to empty. */
+  readonly take: () => string
+  /** Whether any text has been dropped or pushed past the head. */
+  readonly truncated: () => boolean
+  /** Reset to empty without reading. */
+  readonly reset: () => void
+}
+
+/**
+ * Keeps the first `headLimit` characters and the last `limit - headLimit`, so the
+ * end of a long output — usually the error — survives alongside its beginning.
+ * `separator` goes between appends once anything has been written.
+ */
+export const makeBoundedOutput = (options: {
+  readonly limit: number
+  readonly headLimit: number
+  readonly separator?: string
+}): BoundedOutput => {
+  const separator = options.separator ?? ""
+  const tailLimit = Math.max(0, options.limit - options.headLimit)
+  let head = ""
+  let tail = ""
+  let omitted = 0
+  let truncated = false
+  const read = (): string => {
+    if (!truncated) return head
+    return `${head}\n... [${omitted} characters omitted] ...\n${tail}`
+  }
+  const reset = (): void => {
+    head = ""
+    tail = ""
+    omitted = 0
+    truncated = false
+  }
+  return {
+    append: (text: string): void => {
+      let lead = ""
+      if (head.length > 0 || tail.length > 0) lead = separator
+      const next = lead + text
+      const headRoom = Math.max(0, options.headLimit - head.length)
+      if (headRoom >= next.length) {
+        head += next
+        return
+      }
+      head += next.slice(0, headRoom)
+      truncated = true
+      tail += next.slice(headRoom)
+      if (tail.length > tailLimit) {
+        omitted += tail.length - tailLimit
+        tail = tail.slice(tail.length - tailLimit)
+      }
+    },
+    read,
+    take: (): string => {
+      const result = read()
+      reset()
+      return result
+    },
+    truncated: () => truncated,
+    reset,
+  }
+}

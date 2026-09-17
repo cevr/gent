@@ -105,6 +105,27 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
+    "process output past the display limit keeps its tail, so a trailing error survives",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel(yield* buildWorker)
+        const host = CellOperationHost.of({ call: () => Effect.succeed(0) })
+        // The filler alone exceeds maximumCellDisplayLength, so the buffer must drop
+        // something. A head-only policy drops the end, taking the trailing marker with it.
+        const evaluation = yield* kernel
+          .evaluate(
+            "process.stdout.write('f'.repeat(90000) + '\\n'); process.stderr.write('TRAILING-FAILURE\\n'); 'done'",
+          )
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(evaluation.display.startsWith("fff")).toBe(true)
+        expect(evaluation.display).toContain("characters omitted")
+        expect(evaluation.display).toContain("TRAILING-FAILURE")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "close waits for active host cleanup and prevents recovery",
     () =>
       Effect.gen(function* () {

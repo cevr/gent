@@ -35,7 +35,7 @@ import type { BranchId, SessionId } from "@gent/core/protocol"
 import { formatError } from "../utils/format-error"
 import { truncate } from "../utils/truncate"
 
-export interface BranchPickerProps {
+interface BranchPickerProps {
   readonly open: boolean
   readonly sessionId: SessionId
   readonly sessionName: string

@@ -6,9 +6,9 @@ export type QueueState = {
   followUp: readonly QueueEntryInfo[]
 }
 
-export type AuthGateState = "checking" | "open" | "closed" | "error"
+type AuthGateState = "checking" | "open" | "closed" | "error"
 
-export interface SessionControllerState {
+interface SessionControllerState {
   readonly authGate: AuthGateState
   // eslint-disable-next-line effect/noNullish -- reducer consumers expose the validated agent as an optional snapshot field.
   readonly validatedAgent?: string

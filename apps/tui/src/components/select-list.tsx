@@ -161,7 +161,7 @@ export interface SelectListApi {
   readonly moveTo: (index: number) => void
 }
 
-export interface SelectListFilter {
+interface SelectListFilter {
   /**
    * Called on every query change. A pane that filters its own rows locally
    * keeps the query it was handed; a pane whose server owns the search
@@ -172,7 +172,7 @@ export interface SelectListFilter {
   readonly showInput?: boolean
 }
 
-export interface SelectListProps<A> {
+interface SelectListProps<A> {
   /** Unique among mounted lists: it keys the scroll-sync row ids. */
   readonly id: string
   /** Mount but hide when false; keys stay unbound. */

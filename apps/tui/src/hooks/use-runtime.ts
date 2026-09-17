@@ -12,7 +12,7 @@ import { Cause, Context, Effect, Exit, Fiber } from "effect"
 import { onCleanup } from "solid-js"
 import { useClient } from "../client/index"
 
-export interface UseRuntimeReturn {
+interface UseRuntimeReturn {
   /** Run Effect, interrupting it when the owning component unmounts. */
   call: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
   /** Fire and forget - runs Effect without tracking result */

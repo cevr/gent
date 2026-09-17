@@ -8,7 +8,7 @@ import type { JSX } from "solid-js"
 import type * as Option from "effect/Option"
 import { useRequiredContext } from "../utils/solid-context"
 
-export interface EnvContextValue {
+interface EnvContextValue {
   /** $VISUAL editor */
   visual: Option.Option<string>
   /** $EDITOR editor */

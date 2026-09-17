@@ -175,7 +175,7 @@ const scoreItem = (item: AutocompleteItem, filter: string): number => {
  * Both fields are optional and default to "no history", so every existing call
  * site keeps ranking purely by match quality.
  */
-export interface RankOptions {
+interface RankOptions {
   /** The prefix the rows were offered under, namespacing the store keys. */
   readonly prefix?: string
   /** The reader's decayed pick weights, already fixed at an instant. */

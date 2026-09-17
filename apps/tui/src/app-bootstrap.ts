@@ -56,7 +56,7 @@ export type InitialState =
     }
   | { _tag: "headless"; session: DomainSession; prompt: string }
 
-export interface AppBootstrap {
+interface AppBootstrap {
   // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence when no session is selected.
   readonly initialSession: ClientSession | undefined
   readonly initialPrompt: Option.Option<string>
@@ -71,13 +71,13 @@ export interface AppBootstrap {
   readonly missingAuthProviders: readonly ProviderId[] | undefined
 }
 
-export interface StartupAuthState {
+interface StartupAuthState {
   // eslint-disable-next-line effect/noNullish -- auth API uses absence when no agent override is needed.
   readonly initialAgent: AgentName | undefined
   readonly missingProviders: readonly ProviderId[]
 }
 
-export interface InteractiveBootstrapResult {
+interface InteractiveBootstrapResult {
   readonly bootstrap: AppBootstrap
   // eslint-disable-next-line effect/noNullish -- bootstrap API uses absence for headless startup.
   readonly initialAgent: AgentName | undefined

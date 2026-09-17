@@ -5,7 +5,7 @@
 import { Option } from "effect"
 import type { Command } from "../command/types"
 
-export interface SlashCommandResult {
+interface SlashCommandResult {
   handled: boolean
   // eslint-disable-next-line effect/noNullish -- command results omit an error on success.
   error?: string

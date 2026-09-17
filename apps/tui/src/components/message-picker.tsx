@@ -12,7 +12,7 @@ interface PickerItem {
   label: string
 }
 
-export interface MessagePickerProps {
+interface MessagePickerProps {
   open: boolean
   messages: readonly Message[]
   onSelect: (messageId: MessageId) => void

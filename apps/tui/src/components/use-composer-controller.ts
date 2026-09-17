@@ -59,7 +59,7 @@ export function createPasteManager() {
   }
 }
 
-export interface ComposerController {
+interface ComposerController {
   // eslint-disable-next-line effect/noNullish -- Solid autocomplete accessors use null while closed.
   readonly autocomplete: Accessor<AutocompleteState | null>
   readonly mode: Accessor<"editing" | "shell" | "interaction">

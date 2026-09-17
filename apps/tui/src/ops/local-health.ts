@@ -11,7 +11,7 @@ const STORAGE_TABLES = [
   "events",
 ] satisfies ReadonlyArray<string>
 
-export interface StorageHealth {
+interface StorageHealth {
   readonly dbPath: string
   readonly exists: boolean
   readonly sizeBytes: number
@@ -22,12 +22,12 @@ export interface StorageHealth {
   readonly error?: string
 }
 
-export interface ServerHealth {
+interface ServerHealth {
   readonly status: "none" | "alive" | "dead"
   readonly summary: string
 }
 
-export interface LogHealth {
+interface LogHealth {
   readonly dir: string
   readonly latestServer?: string
   readonly latestClient?: string
@@ -40,7 +40,7 @@ export interface ExtensionDoctorHealth {
   readonly error?: string
 }
 
-export interface DoctorReport {
+interface DoctorReport {
   readonly home: string
   readonly storage: StorageHealth
   readonly server: ServerHealth
@@ -48,7 +48,7 @@ export interface DoctorReport {
   readonly extensions: ExtensionDoctorHealth
 }
 
-export interface StorageResetResult {
+interface StorageResetResult {
   readonly archiveDir?: string
   readonly archived: ReadonlyArray<string>
 }

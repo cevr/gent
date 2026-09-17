@@ -1,4 +1,4 @@
-import { Match, Schema } from "effect"
+import { Match, Option, Schema } from "effect"
 import { Branch, Message } from "@gent/core/protocol"
 import type { PromptSearchState } from "../components/prompt-search-state"
 import {
@@ -13,7 +13,7 @@ interface PromptSearchOverlayState {
   readonly state: PromptSearchState
 }
 
-export type SessionOverlayState =
+type SessionOverlayState =
   | { readonly _tag: "none" }
   | { readonly _tag: "fork"; readonly messages: readonly Message[] }
   | { readonly _tag: "mermaid" }
@@ -45,11 +45,19 @@ export interface SessionUiState {
 }
 
 export const SessionUiState = {
-  initial: (): SessionUiState => ({
+  /**
+   * `initialBranches` opens the branch picker before the first render, because
+   * the picker is also what holds the auth gate and the startup prompt. Opening
+   * it later would let both act on a branch the reader has not picked yet.
+   */
+  initial: (initialBranches: Option.Option<readonly Branch[]> = Option.none()): SessionUiState => ({
     disclosure: "collapsed",
     transcriptExpanded: false,
     displayRevision: 0,
-    overlay: { _tag: "none" },
+    overlay: Option.match(initialBranches, {
+      onNone: (): SessionOverlayState => ({ _tag: "none" }),
+      onSome: (branches): SessionOverlayState => ({ _tag: "branches", branches }),
+    }),
   }),
 }
 
@@ -71,7 +79,7 @@ export type SessionUiEvent = Schema.Schema.Type<typeof SessionUiEvent>
 
 export type SessionUiEffect = { readonly _tag: "RestoreComposer"; readonly text: string }
 
-export interface SessionUiTransitionResult {
+interface SessionUiTransitionResult {
   readonly state: SessionUiState
   readonly effects: readonly SessionUiEffect[]
 }

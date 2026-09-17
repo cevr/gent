@@ -6,7 +6,7 @@ import { Effect, Fiber, FileSystem, Context, Option, Stream } from "effect"
 import type { Cause } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 
-export interface GitStatus {
+interface GitStatus {
   branch: string
   files: number
   additions: number

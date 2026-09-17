@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
-export type OsPlatform = "darwin" | "win32" | "linux" | "other"
+type OsPlatform = "darwin" | "win32" | "linux" | "other"
 
 const resolvePlatform = (platform: string): OsPlatform => {
   if (platform === "darwin") return "darwin"
@@ -10,7 +10,7 @@ const resolvePlatform = (platform: string): OsPlatform => {
   return "other"
 }
 
-export interface OsServiceDefinition {
+interface OsServiceDefinition {
   readonly platform: OsPlatform
 }
 

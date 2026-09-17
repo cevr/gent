@@ -59,13 +59,13 @@ export function canNavigateAtCursor(
   return pos === textLength
 }
 
-export interface NavigateResult {
+interface NavigateResult {
   readonly handled: boolean
   readonly text?: string
   readonly cursor?: "start" | "end"
 }
 
-export interface PromptHistory {
+interface PromptHistory {
   readonly entries: () => readonly string[]
   /** Add a submitted prompt to history. */
   readonly add: (text: string) => void

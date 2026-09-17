@@ -19,7 +19,7 @@ interface KeyboardScopeContextValue {
 
 const KeyboardScopeContext = createContext<KeyboardScopeContextValue>()
 
-export interface ScopedKeyboardOptions {
+interface ScopedKeyboardOptions {
   when?: () => boolean
   capture?: boolean
 }
