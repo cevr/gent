@@ -98,12 +98,19 @@ because both block an import merge:
 
 ## Renames
 
-| Target                       | Name                     | New name                           | Why                                                                     |
-| ---------------------------- | ------------------------ | ---------------------------------- | ----------------------------------------------------------------------- |
-| `tests/utils.test.ts`        | `absent`, `nullValue`    | —                                  | identical in `format-tool` and `message-list-utils`; one copy kept      |
-| `tests/session.test.ts`      | `theme`, `contextLabels` | `themeOrder`, `contextLabelsOrder` | different values in `session-labels` and `session-labels-order`         |
-| `tests/autocomplete.test.ts` | `NOW`, `orEmpty`, `ids`  | —                                  | identical across the frecency and ranking sections; one copy kept       |
-| `tests/autocomplete.test.ts` | `skills`, `commands`     | `skillsRanking`, `commandsRanking` | different corpora in `autocomplete-frecency` and `autocomplete-ranking` |
+| Target                                 | Name                                             | New name                                                     | Why                                                                                            |
+| -------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `tests/utils.test.ts`                  | `absent`, `nullValue`                            | —                                                            | identical in `format-tool` and `message-list-utils`; one copy kept                             |
+| `tests/session.test.ts`                | `theme`, `contextLabels`                         | `themeOrder`, `contextLabelsOrder`                           | different values in `session-labels` and `session-labels-order`                                |
+| `tests/autocomplete.test.ts`           | `NOW`, `orEmpty`, `ids`                          | —                                                            | identical across the frecency and ranking sections; one copy kept                              |
+| `tests/autocomplete.test.ts`           | `skills`, `commands`                             | `skillsRanking`, `commandsRanking`                           | different corpora in `autocomplete-frecency` and `autocomplete-ranking`                        |
+| `tests/interaction-renderers.test.tsx` | `interaction`                                    | —                                                            | identical in all three renderer sections; one copy kept                                        |
+| `tests/composer.test.tsx`              | `Contribute`                                     | `ContributePopup`, `ContributeGhost`, `ContributeSlashEnter` | four different contribution harnesses                                                          |
+| `tests/composer.test.tsx`              | `TestComposer`                                   | `TestComposerGhost`, `TestComposerSlashEnter`                | three different controller mocks                                                               |
+| `tests/composer.test.tsx`              | `RegisterCommands`                               | `RegisterCommandsGhost`, `RegisterCommandsSlashEnter`        | different command registries                                                                   |
+| `tests/message-list.test.tsx`          | `absent`, `syntaxStyle`, `assistant`, `longBody` | —                                                            | identical across the transcript sections; one copy kept                                        |
+| `tests/message-list.test.tsx`          | `transcript`                                     | `transcriptCommit`                                           | different props in `native-transcript-fingerprint` and `native-transcript-commit`              |
+| `tests/message-list.test.tsx`          | `Message` (the type from `src/message-list`)     | `ListMessage`                                                | the protocol `Message` class and the render union share the name; the type-only one is aliased |
 
 ## Timing
 

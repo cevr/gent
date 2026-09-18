@@ -609,7 +609,7 @@ open.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/sdk/src/server.ts`: debug seed workspace and failure logging.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/debug/session.ts`: active branch and sample tool results.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: plain tool header and atomic ID column.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list-render.test.tsx`: unchanged tool identity and failure checks.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list.test.tsx`: unchanged tool identity and failure checks.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/transcript/tool_group_projection.zig`: plain group headers and indented detail.
 - `/tmp/gent-fx-ui-tool-header-final.ansi`: expanded tool output in Herdr.
 - `/tmp/gent-fx-ui-tool-header-compact-narrow.ansi`: intact tool ID at narrow width.
@@ -1337,7 +1337,7 @@ still need repair. Extension-specific summary quality needs a further pass.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: adjacent grouping, summaries, and failure visibility.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: separate group and full-detail controls.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list-render.test.tsx`: existing unknown and registered tool failure identity checks.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list.test.tsx`: existing unknown and registered tool failure identity checks.
 - `/tmp/gent-fx-ui-tool-groups-normal.ansi`: normal grouped output.
 - `/tmp/gent-fx-ui-tool-groups-inspection.ansi`: full extension result output.
 - `/tmp/gent-fx-ui-tool-groups-collapsed.ansi`: collapsed group header.
