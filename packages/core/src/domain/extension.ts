@@ -15,7 +15,6 @@ import {
 import {
   type AgentDefinition,
   type AgentName,
-  DEFAULT_AGENT_NAME,
   type RunSpec,
   type SessionDepthLimitError,
   type SteerCommand,
@@ -874,18 +873,6 @@ export interface ExtensionSessionService {
   >
 }
 
-/**
- * The roster a child inherits from. Delegation lives in the `@gent/delegate`
- * extension, built on the `Session` facade; the facet keeps only the roster
- * lookup, which the host owns.
- */
-interface ExtensionAgentService {
-  readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
-}
-
-/** The host's agent facet: the same roster lookup, forwarded from the run that built it. */
-export type ExtensionHostAgentService = ExtensionAgentService
-
 export interface ExtensionInteractionService {
   readonly approve: (
     params: ApprovalRequest,
@@ -973,7 +960,6 @@ export interface ExtensionHostContext {
   readonly cwd: string
   readonly home: string
   readonly host: ExtensionHostPlatform
-  readonly Agent: ExtensionHostAgentService
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
   readonly Process: ExtensionProcessService
@@ -993,7 +979,6 @@ export interface ExtensionContextService {
   readonly cwd: string
   readonly home: string
   readonly Session: ExtensionSessionService
-  readonly Agent: ExtensionAgentService
   readonly Interaction: ExtensionInteractionService
   readonly Process: ExtensionProcessService
   readonly Files: ExtensionFilesService
@@ -1007,10 +992,10 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
 
 /**
  * The per-leaf half of the extension context: the run's facets, plus the two
- * facts only a leaf knows. `Agent.start` charges the child to the leaf's tool
- * call, and `State.changed` reports under the leaf's extension id. Every other
- * facet is forwarded, because the run already built it over the services that
- * own its inputs.
+ * facts only a leaf knows. `toolCallId` names the call a leaf runs under, and
+ * `State.changed` reports under the leaf's extension id. Every other facet is
+ * forwarded, because the run already built it over the services that own its
+ * inputs.
  */
 const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & {
@@ -1030,7 +1015,6 @@ const extensionServicesFromHostContext = (
       cwd: ctx.cwd,
       home: ctx.home,
       Session: ctx.Session,
-      Agent: ctx.Agent,
       Interaction: ctx.Interaction,
       Process: ctx.Process,
       Files: ctx.Files,
@@ -1048,27 +1032,6 @@ export const provideExtensionServices = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ExtensionContext>> =>
   effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))
-
-/**
- * The agent running the current turn. Children spawned from a cell inherit
- * it, so delegation never needs a roster of named agents.
- */
-export const requireCurrentAgent: Effect.Effect<
-  AgentDefinition,
-  ExtensionServiceError,
-  ExtensionContext
-> = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  const name = Option.getOrElse(Option.fromUndefinedOr(ctx.agentName), () => DEFAULT_AGENT_NAME)
-  const agents = yield* ctx.Agent.listAgents
-  const agent = agents.find((a) => a.name === name)
-  if (!Predicate.isUndefined(agent)) return agent
-  return yield* new ExtensionServiceError({
-    service: "ExtensionAgent",
-    operation: "require",
-    message: `Agent "${name}" not found in registry`,
-  })
-})
 
 // ── extension-load-boundary ─────────────────────────────────────────────────
 

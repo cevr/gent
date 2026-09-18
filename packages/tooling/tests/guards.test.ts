@@ -564,54 +564,25 @@ describe("unadapted seam guard", () => {
     expect(adaptedSeamsIn("packages/extensions/tests/notes.test.ts", "ctx.Telepathy").size).toBe(0)
   })
 
-  test("a facet a public-API helper reaches in the seam file is adapted", () => {
-    // `requireCurrentAgent` reads `ctx.Agent` for extensions that never touch
-    // the raw facet. The helper is re-exported public API, so the seam file's
-    // own `ctx.X` fills the seam and the facet is not dead surface.
-    const seams = adaptedSeamsIn(
-      SEAMS_FILE,
-      `export const requireCurrentAgent = Effect.gen(function* () {
-         const ctx = yield* ExtensionContext
-         const agents = yield* ctx.Agent.listAgents
-         return agents[0]
-       })`,
-    )
-    expect([...seams]).toEqual(["Agent"])
-  })
-
-  test("a facet only the seam file reaches counts, but a shipped-extension facet still must be reached", () => {
-    // The seam file credits Agent through its helper; Telepathy, which no
-    // helper and no extension reaches, is still reported.
-    const source = `${facetsSource}
-export const requireFiles = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  return yield* ctx.Files.read("x")
-})`
-    const adapted = adaptedSeamsIn(SEAMS_FILE, source)
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), adapted)
-    expect(findings).toHaveLength(1)
-    expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
-  })
-
-  test("the context-copy plumbing does not self-credit a facet", () => {
+  test("the seam file never credits a facet, not even one its own helpers reach", () => {
     // `extensionServicesFromHostContext` mirrors the host-context param into a
-    // new struct with `Facet: ctx.Facet` lines. That copy is plumbing, not a
-    // helper reach: crediting it would make every facet permanently adapted and
-    // defeat the dead-facet check. Only a member access (`ctx.Agent.listAgents`)
-    // counts. Telepathy appears only as a copy, so it is still reported.
+    // new struct with `Facet: ctx.Facet` lines, and a helper in the same file
+    // may read a facet. Neither is a shipped extension filling the seam:
+    // crediting them would make every facet permanently adapted and defeat
+    // the dead-facet check. Telepathy is still reported.
     const source = `${facetsSource}
 const extensionServicesFromHostContext = (ctx: ExtensionContextService) =>
   Effect.succeed({
     Files: ctx.Files,
     Telepathy: ctx.Telepathy,
   })
-export const requireFiles = Effect.gen(function* () {
+export const requireTelepathy = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
-  return yield* ctx.Files.read("x")
+  return yield* ctx.Telepathy.read("x")
 })`
     const adapted = adaptedSeamsIn(SEAMS_FILE, source)
-    expect(adapted.has("Telepathy")).toBe(false)
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), adapted)
+    expect(adapted.size).toBe(0)
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["Files"]))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
   })

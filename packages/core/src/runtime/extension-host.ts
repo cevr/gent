@@ -2189,10 +2189,7 @@ interface MakeExtensionHostContextRunInfo {
 
 interface ExtensionHostContextProviderService {
   readonly defaultExtensionRegistry: ExtensionRegistryService
-  readonly forRun: (
-    runInfo: MakeExtensionHostContextRunInfo,
-    extensionRegistry?: ExtensionRegistryService,
-  ) => ExtensionHostContext
+  readonly forRun: (runInfo: MakeExtensionHostContextRunInfo) => ExtensionHostContext
 }
 
 export class ExtensionHostContextProvider extends Context.Service<
@@ -2367,10 +2364,7 @@ export const makeExtensionHostContextProvider = (
 
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
 
-    const forRun = (
-      runInfo: MakeExtensionHostContextRunInfo,
-      extensionRegistry: ExtensionRegistryService = input.extensionRegistry,
-    ): ExtensionHostContext => ({
+    const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
       cwd: runInfo.sessionCwd ?? platform.cwd,
@@ -2411,10 +2405,6 @@ export const makeExtensionHostContextProvider = (
               }),
             }),
         })) satisfies ExtensionStateFacet,
-
-      Agent: {
-        listAgents: Effect.succeed([...extensionRegistry.getResolved().agents.values()]),
-      },
 
       Session: {
         getSession: (sessionId) =>
@@ -2655,7 +2645,7 @@ export const resolveTurnProfile = (params: {
       turnExtensionRegistry: profile.value.registryService,
       turnDriverRegistry: profile.value.driverRegistryService,
       turnBaseSections: profile.value.baseSections,
-      turnHostCtx: hostProvider.forRun(runInfo, profile.value.registryService),
+      turnHostCtx: hostProvider.forRun(runInfo),
       turnCapabilityContext: profile.value.layerContext,
       turnGenerationId: profile.value.generationId,
     }

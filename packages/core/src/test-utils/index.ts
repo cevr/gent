@@ -21,7 +21,6 @@ import {
   type ExtensionFileLockServiceApi,
   type ExtensionFilesService,
   ExtensionHost,
-  type ExtensionHostAgentService,
   type ExtensionHostContext,
   type ExtensionHostPlatform,
   ExtensionHostProcessError,
@@ -71,19 +70,14 @@ import { Gent } from "@gent/sdk"
 
 type TestExtensionHostContextOverrides = Omit<
   Partial<ExtensionHostContext>,
-  "Agent" | "Session" | "Interaction"
+  "Session" | "Interaction"
 > & {
-  readonly Agent?: Partial<ExtensionHostAgentService>
   readonly Session?: Partial<ExtensionSessionService>
   readonly Interaction?: Partial<ExtensionInteractionService>
 }
 
 const die = (operation: string) =>
   Effect.die(new Error(`unconfigured test ExtensionHostContext.${operation}`))
-
-const defaultAgent = (): ExtensionHostAgentService => ({
-  listAgents: die("Agent.listAgents"),
-})
 
 const defaultSession = (): ExtensionSessionService => ({
   getSession: () => die("Session.getSession"),
@@ -216,7 +210,6 @@ export const testExtensionHostContext = (
   home: overrides.home ?? "/tmp",
   host: overrides.host ?? testExtensionHostPlatform(overrides.home),
   agentName: overrides.agentName,
-  Agent: { ...defaultAgent(), ...overrides.Agent },
   Session: { ...defaultSession(), ...overrides.Session },
   Interaction: { ...defaultInteraction(), ...overrides.Interaction },
   Process:
@@ -319,13 +312,11 @@ const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
  * production does.
  */
 export type TestToolContext = ExtensionHostContext &
-  Omit<ExtensionContextService, "State" | "Agent"> & {
+  Omit<ExtensionContextService, "State"> & {
     readonly toolCallId: ToolCallId
-    readonly Agent: ExtensionContextService["Agent"] & ExtensionHostContext["Agent"]
   }
 
-type TestToolContextOverrides = Omit<Partial<TestToolContext>, "Agent" | "State"> & {
-  readonly Agent?: Partial<TestToolContext["Agent"]>
+type TestToolContextOverrides = Omit<Partial<TestToolContext>, "State"> & {
   /** Accepts the flat leaf facet; it is lifted to the host's id-taking form. */
   readonly State?: ReturnType<ExtensionStateFacet>
 }
@@ -333,9 +324,6 @@ type TestToolContextOverrides = Omit<Partial<TestToolContext>, "Agent" | "State"
 /** Default ToolCapabilityContext for tests — overridable via spread */
 export const testToolContext = (overrides?: TestToolContextOverrides): TestToolContext => {
   const host = testExtensionHostContext().host
-  const Agent: ExtensionContextService["Agent"] = {
-    listAgents: dieEffect("agent.listAgents"),
-  }
   const Session: ExtensionContextService["Session"] = {
     getSession: dieStub("session.getSession"),
     getDetail: dieStub("session.getDetail"),
@@ -355,7 +343,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     approve: dieStub("Interaction.approve"),
     present: dieStub("Interaction.present"),
   }
-  const resolvedAgent = { ...Agent, ...overrides?.Agent }
   const resolvedSession = overrides?.Session ?? Session
   const resolvedInteraction = overrides?.Interaction ?? Interaction
   const resolvedProcess = overrides?.Process ?? testExtensionProcess(host)
@@ -379,7 +366,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     FileLock: resolvedFileLock,
     ...overrides,
     State: () => resolvedState,
-    Agent: resolvedAgent,
   }
 }
 

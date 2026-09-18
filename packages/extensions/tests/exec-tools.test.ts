@@ -331,9 +331,6 @@ const stubCtx = testToolContext({
   toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
-  Agent: {
-    listAgents: Effect.die("listAgents not wired in test"),
-  },
   Session: {
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),

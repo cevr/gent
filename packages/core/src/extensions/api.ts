@@ -63,7 +63,6 @@ export {
   RunSpecSchema,
   AgentRunToolCallSchema,
 } from "../domain/agent.js"
-export { requireCurrentAgent } from "../domain/extension.js"
 export {
   type AnyExtensionHook,
   type GentExtension,

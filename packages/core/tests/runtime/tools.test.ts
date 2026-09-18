@@ -247,7 +247,6 @@ describe("tool execution", () => {
         sessionId: Schema.String,
         branchId: Schema.String,
         toolCallId: Schema.String,
-        hasListAgents: Schema.Boolean,
         hasInteraction: Schema.Boolean,
         hasProcessRun: Schema.Boolean,
       })
@@ -263,7 +262,6 @@ describe("tool execution", () => {
               sessionId: ctx.sessionId,
               branchId: ctx.branchId,
               toolCallId: ctx.toolCallId ?? "",
-              hasListAgents: Effect.isEffect(ctx.Agent.listAgents),
               hasInteraction: Predicate.isFunction(ctx.Interaction.approve),
               hasProcessRun: Predicate.isFunction(ctx.Process.run),
             }
@@ -308,7 +306,6 @@ describe("tool execution", () => {
         sessionId: "s",
         branchId: "b",
         toolCallId: "tc-probe",
-        hasListAgents: true,
         hasInteraction: true,
         hasProcessRun: true,
       })

@@ -36,13 +36,11 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionHost,
-  ExtensionServiceError,
   type GentExtension,
   getToolId,
   hook,
   request,
   type RequestCapability,
-  requireCurrentAgent,
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -135,7 +133,6 @@ import {
   type ExtensionHostContext,
   type ExtensionLoadError,
   LoadedArtifactIdentity,
-  provideExtensionServices,
   registerContributions,
   type SystemPromptInput,
   type TurnAfterInput,
@@ -2231,11 +2228,10 @@ describe("runtime slots", () => {
  * Host facet survivor regression suite.
  *
  * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.Session.listBranches` and the `requireCurrentAgent` helper remain as the
- * two non-trivial host-wired behaviors with no other direct test coverage.
- * The RPC suites exercise the durable mutation surface from the public
- * RPC angle; these tests pin the host-facet shape from the extension
- * angle.
+ * `ctx.Session.listBranches` remains as the one non-trivial host-wired
+ * behavior with no other direct test coverage. The RPC suites exercise the
+ * durable mutation surface from the public RPC angle; this test pins the
+ * host-facet shape from the extension angle.
  */
 
 const SESSION_ID = SessionId.make("test-session")
@@ -2244,34 +2240,6 @@ const FIXTURE_DATE = dateFromMillis(0)
 const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
 
 describe("host facet survivors after C9.5 prune", () => {
-  it.live(
-    "requireCurrentAgent fails with typed ExtensionServiceError when the agent is missing",
-    () =>
-      Effect.gen(function* () {
-        const base = testToolContext()
-        const exit = yield* Effect.exit(
-          provideExtensionServices(
-            {
-              ...base,
-              agentName: AgentName.make("missing-agent"),
-              Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
-            },
-            requireCurrentAgent,
-          ),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag !== "Failure") return
-        const error = Cause.findErrorOption(exit.cause)
-        expect(Option.isSome(error)).toBe(true)
-        if (!Option.isSome(error)) return
-        expect(Schema.is(ExtensionServiceError)(error.value)).toBe(true)
-        if (!Schema.is(ExtensionServiceError)(error.value)) return
-        expect(error.value.service).toBe("ExtensionAgent")
-        expect(error.value.operation).toBe("require")
-        expect(error.value.message).toBe('Agent "missing-agent" not found in registry')
-      }),
-  )
-
   it.live("ctx.Session.listBranches returns branches for the current session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

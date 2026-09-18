@@ -95,7 +95,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
           void ctx.sessionId
           void ctx.branchId
           void ctx.toolCallId
-          void ctx.Agent
           void ctx.Session
           return "ok"
         }),
