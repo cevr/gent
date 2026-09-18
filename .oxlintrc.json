@@ -184,7 +184,7 @@
       }
     },
     {
-      "files": ["packages/tooling/tests/fixtures.test.ts"],
+      "files": ["packages/tooling/tests/fixture-runner.test.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"
       }

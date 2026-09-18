@@ -1225,7 +1225,7 @@ export const collectGentVariableUses = (
     // This finder and its fixtures name variables to describe the finder
     // itself. Neither file is a call site, so neither is scanned.
     if (file.startsWith("packages/tooling/src/guards")) continue
-    if (file.startsWith("packages/tooling/tests/lint-config-guards")) continue
+    if (file.startsWith("packages/tooling/tests/guards")) continue
     // A test may set a variable to drive a reader; that proves the reader
     // works, not that anything in production supplies it.
     const skipWrites = isTestFile(file)
@@ -2054,10 +2054,7 @@ const SOURCE = /\.[cm]?[jt]sx?$/
  * build the detached shapes the test asserts on. Reading them would report the
  * description of the rule as a violation of it.
  */
-const SELF = new Set([
-  "packages/tooling/src/guards.ts",
-  "packages/tooling/tests/diagnostic-suppression-anchor.test.ts",
-])
+const SELF = new Set(["packages/tooling/src/guards.ts", "packages/tooling/tests/guards.test.ts"])
 
 /** The line-scoped form. The file-scoped `@effect-diagnostics` has no anchor. */
 const NEXT_LINE_SUPPRESSION = /@effect-diagnostics-next-line\b/
@@ -2209,7 +2206,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off self-contained probe, no scope lifetime",
   },
   {
-    file: "packages/sdk/tests/server-lock.test.ts",
+    file: "packages/sdk/tests/server.test.ts",
     scope: "file",
     text: "nodeBuiltinImport:off",
   },
@@ -2282,7 +2279,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
  */
 const DESCRIBES_THE_MARKER = new Set([
   "packages/tooling/src/guards.ts",
-  "packages/tooling/tests/diagnostic-suppression-anchor.test.ts",
+  "packages/tooling/tests/guards.test.ts",
 ])
 
 const approvedSuppression = (file: string, text: string): boolean =>
