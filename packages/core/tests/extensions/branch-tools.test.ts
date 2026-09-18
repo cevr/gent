@@ -1,3 +1,16 @@
+import { describe, expect, it } from "effect-bun-test"
+import { Effect, Layer } from "effect"
+import { SqlClient } from "effect/unstable/sql"
+import { MessageStorage, SqliteStorage } from "../../src/storage/storage"
+import {
+  type BranchToolFeature,
+  CurrentBranchToolFeature,
+  noBranchTools,
+} from "../../src/runtime/tools"
+import { emptyErasedResourceLayer } from "../../src/runtime/extension-host"
+
+// ── ../runtime/branch-tool-feature.test ─────────────────────────────────────
+
 /**
  * A branch-tool feature is input to the runtime, not part of it.
  *
@@ -5,16 +18,6 @@
  * none. These tests hold that seam open: they build storage from
  * `noBranchTools` and from a synthetic feature, and never mention the cell.
  */
-import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { SqlClient } from "effect/unstable/sql"
-import { MessageStorage, SqliteStorage } from "../../src/storage/storage"
-import {
-  noBranchTools,
-  CurrentBranchToolFeature,
-  type BranchToolFeature,
-} from "../../src/runtime/tools"
-import { emptyErasedResourceLayer } from "../../src/runtime/extension-host"
 
 const tableNames = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient

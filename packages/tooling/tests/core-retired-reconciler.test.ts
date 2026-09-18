@@ -52,7 +52,7 @@ describe("retired reconciler guard", () => {
   test("ignores tests and docs", () => {
     expect(
       findRetiredReconcilerFindings(
-        "packages/core/tests/runtime/session-profile.test.ts",
+        "packages/core/tests/runtime/extension-host.test.ts",
         "const host = ResourceGraphHost",
       ),
     ).toEqual([])
