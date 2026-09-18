@@ -720,7 +720,12 @@ const PUBLIC_API_HELPER_FILE = SEAM_DECLARATION_FILE
 
 const facetsReachedByPublicHelpers = (text: string): ReadonlySet<string> => {
   const names = new Set<string>()
-  for (const match of text.matchAll(/\bctx\.([A-Z][A-Za-z0-9]*)/g)) {
+  // A genuine helper reaches into a facet with a member access (`ctx.Agent.listAgents`).
+  // The trailing `.` excludes the `Facet: ctx.Facet` copy plumbing in
+  // `extensionServicesFromHostContext`, which mirrors the host-context param
+  // into a new struct and would otherwise self-credit every facet, defeating the
+  // dead-facet check (the reason this guard exists — see the Dynamic facet note).
+  for (const match of text.matchAll(/\bctx\.([A-Z][A-Za-z0-9]*)\./g)) {
     Option.match(Option.fromNullishOr(match[1]), {
       onNone: () => {},
       onSome: (name) => {

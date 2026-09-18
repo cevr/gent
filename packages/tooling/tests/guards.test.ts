@@ -592,6 +592,29 @@ export const requireFiles = Effect.gen(function* () {
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
   })
+
+  test("the context-copy plumbing does not self-credit a facet", () => {
+    // `extensionServicesFromHostContext` mirrors the host-context param into a
+    // new struct with `Facet: ctx.Facet` lines. That copy is plumbing, not a
+    // helper reach: crediting it would make every facet permanently adapted and
+    // defeat the dead-facet check. Only a member access (`ctx.Agent.listAgents`)
+    // counts. Telepathy appears only as a copy, so it is still reported.
+    const source = `${facetsSource}
+const extensionServicesFromHostContext = (ctx: ExtensionContextService) =>
+  Effect.succeed({
+    Files: ctx.Files,
+    Telepathy: ctx.Telepathy,
+  })
+export const requireFiles = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  return yield* ctx.Files.read("x")
+})`
+    const adapted = adaptedSeamsIn(SEAMS_FILE, source)
+    expect(adapted.has("Telepathy")).toBe(false)
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), adapted)
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
+  })
 })
 
 // ── e2e-fixture-imports.test ────────────────────────────────────────────────
