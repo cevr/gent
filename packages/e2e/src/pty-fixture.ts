@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/headless"
 import { Clock, Effect, Predicate, Schema } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { seedAuthBoundary } from "./auth-seed-boundary"
-import { waitForProcessExit } from "./wait-for-process-exit"
+import { waitForProcessExit } from "./server-process-fixture"
 
 const CTRL_C = "\x03"
 const repoRoot = decodeURIComponent(new URL("../../..", import.meta.url).pathname).replace(

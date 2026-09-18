@@ -7,8 +7,12 @@ import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
 import { toTestFailure } from "./test-failure-boundary"
-import { killProcess, spawnServer, waitUntil } from "../src/server-process-fixture"
-import { waitForProcessExit } from "../src/wait-for-process-exit"
+import {
+  killProcess,
+  spawnServer,
+  waitForProcessExit,
+  waitUntil,
+} from "../src/server-process-fixture"
 
 const randomLifecyclePort = Random.nextIntBetween(19_000, 20_000)
 
