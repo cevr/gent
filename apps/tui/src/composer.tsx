@@ -25,7 +25,7 @@ import {
 } from "./session"
 import { useTheme } from "./theme"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { textWidth } from "./platform/text-width-adapter"
+import { textWidth } from "./text-width-adapter"
 import { expandFileRefs, truncate, useRequiredContext } from "./utils"
 import {
   ChromePanel,

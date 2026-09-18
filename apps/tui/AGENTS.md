@@ -87,7 +87,7 @@ State ownership rules:
 
 Views (only 1):
 
-- `src/routes/session.tsx` — provides `SessionControllerContext`
+- `src/app.tsx` — provides `SessionControllerContext`
 - `src/session.tsx` — `createSessionController()` + context
 
 The branch picker is a docked pane (`pickers.tsx`), not a
@@ -194,13 +194,13 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 
 ## Key Files (Composer + Session)
 
-| File                     | Purpose                           |
-| ------------------------ | --------------------------------- |
-| `src/session.tsx`        | session-screen orchestration      |
-| `src/routes/session.tsx` | session presentation + route keys |
-| `src/composer.tsx`       | composer render surface           |
-| `src/composer.tsx`       | composer interaction wiring       |
-| `src/composer.tsx`       | Generic contribution-driven popup |
-| `src/composer.tsx`       | Shell execution + truncation      |
-| `src/utils.ts`           | @file#line expansion              |
-| `src/commands.tsx`       | Slash command handlers            |
+| File               | Purpose                           |
+| ------------------ | --------------------------------- |
+| `src/session.tsx`  | session-screen orchestration      |
+| `src/app.tsx`      | session presentation + route keys |
+| `src/composer.tsx` | composer render surface           |
+| `src/composer.tsx` | composer interaction wiring       |
+| `src/composer.tsx` | Generic contribution-driven popup |
+| `src/composer.tsx` | Shell execution + truncation      |
+| `src/utils.ts`     | @file#line expansion              |
+| `src/commands.tsx` | Slash command handlers            |

@@ -24,7 +24,7 @@ import {
   type SelectListApi,
   type SelectListRow,
 } from "./ui"
-import { textWidth } from "./platform/text-width-adapter"
+import { textWidth } from "./text-width-adapter"
 import { useTheme } from "./theme"
 
 // ── command types ───────────────────────────────────────────────────────────

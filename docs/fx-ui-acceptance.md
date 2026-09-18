@@ -69,7 +69,7 @@ The temporary terminal size control was stopped. The test draft was cleared.
 The isolated preview remains in Herdr pane wZ:pD. All existing architecture
 work remains in the FX Rift. The warm source was not changed.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
@@ -113,7 +113,7 @@ FX source root: `/Users/cvr/.cache/repo/vercel-labs/fx`.
 Gent source root: `/Users/cvr/Developer/personal/.rifts/gent/fx-ui`.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: full-height app shell.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: transcript, composer, status, and extension slots.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: transcript, composer, status, and extension slots.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/bordered-input.tsx`: composer rules and padding.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: input rendering and controls.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme.tsx`: default theme selection.
@@ -195,7 +195,7 @@ Evidence:
 - `/tmp/gent-fx-ui-herdr-menu.ansi`: Gent command menu under the composer while viewing older transcript rows.
 - `/tmp/gent-fx-ui-herdr-fx-menu.ansi`: FX command menu in the equal-size reference pane.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: measured text rail and bold user text.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: transcript and footer allocation.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: transcript and footer allocation.
 
 The command menu still differs from FX's category-tab header and denser
 description columns. Final parity is not proved. The app also still uses
@@ -249,7 +249,7 @@ Evidence:
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/scripts/scrollback-probe.tsx`: temporary context, replay, and draft check.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/chunk-bun-bb3k0yt8.js`: screen/output mode guards, replay reset, and screen transition implementation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/main.tsx`: current renderer creation.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: current transcript and composer ownership.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: current transcript and composer ownership.
 
 ## Native session integration
 
@@ -280,7 +280,7 @@ Source evidence:
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: native commits, snapshot ownership, footer allocation, and transcript viewport.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/terminal.tsx`: terminal geometry independent of the footer.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: live transcript integration and overlay allocation.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: live transcript integration and overlay allocation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: transcript view state.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: transcript, return, and tool-detail keys.
 
@@ -669,7 +669,7 @@ The temporary empty pane used to restore the failing width was closed.
 The user's wide Gent pane and caller focus were restored. This fixes the
 reproduced menu-entry fault. It does not prove every native-history case.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: combines command menu and session overlay state.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: combines command menu and session overlay state.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: command menu open state.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: native-output readiness and write/reset guards.
 - `/tmp/gent-fx-ui-menu-narrow-direct.ansi`: minimal failing menu entry.
@@ -827,7 +827,7 @@ The full gate and all 61 E2E checks passed. Enter still queues regular
 follow-up work in Gent. This pass did not change delivery semantics.
 The broader FX interaction comparison remains open.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/queue-widget.tsx`: plain pending rows and dotted rail.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: plain pending rows and dotted rail.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/widgets-render.test.tsx`: unchanged steer, queued-summary, and restore-hint assertions.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/test-utils/language-model.ts`: scripted replies and delay control.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/footer/input_presentation.zig`: dotted pending-input rail.
@@ -1336,7 +1336,7 @@ labels. This is not proof of full FX parity. Width reflow and native history
 still need repair. Extension-specific summary quality needs a further pass.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: adjacent grouping, summaries, and failure visibility.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: separate group and full-detail controls.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: separate group and full-detail controls.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list-render.test.tsx`: existing unknown and registered tool failure identity checks.
 - `/tmp/gent-fx-ui-tool-groups-normal.ansi`: normal grouped output.
 - `/tmp/gent-fx-ui-tool-groups-inspection.ansi`: full extension result output.
@@ -1397,7 +1397,7 @@ small label column although none of its rows had descriptions. The palette
 now reserves a detail column only when its filtered rows have descriptions
 or shortcuts. Rows without that column use the available title width.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: debug-only workspace label.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: debug-only workspace label.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: model context and debug labels.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins/artifacts.client.ts`: shipped bottom-right artifact count.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/README.md`: workspace status default.
@@ -1696,7 +1696,7 @@ still open. The shared Herdr theme was not changed. This pass checks status
 layout; it does not claim exact parity for phase words or token metrics.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`
 
 ### Connection failure and recovery
 
@@ -1796,7 +1796,7 @@ does. Session data remains the source of truth. The partial-content repair
 has source verification; a dedicated live mutation check remains open.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`
 - `/tmp/gent-fx-ui-tools-collapsed.txt`: no connected summary rows.
 - `/tmp/gent-fx-ui-tools-expanded-again.txt`: 13 connected summary rows.
 - `/tmp/gent-fx-ui-tools-expanded-confirm.txt`: identical after another cycle.
@@ -1825,7 +1825,7 @@ and shows the interruption notice. The terminal size control was stopped.
 No paid model calls or appearance-only tests were added.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`
 - `/tmp/gent-fx-ui-partial-replaced.txt`: exactly 45 new ordered rows.
 - `/tmp/gent-fx-ui-partial-short.txt`: exactly 3 new ordered rows.
 - `/tmp/gent-fx-ui-partial-long.txt`: exactly 100 new ordered rows.
@@ -1852,4 +1852,4 @@ Do not treat arbitrary extension layouts as verified.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`

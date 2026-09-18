@@ -34,19 +34,19 @@ import {
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
-import { App } from "./app"
+import {
+  App,
+  AppBootstrapError,
+  type InitialState,
+  resolveInitialState,
+  resolveInteractiveBootstrap,
+  resolveStartupAuthState,
+} from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
 import { ComposerDraftsProvider, SessionShellProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider, makeClientRuntime } from "./extensions/host"
-import {
-  AppBootstrapError,
-  resolveInteractiveBootstrap,
-  resolveInitialState,
-  resolveStartupAuthState,
-  type InitialState,
-} from "./app-bootstrap"
 import { DEFAULT_HEADLESS_TOOL_RENDERERS, runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import { builtinClientModules } from "./extensions/builtins"

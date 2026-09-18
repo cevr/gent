@@ -218,7 +218,7 @@ void Orphan
 
 describe("the TUI app surface", () => {
   const TUI_FILE = "apps/tui/src/utils.ts"
-  const TUI_CONSUMER = "apps/tui/src/routes/session.tsx"
+  const TUI_CONSUMER = "apps/tui/src/app.tsx"
 
   test("a TUI export another TUI file imports is live", () => {
     expect(

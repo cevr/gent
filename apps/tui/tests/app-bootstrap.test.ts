@@ -15,7 +15,7 @@ import {
   resolveInitialState,
   resolveStartupAuthState,
   type InitialState,
-} from "../src/app-bootstrap"
+} from "../src/app"
 import { createMockClient } from "./render-harness-boundary"
 
 const absent = Option.getOrUndefined(Option.none())

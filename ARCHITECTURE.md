@@ -79,9 +79,10 @@ updates this list in the same commit.
 14. **A child's completion arrives as a user message, never a tool result.**
     Receipt: `packages/core/src/runtime/agent/child-completion.ts`.
 15. **Platform edges stay explicit.** File, process, lock, and network access
-    go through `GentPlatform` facets; TUI routes own screen state, components
-    render and dispatch; app-specific UI facets live at the app edge.
-    Receipts: `packages/core/src/runtime/gent-platform.ts`, `apps/tui/src/routes/`.
+    go through `GentPlatform` facets; the TUI session controller owns screen
+    state, views render and dispatch; app-specific UI facets live at the app
+    edge. Receipts: `packages/core/src/runtime/gent-platform.ts`,
+    `apps/tui/src/session.tsx`, `apps/tui/src/app.tsx`.
 16. **RPC is the application transport.** No parallel REST surface. Receipt:
     `apps/server/src/`.
 
