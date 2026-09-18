@@ -88,6 +88,10 @@ commit with counsel and a gamut run:
 Keep in core: governance, dedup, pubsub, interaction cold park, the auth
 store, the compaction seam, the extension host.
 
+| #   | Move                                             | Status                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1  | models.dev fetch + cache → driver-owned catalogs | done `62149d11`, guard `1e661e7b` (core must not name a catalog host; proven red on the old `provider.ts`), review fixup `7d364f26` (empty load not memoized, memo test concurrent, both proven red). `provider.ts` 1,033 → 853; `packages/extensions/src/models-dev.ts` 249. `/model` now lists 104 resolvable models, not 7,843 models.dev entries. Gamut `opus-sonnet` baseline + `/model` pane checked. |
+
 ## Test folds
 
 Mirror the source layout, one test file per concern. Four agents ran in
