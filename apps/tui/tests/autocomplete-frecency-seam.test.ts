@@ -25,10 +25,10 @@ import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   emptyFrecencyStore,
   frecencyLookup,
-  recordPick,
   type FrecencyStoreValue,
-} from "../src/components/autocomplete-frecency"
-import { readFrecencyStore } from "../src/components/autocomplete-frecency-store"
+  readFrecencyStore,
+  recordPick,
+} from "../src/autocomplete"
 import type { Command } from "../src/command/types"
 import type {
   AnyExtensionClientModule,

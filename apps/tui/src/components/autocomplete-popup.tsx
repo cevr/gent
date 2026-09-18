@@ -23,7 +23,7 @@ import { useClient } from "../client/index"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import type { AutocompleteState } from "./composer-interaction-state"
 import { runAutocompleteContributions } from "./autocomplete-popup-boundary"
-import { ghostCompletion } from "./autocomplete-ranking"
+import { ghostCompletion } from "../autocomplete"
 import { Option } from "effect"
 
 export type { AutocompleteState }

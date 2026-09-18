@@ -23,15 +23,16 @@ import { Effect, FileSystem, Option } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   clearFrecencyStore,
+  emptyFrecencyStore,
+  frecencyLookup,
   frecencyPaths,
   frecencySnapshot,
+  rankAutocompleteItems,
   readFrecencyStore,
   recordFrecencyPick,
   setFrecencySnapshot,
   writeFrecencyStore,
-} from "../src/components/autocomplete-frecency-store"
-import { emptyFrecencyStore, frecencyLookup } from "../src/components/autocomplete-frecency"
-import { rankAutocompleteItems } from "../src/components/autocomplete-ranking"
+} from "../src/autocomplete"
 import type { AutocompleteItem } from "../src/extensions/client-facets.js"
 
 const durabilityTest = it.scopedLive.layer(BunServices.layer)

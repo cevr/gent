@@ -26,14 +26,15 @@
  */
 
 import { DateTime, Effect, Option } from "effect"
-import { frecencyLookup, type FrecencyLookup } from "../components/autocomplete-frecency"
 import {
   clearFrecencyStore,
+  frecencyLookup,
+  type FrecencyLookup,
   frecencySnapshot,
   readFrecencyStore,
   recordFrecencyPick,
   setFrecencySnapshot,
-} from "../components/autocomplete-frecency-store"
+} from "../autocomplete"
 import { useWorkspace } from "../workspace"
 import { useRuntime } from "./use-runtime"
 

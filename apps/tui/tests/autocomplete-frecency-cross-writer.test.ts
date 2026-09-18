@@ -21,16 +21,14 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Option } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
+  emptyFrecencyStore,
+  frecencyLookup,
   frecencySnapshot,
+  type FrecencyStoreValue,
   readFrecencyStore,
   recordFrecencyPick,
   setFrecencySnapshot,
-} from "../src/components/autocomplete-frecency-store"
-import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  type FrecencyStoreValue,
-} from "../src/components/autocomplete-frecency"
+} from "../src/autocomplete"
 
 const crossWriterTest = it.scopedLive.layer(BunServices.layer)
 const NOW = 1_800_000_000_000

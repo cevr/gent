@@ -25,9 +25,13 @@ import { ClientWorkspace } from "../client-services"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils"
-import { rankAutocompleteItems } from "../../components/autocomplete-ranking"
-import { emptyFrecencyStore, frecencyLookup } from "../../components/autocomplete-frecency"
-import { readFrecencyStore, recordFrecencyPick } from "../../components/autocomplete-frecency-store"
+import {
+  emptyFrecencyStore,
+  frecencyLookup,
+  rankAutocompleteItems,
+  readFrecencyStore,
+  recordFrecencyPick,
+} from "../../autocomplete"
 
 const builtinConnection = defineClientExtension("@gent/connection", {
   setup: Effect.succeed(

@@ -7,15 +7,16 @@
  */
 import { describe, expect, test } from "bun:test"
 import {
-  HALF_LIFE_MS,
-  MAX_ENTRIES,
   decayedWeight,
   emptyFrecencyStore,
+  frecencyBonus,
   frecencyLookup,
+  HALF_LIFE_MS,
+  MAX_ENTRIES,
   noFrecency,
+  rankAutocompleteItems,
   recordPick,
-} from "../src/components/autocomplete-frecency"
-import { frecencyBonus, rankAutocompleteItems } from "../src/components/autocomplete-ranking"
+} from "../src/autocomplete"
 import type { AutocompleteItem } from "../src/extensions/client-facets.js"
 
 const NOW = 1_800_000_000_000
