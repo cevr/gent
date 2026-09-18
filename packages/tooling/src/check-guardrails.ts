@@ -1,37 +1,37 @@
 import { BunRuntime } from "@effect/platform-bun"
 import { Console, Effect, Option, Schema } from "effect"
-import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "./blanket-eslint-disable"
-import { findCoreFeatureIndependenceFindings } from "./core-feature-independence"
-import { findRetiredReconcilerFindings } from "./core-retired-reconciler"
-import { findCoreVendorModelPins } from "./core-vendor-model-pins"
-import { findDiagnosticSuppressionAnchors } from "./diagnostic-suppression-anchor"
-import { findAliasTestLayers } from "./core-alias-test-layers"
-import { findUnadmittedChildSessionWriters } from "./core-child-session-depth"
-import { findIdentityEncodes } from "./core-identity-encode"
-import { findProcessRunnerFindings } from "./core-process-runner"
-import { findTuiSessionIdentityReads } from "./tui-session-identity"
 import {
+  adaptedSeamsIn,
   collectExportFacts,
-  findPackageSurfaceFindings,
-  findUnconsumedExports,
   type ExportFacts,
-  type PackageJson,
-} from "./export-consumers"
-import { findE2eFixtureImportFindings } from "./e2e-fixture-imports"
-import {
+  findAliasTestLayers,
+  findBannedEslintDisableBlocks,
+  findBlanketEslintDisables,
+  findCoreFeatureIndependenceFindings,
+  findCoreVendorModelPins,
+  findDiagnosticSuppressionAnchors,
+  findE2eFixtureImportFindings,
+  findHookGuardOrder,
+  findIdentityEncodes,
+  findPackageSurfaceFindings,
+  findPlatformDuplicationViolations,
+  findProcessRunnerFindings,
   findReadersWithoutWriters,
+  findRetiredReconcilerFindings,
+  findSteeringFilePaths,
+  findSuppressionInventoryFindings,
+  findTuiSessionIdentityReads,
+  findUnadaptedSeams,
+  findUnadmittedChildSessionWriters,
+  findUnconsumedExports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
-  OxlintConfigSchema,
-} from "./lint-config-guards"
-import { findPlatformDuplicationViolations } from "./platform-duplication-guards"
-import { findHookGuardOrder, HOOK_FILE } from "./hook-guard-order"
-import { findSteeringFilePaths, isSteeringFile } from "./steering-file-paths"
-import {
-  findSuppressionInventoryFindings,
   findUnusedSuppressionApprovals,
-} from "./suppression-inventory"
-import { adaptedSeamsIn, findUnadaptedSeams } from "./core-unadapted-seams"
+  HOOK_FILE,
+  isSteeringFile,
+  OxlintConfigSchema,
+  type PackageJson,
+} from "./guards"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
@@ -178,7 +178,7 @@ const program = Effect.gen(function* () {
 
   for (const finding of findUnusedSuppressionApprovals(sourceTexts)) {
     pushFailure(
-      `${finding.file}: approved suppression has no matching comment; drop it from packages/tooling/src/suppression-inventory.ts: ${finding.comment}`,
+      `${finding.file}: approved suppression has no matching comment; drop it from packages/tooling/src/guards.ts: ${finding.comment}`,
     )
   }
 

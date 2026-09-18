@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findDiagnosticSuppressionAnchors } from "../src/diagnostic-suppression-anchor"
+import { findDiagnosticSuppressionAnchors } from "../src/guards"
 
 const FILE = "packages/core/src/runtime/thing.ts"
 
@@ -78,7 +78,7 @@ describe("diagnostic suppression anchor", () => {
 
   test("skips the guard's own source and test, which must spell the marker", () => {
     for (const self of [
-      "packages/tooling/src/diagnostic-suppression-anchor.ts",
+      "packages/tooling/src/guards.ts",
       "packages/tooling/tests/diagnostic-suppression-anchor.test.ts",
     ]) {
       expect(messagesOf([SUPPRESSION, ""], self)).toEqual([])

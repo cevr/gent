@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  RETIRED_IDENTIFIERS,
-  RETIRED_MODULES,
-  findRetiredReconcilerFindings,
-} from "../src/core-retired-reconciler"
+import { RETIRED_IDENTIFIERS, RETIRED_MODULES, findRetiredReconcilerFindings } from "../src/guards"
 
 describe("retired reconciler guard", () => {
   test("flags a shipped file that imports a retired module", () => {

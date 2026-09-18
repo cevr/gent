@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { ConfigProvider, Effect, Layer } from "effect"
-import { GentTracerLive } from "../src/tracer"
+import { GentTracerLive } from "../src/logger"
 
 const tracerWithConfig = (env: Record<string, string>) =>
   Layer.provide(GentTracerLive, ConfigProvider.layer(ConfigProvider.fromEnv({ env })))

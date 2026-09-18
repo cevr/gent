@@ -1,3 +1,673 @@
+// @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution for gent's data directory
+import {
+  Clock,
+  Config,
+  Context,
+  Deferred,
+  Effect,
+  FileSystem,
+  Layer,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+  type Scope,
+} from "effect"
+import { join as pathJoin, resolve as pathResolve } from "node:path"
+import type { ChildProcessSpawner } from "effect/unstable/process"
+import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message.js"
+import { GentPlatform, runProcess } from "@gent/core-internal/runtime/gent-platform.js"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+} from "@gent/core-internal/storage/storage.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
+import { BunFileSystem, BunHttpServer, BunServices } from "@effect/platform-bun"
+import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
+import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import type { BranchToolFeature } from "@gent/core-internal/runtime/tools.js"
+import type { GentExtension } from "@gent/core/extensions/api"
+import type { RpcHandlersLive } from "@gent/core-internal/server/server.js"
+import {
+  provideWorkspaceIdHeader,
+  type WorkspaceHeaders,
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+} from "@gent/core-internal/server/workspace-rpc.js"
+import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
+import type { LanguageModel } from "effect/unstable/ai"
+import { GentObservability } from "./logger.js"
+import { GentConnectionError } from "@gent/core/protocol"
+import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { buildServerRoot, StateLocation } from "@gent/core-internal/server/server-root.js"
+
+// ── data-paths ──────────────────────────────────────────────────────────────
+
+/**
+ * The one owner of where gent keeps its durable state on disk.
+ *
+ * `GENT_DATA_DIR` names the directory holding `data.db`; without it the
+ * directory is `<home>/.gent`. Every reader — the server that writes the
+ * database, and the `doctor` and `storage reset` commands that inspect and
+ * archive it — resolves through here, so an operator who redirects the
+ * database does not get tools that look somewhere else.
+ */
+
+/** A malformed value is no value: the fallback under `home` still applies. */
+const optionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
+  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none<string>()))
+
+const DB_FILE = "data.db"
+
+/** The database file plus the sidecars SQLite writes beside it. */
+interface DataPaths {
+  readonly dataDir: string
+  readonly dbPath: string
+  /** `dbPath` and its `-shm`/`-wal` sidecars, in that order. */
+  readonly files: ReadonlyArray<string>
+  /** Where `storage reset` moves the files it clears. */
+  readonly archiveDir: string
+  /** The shared-server identity record. One server per database, so it sits beside it. */
+  readonly serverLock: string
+}
+
+/**
+ * Build the paths for an already-resolved data directory. Pure — callers that
+ * hold an explicit directory (a test fixture, an explicit `dbPath`) use this;
+ * callers reading the environment use {@link dataPaths}.
+ */
+export const dataPathsIn = (dataDir: string): DataPaths => {
+  const resolvedDir = pathResolve(dataDir)
+  const dbPath = pathJoin(resolvedDir, DB_FILE)
+  return {
+    dataDir: resolvedDir,
+    dbPath,
+    files: [dbPath, `${dbPath}-shm`, `${dbPath}-wal`],
+    archiveDir: pathJoin(resolvedDir, "storage-archive"),
+    serverLock: pathJoin(resolvedDir, "server.lock"),
+  }
+}
+
+/** The data directory `GENT_DATA_DIR` names, else `<home>/.gent`. */
+const resolveDataDir = (home: string): Effect.Effect<string> =>
+  Effect.map(optionalEnv("GENT_DATA_DIR"), (dataDir) =>
+    pathResolve(Option.getOrElse(dataDir, () => pathJoin(home, ".gent"))),
+  )
+
+/**
+ * Resolve the paths from the environment. `home` names the fallback root; a
+ * caller without one passes `HOME`.
+ */
+export const dataPaths = (home: string): Effect.Effect<DataPaths> =>
+  Effect.map(resolveDataDir(home), dataPathsIn)
+
+// ── build-fingerprint ───────────────────────────────────────────────────────
+
+/**
+ * Build fingerprint — identifies gent executable/source version.
+ * Used by server identity and SDK registry for version-aware restarts.
+ */
+
+/** True when execPath is a compiled gent binary, not a generic runtime like bun. */
+const isCompiledBinary = (exe: string): boolean => !exe.endsWith("/bun") && !exe.includes("/.bun/")
+
+/**
+ * Compute a build fingerprint from local sources (no env).
+ * Priority: compiled binary mtime → gent source git hash → "unknown"
+ */
+const computeLocalFingerprintUncached: Effect.Effect<
+  string,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
+> = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const platform = yield* GentPlatform
+  const exe = yield* platform.execPath
+
+  // 1. Binary mtime (compiled mode only — skip if running via bun runtime)
+  if (isCompiledBinary(exe)) {
+    const info = yield* fs.stat(exe).pipe(Effect.option)
+    if (info._tag === "Some") {
+      const mtime = Option.getOrElse(info.value.mtime, () => dateFromMillis(0))
+      return `bin-${mtime.getTime().toString(36)}`
+    }
+  }
+
+  // 2. Git hash from gent source root (dev mode)
+  const gentRoot = path.resolve(platform.fileURLToPath(import.meta.url), "../../../..")
+  const result = yield* runProcess("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: gentRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  }).pipe(
+    Effect.map((r) => {
+      if (r.exitCode === 0) {
+        return r.stdout.trim()
+      }
+      return ""
+    }),
+    Effect.catchTag("ProcessError", () => Effect.succeed("")),
+  )
+  if (result.length > 0) return `src-${result}`
+
+  return "unknown"
+})
+
+interface BuildFingerprintApi {
+  /** Cached local fingerprint computation. Identical across yields within TTL. */
+  readonly local: Effect.Effect<string>
+  /** Resolved fingerprint — env override (`GENT_BUILD_FINGERPRINT`) wins, else local. */
+  readonly resolved: Effect.Effect<string>
+}
+
+export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintApi>()(
+  "@gent/sdk/src/server/BuildFingerprint",
+) {
+  static Live: Layer.Layer<
+    BuildFingerprint,
+    never,
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
+  > = Layer.effect(
+    BuildFingerprint,
+    Effect.gen(function* () {
+      const ctx = yield* Effect.context<
+        FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | GentPlatform
+      >()
+      const cached = yield* Effect.cachedWithTTL(computeLocalFingerprintUncached, "1 hour")
+      // oxlint-disable-next-line effect/noInlineProvide -- Layer construction captures the services required by the cached computation.
+      const local: Effect.Effect<string> = Effect.provide(cached, ctx)
+      const resolved: Effect.Effect<string> = Effect.gen(function* () {
+        const opt: Option.Option<string> = yield* Config.option(
+          Config.string("GENT_BUILD_FINGERPRINT"),
+        )
+        if (Option.isSome(opt) && opt.value !== "") return opt.value
+        return yield* local
+      }).pipe(Effect.catchEager(() => local))
+      return BuildFingerprint.of({ local, resolved })
+    }),
+  )
+
+  /** Deterministic test layer. */
+  static Test = (fingerprint = "test-fingerprint"): Layer.Layer<BuildFingerprint> =>
+    Layer.succeed(
+      BuildFingerprint,
+      BuildFingerprint.of({
+        local: Effect.succeed(fingerprint),
+        resolved: Effect.succeed(fingerprint),
+      }),
+    )
+}
+
+// ── server-lock ─────────────────────────────────────────────────────────────
+
+/**
+ * Single shared server discovery file.
+ *
+ * `~/.gent/server.lock` is a pidfile-style identity record for the one
+ * shared gent server on this host. Clients attach only after the server's
+ * identity endpoint confirms the full tuple, so PID reuse cannot signal an
+ * unrelated process.
+ */
+
+export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEntry")({
+  serverId: Schema.String,
+  pid: Schema.Finite,
+  hostname: Schema.String,
+  rpcUrl: Schema.String,
+  dbPath: Schema.String,
+  buildFingerprint: Schema.String,
+  startedAt: Schema.Finite,
+}) {}
+
+const ServerLockEntryJson = Schema.fromJsonString(ServerLockEntry)
+
+/**
+ * The lock sits in the data directory `data-paths.ts` resolves, beside the
+ * database it guards. Under `~/.gent` it was shared by every `GENT_DATA_DIR`
+ * run on the machine: a second run saw a foreign `dbPath`, signalled the
+ * first run's server as stale, and that TUI lost its server.
+ */
+const serverLockPath = (home: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const paths = yield* dataPaths(home)
+    yield* fs.makeDirectory(paths.dataDir, { recursive: true }).pipe(Effect.ignore)
+    return paths.serverLock
+  })
+
+export const readServerLock = (
+  home: string,
+): Effect.Effect<
+  // oxlint-disable-next-line effect/noNullish -- The lock file is an optional process boundary record consumed by the TUI.
+  ServerLockEntry | undefined,
+  never,
+  FileSystem.FileSystem | GentPlatform
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* serverLockPath(home)
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    const content = yield* fs.readFileString(path).pipe(Effect.option)
+    // oxlint-disable-next-line effect/noNullish -- A missing lock file is the documented absent-server result.
+    if (content._tag === "None") return undefined
+    const decoded = Schema.decodeOption(ServerLockEntryJson)(content.value)
+    // oxlint-disable-next-line effect/noNullish -- Invalid lock content is treated as no active server.
+    if (decoded._tag === "None") return undefined
+    // oxlint-disable-next-line effect/noNullish -- A lock owned by another host is invisible to this client.
+    if (decoded.value.hostname !== osInfo.hostname) return undefined
+    return decoded.value
+  })
+
+export const writeServerLock = (
+  home: string,
+  entry: ServerLockEntry,
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* serverLockPath(home)
+    const json = yield* Schema.encodeEffect(ServerLockEntryJson)(entry).pipe(Effect.orDie)
+    yield* fs.writeFileString(path, json).pipe(Effect.ignore)
+  })
+
+export const removeServerLock = (
+  home: string,
+  serverId: string,
+): Effect.Effect<boolean, never, FileSystem.FileSystem | GentPlatform> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const current = yield* readServerLock(home)
+    if (Predicate.isUndefined(current) || current.serverId !== serverId) return false
+    const path = yield* serverLockPath(home)
+    return yield* fs.remove(path).pipe(
+      Effect.as(true),
+      Effect.catchEager(() => Effect.succeed(false)),
+    )
+  })
+
+export const getLocalHostname: Effect.Effect<string, never, GentPlatform> = Effect.gen(
+  function* () {
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    return osInfo.hostname
+  },
+)
+
+export const isPidAlive = (pid: number): Effect.Effect<boolean, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    return yield* platform.signal(pid, 0).pipe(
+      Effect.as(true),
+      Effect.catchEager(() => Effect.succeed(false)),
+    )
+  })
+
+export const validateServerLockEntry = (
+  entry: ServerLockEntry,
+): Effect.Effect<{ valid: boolean; reason?: string }, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    if (entry.hostname !== osInfo.hostname) {
+      return { valid: false, reason: "different-host" }
+    }
+    if (!(yield* isPidAlive(entry.pid))) {
+      return { valid: false, reason: "dead-pid" }
+    }
+    return { valid: true }
+  })
+
+interface ServerLockIdentity {
+  readonly serverId: string
+  readonly pid: number
+  readonly hostname: string
+  readonly dbPath: string
+  readonly buildFingerprint: string
+}
+
+export const serverLockIdentityOf = (entry: ServerLockEntry): ServerLockIdentity => ({
+  serverId: entry.serverId,
+  pid: entry.pid,
+  hostname: entry.hostname,
+  dbPath: entry.dbPath,
+  buildFingerprint: entry.buildFingerprint,
+})
+
+const canSignalServerLockEntry = (
+  entry: ServerLockEntry,
+): Effect.Effect<boolean, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    return entry.hostname === osInfo.hostname && (yield* isPidAlive(entry.pid))
+  })
+
+export const signalIfIdentityOwned = <E, R>(
+  entry: ServerLockEntry,
+  probe: (entry: ServerLockEntry) => Effect.Effect<boolean, E, R>,
+): Effect.Effect<"signaled" | "skipped", never, R | GentPlatform> =>
+  Effect.gen(function* () {
+    if (!(yield* canSignalServerLockEntry(entry))) return "skipped"
+    const owns = yield* probe(entry).pipe(Effect.catchEager(() => Effect.succeed(false)))
+    if (!owns) return "skipped"
+    const platform = yield* GentPlatform
+    const sent = yield* platform.signal(entry.pid, "SIGTERM").pipe(
+      Effect.as(true),
+      Effect.catchEager(() => Effect.succeed(false)),
+    )
+    if (sent) return "signaled"
+    return "skipped"
+  })
+
+// ── debug-session ───────────────────────────────────────────────────────────
+
+/**
+ * Debug session seeding — creates a pre-populated session with realistic
+ * tool calls and message history for TUI development/testing.
+ */
+
+interface DebugSessionInfo {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly name: string
+}
+
+type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
+
+const makeText = (text: string) => Prompt.textPart({ text })
+
+const asToolCallId = (value: string) => ToolCallId.make(value)
+
+const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: DebugValue) =>
+  Prompt.toolResultPart({
+    id: toolCallId,
+    name: toolName,
+    isFailure: false,
+    providerExecuted: false,
+    result: value,
+  })
+
+const makeToolCall = (params: {
+  readonly id: ToolCallId
+  readonly name: string
+  readonly params: DebugValue
+}) => Prompt.toolCallPart({ ...params, providerExecuted: false })
+
+const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
+  const sessions = yield* SessionStorage
+  const branches = yield* BranchStorage
+  const messages = yield* MessageStorage
+  const platform = yield* GentPlatform
+  const sessionId = SessionId.make(yield* platform.randomId)
+  const branchId = BranchId.make(yield* platform.randomId)
+  const now = yield* Clock.currentTimeMillis
+  const nowPlus = (offsetMs: number) => dateFromMillis(now + offsetMs)
+
+  const session = new Session({
+    id: sessionId,
+    name: "debug scenario",
+    cwd,
+    createdAt: nowPlus(-60_000),
+    updatedAt: nowPlus(-1_000),
+  })
+  const branch = new Branch({
+    id: branchId,
+    sessionId,
+    createdAt: nowPlus(-60_000),
+  })
+
+  yield* sessions.createSession(session)
+  yield* branches.createBranch(branch)
+  yield* sessions.updateSession(new Session({ ...session, activeBranchId: branchId }))
+
+  const user1 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [makeText("Review the TUI renderer cleanup and inspect the current implementation.")],
+    createdAt: nowPlus(-50_000),
+  })
+
+  const assistant1 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      Prompt.reasoningPart({
+        text: "Need tool chrome parity, queue semantics, and todo widget behavior.",
+      }),
+      makeText("Inspected the relevant files and compared the renderer chrome paths."),
+      makeToolCall({
+        id: asToolCallId("dbg-read"),
+        name: "read",
+        params: { path: `${cwd}/apps/tui/src/routes/session.tsx` },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-grep"),
+        name: "grep",
+        params: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-glob"),
+        name: "glob",
+        params: { pattern: "**/*.tsx", path: `${cwd}/apps/tui/src` },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-bash"),
+        name: "bash",
+        params: { command: "bun run typecheck" },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-edit"),
+        name: "edit",
+        params: {
+          path: `${cwd}/apps/tui/src/components/message-list.tsx`,
+          oldString: "<text>[ x ] tool_call</text>",
+          newString: "<ToolFrame />",
+        },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-write"),
+        name: "write",
+        params: { path: `${cwd}/packages/sdk/src/server.ts` },
+      }),
+    ],
+    createdAt: nowPlus(-47_000),
+  })
+
+  const toolResults1 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "tool",
+    parts: [
+      makeJsonResult(asToolCallId("dbg-read"), "read", {
+        path: `${cwd}/apps/tui/src/routes/session.tsx`,
+        lineCount: 18,
+        truncated: false,
+        content:
+          "const [toolsExpanded, setToolsExpanded] = createSignal(false)\nconst [composerState, setComposerState] = createSignal(...)",
+      }),
+      makeJsonResult(asToolCallId("dbg-grep"), "grep", {
+        matches: [
+          {
+            file: `${cwd}/apps/tui/src/components/tool-renderers/generic.tsx`,
+            line: 3,
+            content: 'import { ToolFrame } from "../tool-frame"',
+          },
+        ],
+        truncated: false,
+      }),
+      makeJsonResult(asToolCallId("dbg-glob"), "glob", {
+        files: [
+          "apps/tui/src/app.tsx",
+          "apps/tui/src/routes/session.tsx",
+          "apps/tui/src/components/message-list.tsx",
+        ],
+        truncated: false,
+      }),
+      makeJsonResult(asToolCallId("dbg-bash"), "bash", {
+        stdout: "$ turbo run typecheck\nTodos: 4 successful, 4 total",
+        stderr: "",
+        exitCode: 0,
+      }),
+      makeJsonResult(asToolCallId("dbg-edit"), "edit", {
+        path: `${cwd}/apps/tui/src/components/message-list.tsx`,
+        oldString: "<text>[ x ] tool_call</text>",
+        newString: "<ToolFrame />",
+      }),
+      makeJsonResult(asToolCallId("dbg-write"), "write", {
+        path: `${cwd}/packages/sdk/src/server.ts`,
+        bytesWritten: 7421,
+      }),
+    ],
+    createdAt: nowPlus(-46_000),
+  })
+
+  const assistant2 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [makeText("The duplicate chrome came from rendering both tool summary surfaces.")],
+    createdAt: nowPlus(-45_000),
+  })
+
+  const user2 = Message.cases.interjection.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [makeText("Actually check queue vs steer too.")],
+    createdAt: nowPlus(-38_000),
+  })
+
+  const assistant3 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      makeText(
+        "Steer should cut ahead of queued regular work. Regular sends should merge by newline while a turn is active.",
+      ),
+    ],
+    createdAt: nowPlus(-36_000),
+  })
+
+  const user3 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [makeText("Read the related session and review the audit output.")],
+    createdAt: nowPlus(-28_000),
+  })
+
+  const assistant4 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      makeText("Pulled adjacent context and kicked off review helpers."),
+      makeToolCall({
+        id: asToolCallId("dbg-delegate"),
+        name: "delegate",
+        params: { todos: [{ todo: "Inspect the TUI tool chrome" }] },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-explore"),
+        name: "delegate",
+        params: { todo: "Where is the double-border coming from?" },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-review"),
+        name: "delegate",
+        params: { todo: "Sanity-check the debug session bootstrap." },
+      }),
+      makeToolCall({
+        id: asToolCallId("dbg-read-session"),
+        name: "read_session",
+        params: {
+          sessionId: "019debug1-session",
+          goal: "Understand the renderer cleanup thread",
+        },
+      }),
+    ],
+    createdAt: nowPlus(-25_000),
+  })
+
+  const toolResults2 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "tool",
+    parts: [
+      makeJsonResult(asToolCallId("dbg-delegate"), "delegate", {
+        output: "Explorer agreed the duplicate chrome was stale message-list markup.",
+      }),
+      makeJsonResult(asToolCallId("dbg-explore"), "delegate", {
+        output: "The second border was rendered by the message list, not the tool renderer.",
+      }),
+      makeJsonResult(asToolCallId("dbg-review"), "delegate", {
+        output: "Move debug boot into core-side scenario code and keep the shell thin.",
+      }),
+      makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
+        sessionId: "019debug1-session",
+        extracted: true,
+        goal: "Understand the renderer cleanup thread",
+        content: "Audit said queue semantics and renderer chrome should be tested together.",
+      }),
+    ],
+    createdAt: nowPlus(-23_000),
+  })
+
+  const assistant5 = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "assistant",
+    parts: [
+      makeText(
+        "Audit lines up: keep one tool frame, make queue state structural, and test renderer behavior directly.",
+      ),
+    ],
+    createdAt: nowPlus(-21_000),
+  })
+
+  const seedMessages = [
+    user1,
+    assistant1,
+    toolResults1,
+    assistant2,
+    user2,
+    assistant3,
+    user3,
+    assistant4,
+    toolResults2,
+    assistant5,
+  ]
+
+  for (const message of seedMessages) {
+    yield* messages.createMessage(message)
+  }
+
+  return {
+    sessionId,
+    branchId,
+    name: Option.getOrElse(Option.fromUndefinedOr(session.name), () => "debug scenario"),
+  } satisfies DebugSessionInfo
+})
+
+// ── server ──────────────────────────────────────────────────────────────────
+
 /**
  * Gent server primitive — resolves or starts a server, always has a URL.
  *
@@ -6,53 +676,6 @@
  * - attached: existing server found via registry (client connects via WS)
  */
 
-import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
-import {
-  Clock,
-  Config,
-  Context,
-  Deferred,
-  Effect,
-  Layer,
-  Match,
-  Option,
-  Predicate,
-  Schema,
-} from "effect"
-import type { Scope } from "effect"
-// @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
-import { resolve as pathResolve } from "node:path"
-import { dataPaths } from "./data-paths.js"
-
-import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import type { BranchToolFeature } from "@gent/core-internal/runtime/tools.js"
-import type { GentExtension } from "@gent/core/extensions/api"
-import type { RpcHandlersLive } from "@gent/core-internal/server/server.js"
-import { seedDebugSession } from "./debug-session.js"
-import {
-  provideWorkspaceIdHeader,
-  workspaceHeadersForCwd,
-  workspaceIdForCwd,
-  type WorkspaceHeaders,
-} from "@gent/core-internal/server/workspace-rpc.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import type { LanguageModel } from "effect/unstable/ai"
-import { BuildFingerprint } from "./build-fingerprint.js"
-import { GentObservability } from "./logger.js"
-import { GentConnectionError } from "@gent/core/protocol"
-import {
-  readServerLock,
-  validateServerLockEntry,
-  writeServerLock,
-  removeServerLock,
-  ServerLockEntry,
-  serverLockIdentityOf,
-  signalIfIdentityOwned,
-} from "./server-lock.js"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { buildServerRoot, StateLocation } from "@gent/core-internal/server/server-root.js"
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels

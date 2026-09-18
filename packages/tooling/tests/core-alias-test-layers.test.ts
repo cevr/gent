@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findAliasTestLayers } from "../src/core-alias-test-layers"
+import { findAliasTestLayers } from "../src/guards"
 
 const FILE = "packages/core/src/domain/widget.ts"
 

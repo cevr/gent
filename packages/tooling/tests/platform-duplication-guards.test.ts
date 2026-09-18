@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findPlatformDuplicationViolations } from "../src/platform-duplication-guards"
+import { findPlatformDuplicationViolations } from "../src/guards"
 
 describe("platform duplication guards", () => {
   test("ignores docs and tests", () => {
@@ -375,7 +375,7 @@ describe("platform duplication guards", () => {
   test("does not flag the guard source itself", () => {
     expect(
       findPlatformDuplicationViolations(
-        "packages/tooling/src/platform-duplication-guards.ts",
+        "packages/tooling/src/guards.ts",
         ["ExtensionRuntime", "ctx.extension.request(ref)", "subTagLayers(base)"].join("\n"),
       ),
     ).toEqual([])

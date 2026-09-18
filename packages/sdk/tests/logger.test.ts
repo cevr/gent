@@ -1,8 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { Effect, FileSystem, Layer, Random, Schema } from "effect"
-import { GentObservability } from "../src/logger"
-import { buildLogPaths, LOG_DIR } from "../src/log-paths"
+import { buildLogPaths, GentObservability, LOG_DIR } from "../src/logger"
 
 describe("buildLogPaths", () => {
   it.effect("returns a deterministic shape under the central log dir", () =>

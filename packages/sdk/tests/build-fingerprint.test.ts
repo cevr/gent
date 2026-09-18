@@ -3,7 +3,7 @@ import { Predicate, Effect, FileSystem, Layer, Option, Path, Ref } from "effect"
 import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { BuildFingerprint } from "../src/build-fingerprint"
+import { BuildFingerprint } from "../src/server"
 
 // Compiled-binary execPath path. computeLocalFingerprintUncached takes the
 // binary-mtime branch and calls fs.stat(exe), so a counter-driven mtime
