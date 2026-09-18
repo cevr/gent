@@ -2520,12 +2520,7 @@ const buildAnthropicModelDriver = (
   ]
     ? [CredentialCell, BetaCell, EnvApiKey]
     : never
-) =>
-  buildAnthropicModelDriverLive(
-    ...args,
-    testPlatform,
-    testCatalogSource("/tmp/gent-test-no-catalog"),
-  )
+) => buildAnthropicModelDriverLive(...args, testPlatform, testCatalogSource())
 const makeOAuthInfo = (): ProviderAuthInfo => ({
   type: "oauth",
   access: "test-access",

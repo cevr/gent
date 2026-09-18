@@ -19,10 +19,12 @@ import {
  * concern, so the fetch, the parse, and the disk cache live here — shared by
  * the anthropic, openai, and api-key-compat drivers.
  *
- * One load per home directory per process. `Effect.cached` memoizes it, so
- * several drivers listing at once share one read and at most one fetch. There
- * is no background refresh: a cache older than a day refetches on the next
- * load, and a failed fetch serves whatever the disk still holds.
+ * One load per home directory. `Effect.cached` memoizes it, so several drivers
+ * listing at once share one read and at most one fetch. There is no background
+ * refresh: a cache older than a day refetches on the next load, and a failed
+ * fetch serves whatever the disk still holds. A load that finds neither a
+ * cache nor a reachable host returns nothing and forgets its memo, so the next
+ * call tries again instead of serving an empty catalog for the whole process.
  *
  * @module
  */
@@ -186,15 +188,21 @@ type CatalogEffect = Effect.Effect<
 >
 
 /**
- * One memoized load per home directory, for the life of the process. The
- * drivers each call `driverCatalog` during their own `listModels`, and the
- * memo is what makes that one read and at most one fetch rather than one per
- * driver.
+ * One memoized load per home directory. The drivers each call `driverCatalog`
+ * during their own `listModels`, and the memo is what makes that one read and
+ * at most one fetch rather than one per driver.
+ *
+ * A memo that resolved to a catalog holds for the life of the process. A memo
+ * that resolved to nothing does not: `loadCatalog` degrades rather than fails,
+ * so an offline start would otherwise pin an empty catalog until the process
+ * ends. An empty result drops its own entry, and the next `listModels` loads
+ * again.
  */
 const catalogsByHome = new Map<string, CatalogEffect>()
 
 /**
- * The models.dev catalog for `home`, loaded at most once per process.
+ * The models.dev catalog for `home`, loaded at most once per process while the
+ * load produces models.
  *
  * The memo is built the first time a home is asked for and stored before the
  * effect is handed back, so every driver that lists models for the same home
@@ -208,7 +216,15 @@ export const modelsDevCatalog = (home: string): CatalogEffect => {
   // `Effect.cached` only allocates the memo's latch — no IO, no failure — so
   // running it here is allocation, not work. The catalog loads when a driver
   // runs the effect this returns.
-  const memo = Effect.runSync(Effect.cached(loadCatalog(home)))
+  const memo = Effect.runSync(Effect.cached(loadCatalog(home))).pipe(
+    // An empty result means no cache and no reachable host. Forget it, so a
+    // later call retries instead of serving nothing for the whole process.
+    Effect.tap((models) =>
+      Effect.sync(() => {
+        if (models.length === 0) catalogsByHome.delete(home)
+      }),
+    ),
+  )
   catalogsByHome.set(home, memo)
   return memo
 }

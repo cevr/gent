@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Model, ModelId, ProviderId } from "@gent/core/extensions/api"
@@ -55,6 +55,23 @@ const countingHttpLayer = (calls: Ref.Ref<number>, body: string) =>
     HttpClient.make((request) =>
       Effect.gen(function* () {
         yield* Ref.update(calls, (n) => n + 1)
+        return HttpClientResponse.fromWeb(request, new Response(body, { status: 200 }))
+      }),
+    ),
+  )
+
+/**
+ * An HTTP client that counts the call, then waits for `gate` before it
+ * answers. Every caller that reaches it is still in flight until the gate
+ * opens, so the count reflects how many callers got past the memo.
+ */
+const gatedHttpLayer = (calls: Ref.Ref<number>, gate: Deferred.Deferred<void>, body: string) =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.gen(function* () {
+        yield* Ref.update(calls, (n) => n + 1)
+        yield* Deferred.await(gate)
         return HttpClientResponse.fromWeb(request, new Response(body, { status: 200 }))
       }),
     ),
@@ -286,15 +303,59 @@ describe("models.dev catalog", () => {
     Effect.gen(function* () {
       const home = yield* freshHome("memo")
       const calls = yield* Ref.make(0)
+      // The gate holds every request open until the test releases it. Both
+      // drivers are therefore still in flight when the count is taken, so the
+      // first load's disk write cannot serve the second caller and stand in
+      // for the memo. Without the memo store this test sees 2 calls.
+      const gate = yield* Deferred.make<void>()
+      const gated = gatedHttpLayer(calls, gate, encodeAnyJson(remotePayload))
       // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
-      const http = Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload)))
+      const http = Effect.provide(gated)
 
-      const openai = yield* driverCatalog(home, "openai").pipe(http)
-      const anthropic = yield* driverCatalog(home, "anthropic").pipe(http)
+      const both = yield* Effect.forkChild(
+        Effect.all(
+          [driverCatalog(home, "openai").pipe(http), driverCatalog(home, "anthropic").pipe(http)],
+          {
+            concurrency: "unbounded",
+          },
+        ),
+      )
+      // Let both callers reach the catalog before anything can answer.
+      yield* Effect.yieldNow
+      // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+      yield* Deferred.succeed(gate, undefined)
+      const [openai, anthropic] = yield* Fiber.join(both).pipe(Effect.timeout(5_000))
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(openai.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-5.4")])
       expect(anthropic.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("an offline load is not memoized; the next load reaches the host", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("recovers")
+      const offlineCalls = yield* Ref.make(0)
+
+      const offline = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(failingHttpLayer(offlineCalls)),
+      )
+
+      expect(offline).toEqual([])
+      expect(yield* Ref.get(offlineCalls)).toBe(1)
+
+      // The host is reachable again. An empty first load must not have pinned
+      // an empty catalog for the life of the process.
+      const onlineCalls = yield* Ref.make(0)
+      const online = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(countingHttpLayer(onlineCalls, encodeAnyJson(remotePayload))),
+      )
+
+      expect(yield* Ref.get(onlineCalls)).toBe(1)
+      expect(online.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
       // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
