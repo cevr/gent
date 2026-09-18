@@ -381,11 +381,11 @@ describe("process runner guard", () => {
 
   test("flags a test that builds the removed layer", () => {
     const findings = findProcessRunnerFindings(
-      "packages/core/tests/runtime/session-runtime.test.ts",
+      "packages/core/tests/runtime/session.test.ts",
       'import { ProcessRunnerLive } from "../../src/runtime/run-process"',
     )
     expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/tests/runtime/session-runtime.test.ts:1",
+      "packages/core/tests/runtime/session.test.ts:1",
     ])
   })
 
@@ -473,7 +473,7 @@ describe("retired reconciler guard", () => {
   test("ignores tests and docs", () => {
     expect(
       findRetiredReconcilerFindings(
-        "packages/core/tests/runtime/session-profile.test.ts",
+        "packages/core/tests/runtime/extension-host.test.ts",
         "const host = ResourceGraphHost",
       ),
     ).toEqual([])
@@ -2708,7 +2708,7 @@ export const plantedDeadSdkExport = "nothing imports this"
       findingsFor([
         { file: CORE_FILE, text: `export const retrySchedule = 1\n` },
         {
-          file: "packages/core/tests/runtime/retry.test.ts",
+          file: "packages/core/tests/runtime/provider.test.ts",
           text: `import { retrySchedule } from "../../src/runtime/retry"\n`,
         },
       ]),
@@ -2841,7 +2841,7 @@ describe("core test-utils surface", () => {
       findingsFor([
         { file: TEST_UTILS_FILE, text: `export const LanguageModelLayers = {}\n` },
         {
-          file: "packages/core/tests/runtime/session-runtime.test.ts",
+          file: "packages/core/tests/runtime/session.test.ts",
           text: `import { LanguageModelLayers } from "../../src/test-utils/language-model"\n`,
         },
       ]),
@@ -2859,7 +2859,7 @@ export const signal = () => {
       findingsFor([
         { file: TEST_UTILS_FILE, text: source },
         {
-          file: "packages/core/tests/runtime/session-runtime.test.ts",
+          file: "packages/core/tests/runtime/session.test.ts",
           text: `import { signal } from "../../src/test-utils/language-model"\n`,
         },
       ]),
