@@ -52,7 +52,7 @@ import type { ModelResolver } from "../providers/model-resolver.js"
 import type { ApprovalService } from "./approval-service.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tools.js"
-import type { ConfigService } from "./config-service.js"
+import type { ConfigService } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 const SESSION_TERMINATION_CONCURRENCY = 16

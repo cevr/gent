@@ -34,7 +34,7 @@ import {
   Session,
 } from "../../src/domain/message"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
-import { ConfigService } from "../../src/runtime/config-service"
+import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
@@ -95,7 +95,6 @@ import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionRuntime,
   SessionRuntimeError,

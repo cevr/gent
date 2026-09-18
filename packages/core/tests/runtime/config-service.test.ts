@@ -6,8 +6,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { AgentName, ExternalDriverRef, ModelDriverRef, ModelId } from "../../src/domain/agent"
-import { ConfigService, UserConfig } from "../../src/runtime/config-service"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
+import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 

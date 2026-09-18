@@ -59,7 +59,7 @@ import {
   ExtensionHostContextProvider,
   makeExtensionHostContextProvider,
 } from "../make-extension-host-context.js"
-import type { ConfigService } from "../config-service.js"
+import type { ConfigService } from "../config.js"
 import type { PromptSection } from "../../domain/capability.js"
 import type { StorageError } from "../../domain/errors.js"
 import { ModelResolver } from "../../providers/model-resolver.js"

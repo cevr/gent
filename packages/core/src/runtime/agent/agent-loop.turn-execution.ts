@@ -22,7 +22,7 @@ import {
   TurnRecordStorage,
 } from "../../storage/storage.js"
 import { Message } from "../../domain/message.js"
-import { ConfigService } from "../config-service.js"
+import { ConfigService } from "../config.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"

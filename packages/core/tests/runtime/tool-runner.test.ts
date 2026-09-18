@@ -11,7 +11,7 @@ import {
   ToolRunner,
 } from "../../src/runtime/agent/tools"
 import { ApprovalService } from "../../src/runtime/approval-service"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
+import { RuntimeEnvironment } from "../../src/runtime/config"
 import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { testToolContext } from "../../src/test-utils/extension-harness"

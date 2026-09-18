@@ -5,7 +5,7 @@ import { EventStoreError } from "../domain/event.js"
 import { ExtensionId } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
-import { ConfigLoadError } from "../runtime/config-service.js"
+import { ConfigLoadError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/storage.js"
 

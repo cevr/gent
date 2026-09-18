@@ -32,7 +32,7 @@ import {
 import { ModelResolver } from "../../src/providers/model-resolver"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils"
-import { ConfigService } from "../../src/runtime/config-service"
+import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import {
@@ -51,7 +51,6 @@ import { noBranchTools, ToolRunner } from "../../src/runtime/agent/tools"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import {
   BranchStorage,

@@ -15,7 +15,7 @@ import {
 import { bindRequestCapabilityExtension } from "../../domain/capability.js"
 import { ExtensionId } from "../../domain/ids.js"
 import { makeExtensionHostPlatform } from "./host-platform.js"
-import { isProjectExtensionDirectoryTrusted } from "./project-trust.js"
+import { isProjectExtensionDirectoryTrusted } from "../config.js"
 
 type LoadedUserExtension = GentExtension<ExtensionSetupServices>
 

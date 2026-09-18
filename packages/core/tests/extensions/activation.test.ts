@@ -20,7 +20,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
-import { ConfigService } from "../../src/runtime/config-service"
+import { ConfigService } from "../../src/runtime/config"
 import {
   GentToolMetadataTag,
   getToolMetadata,

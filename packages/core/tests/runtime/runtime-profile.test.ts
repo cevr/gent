@@ -12,7 +12,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { testExtensionHostContext } from "../../src/test-utils"
-import { ConfigService } from "../../src/runtime/config-service"
+import { ConfigService } from "../../src/runtime/config"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/storage"
 import {

@@ -13,7 +13,7 @@ import {
   ProviderId,
 } from "../domain/agent.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { RuntimeEnvironment } from "./runtime-environment.js"
+import { RuntimeEnvironment } from "./config.js"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"

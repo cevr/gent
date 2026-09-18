@@ -25,10 +25,9 @@ import {
   CurrentBranchToolFeature,
   ToolRunner,
 } from "../runtime/agent/tools.js"
-import { ConfigService } from "../runtime/config-service.js"
+import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
-import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
 import { InteractionStorage, SqliteStorage } from "../storage/storage.js"
 import {
   decodeInteractionDecision,

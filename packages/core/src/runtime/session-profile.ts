@@ -38,7 +38,7 @@ import {
   buildResourceLayer,
   collectResourceEntries,
 } from "./extensions/resource-host/resource-layer.js"
-import { ConfigService, type UserConfig } from "./config-service.js"
+import { ConfigService, type UserConfig } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   buildSessionProfile,

@@ -17,7 +17,7 @@ import {
   ModelDriverRef,
   resolveAgentDriver,
 } from "../../src/domain/agent"
-import { ConfigService, UserConfig } from "../../src/runtime/config-service"
+import { ConfigService, UserConfig } from "../../src/runtime/config"
 
 const cowork = AgentDefinition.make({ name: AgentName.make("cowork") })
 const hardcoded = AgentDefinition.make({

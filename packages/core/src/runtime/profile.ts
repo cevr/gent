@@ -17,7 +17,7 @@ import {
   type ExtensionActivationResult,
 } from "./extensions/activation.js"
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
-import { GENT_CONFIG_DIRECTORY } from "./extensions/disabled.js"
+import { GENT_CONFIG_DIRECTORY } from "./config.js"
 import type { ProcessGenerationId } from "../domain/ids.js"
 
 /**

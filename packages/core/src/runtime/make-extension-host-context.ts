@@ -28,7 +28,7 @@ import {
 import { InteractionPendingError } from "../domain/interaction.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
-import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
+import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./config.js"
 import { ApprovalService } from "./approval-service.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import {

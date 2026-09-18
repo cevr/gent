@@ -10,10 +10,83 @@ import {
   Schema,
   SynchronizedRef,
 } from "effect"
-import { AgentName, AgentRunOverridesSchema, DriverRefFromConfig } from "../domain/agent.js"
-import type { DriverRef } from "../domain/agent.js"
-import { RuntimeEnvironment } from "./runtime-environment.js"
-import { GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME } from "./extensions/disabled.js"
+import {
+  AgentName,
+  AgentRunOverridesSchema,
+  type DriverRef,
+  DriverRefFromConfig,
+} from "../domain/agent.js"
+
+// ── runtime-environment ─────────────────────────────────────────────────────
+
+export interface RuntimeEnvironmentApi {
+  readonly cwd: string
+  readonly home: string
+  readonly platform: string
+}
+
+export class RuntimeEnvironment extends Context.Service<
+  RuntimeEnvironment,
+  RuntimeEnvironmentApi
+>()("@gent/core/src/runtime/config/RuntimeEnvironment") {
+  static Live = (config: RuntimeEnvironmentApi): Layer.Layer<RuntimeEnvironment> =>
+    Layer.succeed(RuntimeEnvironment, config)
+}
+
+// ── extensions/disabled ─────────────────────────────────────────────────────
+
+/**
+ * Disabled-extension reader for a caller that has no `ConfigService`.
+ * Effect-based — requires FileSystem and Path from the platform.
+ *
+ * The TUI's extension context boundary
+ * (`apps/tui/src/extensions/loader-boundary.ts`) reads the set this
+ * way because it runs before any server is reachable. On the server path
+ * `ConfigService` is the reader and `SessionProfileCache` passes the merged
+ * set down, so the two config files are opened once.
+ *
+ * This module also owns where those files live; `ConfigService` builds its
+ * paths from the same constants.
+ */
+
+/** The per-user and per-project directory holding gent's config file. */
+export const GENT_CONFIG_DIRECTORY = ".gent"
+
+/** The config file inside `GENT_CONFIG_DIRECTORY`. */
+const GENT_CONFIG_FILENAME = "config.json"
+
+const DisabledConfig = Schema.Struct({
+  disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
+})
+
+/** Read disabledExtensions from a JSON config file. Returns [] on any error. */
+const readDisabledFromFile = (filePath: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const text = yield* fs.readFileString(filePath)
+    const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(DisabledConfig))(text)
+    return Option.getOrElse(Option.fromUndefinedOr(decoded.disabledExtensions), () => [])
+  }).pipe(Effect.catchEager(() => Effect.succeed<ReadonlyArray<string>>([])))
+
+/**
+ * Read disabled extensions from user + project config.
+ * Same merge semantics as ConfigService: union of user + project lists.
+ */
+export const readDisabledExtensions = (params: {
+  home: string
+  cwd: string
+  extra?: ReadonlyArray<string>
+}) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const userConfigPath = path.join(params.home, GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME)
+    const projectConfigPath = path.join(params.cwd, GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME)
+    const userDisabled = yield* readDisabledFromFile(userConfigPath)
+    const projectDisabled = yield* readDisabledFromFile(projectConfigPath)
+    return new Set([...(params.extra ?? []), ...userDisabled, ...projectDisabled])
+  })
+
+// ── config-service ──────────────────────────────────────────────────────────
 
 // User config schema - stored at ~/.gent/config.json
 
@@ -120,7 +193,7 @@ export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("Conf
 }) {}
 
 export class ConfigService extends Context.Service<ConfigService, ConfigServiceService>()(
-  "@gent/core/src/runtime/config-service/ConfigService",
+  "@gent/core/src/runtime/config/ConfigService",
 ) {
   /**
    * Where a config file sits, relative to $HOME for the user config and to
@@ -344,3 +417,25 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       }),
     )
 }
+
+// ── extensions/project-trust ────────────────────────────────────────────────
+
+const TrustConfig = Schema.fromJsonString(
+  Schema.Struct({ trustedProjects: UserConfig.fields.trustedProjects }),
+)
+
+/** Only user configuration can authorize project module execution. */
+export const isProjectExtensionDirectoryTrusted = Effect.fn("ExtensionLoader.projectTrust")(
+  function* (directories: { readonly userDir: string; readonly projectDir: string }) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    return yield* Effect.gen(function* () {
+      const configPath = path.resolve(directories.userDir, "../config.json")
+      const config = yield* fs
+        .readFileString(configPath)
+        .pipe(Effect.flatMap(Schema.decodeEffect(TrustConfig)))
+      const projectRoot = yield* fs.realPath(path.resolve(directories.projectDir, "../.."))
+      return (config.trustedProjects ?? []).includes(projectRoot)
+    }).pipe(Effect.orElseSucceed(() => false))
+  },
+)

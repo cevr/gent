@@ -46,7 +46,7 @@ import {
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
-import { ConfigService } from "../../src/runtime/config-service"
+import { ConfigService } from "../../src/runtime/config"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../../src/server/errors"
 class ProfileToken extends Context.Service<

@@ -4,7 +4,7 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
 import { BranchId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
 import { dateFromMillis, Session } from "../../src/domain/message"
-import { ConfigService } from "../../src/runtime/config-service"
+import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import {
@@ -15,7 +15,6 @@ import {
   ExtensionHostContextProvider,
   makeExtensionHostContextProvider,
 } from "../../src/runtime/make-extension-host-context"
-import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import {
   SessionProfileCache,
   type SessionProfile,

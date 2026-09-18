@@ -5,7 +5,10 @@ import {
   isClientFile,
   SCOPE_PRECEDENCE,
 } from "@gent/core/protocol"
-import { isProjectExtensionDirectoryTrusted } from "@gent/core-internal/runtime/extensions/project-trust"
+import {
+  isProjectExtensionDirectoryTrusted,
+  readDisabledExtensions,
+} from "@gent/core-internal/runtime/config"
 import {
   type AnyExtensionClientModule,
   type AutocompleteContribution,
@@ -22,7 +25,6 @@ import {
 import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
-import { readDisabledExtensions } from "@gent/core-internal/runtime/extensions/disabled"
 
 // ── extension discovery ─────────────────────────────────────────────────────
 
