@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { describeChildCompletion } from "../../src/runtime/agent/child-completion"
+import { describeChildCompletion } from "../../src/runtime/child-agents"
 import { TurnCompleted } from "../../src/domain/event"
 import { AgentName } from "../../src/domain/agent"
 import { BranchId, MessageId, RequestId, SessionId } from "../../src/domain/ids"

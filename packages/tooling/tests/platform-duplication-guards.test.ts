@@ -616,7 +616,7 @@ describe("platform duplication guards", () => {
 
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/runtime/agent/agent-runner.ts",
+        "packages/core/src/runtime/child-agents.ts",
         "const layer = Layer.provideMerge(parent, child)",
       ),
     ).toEqual([])
@@ -640,7 +640,7 @@ describe("platform duplication guards", () => {
       },
     ])
     expect(
-      findPlatformDuplicationViolations("packages/core/src/runtime/agent/agent-runner.ts", ""),
+      findPlatformDuplicationViolations("packages/core/src/runtime/child-agents.ts", ""),
     ).toEqual([])
   })
 

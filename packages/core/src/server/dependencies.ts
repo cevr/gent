@@ -19,8 +19,7 @@ import {
   ExtensionRegistry,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { InProcessRunner } from "../runtime/agent/agent-runner.js"
-import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
+import { ChildCompletionDelivery, InProcessRunner } from "../runtime/child-agents.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"

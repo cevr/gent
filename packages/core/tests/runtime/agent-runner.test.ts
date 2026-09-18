@@ -26,7 +26,11 @@ import {
   ExtensionRegistry,
   resolveExtensions,
 } from "../../src/runtime/extension-host"
-import { InProcessRunner, admitChildSession } from "../../src/runtime/agent/agent-runner"
+import {
+  admitChildSession,
+  ChildCompletionDelivery,
+  InProcessRunner,
+} from "../../src/runtime/child-agents"
 import {
   EventStoreLive,
   getSessionDepth,
@@ -34,7 +38,6 @@ import {
   SessionRuntimeError,
   type SessionRuntimeService,
 } from "../../src/runtime/session"
-import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { waitFor } from "../../src/test-utils/fixtures"
 import {
   Branch,

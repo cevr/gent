@@ -77,7 +77,7 @@ updates this list in the same commit.
     HTML parsing, and past-session queries happen in the cell. Receipt:
     `packages/extensions/src/cell.ts`.
 14. **A child's completion arrives as a user message, never a tool result.**
-    Receipt: `packages/core/src/runtime/agent/child-completion.ts`.
+    Receipt: `packages/core/src/runtime/child-agents.ts`.
 15. **Platform edges stay explicit.** File, process, lock, and network access
     go through `GentPlatform` facets; the TUI session controller owns screen
     state, views render and dispatch; app-specific UI facets live at the app
@@ -1134,13 +1134,13 @@ Both exported from `@gent/core-internal/test-utils/e2e-layer`.
 
 Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
 
-| Boundary     | Service       | File                            |
-| ------------ | ------------- | ------------------------------- |
-| Agent turn   | `agent-loop`  | `runtime/agent-loop.ts`         |
-| Tool call    | `tool-runner` | `runtime/tools.ts`              |
-| Model stream | `model`       | `runtime/agent-loop.ts`         |
-| RPC request  | `rpc`         | `server/rpc-handlers.ts`        |
-| Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts` |
+| Boundary     | Service       | File                      |
+| ------------ | ------------- | ------------------------- |
+| Agent turn   | `agent-loop`  | `runtime/agent-loop.ts`   |
+| Tool call    | `tool-runner` | `runtime/tools.ts`        |
+| Model stream | `model`       | `runtime/agent-loop.ts`   |
+| RPC request  | `rpc`         | `server/rpc-handlers.ts`  |
+| Agent run    | `agent-run`   | `runtime/child-agents.ts` |
 
 Logging conventions:
 

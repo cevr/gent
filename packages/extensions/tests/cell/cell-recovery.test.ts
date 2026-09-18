@@ -15,7 +15,7 @@ import {
   makeRunSpec,
 } from "@gent/core-internal/domain/agent.js"
 import { ControlChildAgent, DelegateTool } from "../../src/delegate.js"
-import { admitChildSession } from "@gent/core-internal/runtime/agent/agent-runner.js"
+import { admitChildSession } from "@gent/core-internal/runtime/child-agents.js"
 import {
   assistantMessageIdForTurn,
   dateFromMillis,
