@@ -33,6 +33,26 @@ describe("child-session depth guard", () => {
     expect(findings).toEqual([])
   })
 
+  test("flags a writer in runtime/session.ts whose own declaration never admits", () => {
+    const text = [
+      "export const admitChildSessionDepth = Effect.fn(function* (parentSessionId) {",
+      "  yield* admitChildSessionDepth(parentSessionId)",
+      "})",
+      "",
+      "export const forkSession = Effect.fn(function* (input) {",
+      childWriter,
+      "})",
+    ].join("\n")
+    const findings = findUnadmittedChildSessionWriters("packages/core/src/runtime/session.ts", text)
+    expect(findings.map((finding) => finding.line)).toEqual([8])
+  })
+
+  test("an admission in an earlier declaration does not cover a later writer", () => {
+    const text = `export const admitted = Effect.fn(function* () {\n  yield* admitChildSessionDepth(id)\n})\n\nexport const unadmitted = Effect.fn(function* () {${childWriter}})`
+    const findings = findUnadmittedChildSessionWriters("packages/core/src/server/server.ts", text)
+    expect(findings).toHaveLength(1)
+  })
+
   test("ignores a root session row", () => {
     const findings = findUnadmittedChildSessionWriters(
       "packages/core/src/server/server.ts",

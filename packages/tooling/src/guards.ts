@@ -204,6 +204,15 @@ const CORE_SRC = "packages/core/src/"
 const EXEMPT_PREFIXES = [`${CORE_SRC}storage/`, `${CORE_SRC}test-utils/`]
 const SHARED_CHECK = "admitChildSessionDepth"
 const SESSION_LITERAL = /new Session\(\{/g
+const SHARED_CHECK_CALL = new RegExp(`\\b${SHARED_CHECK}\\(`)
+const TOP_LEVEL_DECLARATION = /(?:^|\n)(?:export\s+)?(?:const|let|function|class)\s/g
+
+/** Offset of the last column-0 declaration head in `text`, or 0. */
+const lastDeclarationStart = (text: string): number => {
+  let start = 0
+  for (const match of text.matchAll(TOP_LEVEL_DECLARATION)) start = match.index
+  return start
+}
 
 /** Report `new Session({...parentSessionId...})` in a core file that never admits depth. */
 export const findUnadmittedChildSessionWriters = (
@@ -212,8 +221,6 @@ export const findUnadmittedChildSessionWriters = (
 ): ReadonlyArray<ChildSessionDepthFinding> => {
   if (!file.startsWith(CORE_SRC)) return []
   if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) return []
-  if (file.endsWith("/runtime/session.ts")) return []
-  if (new RegExp(`\\b${SHARED_CHECK}\\(`).test(text)) return []
 
   const findings: ChildSessionDepthFinding[] = []
   for (const match of text.matchAll(SESSION_LITERAL)) {
@@ -222,6 +229,11 @@ export const findUnadmittedChildSessionWriters = (
     if (end === -1) continue
     const literal = text.slice(start, end)
     if (!/\bparentSessionId:/.test(literal)) continue
+    // The admission must run before the write, in the same top-level
+    // declaration. A whole-file escape let one admission anywhere in a
+    // 700-line file cover every writer in it.
+    const before = text.slice(0, start)
+    if (SHARED_CHECK_CALL.test(before.slice(lastDeclarationStart(before)))) continue
     findings.push({
       file,
       line: text.slice(0, start).split("\n").length,
