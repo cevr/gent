@@ -71,7 +71,7 @@ work remains in the FX Rift. The warm source was not changed.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/themes/fx.json`
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render.zig`
@@ -115,7 +115,7 @@ Gent source root: `/Users/cvr/Developer/personal/.rifts/gent/fx-ui`.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: full-height app shell.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: transcript, composer, status, and extension slots.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/bordered-input.tsx`: composer rules and padding.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer.tsx`: input rendering and controls.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: input rendering and controls.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme.tsx`: default theme selection.
 
 ## Progress
@@ -520,7 +520,7 @@ directly after each title. FX uses a separate description column.
 - `/tmp/gent-fx-ui-menu-current.ansi`: current Gent menu.
 - `/tmp/gent-fx-ui-herdr-fx-menu.ansi`: reference FX menu.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: menu rows and outer border.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: related completion menu layout.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: related completion menu layout.
 
 ## Picker layout pass
 
@@ -546,7 +546,7 @@ No appearance-only tests were added.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/picker-text.ts`: grapheme-safe end clipping.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/platform/text-width-adapter.ts`: runtime text-width adapter.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: aligned command rows and narrow help.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: aligned completion rows and narrow help.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: aligned completion rows and narrow help.
 - `/tmp/gent-fx-ui-picker-aligned.ansi`: equal-width menu frame comparison.
 - `/tmp/gent-fx-ui-picker-narrow-final.ansi`: narrow command menu with end ellipses.
 - `/tmp/gent-fx-ui-completion-narrow-final.ansi`: narrow completion menu.
@@ -798,8 +798,8 @@ The help and status rows remain visible. The full gate and all 61 E2E
 checks passed. No appearance-only tests were added. The temporary empty
 resize pane was removed. The wide layout and caller focus were restored.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer.tsx`: measured picker reservation and editor height bound.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`: status and spacing allocation.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: measured picker reservation and editor height bound.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: status and spacing allocation.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render_engine/footer_layout.zig`: combined input, picker, and hint row allocation.
 - `/tmp/gent-fx-ui-multiline-menu-before.ansi`: hidden help and status rows before the fix.
 - `/tmp/gent-fx-ui-multiline-menu-after.ansi`: complete menu beside a multiline draft.
@@ -894,7 +894,7 @@ The full gate and all 61 E2E checks passed. The larger final FX comparison
 remains open.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`: measured document viewport and fixed answer controls.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`: external spacing and status reservation.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: external spacing and status reservation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/prompt.ts`: real confirmation tool path.
 - `/tmp/gent-fx-ui-multi-selected.ansi`: two selected options in the live pane.
 - `/tmp/gent-fx-ui-long-confirm-before.ansi`: missing answer controls before the repair.
@@ -1013,7 +1013,7 @@ were restored.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: shared six-result height budget.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: unique session actions and preserved descriptions.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: matching completion height and filter row.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: matching completion height and filter row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: fresh transcript display origin.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/render-harness-boundary.tsx`: in-memory terminal setup before mounting.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/core/shared/list_window.zig`: six-row default.
@@ -1091,7 +1091,7 @@ the symptom, not its cause. Only the isolated debug process was restarted.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: app-owned draft map.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/main.tsx`: provider lifetime.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: route restoration and captured branch key.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/use-composer-controller.ts`: paste expansion before cleanup.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`: paste expansion before cleanup.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: tree command label and handler.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/session-tree.tsx`: session tree view and key handlers.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: panel background.
@@ -1695,7 +1695,7 @@ The pane API has no per-pane theme control. A live white-background check is
 still open. The shared Herdr theme was not changed. This pass checks status
 layout; it does not claim exact parity for phase words or token metrics.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/composer.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
 
 ### Connection failure and recovery

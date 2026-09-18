@@ -14,8 +14,7 @@ import {
   type SessionId,
 } from "@gent/core/protocol"
 import { MessageList, NativeTranscript } from "../message-list"
-import { Composer } from "../components/composer"
-import { ComposerFrame } from "../components/composer-frame"
+import { Composer, ComposerFrame } from "../composer"
 import { formatDuration, truncate } from "../utils"
 import { CommandPalette, useCommand } from "../commands"
 import { useTheme, buildSyntaxStyle } from "../theme"

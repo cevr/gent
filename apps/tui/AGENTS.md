@@ -194,13 +194,13 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 
 ## Key Files (Composer + Session)
 
-| File                                        | Purpose                           |
-| ------------------------------------------- | --------------------------------- |
-| `src/session.tsx`                           | session-screen orchestration      |
-| `src/routes/session.tsx`                    | session presentation + route keys |
-| `src/components/composer.tsx`               | composer render surface           |
-| `src/components/use-composer-controller.ts` | composer interaction wiring       |
-| `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup |
-| `src/utils/shell.ts`                        | Shell execution + truncation      |
-| `src/utils.ts`                              | @file#line expansion              |
-| `src/commands.tsx`                          | Slash command handlers            |
+| File                     | Purpose                           |
+| ------------------------ | --------------------------------- |
+| `src/session.tsx`        | session-screen orchestration      |
+| `src/routes/session.tsx` | session presentation + route keys |
+| `src/composer.tsx`       | composer render surface           |
+| `src/composer.tsx`       | composer interaction wiring       |
+| `src/composer.tsx`       | Generic contribution-driven popup |
+| `src/composer.tsx`       | Shell execution + truncation      |
+| `src/utils.ts`           | @file#line expansion              |
+| `src/commands.tsx`       | Slash command handlers            |

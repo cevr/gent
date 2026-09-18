@@ -25,7 +25,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { createSignal, onMount, type JSX } from "solid-js"
 import { Effect, Option } from "effect"
-import { Composer } from "../../src/components/composer"
+import { Composer } from "../../src/composer"
 import {
   ComposerInteractionState,
   ComposerState,

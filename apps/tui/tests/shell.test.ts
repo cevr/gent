@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { executeShell, shellOutputDirectory } from "../src/utils/shell"
+import { executeShell, shellOutputDirectory } from "../src/composer"
 import { Effect, FileSystem, Layer, Option } from "effect"
 import { BunServices, BunFileSystem } from "@effect/platform-bun"
 
