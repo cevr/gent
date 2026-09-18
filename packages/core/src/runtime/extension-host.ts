@@ -899,9 +899,8 @@ export interface DriverRegistryService {
   readonly listModels: Effect.Effect<ReadonlyArray<ModelDriverContribution>>
   /** All registered external drivers in registration order. */
   readonly listExternal: Effect.Effect<ReadonlyArray<ExternalDriverContribution>>
-  /** Run a base catalog through every model driver's `listModels` filter. */
-  readonly filterModelCatalog: (
-    baseCatalog: ReadonlyArray<Model>,
+  /** Concatenate every model driver's own catalog. Core fetches nothing itself. */
+  readonly listModelCatalog: (
     resolveAuth?: (
       driverId: string,
       // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
@@ -920,29 +919,28 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
         getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
         listModels: Effect.succeed([...resolved.modelDrivers.values()]),
         listExternal: Effect.succeed([...resolved.externalDrivers.values()]),
-        filterModelCatalog: Effect.fn("DriverRegistry.filterModelCatalog")(function* (
-          baseCatalog: ReadonlyArray<Model>,
+        listModelCatalog: Effect.fn("DriverRegistry.listModelCatalog")(function* (
           resolveAuth?: (
             driverId: string,
             // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
           ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
         ) {
-          let catalog = baseCatalog
+          const catalog: Array<Model> = []
           for (const driver of resolved.modelDrivers.values()) {
             if (Predicate.isUndefined(driver.listModels)) continue
             let auth = Option.none<ProviderAuthInfo>()
             if (!Predicate.isUndefined(resolveAuth)) {
               auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
             }
-            const nextCatalog = driver.listModels(catalog, Option.getOrUndefined(auth))
-            const decoded = decodeModelCatalog(nextCatalog)
+            const driverCatalog = yield* driver.listModels(Option.getOrUndefined(auth))
+            const decoded = decodeModelCatalog(driverCatalog)
             if (decoded._tag === "None") {
               return yield* new DriverError({
                 driver: DriverFailureId.make(driver.id),
                 reason: `Model driver "${driver.id}" returned an invalid model catalog`,
               })
             }
-            catalog = decoded.value
+            catalog.push(...decoded.value)
           }
           return catalog
         }),

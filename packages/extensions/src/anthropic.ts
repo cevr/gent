@@ -43,6 +43,7 @@ import {
   recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
+import { type CatalogSource, catalogSource, driverListModels } from "./models-dev.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   FetchHttpClient,
@@ -2311,9 +2312,11 @@ export const buildAnthropicModelDriver = (
   betaCellRef: Ref.Ref<BetaCacheCell>,
   envApiKey: Option.Option<string>,
   platform: AnthropicPlatformApi,
+  catalog: CatalogSource,
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
+  listModels: driverListModels(catalog, "anthropic"),
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; Anthropic names its type.
@@ -2444,9 +2447,11 @@ export const AnthropicExtension = defineExtension({
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
     const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
 
+    const catalog = yield* catalogSource(ctx.home)
+
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform),
+      buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform, catalog),
     )
   }),
 })

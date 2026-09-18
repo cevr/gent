@@ -39,6 +39,7 @@ import { HttpClientError, TransportError } from "effect/unstable/http/HttpClient
 import { runEffectBoundary } from "./run-effect-boundary.js"
 import { LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
+import { testCatalogSource } from "./helpers/catalog-source.js"
 import {
   type CapturedRequest,
   fakeFetchLayer,
@@ -1017,7 +1018,12 @@ describe("OpenAI device-code login", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, new Map(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        new Map(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const methods = Option.fromNullishOr(driver.auth?.methods).pipe(Option.getOrElse(() => []))
       expect(methods.map((method) => `${method.type}:${method.label}`)).toEqual([
         "oauth:ChatGPT Pro/Plus (browser)",
@@ -2141,7 +2147,12 @@ describe("OpenAI cache routing", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const codec = Schema.fromJsonString(
         Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
       )
@@ -2189,7 +2200,12 @@ describe("OpenAI cache routing", () => {
           accountId: Option.none(),
         }),
       )
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const codec = Schema.fromJsonString(Schema.Struct({ prompt_cache_key: Schema.String }))
       const fetchState = makeFakeFetchState()
       for (const cacheKey of ["same-session", "same-session", "other-session"]) {
@@ -2211,7 +2227,12 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const callback = Option.fromUndefinedOr(driver.auth?.callback)
       if (Option.isNone(callback)) {
         return yield* Effect.die(new Error("OpenAI driver callback missing"))
@@ -2237,7 +2258,12 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthOpenAILayer` regressed to allocating its own internal
       // Ref via `OpenAICredentialService.layer(authInfo)`, the production
@@ -2276,7 +2302,12 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
             accountId: Option.none(),
           }),
         )
-        const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource("/tmp/gent-test-no-catalog"),
+        )
         const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
@@ -2305,7 +2336,12 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
           accountId: Option.none(),
         }),
       )
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2337,7 +2373,12 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
             accountId: Option.none(),
           }),
         )
-        const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource("/tmp/gent-test-no-catalog"),
+        )
         const model1 = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
         yield* runOne(model1, fetchState1)
@@ -2366,7 +2407,12 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const model = yield* driver.resolveModel("gpt-6-astra", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2383,7 +2429,12 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const error = yield* driver.resolveModel("gpt-3.5-turbo", makeOAuthInfo()).pipe(Effect.flip)
       expect(error.message).toMatch(/not available with ChatGPT OAuth/)
     }),
@@ -2412,7 +2463,12 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
             accountId: Option.none(),
           }),
         )
-        const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource("/tmp/gent-test-no-catalog"),
+        )
         const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         // 401 triggers tapError(invalidate). The retry's preprocess sees
@@ -2457,7 +2513,12 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-        const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource("/tmp/gent-test-no-catalog"),
+        )
         const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
@@ -2474,7 +2535,12 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks(), Option.none())
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource("/tmp/gent-test-no-catalog"),
+      )
       const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
