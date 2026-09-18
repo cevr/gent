@@ -4,10 +4,10 @@ export { GoalRpc } from "./goal/goal-rpc.js"
 export { remainingTokens } from "./goal/goal-protocol.js"
 export {
   BTW_EXTENSION_ID,
+  BtwRpc,
   type SideQuestionRun as SideQuestionRunType,
   type SideTurn as SideTurnType,
-} from "./btw/btw-protocol.js"
-export { BtwRpc } from "./btw/index.js"
+} from "./btw.js"
 export { AgentsViewRpc, type AgentRowEntry } from "./agents-view/protocol.js"
 export {
   WAKE_EXTENSION_ID,

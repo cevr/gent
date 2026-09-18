@@ -1,3 +1,61 @@
+import { Cause, Context, Effect, Layer, Option, Ref, Schema } from "effect"
+import {
+  defineExtension,
+  defineRequests,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+  ExtensionId,
+  makeRunSpec,
+  request,
+  requireCurrentAgent,
+} from "@gent/core/extensions/api"
+
+// ── protocol ────────────────────────────────────────────────────────────────
+
+export const BTW_EXTENSION_ID = ExtensionId.make("@gent/btw")
+
+const MAXIMUM_SIDE_QUESTION_CHARS = 8000
+
+/** One completed exchange in a side conversation; replayed on follow-ups. */
+export const SideTurn = Schema.Struct({
+  question: Schema.String,
+  answer: Schema.String,
+})
+export type SideTurn = typeof SideTurn.Type
+
+const SideQuestionInput = Schema.Struct({
+  question: Schema.String,
+  previous: Schema.Array(SideTurn),
+})
+type SideQuestionInput = typeof SideQuestionInput.Type
+
+/**
+ * The side question most recently started on this branch. `text` grows while
+ * the child streams; `done` flips once `answer` or `error` is final.
+ */
+export const SideQuestionRun = Schema.Struct({
+  question: Schema.String,
+  text: Schema.String,
+  done: Schema.Boolean,
+  answer: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+})
+export type SideQuestionRun = typeof SideQuestionRun.Type
+
+export const SideQuestionProgress = Schema.Struct({
+  run: Schema.optional(SideQuestionRun),
+})
+export type SideQuestionProgress = typeof SideQuestionProgress.Type
+
+/** Asking returns at once; the answer arrives through `btw.progress` on state pulses. */
+const SideQuestionOutput = Schema.Struct({
+  started: Schema.Boolean,
+})
+type SideQuestionOutput = typeof SideQuestionOutput.Type
+
+// ── extension ───────────────────────────────────────────────────────────────
+
 /**
  * `/btw` side questions. Each ask runs a private child of the current
  * agent on a copy of this branch's history, with tools off and low
@@ -8,28 +66,6 @@
  * resource so it never holds the branch's request permit; the client reads
  * streamed text and the final answer through `btw.progress` on state pulses.
  */
-import { Cause, Context, Effect, Layer, Option, Ref, Schema } from "effect"
-import {
-  defineExtension,
-  defineRequests,
-  defineResource,
-  ExtensionContext,
-  ExtensionHost,
-  makeRunSpec,
-  request,
-  requireCurrentAgent,
-} from "@gent/core/extensions/api"
-import {
-  BTW_EXTENSION_ID,
-  MAXIMUM_SIDE_QUESTION_CHARS,
-  SideQuestionInput,
-  SideQuestionOutput,
-  SideQuestionProgress,
-  type SideQuestionRun,
-  type SideTurn,
-} from "./btw-protocol.js"
-
-export { SideQuestionProgress } from "./btw-protocol.js"
 
 class SideQuestionError extends Schema.TaggedError<SideQuestionError>()("SideQuestionError", {
   message: Schema.String,
