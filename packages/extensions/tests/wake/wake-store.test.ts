@@ -21,7 +21,7 @@ import {
   WakeAlarmsLive,
   WakeEntry,
   WakeTool,
-} from "../../src/wake/index.js"
+} from "../../src/wake.js"
 
 const branchId = BranchId.make("wake-branch")
 const encodeAlarms = Schema.encodeSync(Schema.fromJsonString(Schema.Array(WakeEntry)))

@@ -14,5 +14,5 @@ export {
   WakeDetails,
   type WakeEntry as WakeEntryType,
   type WakePending as WakePendingType,
-} from "./wake/protocol.js"
-export { WakeRpc } from "./wake/index.js"
+  WakeRpc,
+} from "./wake.js"

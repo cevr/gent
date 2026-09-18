@@ -1,15 +1,3 @@
-/**
- * @gent/wake — alarms and monitors for work that finishes outside the harness.
- *
- * The model sets an alarm (a time) or a monitor (a command polled on an
- * interval) when it is waiting on CI, a deploy, or a remote queue, then
- * answers and goes idle. When the entry fires the extension queues a
- * user-role `wake` message on the same branch and wakes the loop, so the
- * next turn starts with the note the model left itself. Timers live in a
- * branch-scoped resource; the entries themselves live in one file per branch
- * under `~/.gent/wakes`, so the next turn after a restart re-arms what is
- * still pending and fires at once what came due while the process was down.
- */
 import {
   Cause,
   Clock,
@@ -30,21 +18,72 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionHost,
+  ExtensionId,
   type ExtensionServiceError,
   omitUndefined,
   request,
   tool,
 } from "@gent/core/extensions/api"
-import { makeBranchStateStore } from "../branch-state-store.js"
-import {
-  WAKE_EXTENSION_ID,
-  WAKE_MESSAGE_TYPE,
-  WakeDetails,
-  WakeEntry,
-  WakePending,
-} from "./protocol.js"
+import { makeBranchStateStore } from "./branch-state-store.js"
 
-export { WAKE_EXTENSION_ID, WAKE_MESSAGE_TYPE, WakeDetails, WakeEntry, WakePending }
+// ── protocol ────────────────────────────────────────────────────────────────
+
+/**
+ * Wire shapes shared by the wake extension and its TUI tray: the pending
+ * entries a branch holds and the request that lists them.
+ */
+
+export const WAKE_EXTENSION_ID = ExtensionId.make("@gent/wake")
+/** `metadata.customType` on the user-role message an entry queues when it fires. */
+export const WAKE_MESSAGE_TYPE = "wake"
+
+/**
+ * One pending wake. An alarm fires at a time; a monitor runs a command on an
+ * interval and fires when it succeeds, its output matches `until`, or the
+ * deadline passes.
+ */
+export const WakeEntry = Schema.TaggedUnion({
+  alarm: { wakeId: Schema.String, dueAt: Schema.Finite, note: Schema.String },
+  monitor: {
+    wakeId: Schema.String,
+    command: Schema.String,
+    cwd: Schema.optionalKey(Schema.String),
+    everySeconds: Schema.Finite,
+    until: Schema.optionalKey(Schema.String),
+    deadline: Schema.Finite,
+    note: Schema.String,
+  },
+})
+export type WakeEntry = typeof WakeEntry.Type
+
+/** What the tray shows: the entries still pending on the current branch, and the clock they count against. */
+export const WakePending = Schema.Struct({
+  now: Schema.Finite,
+  entries: Schema.Array(WakeEntry),
+})
+export type WakePending = typeof WakePending.Type
+
+/** `details` on a fired wake message; the transcript collapses the row to the outcome and `note`. `fired` is an alarm, the rest a monitor. */
+export const WakeDetails = Schema.Struct({
+  outcome: Schema.Literals(["fired", "matched", "timed-out"]),
+  note: Schema.String,
+})
+export type WakeDetails = typeof WakeDetails.Type
+
+// ── alarms ──────────────────────────────────────────────────────────────────
+
+/**
+ * @gent/wake — alarms and monitors for work that finishes outside the harness.
+ *
+ * The model sets an alarm (a time) or a monitor (a command polled on an
+ * interval) when it is waiting on CI, a deploy, or a remote queue, then
+ * answers and goes idle. When the entry fires the extension queues a
+ * user-role `wake` message on the same branch and wakes the loop, so the
+ * next turn starts with the note the model left itself. Timers live in a
+ * branch-scoped resource; the entries themselves live in one file per branch
+ * under `~/.gent/wakes`, so the next turn after a restart re-arms what is
+ * still pending and fires at once what came due while the process was down.
+ */
 
 const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_MONITOR_EVERY_SECONDS = 30

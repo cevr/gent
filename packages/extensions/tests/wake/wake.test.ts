@@ -18,7 +18,7 @@ import {
   WAKE_MESSAGE_TYPE,
   WakeEntry,
   wakeMessage,
-} from "../../src/wake/index.js"
+} from "../../src/wake.js"
 
 const encodeAlarms = Schema.encodeSync(Schema.fromJsonString(Schema.Array(WakeEntry)))
 
