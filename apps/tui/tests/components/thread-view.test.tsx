@@ -6,8 +6,7 @@
  * handoff marker opened on a branch. These cover the shape the pane draws and
  * the keyboard it answers to.
  */
-import { describe, expect, it } from "effect-bun-test"
-import { test } from "bun:test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import * as Prompt from "effect/unstable/ai/Prompt"

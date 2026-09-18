@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import { createRoot, createSignal } from "solid-js"
 import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme } from "../src/theme"
 

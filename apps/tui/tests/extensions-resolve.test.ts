@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import { Option } from "effect"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core-internal/domain/ids"
@@ -14,7 +14,7 @@ import {
   type ClientContributions,
   type OverlayProps,
   type WidgetComponent,
-} from "../src/extensions/client-facets.js"
+} from "../src/extensions/client-facets"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/loader-boundary"
 import type { ToolRenderer, ToolRendererProps } from "../src/tool-renderers"
 import type { HeadlessToolRenderer } from "../src/headless"

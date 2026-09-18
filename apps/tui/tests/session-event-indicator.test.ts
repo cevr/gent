@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "effect-bun-test"
 import {
   addStep,
   emptyTurnSteps,
   getSessionEventLabel,
   type SessionEvent,
-} from "../src/message-list.js"
+} from "../src/message-list"
 
 describe("session event labels", () => {
   test("formats retrying progress", () => {

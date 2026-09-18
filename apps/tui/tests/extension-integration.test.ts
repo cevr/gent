@@ -91,7 +91,7 @@ import {
   overlayContribution,
   rendererContribution,
   widgetContribution,
-} from "../../../src/extensions/client-facets.js"
+} from "../../../src/extensions/client-facets"
 
 export default defineClientExtension("@test/custom-read", {
   setup: Effect.succeed(clientContributions(
@@ -105,7 +105,7 @@ export default defineClientExtension("@test/custom-read", {
     writeFileSync(
       join(PROJECT_DIR, "override-bash.client.ts"),
       `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
+import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
 
 export default defineClientExtension("@test/override-bash", {
   setup: Effect.succeed(
@@ -213,7 +213,7 @@ describe("loadTuiExtensions", () => {
       writeFileSync(
         join(userOverrideDir, "override.client.ts"),
         `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
+import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
 
 export default defineClientExtension("@test/user-bash", {
   setup: Effect.succeed(
@@ -299,7 +299,7 @@ export default {
       writeFileSync(
         join(collisionDir, "a.client.ts"),
         `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
+import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
 
 export default defineClientExtension("@test/a", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "a")),
@@ -308,7 +308,7 @@ export default defineClientExtension("@test/a", {
       writeFileSync(
         join(collisionDir, "b.client.ts"),
         `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets.js"
+import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
 
 export default defineClientExtension("@test/b", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "b")),

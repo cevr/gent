@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, test, expect } from "effect-bun-test"
 import { countLines, createPasteManager, isLargePaste } from "../src/composer"
 
 // The paste manager is per-controller: each composer owns its id counter and

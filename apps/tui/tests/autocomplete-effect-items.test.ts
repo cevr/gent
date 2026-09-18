@@ -19,7 +19,7 @@ import {
   ClientTransport,
   type ClientTransportDefinition,
   NoActiveSessionError,
-} from "../src/extensions/client-facets.js"
+} from "../src/extensions/client-facets"
 import { runAutocompleteContributions } from "../src/extensions/loader-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {

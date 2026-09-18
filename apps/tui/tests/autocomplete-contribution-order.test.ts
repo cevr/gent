@@ -22,7 +22,7 @@ import type { Command } from "../src/commands"
 import type {
   AnyExtensionClientModule,
   AutocompleteContribution,
-} from "../src/extensions/client-facets.js"
+} from "../src/extensions/client-facets"
 import {
   makeClientExtensionRuntime,
   runClientExtensionSetup,

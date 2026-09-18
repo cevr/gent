@@ -15,7 +15,7 @@ import {
   type ClientEffect,
   ClientSetupError,
   type ExtensionClientModule,
-} from "../src/extensions/client-facets.js"
+} from "../src/extensions/client-facets"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
 
@@ -131,7 +131,7 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
           join(userDir, "discovered.client.ts"),
           `
 import { Effect } from "effect"
-import { autocompleteContribution } from "../../src/extensions/client-facets.js"
+import { autocompleteContribution } from "../../src/extensions/client-facets"
 
 export default {
   id: "@test/discovered-effect",

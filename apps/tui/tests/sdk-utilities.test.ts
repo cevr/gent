@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { describe, test, expect } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Option } from "effect"
 import { extractText, extractImages, type Message as DomainMessage } from "@gent/sdk"

@@ -14,7 +14,7 @@ import { Effect, Option } from "effect"
 import { AutocompletePopup } from "../../src/composer"
 import { useExtensionUI } from "../../src/extensions/host"
 import { useScopedKeyboard } from "../../src/terminal"
-import type { AutocompleteItem } from "../../src/extensions/client-facets.js"
+import type { AutocompleteItem } from "../../src/extensions/client-facets"
 import { renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

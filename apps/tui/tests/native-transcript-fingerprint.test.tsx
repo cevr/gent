@@ -11,8 +11,7 @@
  * terminal's saved lines — the reader lost the session above the fold. The
  * fingerprint therefore names the drawn fields in a fixed order.
  */
-import { describe, expect, it } from "effect-bun-test"
-import { test } from "bun:test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import { useRenderer } from "@opentui/solid"
