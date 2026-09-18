@@ -24,6 +24,7 @@ import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loo
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import {
+  ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
@@ -48,7 +49,6 @@ import {
   EventPublisherLive,
   EventStore,
 } from "../../../src/domain/event"
-import { ApprovalService } from "../../../src/runtime/approval-service"
 import {
   BranchStorage,
   SessionStorage,

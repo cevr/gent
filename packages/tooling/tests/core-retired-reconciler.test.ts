@@ -8,11 +8,11 @@ import {
 describe("retired reconciler guard", () => {
   test("flags a shipped file that imports a retired module", () => {
     const findings = findRetiredReconcilerFindings(
-      "packages/core/src/runtime/session-profile.ts",
+      "packages/core/src/runtime/extension-host.ts",
       'import { ResourceGraphHost } from "./extensions/resource-host/resource-graph-host.js"',
     )
     expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/runtime/session-profile.ts:1",
+      "packages/core/src/runtime/extension-host.ts:1",
     ])
     expect(findings[0]?.message).toContain("resource-graph-host")
   })
@@ -47,7 +47,7 @@ describe("retired reconciler guard", () => {
     }
     expect(
       findRetiredReconcilerFindings(
-        "packages/core/src/runtime/session-profile.ts",
+        "packages/core/src/runtime/extension-host.ts",
         'import { buildResourceLayer } from "./extensions/resource-host/resource-layer.js"',
       ),
     ).toEqual([])

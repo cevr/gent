@@ -5,7 +5,7 @@ describe("process runner guard", () => {
   test("flags every removed identifier once per line", () => {
     for (const name of REMOVED_IDENTIFIERS) {
       const findings = findProcessRunnerFindings(
-        "packages/core/src/runtime/session-profile.ts",
+        "packages/core/src/runtime/extension-host.ts",
         `const runner = ${name}`,
       )
       expect(findings.length).toBe(1)

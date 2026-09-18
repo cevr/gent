@@ -4,7 +4,12 @@ import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { request, type RequestCapability, type ToolCapability } from "@gent/core/extensions/api"
-import { ApprovalService } from "../../../src/runtime/approval-service"
+import {
+  ApprovalService,
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../../src/runtime/extension-host"
 import { noBranchTools, ProcessLocalToolReplay, ToolRunner } from "../../../src/runtime/agent/tools"
 import { narrowR } from "../../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -21,11 +26,6 @@ import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ActorCommandId, BranchId, ExtensionId, SessionId } from "../../../src/domain/ids"
-import {
-  DriverRegistry,
-  ExtensionRegistry,
-  resolveExtensions,
-} from "../../../src/runtime/extension-host"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../../src/storage/storage"

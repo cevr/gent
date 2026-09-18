@@ -56,23 +56,21 @@ import {
 } from "../../storage/storage.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
+  buildResourceLayer,
+  DriverRegistry,
   ExtensionHostContextProvider,
+  ExtensionRegistry,
   makeExtensionHostContextProvider,
-} from "../make-extension-host-context.js"
+  makeExtensionHostPlatform,
+  resolveTurnProfile as resolveSessionTurnProfile,
+  type SessionProfileCacheService,
+} from "../extension-host.js"
 import type { ConfigService } from "../config.js"
 import type { PromptSection } from "../../domain/capability.js"
 import type { StorageError } from "../../domain/errors.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
-import type { SessionProfileCacheService } from "../session-profile.js"
-import {
-  buildResourceLayer,
-  DriverRegistry,
-  ExtensionRegistry,
-  makeExtensionHostPlatform,
-} from "../extension-host.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
-import { resolveTurnProfile as resolveSessionTurnProfile } from "../session-runtime-context.js"
 import {
   buildIdleState,
   AgentLoopError,

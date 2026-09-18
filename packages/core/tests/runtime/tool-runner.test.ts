@@ -3,6 +3,7 @@ import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import {
+  ApprovalService,
   ExtensionRegistry,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
@@ -14,7 +15,6 @@ import {
   type ResolvedToolCapability,
   ToolRunner,
 } from "../../src/runtime/agent/tools"
-import { ApprovalService } from "../../src/runtime/approval-service"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"

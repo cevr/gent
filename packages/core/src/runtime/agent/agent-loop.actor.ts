@@ -78,7 +78,7 @@ import type {
   CapabilityNotFoundError,
   PromptSection,
 } from "../../domain/capability.js"
-import { SessionProfileCache } from "../session-profile.js"
+import { type CurrentExtensionHostContext, SessionProfileCache } from "../extension-host.js"
 import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import {
   AgentLoop,
@@ -110,7 +110,6 @@ import {
   SessionOperationStorage,
 } from "../../storage/storage.js"
 import { ProcessLocalToolReplay } from "./tools.js"
-import { type CurrentExtensionHostContext } from "../extension-host.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 

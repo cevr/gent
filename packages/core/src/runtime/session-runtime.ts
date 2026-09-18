@@ -50,17 +50,20 @@ import {
   type SessionRuntimeState,
 } from "../domain/agent-loop.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
-import type { DriverRegistry, ExtensionRegistry } from "./extension-host.js"
+import {
+  type ApprovalService,
+  type DriverRegistry,
+  type ExtensionRegistry,
+  resolveExistingSessionBranch,
+} from "./extension-host.js"
 import type { ModelRegistry } from "./model-registry.js"
 import type { ModelResolver } from "../providers/model-resolver.js"
-import type { ApprovalService } from "./approval-service.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tools.js"
 import type { ConfigService } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 const SESSION_TERMINATION_CONCURRENCY = 16
-import { resolveExistingSessionBranch } from "./session-runtime-context.js"
 
 export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
   "SessionRuntimeError",

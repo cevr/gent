@@ -9,9 +9,11 @@
 import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { describe, expect, it } from "effect-bun-test"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
-import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
-import { ApprovalService } from "../../src/runtime/approval-service.js"
-import { resolveExtensions } from "../../src/runtime/extension-host.js"
+import {
+  ApprovalService,
+  makeExtensionHostContextProvider,
+  resolveExtensions,
+} from "../../src/runtime/extension-host.js"
 import { EventPublisherLive, EventStore } from "../../src/domain/event.js"
 import { MessageStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage.js"
 import { noBranchTools } from "../../src/runtime/agent/tools.js"

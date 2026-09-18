@@ -15,7 +15,12 @@ import {
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { ApprovalService } from "../runtime/approval-service.js"
+import {
+  ApprovalService,
+  DriverRegistry,
+  ExtensionRegistry,
+  SessionProfileCache,
+} from "../runtime/extension-host.js"
 import { InProcessRunner } from "../runtime/agent/agent-runner.js"
 import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
 import { AgentLoopLiveActor } from "../runtime/agent/agent-loop.actor.js"
@@ -36,8 +41,6 @@ import {
 } from "../domain/interaction.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { SessionMutationsLive } from "./session-mutations-live.js"
-import { SessionProfileCache } from "../runtime/session-profile.js"
-import { DriverRegistry, ExtensionRegistry } from "../runtime/extension-host.js"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "./workspace-rpc.js"
 
 interface DependencyOverrides {

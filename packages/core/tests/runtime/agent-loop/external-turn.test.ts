@@ -18,6 +18,7 @@ import {
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import {
+  ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
@@ -75,7 +76,6 @@ import {
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
-import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"

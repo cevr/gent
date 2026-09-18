@@ -26,7 +26,10 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
+import {
+  makeExtensionHostContextProvider,
+  SessionProfileCache,
+} from "@gent/core-internal/runtime/extension-host.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import {
@@ -47,7 +50,6 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core-internal/domain/ids.js"
-import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
 import {
   captureCurrentToolBinding,
   CurrentToolCall,

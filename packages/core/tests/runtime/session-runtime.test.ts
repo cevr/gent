@@ -33,7 +33,13 @@ import { ModelResolver } from "../../src/providers/model-resolver"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
-import { ApprovalService } from "../../src/runtime/approval-service"
+import {
+  ApprovalService,
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+  SessionProfileCache,
+} from "../../src/runtime/extension-host"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import {
   BranchId,
@@ -45,15 +51,9 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { InteractionPendingError } from "../../src/domain/interaction"
-import {
-  DriverRegistry,
-  ExtensionRegistry,
-  resolveExtensions,
-} from "../../src/runtime/extension-host"
 import { noBranchTools, ToolRunner } from "../../src/runtime/agent/tools"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import {
   BranchStorage,

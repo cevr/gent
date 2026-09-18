@@ -50,10 +50,13 @@ import {
   ToolRunner,
 } from "../../../src/runtime/agent/tools"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extension-host"
+import {
+  ExtensionRegistry,
+  resolveExtensions,
+  SessionProfileCache,
+} from "../../../src/runtime/extension-host"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { SessionProfileCache } from "../../../src/runtime/session-profile"
 
 class ReplayResource extends Context.Service<ReplayResource, { readonly value: string }>()(
   "@gent/core/tests/runtime/agent-loop/tool-binding-replay.test/ReplayResource",

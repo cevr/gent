@@ -16,7 +16,7 @@ import { Auth } from "../domain/auth.js"
 import type { ToolCapability } from "../domain/capability.js"
 import { SessionId } from "../domain/ids.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
-import { ApprovalService } from "../runtime/approval-service.js"
+import { ApprovalService } from "../runtime/extension-host.js"
 import { ConfigService } from "../runtime/config.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 

@@ -48,7 +48,7 @@ updates this list in the same commit.
 7. **Approvals are one-shot and fail closed.** A guarded call asks once
    through the durable interaction request; nothing is saved; no answerer
    means no. Core has no rule schema, rule storage, or `permission.*` RPC.
-   Receipts: `packages/core/src/runtime/approval-service.ts`,
+   Receipts: `packages/core/src/runtime/extension-host.ts`,
    `packages/core/src/domain/interaction.ts`.
 8. **Each model step is classified once.** The stream fold produces a
    `StepOutcome`; persistence and the continue/stop/run-tools policy are
@@ -223,7 +223,7 @@ It is the composition boundary. Not the domain boundary.
 
 ### Runtime Profile
 
-`packages/core/src/runtime/profile.ts` owns the shared profile pipeline.
+`packages/core/src/runtime/extension-host.ts` owns the shared profile pipeline.
 `loadRuntimeProfileDeclarations` discovers extensions, runs trusted setup,
 validates declarations, and loads static prompt inputs. It does not acquire
 Resource layers, invoke their lifecycle hooks, or reconcile scheduled jobs.
@@ -239,7 +239,7 @@ composition root. Neither has a separate activation implementation.
 
 The production server uses one live profile owner:
 
-- `runtime/session-profile.ts` owns entries by workspace and canonical cwd. Each
+- `runtime/extension-host.ts` owns entries by workspace and canonical cwd. Each
   entry is built once: declarations load, every extension's process resources
   build into a child of the server scope, and `buildProfileCatalog` stages the
   catalog from that context. An extension whose process resource fails to build

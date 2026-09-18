@@ -1,6 +1,7 @@
 import {
   Cause,
   Context,
+  DateTime,
   Effect,
   Exit,
   FileSystem,
@@ -10,12 +11,17 @@ import {
   Predicate,
   Result,
   Schema,
+  Scope,
+  type Scope as ScopeType,
+  Semaphore,
 } from "effect"
 import {
   type AnyExtensionHook,
   type AnyResourceContribution,
   type ExtensionContext,
   type ExtensionContributions,
+  type ExtensionFileLockServiceApi,
+  type ExtensionFilesService,
   type ExtensionHook,
   ExtensionHost,
   type ExtensionHostContext,
@@ -23,32 +29,51 @@ import {
   ExtensionHostProcessError,
   ExtensionLoadError,
   type ExtensionLoaderServices,
+  type ExtensionProcessService,
   type ExtensionScope,
+  extensionServiceError,
+  type ExtensionServiceError,
+  ExtensionServiceError as ExtensionServiceErrorClass,
   type ExtensionSetupServices,
+  type ExtensionStateFacet,
   type ExtensionStatusInfo,
   type ExtensionTurnContext,
   type FailedExtension,
   type FailedExtensionPhase,
+  FileLockService,
   type GentExtension,
   isClientFile,
   type LoadedExtension,
   makeCollectingExtensionHost,
+  makeFileWriter,
+  mapExtensionServiceError,
   provideExtensionServices,
   type ResourceScope,
   sealRuntimeLoadedEffect,
+  SessionMutations,
   sortExtensionsByScope,
   type SystemPromptInput,
   type ToolPolicyFragment,
   type TurnAfterInput,
   validateExtensionPackage,
 } from "../domain/extension.js"
-import { ExtensionId, type RpcId, type ToolCallId } from "../domain/ids.js"
+import {
+  type BranchId,
+  ExtensionId,
+  type InteractionRequestId,
+  MessageId,
+  ProcessGenerationId,
+  type RpcId,
+  type SessionId,
+  type ToolCallId,
+} from "../domain/ids.js"
 import {
   bindRequestCapabilityExtension,
   type CapabilityError,
   CapabilityError as CapabilityErrorClass,
   type CapabilityNotFoundError,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
+  environmentSection,
   getToolId,
   getToolMetadata,
   isToolCapability,
@@ -56,7 +81,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "../domain/capability.js"
-import { type AgentDefinition, Model } from "../domain/agent.js"
+import { type AgentDefinition, AgentRunnerService, Model } from "../domain/agent.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
 import {
   DriverError,
@@ -66,9 +91,51 @@ import {
   type ProviderAuthError,
   type ProviderAuthInfo,
 } from "../domain/driver.js"
-import { ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { GentPlatform, runProcess } from "./gent-platform.js"
-import { isProjectExtensionDirectoryTrusted } from "./config.js"
+import {
+  ConfigService,
+  GENT_CONFIG_DIRECTORY,
+  isProjectExtensionDirectoryTrusted,
+  RuntimeEnvironment,
+  type RuntimeEnvironmentApi,
+  type UserConfig,
+} from "./config.js"
+import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
+import {
+  EventPublisher,
+  EventStoreError,
+  ExtensionStatePublisher,
+  InteractionPresented,
+  MessageReceived,
+} from "../domain/event.js"
+import {
+  type ApprovalDecision,
+  CurrentInteractionOwner,
+  InteractionPendingError,
+  type InteractionService,
+  type InteractionStorageConfig,
+  makeInteractionService,
+} from "../domain/interaction.js"
+import {
+  BranchStorage,
+  InteractionStorage,
+  MessageStorage,
+  RelationshipStorage,
+  SessionStorage,
+} from "../storage/storage.js"
+import { SqlClient } from "effect/unstable/sql"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
+import { type Branch, Message, type MessageMetadata, type Session } from "../domain/message.js"
+import {
+  AgentLoop as AgentLoopActor,
+  entityIdOf,
+  listWorkspaceLoops,
+  type SessionRuntimeState,
+} from "../domain/agent-loop.js"
+import { StorageError } from "../domain/errors.js"
+import type { AgentLoopTurnProfile } from "./agent/agent-loop.turn-profile.js"
 
 // ── current-extension-host-context ──────────────────────────────────────────
 
@@ -84,7 +151,7 @@ export const provideCurrentHostCtx =
   ): Effect.Effect<A, E, Exclude<R, CurrentExtensionHostContext>> =>
     effect.pipe(Effect.provideService(CurrentExtensionHostContext, hostCtx))
 
-// ── extensions/extension-capability-context ─────────────────────────────────
+// ── extension-capability-context ────────────────────────────────────────────
 
 const CurrentExtensionCapabilityContext = Context.Reference<Context.Context<never>>(
   "@gent/core/src/runtime/extension-host/CurrentExtensionCapabilityContext",
@@ -106,7 +173,7 @@ const provideExtensionCapabilityContext = <A, E, R>(
     return yield* effect.pipe(Effect.provideContext(capabilityContext))
   })
 
-// ── extensions/extension-effect-membrane ────────────────────────────────────
+// ── extension-effect-membrane ───────────────────────────────────────────────
 
 type ErasedValue = Schema.Schema.Type<typeof Schema.Unknown>
 
@@ -197,7 +264,7 @@ export const provideExtensionLeaf =
       )
     })
 
-// ── extensions/extension-hooks ──────────────────────────────────────────────
+// ── extension-hooks ─────────────────────────────────────────────────────────
 
 interface CompiledExtensionHooks {
   readonly resolveSystemPrompt: (
@@ -411,7 +478,7 @@ export const compileExtensionHooks = (
   }
 }
 
-// ── extensions/registry ─────────────────────────────────────────────────────
+// ── registry ────────────────────────────────────────────────────────────────
 
 // SlashCommand — public-facing slash entry. Built from `requests:` bucket
 // winners that carry a `slash:` presentation block. The slash block is the
@@ -433,7 +500,7 @@ interface SlashCommand {
 
 // Resolved snapshot — the immutable compiled state
 
-export interface ResolvedExtensions {
+interface ResolvedExtensions {
   readonly modelCapabilities: ReadonlyMap<string, ToolCapability>
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
@@ -789,7 +856,7 @@ export class ExtensionRegistry extends Context.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-// ── extensions/driver-registry ──────────────────────────────────────────────
+// ── driver-registry ─────────────────────────────────────────────────────────
 
 /**
  * DriverRegistry — unified lookup over both model and external drivers.
@@ -883,7 +950,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
     )
 }
 
-// ── extensions/resource-host/resource-layer ─────────────────────────────────
+// ── resource-layer ──────────────────────────────────────────────────────────
 
 /**
  * Resource service/lifecycle assembly.
@@ -905,7 +972,7 @@ class ResourceStartError extends Schema.TaggedError<ResourceStartError>()("Resou
   cause: Schema.String,
 }) {}
 
-export const collectResourceEntries = (
+const collectResourceEntries = (
   extensions: ReadonlyArray<LoadedExtension>,
   scope: ResourceScope,
 ): ReadonlyArray<ResourceEntry> =>
@@ -969,7 +1036,7 @@ export const buildResourceLayer = (
   return eraseResourceLayer(Layer.provideMerge(buildLifecycleLayer(entries), serviceLayers))
 }
 
-// ── extensions/host-platform ────────────────────────────────────────────────
+// ── host-platform ───────────────────────────────────────────────────────────
 
 const hasTimedOut = Schema.is(Schema.Struct({ timedOut: Schema.Literal(true) }))
 
@@ -990,11 +1057,11 @@ const toHostProcessError =
 export const makeExtensionHostPlatform: Effect.Effect<
   ExtensionHostPlatform,
   never,
-  GentPlatform | ChildProcessSpawner.ChildProcessSpawner
+  GentPlatform | ChildProcessSpawner
 > = Effect.gen(function* () {
   const platform = yield* GentPlatform
   // Captured once so the facade's runProcess keeps a `never` R channel.
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const spawner = yield* ChildProcessSpawner
   const osInfo = yield* platform.osInfo
   const execPath = yield* platform.execPath
   const homeDirectory = yield* platform.homeDirectory
@@ -1009,13 +1076,13 @@ export const makeExtensionHostPlatform: Effect.Effect<
     pathListSeparator,
     runProcess: (command, args, options) =>
       runProcess(command, args, options).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(ChildProcessSpawner, spawner),
         Effect.mapError(toHostProcessError(command)),
       ),
   }
 })
 
-// ── extensions/loader ───────────────────────────────────────────────────────
+// ── loader ──────────────────────────────────────────────────────────────────
 
 type LoadedUserExtension = GentExtension<ExtensionSetupServices>
 
@@ -1281,14 +1348,14 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   return loaded
 })
 
-// ── extensions/activation ───────────────────────────────────────────────────
+// ── activation ──────────────────────────────────────────────────────────────
 
-export interface ExtensionActivationResult {
+interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>
   readonly failed: ReadonlyArray<FailedExtension>
 }
 
-export const toFailedExtension = (
+const toFailedExtension = (
   ext: {
     manifest: LoadedExtension["manifest"]
     scope: LoadedExtension["scope"]
@@ -1515,4 +1582,1075 @@ export const validateLoadedExtensions = (
       failed.push(toFailedExtension(ext, "validation", failure.errors.join("; ")))
     }
     return { active, failed }
+  })
+
+// ── profile ─────────────────────────────────────────────────────────────────
+
+/** Profile declarations, catalog assembly, and isolated child resource wiring. */
+
+/**
+ * Inputs that fully describe a runtime profile.
+ *
+ * `cwd` is the only per-call axis; everything else is composition-root configuration
+ * (home dir, platform metadata, builtin extensions).
+ */
+export interface RuntimeProfileInputs {
+  readonly cwd: string
+  readonly home: string
+  readonly platform: string
+  readonly shell?: string
+  readonly osVersion?: string
+  readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+  /**
+   * Every extension this profile must not activate. The caller has already
+   * merged the user and project config into it, so this loader reads no
+   * config file of its own.
+   */
+  readonly disabledExtensions?: ReadonlyArray<string>
+}
+
+/**
+ * Heterogeneous services contributed by authored process resources. The host
+ * membrane owns this erased context instead of naming a closed-world service
+ * union here.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Resource services are heterogeneous at this explicit host membrane.
+type RuntimeProfileServiceContext = Context.Context<any>
+
+/** Services and immutable prompt inputs built for one session. */
+export interface SessionProfile {
+  readonly cwd: string
+  readonly resolved: ResolvedExtensions
+  readonly layerContext: RuntimeProfileServiceContext
+  readonly registryService: ExtensionRegistryService
+  readonly driverRegistryService: DriverRegistryService
+  readonly baseSections: ReadonlyArray<PromptSection>
+  /**
+   * Identity of the process that built this profile. A process-local tool
+   * binding is replayable only inside it.
+   */
+  readonly generationId: ProcessGenerationId
+}
+
+/**
+ * Extension declarations and prompt inputs loaded before process resources are
+ * acquired.
+ *
+ * Extension setup is trusted code and can perform its own ordinary effects.
+ * This boundary only guarantees that it does not build Resource layers,
+ * invoke Resource start/stop hooks.
+ */
+interface RuntimeProfileDeclarations {
+  readonly extensionDeclarations: ExtensionActivationResult
+  readonly coreSections: ReadonlyArray<PromptSection>
+}
+
+export const loadRuntimeProfileDeclarations = (
+  inputs: RuntimeProfileInputs,
+): Effect.Effect<
+  RuntimeProfileDeclarations,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner | GentPlatform
+> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const fs = yield* FileSystem.FileSystem
+    const canonicalCwd = path.resolve(inputs.cwd)
+
+    // 1. Disabled set, already merged by the caller
+    const disabledSet = new Set(inputs.disabledExtensions ?? [])
+
+    // 2. Discover external extensions (user + project dirs)
+    const userExtensionsDir = path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions")
+    const projectExtensionsDir = path.join(canonicalCwd, GENT_CONFIG_DIRECTORY, "extensions")
+    const discovery = yield* discoverExtensions({
+      userDir: userExtensionsDir,
+      projectDir: projectExtensionsDir,
+    }).pipe(
+      Effect.catchEager((error) =>
+        Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
+          Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
+          Effect.as({ loaded: [], skipped: [] }),
+        ),
+      ),
+    )
+
+    if (discovery.skipped.length > 0) {
+      yield* Effect.logWarning("runtime-profile.extension.discovery.summary").pipe(
+        Effect.annotateLogs({
+          loaded: String(discovery.loaded.length),
+          skipped: String(discovery.skipped.length),
+          cwd: canonicalCwd,
+        }),
+      )
+    }
+
+    // 3. Setup builtin + external extensions
+    const setup = yield* setupExtensions({
+      extensions: [
+        ...inputs.extensions.map((extension): DiscoveredExtension => ({
+          extension,
+          scope: "builtin",
+          sourcePath: "builtin",
+        })),
+        ...discovery.loaded,
+      ],
+      cwd: canonicalCwd,
+      home: inputs.home,
+      disabled: disabledSet,
+    })
+
+    // 4. Validate declarations without acquiring process resources.
+    const extensionDeclarations = yield* validateLoadedExtensions(setup.active)
+    const declarations: ExtensionActivationResult = {
+      active: extensionDeclarations.active,
+      failed: [...setup.failed, ...extensionDeclarations.failed],
+    }
+    // 5. Build base prompt sections (core writes the environment; extensions shadow by id)
+    const isGitRepo = yield* fs
+      .exists(path.join(canonicalCwd, ".git"))
+      .pipe(Effect.catchEager(() => Effect.succeed(false)))
+    const date = DateTime.formatIsoDateUtc(yield* DateTime.now)
+    const coreSections = [
+      environmentSection({
+        cwd: canonicalCwd,
+        platform: inputs.platform,
+        date,
+        shell: inputs.shell,
+        osVersion: inputs.osVersion,
+        isGitRepo,
+      }),
+    ]
+
+    return {
+      extensionDeclarations: declarations,
+      coreSections,
+    }
+  })
+
+/**
+ * Build a session profile from a context whose resources are already built.
+ * This function only assembles services. It never invokes a resource layer.
+ */
+const buildSessionProfile = (params: {
+  readonly cwd: string
+  readonly resolved: ResolvedExtensions
+  readonly coreSections: ReadonlyArray<PromptSection>
+  readonly resourceContext: Context.Context<unknown>
+  readonly generationId: ProcessGenerationId
+}) =>
+  Effect.gen(function* () {
+    // Every resource is already built. Supplying that immutable context here is
+    // the only resource-side operation in staging.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- The host membrane erases heterogeneous resource services at this boundary.
+    const resourceLayer: Layer.Layer<any, never, never> = Layer.succeedContext(
+      params.resourceContext,
+    )
+    const baseLayers = Layer.mergeAll(
+      ExtensionRegistry.fromResolved(params.resolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: params.resolved.modelDrivers,
+        externalDrivers: params.resolved.externalDrivers,
+      }),
+    )
+    const layerContext = yield* Layer.build(Layer.provideMerge(resourceLayer, baseLayers))
+    // Extension sections shadow core sections by id.
+    const sectionMap = new Map(params.coreSections.map((s) => [s.id, s]))
+    for (const s of params.resolved.promptSections.values()) sectionMap.set(s.id, s)
+    return {
+      cwd: params.cwd,
+      resolved: params.resolved,
+      layerContext,
+      registryService: Context.get(layerContext, ExtensionRegistry),
+      driverRegistryService: Context.get(layerContext, DriverRegistry),
+      baseSections: [...sectionMap.values()],
+      generationId: params.generationId,
+    } satisfies SessionProfile
+  })
+
+// ── session-profile ─────────────────────────────────────────────────────────
+
+/**
+ * SessionProfile — per-(workspace,cwd) live profile for shared server mode.
+ *
+ * Each cache entry is built once. Declarations are loaded, every extension's
+ * process resources are built into a scope that closes with the server, and
+ * the catalog is staged from the resulting context. An extension whose process
+ * resource fails to build is reported as a failed extension and the rest of the
+ * profile stays live.
+ */
+
+// ── SessionProfileCache ──
+
+interface SessionProfileCacheConfig {
+  readonly home: string
+  readonly platform: string
+  readonly shell?: string
+  readonly osVersion?: string
+  readonly disabledExtensions?: ReadonlyArray<string>
+  readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+}
+
+export interface SessionProfileCacheService {
+  /** Get or lazily create a profile for the given cwd. */
+  readonly resolve: (cwd: string) => Effect.Effect<SessionProfile>
+}
+
+const cacheKey = (workspaceId: WorkspaceId, cwd: string): string => `${workspaceId}\u0000${cwd}`
+
+const effectiveInputs = (
+  inputs: RuntimeProfileInputs,
+  config: UserConfig,
+): RuntimeProfileInputs => {
+  const configDisabled = Option.getOrElse(
+    Option.fromUndefinedOr(config.disabledExtensions),
+    () => [],
+  )
+  const explicitDisabled = Option.getOrElse(
+    Option.fromUndefinedOr(inputs.disabledExtensions),
+    () => [],
+  )
+  return {
+    ...inputs,
+    disabledExtensions: [...explicitDisabled, ...configDisabled],
+  }
+}
+
+interface StartedProcessResources {
+  readonly active: ReadonlyArray<LoadedExtension>
+  readonly failed: ReadonlyArray<FailedExtension>
+  readonly context: Context.Context<unknown>
+}
+
+/**
+ * Build every extension's process resources in resolution order, so a later
+ * extension's service wins exactly as it does in the registry. Each extension
+ * gets its own child scope so a failed build releases only what it acquired;
+ * the extension is then reported as failed at the startup phase instead of
+ * taking the whole profile down.
+ */
+const startProcessResources = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  baseContext: Context.Context<unknown>,
+  profileScope: Scope.Scope,
+): Effect.Effect<StartedProcessResources> =>
+  Effect.gen(function* () {
+    let context = baseContext
+    const active: Array<LoadedExtension> = []
+    const failed: Array<FailedExtension> = []
+    for (const extension of sortExtensionsByScope(extensions)) {
+      if (collectResourceEntries([extension], "process").length === 0) {
+        active.push(extension)
+        continue
+      }
+      const extensionScope = yield* Scope.fork(profileScope)
+      const built = yield* Layer.build(buildResourceLayer([extension], "process")).pipe(
+        Effect.provideContext(context),
+        Effect.provideService(Scope.Scope, extensionScope),
+        Effect.exit,
+      )
+      if (Exit.isSuccess(built)) {
+        context = Context.merge(context, built.value)
+        active.push(extension)
+        continue
+      }
+      const error = Cause.pretty(built.cause)
+      yield* Scope.close(extensionScope, built)
+      yield* Effect.logError("session-profile.resource.failed").pipe(
+        Effect.annotateLogs({ extensionId: extension.manifest.id, error }),
+      )
+      failed.push(toFailedExtension(extension, "startup", error))
+    }
+    return { active, failed, context }
+  })
+
+export class SessionProfileCache extends Context.Service<
+  SessionProfileCache,
+  SessionProfileCacheService
+>()("@gent/core/src/runtime/extension-host/SessionProfileCache") {
+  static Live = (
+    config: SessionProfileCacheConfig,
+  ): Layer.Layer<
+    SessionProfileCache,
+    never,
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner
+    | ConfigService
+    | ScopeType.Scope
+    | GentPlatform
+  > =>
+    Layer.effect(
+      SessionProfileCache,
+      Effect.gen(function* () {
+        const configService = yield* ConfigService
+        const fs = yield* FileSystem.FileSystem
+        const pathSvc = yield* Path.Path
+        const spawner = yield* ChildProcessSpawner
+        const platform = yield* GentPlatform
+        // Every profile's resources close with this server scope.
+        const serverScope = yield* Scope.Scope
+        const generationId = ProcessGenerationId.make(yield* platform.randomId)
+
+        const platformServicesContext: Context.Context<unknown> = Context.makeUnsafe<unknown>(
+          new Map(),
+        ).pipe(
+          Context.add(FileSystem.FileSystem, fs),
+          Context.add(Path.Path, pathSvc),
+          Context.add(ChildProcessSpawner, spawner),
+          Context.add(ConfigService, configService),
+          Context.add(GentPlatform, platform),
+        )
+
+        const profiles = new Map<string, SessionProfile>()
+        // The gate only protects creation of per-key locks. Building one cwd
+        // must not block unrelated cwd or workspace keys.
+        const locks = new Map<string, Semaphore.Semaphore>()
+        const lockGate = yield* Semaphore.make(1)
+        const lockFor = (key: string) =>
+          Effect.gen(function* () {
+            const existing = Option.fromNullishOr(locks.get(key))
+            if (Option.isSome(existing)) return existing.value
+            const created = yield* Semaphore.make(1)
+            locks.set(key, created)
+            return created
+          }).pipe(lockGate.withPermits(1))
+
+        const inputsFor = (cwd: string): RuntimeProfileInputs => ({
+          cwd,
+          home: config.home,
+          platform: config.platform,
+          shell: config.shell,
+          osVersion: config.osVersion,
+          extensions: config.extensions,
+          disabledExtensions: config.disabledExtensions,
+        })
+
+        const buildProfile = (cwd: string) =>
+          Effect.gen(function* () {
+            const profileScope = yield* Scope.fork(serverScope)
+            return yield* Effect.gen(function* () {
+              const userConfig = yield* configService.getFresh(cwd)
+              const declarations = yield* loadRuntimeProfileDeclarations(
+                effectiveInputs(inputsFor(cwd), userConfig),
+              ).pipe(Effect.provideContext(platformServicesContext))
+              const started = yield* startProcessResources(
+                declarations.extensionDeclarations.active,
+                platformServicesContext,
+                profileScope,
+              )
+              const resolved = resolveExtensions(started.active, [
+                ...declarations.extensionDeclarations.failed,
+                ...started.failed,
+              ])
+              return yield* buildSessionProfile({
+                cwd,
+                resolved,
+                coreSections: declarations.coreSections,
+                resourceContext: started.context,
+                generationId,
+              })
+            }).pipe(
+              Effect.provideService(Scope.Scope, profileScope),
+              // A failed or interrupted build releases everything it acquired.
+              Effect.onError((cause) => Scope.close(profileScope, Exit.failCause(cause))),
+            )
+          })
+
+        const resolve: SessionProfileCacheService["resolve"] = (cwd) =>
+          Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            const canonicalCwd = pathSvc.resolve(cwd)
+            const key = cacheKey(workspaceId, canonicalCwd)
+            const cached = Option.fromNullishOr(profiles.get(key))
+            if (Option.isSome(cached)) return cached.value
+            const lock = yield* lockFor(key)
+            return yield* Effect.gen(function* () {
+              const found = Option.fromNullishOr(profiles.get(key))
+              if (Option.isSome(found)) return found.value
+              const profile = yield* buildProfile(canonicalCwd).pipe(Effect.orDie)
+              profiles.set(key, profile)
+              yield* Effect.logInfo("session-profile.initialized").pipe(
+                Effect.annotateLogs({
+                  cwd: profile.cwd,
+                  extensionCount: profile.resolved.extensions.length,
+                  sectionCount: profile.baseSections.length,
+                }),
+              )
+              return profile
+            }).pipe(lock.withPermits(1))
+          })
+
+        return SessionProfileCache.of({ resolve })
+      }),
+    )
+
+  static Test = (profiles?: Map<string, SessionProfile>): Layer.Layer<SessionProfileCache> => {
+    const cache = Option.getOrElse(
+      Option.fromUndefinedOr(profiles),
+      () => new Map<string, SessionProfile>(),
+    )
+    return Layer.succeed(
+      SessionProfileCache,
+      SessionProfileCache.of({
+        resolve: (cwd) =>
+          Effect.sync(() => {
+            const existing = Option.fromUndefinedOr(cache.get(cwd))
+            if (Option.isSome(existing)) return existing.value
+            const resolved = resolveExtensions([])
+            const layerContext = Effect.runSync(
+              Layer.build(
+                Layer.mergeAll(
+                  ExtensionRegistry.fromResolved(resolved),
+                  DriverRegistry.fromResolved({
+                    modelDrivers: resolved.modelDrivers,
+                    externalDrivers: resolved.externalDrivers,
+                  }),
+                ),
+              ).pipe(Effect.scoped),
+            )
+            const profile: SessionProfile = {
+              cwd,
+              resolved,
+              layerContext,
+              registryService: Context.get(layerContext, ExtensionRegistry),
+              driverRegistryService: Context.get(layerContext, DriverRegistry),
+              baseSections: [],
+              generationId: ProcessGenerationId.make("test"),
+            }
+            cache.set(cwd, profile)
+            return profile
+          }),
+      }),
+    )
+  }
+}
+
+// ── approval-service ────────────────────────────────────────────────────────
+
+/**
+ * Layer-scoped approval service.
+ *
+ * Wraps `makeInteractionService` with the fixed approval schema.
+ * Long-lived — one instance per server scope, so storedResolutions
+ * survive across tool re-executions for cold resume.
+ *
+ * Tools access this indirectly via `ctx.interaction.approve()` on ToolCapabilityContext.
+ */
+
+const makeApprovalInteractionService: Effect.Effect<
+  InteractionService,
+  never,
+  EventPublisher | GentPlatform | InteractionStorage
+> = Effect.gen(function* () {
+  const store = yield* InteractionStorage
+  const storage: InteractionStorageConfig = {
+    persist: (record) =>
+      Effect.gen(function* () {
+        // A dispatching tool owns the interactions its inner calls raise, so
+        // they are written to its receipt. Core does not know which tools
+        // those are; an absent owner is a direct call.
+        const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
+        if (Option.isSome(owner)) {
+          yield* owner.value.persist(record)
+        } else {
+          yield* store.persist(record)
+        }
+      }).pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (cause) =>
+            new EventStoreError({ message: "Failed to persist interaction request", cause }),
+        ),
+      ),
+    resolve: (requestId) => store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    decide: (requestId, decisionJson) =>
+      store
+        .decide(requestId, decisionJson)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EventStoreError({ message: "Failed to persist interaction decision", cause }),
+          ),
+        ),
+  }
+  const eventPublisher = yield* EventPublisher
+  const service = yield* makeInteractionService({
+    onPresent: (requestId, params, ctx) =>
+      eventPublisher.publish(
+        InteractionPresented.make({
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          requestId,
+          text: params.text,
+          metadata: params.metadata,
+        }),
+      ),
+    storage,
+  })
+  return {
+    ...service,
+    present: Effect.fn("ApprovalService.present")(function* (params, ctx) {
+      // An interaction raised inside a dispatching tool belongs to that
+      // tool's receipt, not to the branch's native replay. Absent owner is
+      // the common case: a direct tool call takes the native path.
+      const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
+      if (Option.isNone(owner)) return yield* service.present(params, ctx)
+      if (owner.value.sessionId !== ctx.sessionId || owner.value.branchId !== ctx.branchId)
+        return yield* new EventStoreError({
+          message: "The owning call belongs to another branch",
+        })
+      return yield* service.present(params, {
+        ...ctx,
+        resumeRequestId: yield* owner.value.resumeRequestId,
+      })
+    }),
+  }
+})
+
+interface ApprovalServiceApi extends InteractionService {}
+
+export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceApi>()(
+  "@gent/core/src/runtime/extension-host/ApprovalService",
+) {
+  static Live: Layer.Layer<
+    ApprovalService,
+    never,
+    EventPublisher | GentPlatform | InteractionStorage
+  > = Layer.effect(ApprovalService, makeApprovalInteractionService)
+
+  static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
+    const queue = [...(decisions ?? [{ approved: true }])]
+    return Layer.succeed(
+      ApprovalService,
+      ApprovalService.of({
+        present: () => {
+          const decision = Option.getOrElse(Option.fromUndefinedOr(queue.shift()), () => ({
+            approved: true,
+          }))
+          return Effect.succeed(decision)
+        },
+        pendingRequestId: () =>
+          Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
+        storeResolution: () => Effect.void,
+        rehydrate: () => Effect.void,
+      }),
+    )
+  }
+}
+
+// ── make-extension-host-context ─────────────────────────────────────────────
+
+/**
+ * The host context an extension reaches through `ExtensionContext`.
+ *
+ * Built once per loop from the services in scope. A facet whose service is
+ * absent still assembles; it reports the absence only if something calls it,
+ * so a root that ships no approval flow provides no stub for one.
+ */
+
+interface ExtensionSessionControlService {
+  readonly queueFollowUp: (input: {
+    readonly sourceId: string
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly content: string
+    readonly metadata?: MessageMetadata
+    readonly wake?: boolean
+  }) => Effect.Effect<void, Error>
+  readonly dequeueFollowUp: (input: {
+    readonly sourceId: string
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<boolean, Error>
+}
+
+/** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
+const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
+
+interface ExtensionHostContextInput {
+  readonly extensionRegistry: ExtensionRegistryService
+  /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
+  readonly host: ExtensionHostPlatform
+  /** The loop's follow-up queue. Absent outside a loop. */
+  readonly sessionControl?: ExtensionSessionControlService
+}
+
+interface MakeExtensionHostContextRunInfo {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
+  readonly sessionCwd?: string
+}
+
+interface ExtensionHostContextProviderService {
+  readonly defaultExtensionRegistry: ExtensionRegistryService
+  readonly forRun: (
+    runInfo: MakeExtensionHostContextRunInfo,
+    extensionRegistry?: ExtensionRegistryService,
+  ) => ExtensionHostContext
+}
+
+export class ExtensionHostContextProvider extends Context.Service<
+  ExtensionHostContextProvider,
+  ExtensionHostContextProviderService
+>()("@gent/core/src/runtime/extension-host/ExtensionHostContextProvider") {}
+
+/** Runs `use` against the service, or dies naming the absent one. */
+type Facet<S> = <A, E, R>(use: (service: S) => Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+
+const via =
+  <S>(service: Option.Option<S>, name: string): Facet<S> =>
+  (use) =>
+    Option.match(service, {
+      onNone: () => Effect.die(`${name} not available`),
+      onSome: use,
+    })
+
+const facet = <I, S>(tag: Context.Key<I, S>, name: string): Effect.Effect<Facet<S>> =>
+  Effect.serviceOption(tag).pipe(Effect.map((service) => via(service, name)))
+
+const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
+
+/** A pending interaction is the caller's to handle; anything else is a service failure. */
+const mapInteraction = <A, E>(
+  operation: string,
+  effect: Effect.Effect<A, E>,
+): Effect.Effect<A, ExtensionServiceError | InteractionPendingError> =>
+  effect.pipe(
+    Effect.mapError((cause) => {
+      if (Schema.is(InteractionPendingError)(cause)) return cause
+      return extensionServiceError("ExtensionInteraction", operation)(cause)
+    }),
+  )
+
+const unavailablePlatform: RuntimeEnvironmentApi = { cwd: "", home: "", platform: "unknown" }
+
+export const makeExtensionHostContextProvider = (
+  input: ExtensionHostContextInput,
+): Effect.Effect<ExtensionHostContextProviderService> =>
+  Effect.gen(function* () {
+    const platform = Option.getOrElse(
+      yield* Effect.serviceOption(RuntimeEnvironment),
+      () => unavailablePlatform,
+    )
+    const host = input.host
+    const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
+    const approval = yield* facet(ApprovalService, "ApprovalService")
+    const publisher = yield* facet(EventPublisher, "EventPublisher")
+    const sql = yield* facet(SqlClient.SqlClient, "SqlClient")
+    const sessions = yield* facet(SessionStorage, "SessionStorage")
+    const branches = yield* facet(BranchStorage, "BranchStorage")
+    const messages = yield* facet(MessageStorage, "MessageStorage")
+    const relationships = yield* facet(RelationshipStorage, "RelationshipStorage")
+    const agents = yield* facet(AgentRunnerService, "AgentRunnerService")
+    const mutations = yield* facet(SessionMutations, "SessionMutations")
+    // Enumerating a workspace's loops needs only the actor state registry,
+    // which exists only where an actor layer is in scope.
+    const registry = yield* facet(ActorStateRegistry, "ActorStateRegistry")
+
+    // A session call made later from a background fiber, after the turn that
+    // built this context, must still land in the workspace the loop opened
+    // under. The actor decodes that workspace from its entity id and provides
+    // it around this construction, so pinning it here anchors every later call
+    // to the loop rather than to whichever fiber happens to make it.
+    const workspaceId = yield* CurrentWorkspaceId
+    const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+
+    const Process: ExtensionProcessService = {
+      randomId: host.randomId,
+      run: (command, args, options) =>
+        mapExtensionServiceError(
+          "ExtensionProcess",
+          "run",
+          host.runProcess(command, args, options),
+        ),
+      parentEnv: host.parentEnv,
+    }
+
+    // The file facets read their platform services optionally, so a root that
+    // ships no file system still assembles a context; the facet reports the
+    // absence only when something calls it.
+    const fs = yield* facet(FileSystem.FileSystem, "FileSystem")
+    const pathOption = yield* Effect.serviceOption(Path.Path)
+    // `resolve`, `join` and `dirname` are synchronous in the facet, so an
+    // absent path service can only be reported as a defect at call time.
+    const onPath = <A>(use: (path: Path.Path) => A): A =>
+      Option.match(pathOption, {
+        onNone: (): A => {
+          // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- The facet's path helpers are synchronous, so an unwired path service can only surface as a defect here.
+          throw new Error("Path not available")
+        },
+        onSome: use,
+      })
+    const writeFile = (
+      fileSystem: FileSystem.FileSystem,
+      path: string,
+      content: string,
+      options?: { readonly atomic?: boolean },
+    ) =>
+      makeFileWriter(fileSystem, (target) => onPath((p) => p.dirname(target)))(
+        path,
+        content,
+        options,
+      )
+    const Files: ExtensionFilesService = {
+      read: (path) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "read",
+          fs((s) => s.readFileString(path)),
+        ),
+      write: (path, content, options) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "write",
+          fs((s) => writeFile(s, path, content, options)),
+        ),
+      exists: (path) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "exists",
+          fs((s) => s.exists(path)),
+        ),
+      stat: (path) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "stat",
+          fs((s) =>
+            s.stat(path).pipe(
+              Effect.map((info) => ({
+                type: info.type,
+                size: info.size,
+                mtime: Option.getOrUndefined(info.mtime),
+              })),
+            ),
+          ),
+        ),
+      makeDirectory: (path, options) =>
+        mapExtensionServiceError(
+          "ExtensionFiles",
+          "makeDirectory",
+          fs((s) => s.makeDirectory(path, options)),
+        ),
+      resolve: (...paths) => onPath((p) => p.resolve(...paths)),
+      join: (...paths) => onPath((p) => p.join(...paths)),
+      dirname: (path) => onPath((p) => p.dirname(path)),
+    }
+
+    const fileLockOption = yield* Effect.serviceOption(FileLockService)
+    const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
+      onNone: () => ({ withLock: (_path, effect) => effect }),
+      onSome: (fileLock) => ({ withLock: (path, effect) => fileLock.withLock(path, effect) }),
+    })
+
+    const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+
+    const forRun = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      extensionRegistry: ExtensionRegistryService = input.extensionRegistry,
+    ): ExtensionHostContext => ({
+      sessionId: runInfo.sessionId,
+      branchId: runInfo.branchId,
+      cwd: runInfo.sessionCwd ?? platform.cwd,
+      home: platform.home,
+      host,
+      Process,
+      Files,
+      FileLock,
+
+      State: ((extensionId) =>
+        Option.match(statePublisherOption, {
+          onNone: () => ({ changed: () => Effect.void }),
+          onSome: (statePublisher) =>
+            Option.match(extensionId, {
+              onNone: () => ({
+                changed: () =>
+                  Effect.fail(
+                    new ExtensionServiceErrorClass({
+                      service: "ExtensionState",
+                      operation: "changed",
+                      message: "Extension id unavailable for state change notification",
+                    }),
+                  ),
+              }),
+              onSome: (id) => ({
+                changed: () =>
+                  mapExtensionServiceError(
+                    "ExtensionState",
+                    "changed",
+                    inWorkspace(
+                      statePublisher.changed({
+                        extensionId: id,
+                        sessionId: runInfo.sessionId,
+                        branchId: runInfo.branchId,
+                      }),
+                    ),
+                  ),
+              }),
+            }),
+        })) satisfies ExtensionStateFacet,
+
+      Agent: {
+        listAgents: Effect.succeed([...extensionRegistry.getResolved().agents.values()]),
+        start: (params) =>
+          agents((runner) =>
+            runner.start({
+              ...params,
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
+            }),
+          ),
+        inspect: (params) =>
+          agents((runner) =>
+            runner.inspect({
+              requestId: params.requestId,
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+            }),
+          ),
+        list: () =>
+          agents((runner) =>
+            runner.list({
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+            }),
+          ),
+        cancel: (params) =>
+          agents((runner) =>
+            runner.cancel({
+              requestId: params.requestId,
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+            }),
+          ),
+        send: (params) =>
+          agents((runner) =>
+            runner.send({
+              ...params,
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+            }),
+          ),
+        run: (params) =>
+          agents((runner) =>
+            runner.run({
+              agent: params.agent,
+              prompt: params.prompt,
+              parentSessionId: runInfo.sessionId,
+              parentBranchId: runInfo.branchId,
+              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
+              runSpec: params.runSpec,
+              observe: params.observe,
+            }),
+          ).pipe(Effect.mapError(extensionServiceError("ExtensionAgent", "run"))),
+      },
+
+      Session: {
+        getSession: (sessionId) =>
+          sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
+            Effect.mapError(sessionError("getSession")),
+            inWorkspace,
+          ),
+        getDetail: (sessionId) =>
+          relationships((storage) => storage.getSessionDetail(sessionId)).pipe(
+            Effect.mapError(sessionError("getDetail")),
+            inWorkspace,
+          ),
+        renameCurrent: (name) =>
+          mutations((service) =>
+            service.renameSession({ sessionId: runInfo.sessionId, name }),
+          ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
+        queueFollowUp: (params) =>
+          control((loop) =>
+            loop.queueFollowUp({
+              sourceId: params.sourceId,
+              sessionId: runInfo.sessionId,
+              branchId: params.branchId ?? runInfo.branchId,
+              content: params.content,
+              metadata: params.metadata,
+              wake: params.wake,
+            }),
+          ).pipe(Effect.mapError(sessionError("queueFollowUp")), inWorkspace),
+        dequeueFollowUp: (params) =>
+          control((loop) =>
+            loop.dequeueFollowUp({
+              sourceId: params.sourceId,
+              sessionId: runInfo.sessionId,
+              branchId: params.branchId ?? runInfo.branchId,
+            }),
+          ).pipe(Effect.mapError(sessionError("dequeueFollowUp")), inWorkspace),
+        listBranches: branches((storage) => storage.listBranches(runInfo.sessionId)).pipe(
+          Effect.mapError(sessionError("listBranches")),
+          inWorkspace,
+        ),
+        listSessions: sessions((storage) => storage.listSessions).pipe(
+          Effect.mapError(sessionError("listSessions")),
+          inWorkspace,
+        ),
+        listActiveLoops: registry((stateRegistry) =>
+          Effect.gen(function* () {
+            const workspaceId = yield* CurrentWorkspaceId
+            const entityIds = yield* listStateEntityIds(AgentLoopActor.name).pipe(
+              Effect.provideService(ActorStateRegistry, stateRegistry),
+            )
+            const loops = yield* listWorkspaceLoops({
+              workspaceId,
+              entityIds,
+              concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY,
+            })
+            // The loop registers its runtime state with the registry, so the
+            // status is a memory read: no actor message, no mutation permit.
+            return yield* Effect.forEach(
+              loops,
+              (loop) =>
+                stateOf<SessionRuntimeState>({
+                  entityType: AgentLoopActor.name,
+                  entityId: entityIdOf(workspaceId, loop.sessionId, loop.branchId),
+                }).pipe(
+                  Effect.map((state) => Option.some(state._tag)),
+                  Effect.catchEager(() => Effect.succeed(Option.none<string>())),
+                  Effect.provideService(ActorStateRegistry, stateRegistry),
+                  Effect.map((status) => ({ ...loop, status })),
+                ),
+              { concurrency: ACTIVE_LOOP_DECODE_CONCURRENCY },
+            )
+          }),
+        ).pipe(Effect.mapError(sessionError("listActiveLoops")), inWorkspace),
+      },
+
+      Interaction: {
+        approve: (params) =>
+          mapInteraction(
+            "approve",
+            approval((service) =>
+              service.present(params, { sessionId: runInfo.sessionId, branchId: runInfo.branchId }),
+            ),
+          ),
+        // A presented note is a hidden assistant message: stored, then delivered.
+        present: (params) =>
+          mapInteraction(
+            "present",
+            Effect.gen(function* () {
+              const text = Option.match(Option.fromUndefinedOr(params.title), {
+                onNone: () => params.content,
+                onSome: (title) => `# ${title}\n\n${params.content}`,
+              })
+              const message = Message.cases.regular.make({
+                id: MessageId.make(yield* host.randomId),
+                sessionId: runInfo.sessionId,
+                branchId: runInfo.branchId,
+                role: "assistant",
+                parts: [Prompt.textPart({ text })],
+                createdAt: yield* DateTime.nowAsDate,
+                metadata: { customType: "prompt-present", hidden: true },
+              })
+              const envelope = yield* sql((client) =>
+                messages((store) => store.createMessage(message)).pipe(
+                  Effect.andThen(
+                    publisher((events) => events.append(MessageReceived.make({ message }))),
+                  ),
+                  client.withTransaction,
+                ),
+              )
+              yield* publisher((events) => events.deliver(envelope))
+            }),
+          ),
+      },
+    })
+
+    return { defaultExtensionRegistry: input.extensionRegistry, forRun }
+  })
+
+// ── session-runtime-context ─────────────────────────────────────────────────
+
+export interface TurnProfileDefaults {
+  readonly driverRegistry: DriverRegistryService
+  readonly baseSections: ReadonlyArray<PromptSection>
+}
+
+interface ExistingSessionBranch {
+  readonly session: Session
+  readonly branch: Branch
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
+/**
+ * Resolve the turn profile for one branch: the stored session cwd selects a
+ * profile from the cache; without a session or a cache, the host defaults
+ * apply. A storage lookup failure falls back to the defaults as well.
+ */
+export const resolveTurnProfile = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly profileCache?: SessionProfileCacheService
+  readonly defaults: TurnProfileDefaults
+}): Effect.Effect<AgentLoopTurnProfile, never, ExtensionHostContextProvider | SessionStorage> =>
+  Effect.gen(function* () {
+    const sessionStorage = yield* SessionStorage
+    const hostProvider = yield* ExtensionHostContextProvider
+    const sessionCwd = yield* sessionStorage.getSession(params.sessionId).pipe(
+      Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
+      Effect.orElseSucceed(() => Option.none<string>()),
+    )
+    const runInfo = {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      sessionCwd: Option.getOrUndefined(sessionCwd),
+    }
+    const profile = yield* Option.match(
+      Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
+      {
+        onNone: () => Effect.succeedNone,
+        onSome: ([profileCache, cwd]) => profileCache.resolve(cwd).pipe(Effect.asSome),
+      },
+    )
+    if (Option.isNone(profile)) {
+      return {
+        turnExtensionRegistry: hostProvider.defaultExtensionRegistry,
+        turnDriverRegistry: params.defaults.driverRegistry,
+        turnBaseSections: params.defaults.baseSections,
+        turnHostCtx: hostProvider.forRun(runInfo),
+      }
+    }
+    return {
+      turnExtensionRegistry: profile.value.registryService,
+      turnDriverRegistry: profile.value.driverRegistryService,
+      turnBaseSections: profile.value.baseSections,
+      turnHostCtx: hostProvider.forRun(runInfo, profile.value.registryService),
+      turnCapabilityContext: profile.value.layerContext,
+      turnGenerationId: profile.value.generationId,
+    }
+  })
+
+export const resolveExistingSessionBranch = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}): Effect.Effect<ExistingSessionBranch, StorageError, SessionStorage | BranchStorage> =>
+  Effect.gen(function* () {
+    const sessionStorage = yield* SessionStorage
+    const branchStorage = yield* BranchStorage
+    const session = yield* sessionStorage.getSession(params.sessionId)
+    if (Predicate.isUndefined(session)) {
+      return yield* new StorageError({
+        message: `Session not found: ${params.sessionId}`,
+      })
+    }
+
+    const branch = yield* branchStorage.getBranch(params.branchId)
+    if (Predicate.isUndefined(branch) || branch.sessionId !== params.sessionId) {
+      return yield* new StorageError({
+        message: `Branch not found for session: ${params.sessionId}/${params.branchId}`,
+      })
+    }
+
+    return {
+      session,
+      branch,
+      sessionId: session.id,
+      branchId: branch.id,
+    }
   })

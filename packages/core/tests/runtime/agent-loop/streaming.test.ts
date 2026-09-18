@@ -10,7 +10,7 @@ import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
-import { ApprovalService } from "../../../src/runtime/approval-service"
+import { ApprovalService } from "../../../src/runtime/extension-host"
 import {
   finishPart,
   LanguageModelLayers,

@@ -16,11 +16,12 @@ import { ConfigService } from "../../src/runtime/config"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SqliteStorage } from "../../src/storage/storage"
 import {
+  CurrentExtensionHostContext,
+  ExtensionRegistry,
   loadRuntimeProfileDeclarations,
   type RuntimeProfileInputs,
-} from "../../src/runtime/profile"
-import { CurrentExtensionHostContext, ExtensionRegistry } from "../../src/runtime/extension-host"
-import { SessionProfileCache } from "../../src/runtime/session-profile"
+  SessionProfileCache,
+} from "../../src/runtime/extension-host"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),

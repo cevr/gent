@@ -24,13 +24,13 @@ import { EventPublisherLive, EventStore } from "../../../src/domain/event"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import {
+  ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
 } from "../../../src/runtime/extension-host"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
-import { ApprovalService } from "../../../src/runtime/approval-service"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
 

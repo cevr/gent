@@ -33,7 +33,7 @@ import {
   ToolCallSucceeded,
 } from "../../../src/domain/event"
 import { InteractionPendingError } from "../../../src/domain/interaction"
-import { ApprovalService } from "../../../src/runtime/approval-service"
+import { ApprovalService } from "../../../src/runtime/extension-host"
 import {
   EventStorage,
   MessageStorage,

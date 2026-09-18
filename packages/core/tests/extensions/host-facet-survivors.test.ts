@@ -10,7 +10,10 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Path, Schema } from "effect"
-import { makeExtensionHostContextProvider } from "../../src/runtime/make-extension-host-context.js"
+import {
+  makeExtensionHostContextProvider,
+  resolveExtensions,
+} from "../../src/runtime/extension-host.js"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage.js"
 import { noBranchTools } from "../../src/runtime/agent/tools.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
@@ -19,7 +22,6 @@ import { requireCurrentAgent, ExtensionServiceError } from "@gent/core/extension
 import { provideExtensionServices } from "../../src/domain/extension.js"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testExtensionFiles, testToolContext } from "../../src/test-utils/index.js"
-import { resolveExtensions } from "../../src/runtime/extension-host.js"
 import { testHostFacts } from "../../src/test-utils"
 
 const SESSION_ID = SessionId.make("test-session")

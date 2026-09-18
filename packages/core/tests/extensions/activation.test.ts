@@ -12,6 +12,7 @@ import {
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   type DiscoveredExtension,
+  SessionProfileCache,
   setupExtensions,
   validateLoadedExtensions,
 } from "../../src/runtime/extension-host"
@@ -22,7 +23,6 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
-import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config"
 import {
   GentToolMetadataTag,

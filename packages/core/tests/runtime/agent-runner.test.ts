@@ -20,6 +20,7 @@ import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { ModelResolver } from "../../src/providers/model-resolver"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import {
+  ApprovalService,
   DriverRegistry,
   eraseResourceLayer,
   ExtensionRegistry,
@@ -85,7 +86,6 @@ import {
   noBranchTools,
   ToolRunner,
 } from "../../src/runtime/agent/tools"
-import { ApprovalService } from "../../src/runtime/approval-service"
 import {
   defineExtension,
   ExtensionContext,

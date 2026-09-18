@@ -7,22 +7,16 @@ import { dateFromMillis, Session } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   DriverRegistry,
-  ExtensionRegistry,
-  resolveExtensions,
-} from "../../src/runtime/extension-host"
-import {
-  resolveTurnProfile,
-  type TurnProfileDefaults,
-} from "../../src/runtime/session-runtime-context"
-import {
   ExtensionHostContextProvider,
+  ExtensionRegistry,
   makeExtensionHostContextProvider,
-} from "../../src/runtime/make-extension-host-context"
-import {
-  SessionProfileCache,
+  resolveExtensions,
+  resolveTurnProfile,
   type SessionProfile,
+  SessionProfileCache,
   type SessionProfileCacheService,
-} from "../../src/runtime/session-profile"
+  type TurnProfileDefaults,
+} from "../../src/runtime/extension-host"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   SessionStorage,

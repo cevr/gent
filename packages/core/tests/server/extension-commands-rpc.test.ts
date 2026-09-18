@@ -27,19 +27,20 @@ import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { type Message, messageSingleText } from "../../src/domain/message"
 import {
+  ApprovalService,
   buildResourceLayer,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
+  type SessionProfile,
+  SessionProfileCache,
 } from "../../src/runtime/extension-host"
 import { SqliteStorage } from "../../src/storage/storage"
-import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SlashCommandInfo } from "../../src/server/transport-contract"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
-import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import {
   CapabilityError,
   ExtensionContext,

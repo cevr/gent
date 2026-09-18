@@ -8,14 +8,16 @@ import { SessionId, type BranchId, type RequestId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import {
+  ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  resolveExistingSessionBranch,
+  SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
-import { SessionProfileCache } from "../runtime/session-profile.js"
 import { foldSessionMetrics } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/agent/turn-resolve.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
@@ -30,8 +32,6 @@ import {
 import { projectMessagesWithToolInteractions, toolCallDurations } from "../domain/message.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
-import { ApprovalService } from "../runtime/approval-service.js"
-import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, InvalidStateError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"

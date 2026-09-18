@@ -2,7 +2,7 @@ import { expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
+import { ApprovalService } from "@gent/core-internal/runtime/extension-host.js"
 import {
   CurrentInteractionOwner,
   encodeInteractionDecision,

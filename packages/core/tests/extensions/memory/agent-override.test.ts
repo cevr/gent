@@ -13,18 +13,18 @@ import { AgentEvent, EventPublisherLive } from "../../../src/domain/event"
 import { type ExtensionContributions, SessionMutations } from "../../../src/domain/extension"
 import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
-import { ApprovalService } from "../../../src/runtime/approval-service"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import {
+  ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
+  SessionProfileCache,
 } from "../../../src/runtime/extension-host"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
-import { SessionProfileCache } from "../../../src/runtime/session-profile"
 import { MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"

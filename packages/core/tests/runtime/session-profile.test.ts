@@ -19,7 +19,7 @@ import {
   defineResource,
   type GentExtension,
 } from "@gent/core/extensions/api"
-import { SessionProfileCache } from "../../src/runtime/session-profile"
+import { SessionProfileCache } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { SqliteStorage } from "../../src/storage/storage"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"

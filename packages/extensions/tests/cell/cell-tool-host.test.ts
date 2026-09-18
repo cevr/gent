@@ -36,11 +36,13 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids.js"
 import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
-import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
+import {
+  ApprovalService,
+  makeExtensionHostContextProvider,
+  SessionProfileCache,
+} from "@gent/core-internal/runtime/extension-host.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
 import { CellResponse } from "../../src/cell-protocol.js"
-import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
 import { InteractionStorage, MessageStorage } from "@gent/core-internal/storage/storage.js"
 import { ensureStorageParents, testHostFacts } from "@gent/core-internal/test-utils/index.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
