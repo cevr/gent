@@ -67,7 +67,7 @@ import {
   submitAgentLoop,
   waitFor,
   waitForPhase,
-} from "./helpers"
+} from "../agent-loop-helpers"
 import {
   type AgentLoopError,
   buildIdleState,

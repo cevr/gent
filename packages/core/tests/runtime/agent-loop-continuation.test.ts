@@ -16,7 +16,7 @@ import {
   submitAgentLoop,
   steerAgentLoop,
   waitForPhase,
-} from "./agent-loop/helpers"
+} from "./agent-loop-helpers"
 
 describe("continuation", () => {
   const contSessionId = SessionId.make("cont-test-session")

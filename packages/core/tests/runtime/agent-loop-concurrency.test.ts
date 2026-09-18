@@ -6,7 +6,7 @@ import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 import { tool } from "@gent/core/extensions/api"
 import { BranchStorage, SessionStorage } from "../../src/storage/storage"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { makeAgentLoopService, makeLiveToolLayer, scriptedProvider } from "./agent-loop/helpers"
+import { makeAgentLoopService, makeLiveToolLayer, scriptedProvider } from "./agent-loop-helpers"
 
 describe("concurrency", () => {
   it.live("independent tool calls may overlap", () =>

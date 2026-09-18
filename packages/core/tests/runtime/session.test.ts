@@ -1,12 +1,21 @@
-import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME, ModelId } from "../../src/domain/agent"
-import { BunCrypto, BunServices } from "@effect/platform-bun"
+import {
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  Model,
+  ModelId,
+  ProviderId,
+} from "../../src/domain/agent"
+import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import {
   Cause,
+  Context,
   Deferred,
   Effect,
   Fiber,
+  FileSystem,
   Layer,
   Option,
   Predicate,
@@ -25,13 +34,33 @@ import {
   textDeltaPart,
   textStep,
   toolCallPart,
+  toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
 import { AgentEvent, EventPublisherLive } from "../../src/domain/event"
-import { type CallRecord } from "../../src/test-utils"
-import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
-import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
-import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils"
+import {
+  baseLocalLayerWithProvider,
+  type CallRecord,
+  createE2ELayer,
+  createRpcHarness,
+  ensureStorageParents,
+  RecordingEventStore,
+  SequenceRecorder,
+} from "../../src/test-utils/index"
+import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  ExtensionHost,
+  request,
+  tool,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
+import {
+  ModelRegistry,
+  ModelResolver,
+  TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+} from "../../src/runtime/provider"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   ApprovalService,
@@ -42,6 +71,7 @@ import {
 } from "../../src/runtime/extension-host"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import {
+  ActorCommandId,
   BranchId,
   ExtensionId,
   InteractionRequestId,
@@ -53,15 +83,20 @@ import {
 import { InteractionPendingError } from "../../src/domain/interaction"
 import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { SessionMutationsLive } from "../../src/server/server"
+import { getSessionSnapshot, SessionMutationsLive } from "../../src/server/server"
 import {
   BranchStorage,
+  EventStorage,
   MessageStorage,
   SessionStorage,
   SqliteStorage,
 } from "../../src/storage/storage"
 import { SessionRuntime } from "../../src/runtime/session"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+
+// ── session-runtime.test ────────────────────────────────────────────────────
+
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,
@@ -781,6 +816,400 @@ describe("SessionRuntime", () => {
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
       )
+    }),
+  )
+})
+
+// ── session-metrics.test ────────────────────────────────────────────────────
+
+const cowork = AgentDefinition.make({
+  name: AgentName.make("cowork"),
+  model: ModelId.make("test/priced"),
+})
+const modelWithPricing = new Model({
+  id: ModelId.make("test/priced"),
+  name: "Priced Test",
+  provider: ProviderId.make("test"),
+  contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+  pricing: { input: 3, output: 15 }, // $3/M in, $15/M out
+})
+const makeLayer = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  models: readonly Model[] = [modelWithPricing],
+) =>
+  baseLocalLayerWithProvider(providerLayer, {
+    agents: [cowork],
+    // `extraLayers` in `baseLocalLayerWithProvider` are merged AFTER the
+    // default `ModelRegistry.Test()`, so later merges win the tag.
+    extraLayers: [ModelRegistry.Test(models)],
+  })
+const createSessionBranchSessionMetrics = (modelIdLabel = "test/priced") =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionStorage
+    const branches = yield* BranchStorage
+    const sessionId = SessionId.make("metrics-session")
+    const branchId = BranchId.make("metrics-branch")
+    const now = dateFromMillis(1_767_225_600_000)
+    void modelIdLabel
+    yield* sessions.createSession(
+      new Session({
+        id: sessionId,
+        name: "Metrics Test",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+    yield* branches.createBranch(
+      new Branch({
+        id: branchId,
+        sessionId,
+        createdAt: now,
+      }),
+    )
+    return { sessionId, branchId }
+  })
+describe("session metrics", () => {
+  it.live("StreamEnded.costUsd is frozen at emit time and summed into metrics.costUsd", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("reply one"),
+        textStep("reply two"),
+      ])
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:first"),
+            content: "first",
+            agentOverride: AgentName.make("cowork"),
+          })
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:second"),
+            content: "second",
+            agentOverride: AgentName.make("cowork"),
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          const streamEndeds = envelopes
+            .map((e) => e.event)
+            .filter(
+              (
+                e,
+              ): e is Extract<
+                typeof e,
+                {
+                  _tag: "StreamEnded"
+                }
+              > => e._tag === "StreamEnded",
+            )
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+          const receipts = envelopes
+            .map((e) => e.event)
+            .filter(
+              (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
+            )
+          return { streamEndeds, metrics, receipts }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
+      // Each turn receipt carries that turn's totals, summed over its steps.
+      expect(result.receipts.map((receipt) => receipt.usage)).toEqual(
+        result.streamEndeds.map((ev) => ev.usage),
+      )
+      for (const ev of result.streamEndeds) {
+        expect(ev.model).toBe(ModelId.make("test/priced"))
+        expect(ev.costUsd).toBeDefined()
+        expect(ev.costUsd).toBeGreaterThan(0)
+      }
+      const expected = result.streamEndeds.reduce((sum, ev) => sum + (ev.costUsd ?? 0), 0)
+      expect(result.metrics.costUsd).toBeCloseTo(expected, 10)
+      expect(result.metrics.lastInputTokens).toBeGreaterThan(0)
+    }),
+  )
+  it.live("a turn with one step that reports no usage leaves the receipt's usage absent", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        {
+          parts: [textDeltaPart("reply without usage"), finishPart({ finishReason: "stop" })],
+        },
+      ])
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:first"),
+            content: "first",
+            agentOverride: AgentName.make("cowork"),
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          return envelopes
+            .map((e) => e.event)
+            .filter(
+              (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
+            )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      expect(result).toHaveLength(1)
+      expect(result[0]?.usage).toBeUndefined()
+    }),
+  )
+  it.live("a completed turn reports what the model saw as context metrics", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:one"),
+            content: "one",
+            agentOverride: AgentName.make("cowork"),
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          const projected = envelopes
+            .map((e) => e.event)
+            .filter((e) => e._tag === "ModelContextProjected")
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+          return { projected, metrics }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      expect(result.projected).toHaveLength(1)
+      const context = Option.getOrThrow(Option.fromUndefinedOr(result.metrics.context))
+      expect(context.contextLimitTokens).toBe(TEST_MODEL_CONTEXT_LIMIT_TOKENS)
+      expect(context.estimatedTokens).toBeGreaterThan(0)
+      expect(context.availableInputTokens).toBeLessThan(TEST_MODEL_CONTEXT_LIMIT_TOKENS)
+      expect(context.omittedMessages).toBe(0)
+      expect(context.compactions).toBe(0)
+    }),
+  )
+  it.live("metrics.costUsd does not drift when pricing changes after emission", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:one"),
+            content: "one",
+            agentOverride: AgentName.make("cowork"),
+          })
+          const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+          const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+          return { first, second }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      // Two reads over the same event log must return the same cost. The cost
+      // is frozen on StreamEnded at emit time — changes to pricing or the
+      // registry between snapshot reads cannot shift historical costs.
+      expect(result.first.costUsd).toBe(result.second.costUsd)
+      expect(result.first.costUsd).toBeGreaterThan(0)
+    }),
+  )
+  it.live("StreamEnded omits costUsd when model has no pricing", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
+      const unpriced = new Model({
+        id: ModelId.make("test/priced"),
+        name: "No Pricing",
+        provider: ProviderId.make("test"),
+        contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+      })
+      const result = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:one"),
+            content: "one",
+            agentOverride: AgentName.make("cowork"),
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          const streamEndeds = envelopes
+            .map((e) => e.event)
+            .filter(
+              (
+                e,
+              ): e is Extract<
+                typeof e,
+                {
+                  _tag: "StreamEnded"
+                }
+              > => e._tag === "StreamEnded",
+            )
+          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+          return { streamEndeds, metrics }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds")),
+      )
+      for (const ev of result.streamEndeds) {
+        expect(ev.costUsd).toBeUndefined()
+      }
+      expect(result.metrics.costUsd).toBe(0)
+    }),
+  )
+})
+
+// ── branch-resources.test ───────────────────────────────────────────────────
+
+class BranchCounter extends Context.Service<BranchCounter, { readonly instance: number }>()(
+  "@gent/core/tests/runtime/session.test/BranchCounter",
+) {}
+
+describe("branch-scoped resources", () => {
+  it.live("builds a branch resource per loop and releases it when the branch closes", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      let nextInstance = 0
+
+      const extensionId = ExtensionId.make("@gent/tests/branch-resource")
+      const readId = "read-branch-instance"
+
+      const BranchResourceExtension = defineExtension({
+        id: extensionId,
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "@gent/tests/branch-resource/counter",
+              scope: "branch",
+              tag: BranchCounter,
+              layer: Layer.effect(
+                BranchCounter,
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    const instance = ++nextInstance
+                    events.push(`acquire:${instance}`)
+                    return BranchCounter.of({ instance })
+                  }),
+                  (service) => Effect.sync(() => events.push(`release:${service.instance}`)),
+                ),
+              ),
+            }),
+          )
+          yield* host.register(
+            "request",
+            request({
+              id: readId,
+              input: Schema.String,
+              output: Schema.String,
+              execute: () =>
+                Effect.gen(function* () {
+                  const counter = yield* BranchCounter
+                  return `instance:${counter.instance}`
+                }),
+            }),
+          )
+        }),
+      })
+
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        extensionInputs: [...e2ePreset.extensionInputs, BranchResourceExtension],
+      })
+
+      // The branch resource is live for the running loop, and is the same
+      // instance across calls within that branch.
+      const first = yield* client.extension.request({
+        sessionId,
+        branchId,
+        extensionId,
+        capabilityId: readId,
+        input: "read",
+      })
+      expect(first).toBe("instance:1")
+      expect(events).toContain("acquire:1")
+      expect(events).not.toContain("release:1")
+
+      const second = yield* client.extension.request({
+        sessionId,
+        branchId,
+        extensionId,
+        capabilityId: readId,
+        input: "read",
+      })
+      expect(second).toBe("instance:1")
+      expect(nextInstance).toBe(1)
+    }).pipe(Effect.scoped),
+  )
+})
+
+// ── ../extensions/exec-tools-background.test ────────────────────────────────
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+describe("exec-tools background runtime", () => {
+  it.live("drops background bash completion after session deletion", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("exec-bg-deleted-session")
+      const branchId = BranchId.make("exec-bg-deleted-branch")
+      const markerPath = `/tmp/gent-${sessionId}-background-done`
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("bash", {
+          command: `sleep 0.3; touch ${markerPath}; printf stale-background-completion`,
+          run_in_background: true,
+        }),
+        textStep("background command started"),
+      ])
+      const layer = createE2ELayer({ ...e2ePreset, providerLayer }).pipe(
+        Layer.provideMerge(BunFileSystem.layer),
+      )
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const sessions = yield* SessionStorage
+        const messages = yield* MessageStorage
+        const fs = yield* FileSystem.FileSystem
+
+        yield* fs.remove(markerPath).pipe(Effect.catchEager(() => Effect.void))
+        yield* ensureStorageParents({ sessionId, branchId })
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:start background command"),
+          content: "start background command",
+          agentOverride: DEFAULT_AGENT_NAME,
+        })
+        yield* sessions.deleteSession(sessionId)
+
+        yield* waitFor(
+          fs.exists(markerPath),
+          (exists) => exists,
+          2_000,
+          "background command marker",
+        )
+        const remaining = yield* messages.listMessages(branchId)
+        const stale = remaining.filter((message) =>
+          encodeJson(message.parts).includes("stale-background-completion"),
+        )
+        expect(stale).toEqual([])
+        yield* fs.remove(markerPath).pipe(Effect.catchEager(() => Effect.void))
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
     }),
   )
 })

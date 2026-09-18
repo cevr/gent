@@ -29,7 +29,7 @@ import {
   makeLayer,
   makeRecordingLayer,
   runAgentLoop,
-} from "./agent-loop/helpers"
+} from "./agent-loop-helpers"
 
 describe("empty final step", () => {
   const sessionId = SessionId.make("empty-step-session")

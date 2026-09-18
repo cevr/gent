@@ -3,11 +3,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import {
-  AgentLoopError,
-  entityIdOf,
-  type SessionRuntimeState,
-} from "../../../src/domain/agent-loop"
+import { AgentLoopError, entityIdOf, type SessionRuntimeState } from "../../src/domain/agent-loop"
 import {
   AgentDefinition,
   AgentName,
@@ -15,31 +11,31 @@ import {
   ModelId,
   type RunSpec,
   type SteerCommand,
-} from "../../../src/domain/agent"
+} from "../../src/domain/agent"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopSessionGovernance,
   AgentLoopTestActor,
-} from "../../../src/runtime/agent-loop"
-import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
-import { GentPlatform } from "../../../src/runtime/gent-platform"
+} from "../../src/runtime/agent-loop"
+import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
-} from "../../../src/runtime/extension-host"
-import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
-import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
+} from "../../src/runtime/extension-host"
+import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
+import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import {
   finishPart,
   LanguageModelLayers,
   type LanguageModelStreamPart,
-} from "../../../src/test-utils/language-model"
-import { dateFromMillis, Message, type QueueSnapshot } from "../../../src/domain/message"
-import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
+} from "../../src/test-utils/language-model"
+import { dateFromMillis, Message, type QueueSnapshot } from "../../src/domain/message"
+import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
-import type { AnyResourceContribution } from "../../../src/domain/extension"
+import type { AnyResourceContribution } from "../../src/domain/extension"
 import {
   type AgentEvent,
   EventEnvelope,
@@ -47,22 +43,18 @@ import {
   type EventPublisher,
   EventPublisherLive,
   EventStore,
-} from "../../../src/domain/event"
+} from "../../src/domain/event"
 import {
   BranchStorage,
   SessionStorage,
   SqliteStorage,
   type StorageError,
-} from "../../../src/storage/storage"
-import {
-  RecordingEventStore,
-  SequenceRecorder,
-  ensureStorageParents,
-} from "../../../src/test-utils"
-import type { BranchId, InteractionRequestId, SessionId } from "../../../src/domain/ids"
-import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
-import type { TurnStreamPart } from "../../../src/domain/driver"
-import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
+} from "../../src/storage/storage"
+import { RecordingEventStore, SequenceRecorder, ensureStorageParents } from "../../src/test-utils"
+import type { BranchId, InteractionRequestId, SessionId } from "../../src/domain/ids"
+import { ActorCommandId, ExtensionId, MessageId } from "../../src/domain/ids"
+import type { TurnStreamPart } from "../../src/domain/driver"
+import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 // ============================================================================
 // Shared helpers
 // ============================================================================

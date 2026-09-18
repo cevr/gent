@@ -44,7 +44,7 @@ import {
   scriptedProvider,
   steerAgentLoop,
   waitForPhase,
-} from "./helpers"
+} from "../agent-loop-helpers"
 
 describe("run completion", () => {
   it.live("run returns after a fast turn completes before the caller awaits idle", () =>

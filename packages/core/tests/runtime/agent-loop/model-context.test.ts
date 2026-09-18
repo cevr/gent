@@ -30,7 +30,7 @@ import {
 } from "../../../src/runtime/extension-host"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
-import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
+import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "../agent-loop-helpers"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content

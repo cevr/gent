@@ -9,7 +9,12 @@ import { EventStorage, MessageStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { BranchId, SessionId, ToolCallId } from "../../../src/domain/ids"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/turn"
-import { makeAgentLoopService, makeLayerWithEvents, makeMessage, runAgentLoop } from "./helpers"
+import {
+  makeAgentLoopService,
+  makeLayerWithEvents,
+  makeMessage,
+  runAgentLoop,
+} from "../agent-loop-helpers"
 
 describe("tool projection reconciliation", () => {
   const echoTool = tool({

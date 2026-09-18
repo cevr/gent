@@ -15,11 +15,11 @@ describe("process runner guard", () => {
 
   test("flags a test that builds the removed layer", () => {
     const findings = findProcessRunnerFindings(
-      "packages/core/tests/runtime/session-runtime.test.ts",
+      "packages/core/tests/runtime/session.test.ts",
       'import { ProcessRunnerLive } from "../../src/runtime/run-process"',
     )
     expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/tests/runtime/session-runtime.test.ts:1",
+      "packages/core/tests/runtime/session.test.ts:1",
     ])
   })
 

@@ -65,7 +65,7 @@ import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import { ApprovalService } from "../../../src/runtime/extension-host"
 import { StorageError } from "../../../src/domain/errors"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
-import { makeExtRegistry } from "../agent-loop/helpers"
+import { makeExtRegistry } from "../agent-loop-helpers"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>
   LoopQueueState.make({ steering: [], followUp: [] })

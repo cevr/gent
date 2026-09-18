@@ -1,3 +1,11 @@
+import { describe, expect, test } from "bun:test"
+import { describeChildCompletion } from "../../src/runtime/child-agents"
+import { TurnCompleted } from "../../src/domain/event"
+import { AgentName } from "../../src/domain/agent"
+import { BranchId, MessageId, RequestId, SessionId } from "../../src/domain/ids"
+
+// ── child-completion-describe.test ──────────────────────────────────────────
+
 /**
  * The message a parent agent reads when a child finishes.
  *
@@ -7,12 +15,6 @@
  * result. If the outcome is not named in the message, the parent model
  * reads a failure as a completed answer.
  */
-
-import { describe, expect, test } from "bun:test"
-import { describeChildCompletion } from "../../src/runtime/child-agents"
-import { TurnCompleted } from "../../src/domain/event"
-import { AgentName } from "../../src/domain/agent"
-import { BranchId, MessageId, RequestId, SessionId } from "../../src/domain/ids"
 
 const sessionId = SessionId.make("child-session")
 const branchId = BranchId.make("child-branch")

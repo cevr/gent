@@ -63,7 +63,7 @@ import {
   runAgentLoop,
   steerAgentLoop,
   waitForPhase,
-} from "./helpers"
+} from "../agent-loop-helpers"
 
 describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")

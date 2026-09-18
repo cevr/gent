@@ -1,12 +1,24 @@
+import { describe, expect, it } from "effect-bun-test"
+import { Deferred, Effect, FileSystem, Layer, Path, Predicate, Ref, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import {
+  AgentDefinition,
+  AgentName,
+  ExternalDriverRef,
+  ModelDriverRef,
+  ModelId,
+  resolveAgentDriver,
+  RunSpecSchema,
+} from "../../src/domain/agent"
+import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
+import { test } from "bun:test"
+import { ToolCallId } from "../../src/domain/ids"
+
+// ── config-service.test ─────────────────────────────────────────────────────
+
 /**
  * ConfigService tests - config persistence and first-run setup
  */
-
-import { describe, it, expect } from "effect-bun-test"
-import { Predicate, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
-import { BunServices } from "@effect/platform-bun"
-import { AgentName, ExternalDriverRef, ModelDriverRef, ModelId } from "../../src/domain/agent"
-import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
@@ -536,5 +548,143 @@ describe("user configuration", () => {
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
+  })
+})
+
+// ── driver-override-routing.test ────────────────────────────────────────────
+
+/**
+ * Driver override routing — integration test that ConfigService.driverOverrides
+ * actually flows into `resolveAgentDriver` at the agent loop's resolution
+ * boundary.
+ *
+ * Drives `ConfigService.Test(...)` with overrides, calls
+ * `resolveAgentDriver` directly with the merged config, asserts source +
+ * driver. Catches breakage between `ConfigService` and the resolver
+ * without spinning up the full agent loop.
+ */
+
+const cowork = AgentDefinition.make({ name: AgentName.make("cowork") })
+const hardcoded = AgentDefinition.make({
+  name: AgentName.make("hardcoded"),
+  driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
+})
+
+describe("configured driver override routing", () => {
+  it.live("agent without hardcoded driver picks up config override (source: config)", () =>
+    Effect.gen(function* () {
+      const cfg = yield* ConfigService
+      const { driverOverrides } = yield* cfg.get()
+      const result = resolveAgentDriver(cowork, driverOverrides)
+      expect(result.source).toBe("config")
+      expect(result.driver?._tag).toBe("External")
+      expect(result.driver?.id).toBe("acp-claude-code")
+    }).pipe(
+      Effect.provide(
+        ConfigService.Test(
+          new UserConfig({
+            driverOverrides: {
+              [AgentName.make("cowork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
+            },
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.live("hardcoded agent.driver wins over config override (source: agent)", () =>
+    Effect.gen(function* () {
+      const cfg = yield* ConfigService
+      const { driverOverrides } = yield* cfg.get()
+      const result = resolveAgentDriver(hardcoded, driverOverrides)
+      expect(result.source).toBe("agent")
+      expect(result.driver?.id).toBe("acp-claude-code")
+    }).pipe(
+      Effect.provide(
+        ConfigService.Test(
+          new UserConfig({
+            driverOverrides: {
+              [AgentName.make("hardcoded")]: ModelDriverRef.make({ id: "anthropic" }),
+            },
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.live("no override returns source: default", () =>
+    Effect.gen(function* () {
+      const cfg = yield* ConfigService
+      const { driverOverrides } = yield* cfg.get()
+      const result = resolveAgentDriver(cowork, driverOverrides)
+      expect(result.source).toBe("default")
+      expect(result.driver).toBeUndefined()
+    }).pipe(Effect.provide(ConfigService.Test())),
+  )
+
+  it.live("clearing the override falls back to default on the next read", () =>
+    Effect.gen(function* () {
+      const cfg = yield* ConfigService
+      yield* cfg.setDriverOverride(
+        AgentName.make("cowork"),
+        ExternalDriverRef.make({ id: "acp-claude-code" }),
+      )
+      const before = (yield* cfg.get()).driverOverrides
+      expect(resolveAgentDriver(cowork, before).source).toBe("config")
+      yield* cfg.clearDriverOverride(AgentName.make("cowork"))
+      const after = (yield* cfg.get()).driverOverrides
+      expect(resolveAgentDriver(cowork, after).source).toBe("default")
+    }).pipe(Effect.provide(ConfigService.Test())),
+  )
+})
+
+// ── execution-overrides.test ────────────────────────────────────────────────
+
+/**
+ * RunSpec threading tests.
+ *
+ * Verifies the run-spec JSON contract used by the headless CLI.
+ *
+ * Public message.send runSpec behavior is covered by
+ * tests/server/message-send.test.ts.
+ */
+
+// ── Tests ──
+
+describe("run spec CLI serialization", () => {
+  const codec = Schema.fromJsonString(RunSpecSchema)
+
+  test("round-trips through JSON encode/decode", () => {
+    const runSpec = {
+      visibility: "private",
+      overrides: {
+        modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
+        allowedTools: ["grep", "read"],
+        deniedTools: ["bash"],
+        reasoningEffort: "high",
+        systemPromptAddendum: "Be concise.",
+      },
+      parentToolCallId: ToolCallId.make("tc-abc-123"),
+    } satisfies Schema.Schema.Type<typeof RunSpecSchema>
+
+    const json = Schema.encodeSync(codec)(runSpec)
+    expect(Predicate.isString(json)).toBe(true)
+
+    const decoded = Schema.decodeSync(codec)(json)
+    expect(decoded).toEqual(runSpec)
+  })
+
+  test("round-trips with minimal runSpec", () => {
+    const runSpec = { parentToolCallId: ToolCallId.make("tc-only") }
+    const json = Schema.encodeSync(codec)(runSpec)
+    const decoded = Schema.decodeSync(codec)(json)
+    expect(decoded.parentToolCallId).toBe(ToolCallId.make("tc-only"))
+  })
+
+  test("round-trips empty runSpec", () => {
+    const runSpec = {}
+    const json = Schema.encodeSync(codec)(runSpec)
+    const decoded = Schema.decodeSync(codec)(json)
+    expect(decoded).toEqual({})
   })
 })

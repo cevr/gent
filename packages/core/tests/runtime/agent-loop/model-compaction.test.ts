@@ -12,7 +12,7 @@ import {
 import { MessageStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { ModelContextCompactorLive } from "../../../../extensions/tests/helpers/test-preset"
-import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "./helpers"
+import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "../agent-loop-helpers"
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content

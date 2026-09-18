@@ -31,7 +31,7 @@ import {
   makeLayerWithEvents,
   runAgentLoop,
   steerAgentLoop,
-} from "./agent-loop/helpers"
+} from "./agent-loop-helpers"
 
 describe("max turn steps", () => {
   const sessionId = SessionId.make("max-steps-session")

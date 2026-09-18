@@ -18,7 +18,7 @@ import {
   makeMessage,
   runAgentLoop,
   scriptedProvider,
-} from "./agent-loop/helpers"
+} from "./agent-loop-helpers"
 
 describe("turn stream parity", () => {
   it.live("model and external turns produce the same assistant draft and lifecycle tags", () =>
