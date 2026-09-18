@@ -18,7 +18,7 @@ import { UsageSchema } from "../domain/event.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Message } from "../domain/message.js"
 import { ModelId } from "../domain/model.js"
-import type { ProviderError } from "../domain/provider-error.js"
+import type { ProviderError } from "../domain/errors.js"
 import type { ModelContextBudget } from "./model-context.js"
 
 /** Why a summary was not produced. Every failure degrades to a truncated window. */

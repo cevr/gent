@@ -7,7 +7,7 @@
 import { Predicate, Context, Effect, Layer } from "effect"
 import type { Message } from "../domain/message.js"
 import type { BranchId, MessageId } from "../domain/ids.js"
-import { StorageError, storageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/errors.js"
 import { SqlClient } from "effect/unstable/sql"
 import {
   decodeMessageChunkRow,

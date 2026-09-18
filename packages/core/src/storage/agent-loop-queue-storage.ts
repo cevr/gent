@@ -14,7 +14,7 @@ import {
   type LoopQueueState as LoopQueueStateType,
 } from "../domain/queue.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import { type StorageError, storageError } from "../domain/storage-error.js"
+import { type StorageError, storageError } from "../domain/errors.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const LoopQueueStateJson = Schema.fromJsonString(LoopQueueState)

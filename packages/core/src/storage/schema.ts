@@ -1,7 +1,7 @@
 import { Effect, Layer, Predicate, Schema } from "effect"
 import { Migrator, SqlClient } from "effect/unstable/sql"
 import { SqliteMigrator } from "@effect/sql-sqlite-bun"
-import { StorageError } from "../domain/storage-error.js"
+import { StorageError } from "../domain/errors.js"
 import { SESSION_PARENT_BRANCH_CHECK } from "./sqlite/rows.js"
 import { DefaultWorkspaceId } from "../server/workspace-rpc.js"
 

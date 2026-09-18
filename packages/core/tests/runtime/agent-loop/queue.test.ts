@@ -64,7 +64,7 @@ import {
 } from "../../../src/domain/queue"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
-import { StorageError } from "../../../src/domain/storage-error"
+import { StorageError } from "../../../src/domain/errors"
 import { ensureStorageParents } from "../../../src/test-utils"
 
 const emptyPersistedQueue = (): LoopQueueStateType =>

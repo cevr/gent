@@ -10,7 +10,7 @@ import {
   type ToolCallBindingKey,
 } from "../domain/tool-binding.js"
 import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { StorageError, storageError, storageErrorExcept } from "../domain/storage-error.js"
+import { StorageError, storageError, storageErrorExcept } from "../domain/errors.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const ToolCallBindingRow = Schema.Struct({

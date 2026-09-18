@@ -21,7 +21,7 @@ import {
   projectResponsePartsToMessageParts,
   responseUsage,
 } from "../../domain/response-to-prompt.js"
-import { ProviderError } from "../../domain/provider-error.js"
+import { ProviderError } from "../../domain/errors.js"
 import { encodeToolOutput, summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
 import type { AssistantResponsePart, ToolResponsePart } from "./turn-persistence.js"
 

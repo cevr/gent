@@ -50,7 +50,7 @@ export {
   makeOwnedToolCallReader,
   type OwnedToolCallAddress,
 } from "../storage/sqlite/owned-tool-call.js"
-export { StorageError } from "../domain/storage-error.js"
+export { StorageError } from "../domain/errors.js"
 export { EventStoreError } from "../domain/event.js"
 
 // The questions core asks a dispatching feature.
@@ -96,7 +96,7 @@ export { estimateTextTokens, ModelContextBudget } from "../runtime/model-context
 export { Message } from "../domain/message.js"
 export { type Usage } from "../domain/event.js"
 export { type ProviderAuthError } from "../domain/driver.js"
-export { type ProviderError } from "../domain/provider-error.js"
+export { type ProviderError } from "../domain/errors.js"
 export { responseUsage } from "../domain/response-to-prompt.js"
 export { toPrompt } from "../providers/ai-transcript.js"
 

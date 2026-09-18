@@ -14,7 +14,7 @@ import {
   type AgentEventTag,
 } from "../domain/event.js"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { StorageError, storageError, storageErrorExcept } from "../domain/storage-error.js"
+import { StorageError, storageError, storageErrorExcept } from "../domain/errors.js"
 import { SqlClient } from "effect/unstable/sql"
 import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"

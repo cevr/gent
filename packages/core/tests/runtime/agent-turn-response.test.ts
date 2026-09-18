@@ -13,7 +13,7 @@ import {
 } from "../../src/runtime/agent/turn-response"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import type { TurnError } from "../../src/domain/driver"
-import { ProviderError } from "../../src/domain/provider-error"
+import { ProviderError } from "../../src/domain/errors"
 import { finishPart, textDeltaPart } from "../../src/test-utils/language-model"
 import { UsageSchema, type AgentEvent } from "../../src/domain/event"
 import { EventPublisher } from "../../src/domain/event-publisher"

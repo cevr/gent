@@ -7,7 +7,7 @@
  */
 import { Effect, Predicate } from "effect"
 import { DEFAULT_MAX_AGENT_RUN_DEPTH, SessionDepthLimitError } from "../domain/agent.js"
-import { NotFoundError } from "../domain/business-errors.js"
+import { NotFoundError } from "../domain/errors.js"
 import type { SessionId } from "../domain/ids.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 

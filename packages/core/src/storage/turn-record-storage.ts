@@ -17,8 +17,7 @@
 import { Context, DateTime, Effect, Layer, Predicate, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import type { StorageError } from "../domain/storage-error.js"
-import { storageError } from "../domain/storage-error.js"
+import { storageError, type StorageError } from "../domain/errors.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 /** One tool call the current step issued. Named so replay can match it. */

@@ -4,7 +4,7 @@ import { EventPublisher } from "../../domain/event-publisher.js"
 import { type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { Message } from "../../domain/message.js"
 import { type ModelId } from "../../domain/model.js"
-import type { StorageError } from "../../domain/storage-error.js"
+import type { StorageError } from "../../domain/errors.js"
 import type { EventStorageError } from "../../storage/event-storage.js"
 import {
   handoffAnchorWithinTurn,

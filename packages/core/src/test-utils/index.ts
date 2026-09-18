@@ -16,7 +16,7 @@ import { ExtensionHost, makeCollectingExtensionHost } from "../domain/extension-
 import type { ExtensionContributions } from "../domain/contribution.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
-import type { StorageError } from "../domain/storage-error.js"
+import type { StorageError } from "../domain/errors.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import {

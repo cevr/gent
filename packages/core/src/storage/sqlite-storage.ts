@@ -15,7 +15,7 @@ import { RelationshipStorage } from "./relationship-storage.js"
 import { SessionOperationStorage } from "./session-operation-storage.js"
 import { ToolCallBindingStorage } from "./tool-call-binding-storage.js"
 import { TurnRecordStorage } from "./turn-record-storage.js"
-import { StorageError } from "../domain/storage-error.js"
+import { StorageError } from "../domain/errors.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 export { StorageError }
 

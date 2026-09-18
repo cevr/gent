@@ -12,7 +12,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { Branch, dateFromMillis } from "../../src/domain/message.js"
-import { StorageError } from "../../src/domain/storage-error.js"
+import { StorageError } from "../../src/domain/errors.js"
 import { BranchStorage } from "../../src/storage/branch-storage.js"
 import { getBranchTree, buildBranchTree } from "../../src/server/session-utils.js"
 

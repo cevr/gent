@@ -18,7 +18,7 @@ import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "../domain/ids.js"
-import { ProviderError } from "../domain/provider-error.js"
+import { ProviderError } from "../domain/errors.js"
 import { CurrentResolveModelAssertion } from "../providers/model-resolver.js"
 
 type LanguageModelToolMap = Record<string, AiTool.Any>

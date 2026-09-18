@@ -1,7 +1,7 @@
 import { Cause, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
 import { DEFAULT_RETRY_POLICY, type ProviderAuthError, type RetryPolicy } from "../domain/driver.js"
-import { ProviderError } from "../domain/provider-error.js"
+import { ProviderError } from "../domain/errors.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 
 /**

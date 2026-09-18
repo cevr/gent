@@ -1,16 +1,15 @@
 import { Schema } from "effect"
 import { SessionDepthLimitError } from "../domain/agent.js"
-import { InvalidStateError, NotFoundError } from "../domain/business-errors.js"
+import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
 import { EventStoreError } from "../domain/event.js"
 import { ExtensionId } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
-import { ProviderError } from "../domain/provider-error.js"
 import { ConfigLoadError } from "../runtime/config-service.js"
 import { SessionRuntimeError } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/sqlite-storage.js"
 
-export { InvalidStateError, NotFoundError } from "../domain/business-errors.js"
+export { InvalidStateError, NotFoundError } from "../domain/errors.js"
 
 export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocolError>()(
   "ExtensionProtocolError",

@@ -46,7 +46,7 @@ import {
 } from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { StorageError } from "../../domain/storage-error.js"
+import type { StorageError } from "../../domain/errors.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"

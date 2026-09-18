@@ -6,7 +6,7 @@ import {
 } from "../domain/interaction-request.js"
 import { SessionId, BranchId } from "../domain/ids.js"
 import type { InteractionRequestId } from "../domain/ids.js"
-import { StorageError, storageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/errors.js"
 import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import { toSqlNull } from "./sqlite/rows.js"
 

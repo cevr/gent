@@ -3,7 +3,7 @@ import { SqlClient } from "effect/unstable/sql"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ToolCallBindingKey } from "../../domain/tool-binding.js"
-import { StorageError } from "../../domain/storage-error.js"
+import { StorageError } from "../../domain/errors.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import { decodeStoredPromptPart } from "./rows.js"
 

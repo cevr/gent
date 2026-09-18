@@ -6,7 +6,7 @@ import { persistAuthTo } from "./provider-auth.js"
 import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import type { AgentName } from "../domain/agent.js"
 import { parseModelId, type ModelId } from "../domain/model.js"
-import { ProviderError } from "../domain/provider-error.js"
+import { ProviderError } from "../domain/errors.js"
 import {
   DriverRegistry,
   type DriverRegistryService,

@@ -18,7 +18,7 @@ import {
   ToolCallId,
   ToolId,
 } from "../../src/domain/ids"
-import { StorageError } from "../../src/domain/storage-error"
+import { StorageError } from "../../src/domain/errors"
 import { CurrentWorkspaceId, DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SqliteStorage } from "../../src/storage/sqlite-storage"

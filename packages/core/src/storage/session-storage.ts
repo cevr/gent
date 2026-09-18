@@ -8,7 +8,7 @@
 import { Context, Effect, Layer, Option, Predicate } from "effect"
 import { Session } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
-import { StorageError, storageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/errors.js"
 import { SqlClient } from "effect/unstable/sql"
 import { sessionFromRow, toSqlNull, SESSION_COLUMNS, type SessionRow } from "./sqlite/rows.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"

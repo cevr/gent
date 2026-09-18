@@ -2,7 +2,7 @@ import { Predicate, Context, DateTime, Effect, Layer, Option, Schema } from "eff
 import { SqlClient } from "effect/unstable/sql"
 import { AgentName, RunSpecSchema, DEFAULT_MAX_CHILD_MODEL_ATTEMPTS } from "../domain/agent.js"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "../domain/ids.js"
-import { StorageError, storageError } from "../domain/storage-error.js"
+import { StorageError, storageError } from "../domain/errors.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const START_AGENT_OPERATION = "agent.start"

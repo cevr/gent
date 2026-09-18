@@ -25,7 +25,7 @@ import {
   ToolId,
 } from "@gent/core-internal/domain/ids.js"
 import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { StorageError } from "@gent/core-internal/domain/storage-error.js"
+import { StorageError } from "@gent/core-internal/domain/errors.js"
 import {
   ToolBindingIdentity,
   ToolBindingSource,
