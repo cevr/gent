@@ -6,7 +6,7 @@ import type {
   Branch,
   Session as DomainSession,
 } from "@gent/sdk"
-import type { Session as ClientSession } from "./client/index"
+import type { Session as ClientSession } from "./client"
 import { randomId } from "./utils"
 
 /**

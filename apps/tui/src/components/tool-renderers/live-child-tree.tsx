@@ -2,7 +2,7 @@ import { Option, Schema } from "effect"
 import { For } from "solid-js"
 import { useTheme } from "../../theme"
 import { ToolCallTree } from "./tool-call-tree"
-import type { ChildSessionEntry } from "../../hooks/use-child-sessions"
+import type { ChildSessionEntry } from "../../client"
 
 export function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
   const { theme } = useTheme()

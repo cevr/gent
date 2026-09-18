@@ -57,7 +57,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off solid mount edge — isolated FS effect",
   },
   {
-    file: "apps/tui/src/utils/client-logger.ts",
+    file: "apps/tui/src/client.tsx",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
   },

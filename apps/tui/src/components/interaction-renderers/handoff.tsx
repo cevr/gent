@@ -2,7 +2,7 @@
 
 import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import { Option } from "effect"
-import { useClient } from "../../client/index"
+import { useClient } from "../../client"
 import { OptionList } from "./option-list"
 
 /** Confirms a handoff. A confirmed one opens the new session seeded with the summary. */

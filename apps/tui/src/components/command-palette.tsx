@@ -4,7 +4,7 @@ import { createEffect, createMemo, createResource, createSignal, Show } from "so
 import { useTerminalDimensions } from "../terminal"
 import { matchSorter } from "match-sorter"
 import { Option } from "effect"
-import { useClient } from "../client/index"
+import { useClient } from "../client"
 import type { Session as DomainSession } from "@gent/sdk"
 import { useCommand } from "../command/context"
 import {

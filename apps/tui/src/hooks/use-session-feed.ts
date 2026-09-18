@@ -31,8 +31,7 @@ import type { AssistantSegment, Message, SessionItem } from "../components/messa
 import type { ToolCall } from "../components/tool-renderers"
 import { addStep, emptyTurnSteps, type SessionEvent } from "../components/session-event-label"
 import { formatConnectionIssue, formatToolInput, randomId } from "../utils"
-import type { ClientLog } from "../utils/client-logger"
-import type { ClientContextValue } from "../client/context"
+import type { ClientContextValue, ClientLog } from "../client"
 import type { StartupPrompt } from "../session-shell"
 
 interface ReconnectOptions<E> {

@@ -11,7 +11,7 @@ import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "@gent/sdk"
-import type { ChildSessionEntry } from "../hooks/use-child-sessions"
+import type { ChildSessionEntry } from "../client"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 import { reasoningMarkdown } from "./reasoning-text"
 import {

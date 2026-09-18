@@ -41,7 +41,7 @@ import {
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"
-import { useClient } from "../client/index"
+import { useClient } from "../client"
 import { Auth } from "./auth"
 import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.js"
 

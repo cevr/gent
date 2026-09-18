@@ -6,7 +6,7 @@ import { Effect, Option, Schema } from "effect"
 import { createEffect, createSignal, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "../../workspace"
-import { useRuntime } from "../../hooks/use-runtime"
+import { useRuntime } from "../../client"
 import { useTheme } from "../../theme"
 import { openExternalEditor, resolveEditor } from "../../os"
 

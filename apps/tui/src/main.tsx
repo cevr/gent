@@ -16,7 +16,13 @@ import {
   Schema,
   Scope,
 } from "effect"
-import { clientTraceLogger } from "./utils/client-trace-logger"
+import {
+  clearClientLog,
+  ClientProvider,
+  clientTraceLogger,
+  createClientLog,
+  shutdownLog,
+} from "./client"
 import { LinkOpener, OsService } from "./os"
 import {
   RunSpecSchema,
@@ -32,11 +38,9 @@ import { App } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
 import { ComposerDraftsProvider } from "./components/composer-drafts"
 import { detectColorScheme } from "./theme"
-import { ClientProvider } from "./client/index"
 import { SessionShellProvider } from "./session-shell"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/context"
-import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
 import {
   AppBootstrapError,
   resolveInteractiveBootstrap,

@@ -10,16 +10,14 @@ import { KeyboardScopeProvider, TerminalDimensionsProvider } from "../src/termin
 import { ThemeProvider } from "../src/theme"
 import { CommandProvider } from "../src/command/context"
 import { EnvProvider, WorkspaceProvider } from "../src/workspace"
-import { ClientProvider } from "../src/client"
+import { type ClientLog, ClientProvider, type Session } from "../src/client"
 import type { Session as DomainSession, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { ComposerDraftsProvider } from "../src/components/composer-drafts"
 import { SessionShellProvider } from "../src/session-shell"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
 import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
-import type { ClientLog } from "../src/utils/client-logger"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 
 const noop = () => {}

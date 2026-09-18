@@ -12,7 +12,7 @@
 import { createSignal } from "solid-js"
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import { useWorkspace } from "../workspace"
-import { useRuntime } from "./use-runtime"
+import { useRuntime } from "../client"
 
 const MAX_ENTRIES = 100
 

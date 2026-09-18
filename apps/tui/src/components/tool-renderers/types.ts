@@ -1,5 +1,5 @@
 import type { JSX } from "@opentui/solid"
-import type { ChildSessionEntry } from "../../hooks/use-child-sessions"
+import type { ChildSessionEntry } from "../../client"
 
 export interface ToolCall {
   id: string

@@ -10,8 +10,7 @@ import {
   ToolCallId,
 } from "@gent/core/protocol"
 import { EventId } from "@gent/core-internal/domain/event"
-import { useChildSessions } from "../src/hooks/use-child-sessions"
-import type { Session } from "../src/client"
+import { type Session, useChildSessions } from "../src/client"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 type ChildSessionsClient = Parameters<typeof useChildSessions>[0]

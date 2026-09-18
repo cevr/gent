@@ -2,7 +2,7 @@ import { createContext, createEffect, createMemo, createSignal, on, onCleanup } 
 import { useRenderer } from "@opentui/solid"
 import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../workspace"
-import { shutdownLog } from "../utils/client-logger"
+import { shutdownLog, SteerCommandInput, useChildSessions, useClient, useRuntime } from "../client"
 import { formatError, useRequiredContext } from "../utils"
 import type {
   ActiveInteraction,
@@ -26,16 +26,13 @@ import {
   type ComposerEffect,
   ComposerState,
 } from "../components/composer-state"
-import { useClient, SteerCommandInput } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/context"
-import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useAutocompleteFrecency } from "../hooks/use-autocomplete-frecency"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../terminal"
 import { useSessionShell } from "../session-shell"
 import { useExtensionUI } from "../extensions/context"
-import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import {
   SessionUiEvent,

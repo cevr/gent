@@ -1,7 +1,7 @@
 import { Show } from "solid-js"
 import { Option } from "effect"
 import { useTheme } from "../theme"
-import { useClient } from "../client/index"
+import { useClient } from "../client"
 
 export function ConnectionWidget() {
   const client = useClient()

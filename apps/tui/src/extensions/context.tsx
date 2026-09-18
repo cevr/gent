@@ -38,7 +38,7 @@ import { loadExtensionUi } from "../services/extension-context-boundary"
 import { makeClientRuntime } from "./client-runtime"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace"
-import { useClient } from "../client/context"
+import { useClient } from "../client"
 
 import type { ClientActivitySnapshot } from "./client-activity"
 

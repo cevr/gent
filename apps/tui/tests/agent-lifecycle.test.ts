@@ -7,8 +7,7 @@ import {
   StreamStarted,
   TurnCompleted,
 } from "@gent/core-internal/domain/event"
-import { reduceAgentLifecycle } from "../src/client/context"
-import { AgentStatus } from "../src/client/agent-state"
+import { AgentStatus, reduceAgentLifecycle } from "../src/client"
 import { BranchId, Message, MessageId, SessionId, dateFromMillis } from "@gent/core/protocol"
 
 const makeMessage = (role: "user" | "assistant") =>

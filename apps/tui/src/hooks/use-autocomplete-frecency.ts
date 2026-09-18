@@ -36,7 +36,7 @@ import {
   setFrecencySnapshot,
 } from "../autocomplete"
 import { useWorkspace } from "../workspace"
-import { useRuntime } from "./use-runtime"
+import { useRuntime } from "../client"
 
 /** Wall-clock millis, in the house style for a Solid callback outside Effect. */
 const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())

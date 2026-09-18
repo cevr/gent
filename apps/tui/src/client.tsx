@@ -1,44 +1,662 @@
 import {
+  Cause,
+  Context,
+  DateTime,
+  Effect,
+  Exit,
+  Fiber,
+  FiberSet,
+  FileSystem,
+  type Logger,
+  Option,
+  type PlatformError,
+  Predicate,
+  Ref,
+  Schema,
+  type Scope,
+  Stream,
+  SubscriptionRef,
+} from "effect"
+import {
+  type Branch,
+  type BranchTreeNode,
+  buildLogPaths,
+  type ConnectionState,
+  type Session as DomainSession,
+  ensureLogDir,
+  type ExtensionHealthSnapshot,
+  type GentClientRpcError,
+  type GentNamespacedClient,
+  type GentRuntime,
+  makeJsonFileLogger,
+  type Message,
+  type QueueSnapshot,
+  type SessionSnapshot,
+  type SteerCommand,
+} from "@gent/sdk"
+import {
+  type AgentDefinition,
+  type AgentEvent,
+  type AgentName,
+  AgentName as AgentNameSchema,
+  BranchId,
+  type CreateSessionInput,
+  DEFAULT_AGENT_NAME,
+  type EventEnvelope,
+  type MessageId,
+  type Model,
+  type ModelContextMetrics,
+  ModelId,
+  ReasoningEffort,
+  SessionId,
+  type ToolCallId,
+} from "@gent/core/protocol"
+import {
   createContext,
   createEffect,
   createMemo,
   createSignal,
   on,
-  onMount,
   onCleanup,
+  onMount,
   type ParentProps,
 } from "solid-js"
 import { createStore } from "solid-js/store"
-import type { Context } from "effect"
-import { Effect, Option, Predicate, Schema } from "effect"
-import {
-  AgentName as AgentNameSchema,
-  type AgentDefinition,
-  BranchId,
-  DEFAULT_AGENT_NAME,
-  type AgentEvent,
-  type AgentName,
-  type CreateSessionInput,
-  type SessionId,
-  type EventEnvelope,
-  type MessageId,
-  type Model,
-  type ModelContextMetrics,
-  type ReasoningEffort,
-} from "@gent/core/protocol"
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import { omitUndefined } from "@gent/core-internal/domain/guards.js"
-import type { ClientLog } from "../utils/client-logger"
 import {
   formatConnectionIssue,
   formatError,
   randomId,
   type UiError,
   useRequiredContext,
-} from "../utils"
-import { useWorkspace } from "../workspace"
-import { AgentStatus, type AgentState } from "./agent-state"
-import { createClientEventHub } from "./event-hub"
+} from "./utils"
+import { useWorkspace } from "./workspace"
+
+// ── client logging ──────────────────────────────────────────────────────────
+
+/**
+ * Client-side structured logger — unified with Effect's logger.
+ *
+ * `createClientLog(services)` — creates a logger backed by Effect.runForkWith.
+ *   All logs flow through the Effect logger layer and land in the same file.
+ *
+ * `shutdownLog` — synchronous file write, survives process.exit(). Use for
+ *   shutdown paths only (after Effect runtime is torn down). It appends to a
+ *   directory `clientTraceLogger` creates in scope at startup.
+ */
+
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { appendFileSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
+
+// Client log path derives from `process.cwd()` — same source the launcher
+// threads into `GentObservability(cwd)` for the server. Both ends hash the same
+// cwd, so a single gent instance writes client + server logs under one
+// filename prefix.
+const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
+
+// Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
+// cannot yield `Clock.currentTimeMillis` here. `Date.now()` is the standard
+// sync-land alternative.
+const isoNow = () => DateTime.formatIso(DateTime.nowUnsafe())
+const encodeLogEntry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/** Synchronous log — survives process.exit(). Use for shutdown paths only. */
+export const shutdownLog = (msg: string, data?: Schema.JsonObject) => {
+  const entry = new Map<string, Schema.Json>(
+    Object.entries(Option.fromNullishOr(data).pipe(Option.getOrElse(() => ({})))),
+  )
+  entry.set("ts", isoNow())
+  entry.set("level", "info")
+  entry.set("source", "client")
+  entry.set("msg", msg)
+  Effect.runSync(
+    Effect.ignore(
+      Effect.try(() =>
+        appendFileSync(CLIENT_LOG_PATH, encodeLogEntry(Object.fromEntries(entry)) + "\n"),
+      ),
+    ),
+  )
+}
+
+export const clearClientLog = () => {
+  Effect.runSync(Effect.ignore(Effect.try(() => writeFileSync(CLIENT_LOG_PATH, ""))))
+}
+
+export interface ClientLog {
+  debug: (msg: string, data?: Schema.JsonObject) => void
+  info: (msg: string, data?: Schema.JsonObject) => void
+  warn: (msg: string, data?: Schema.JsonObject) => void
+  error: (msg: string, data?: Schema.JsonObject) => void
+}
+
+/**
+ * Create an Effect-backed client logger from captured services.
+ * Uses runForkWith — logs are async, fire-and-forget, flow through Effect's logger.
+ * Falls back to shutdownLog if the Effect runtime throws (e.g. during teardown).
+ */
+export const createClientLog = (services: Context.Context<unknown>): ClientLog => {
+  const fork = Effect.runForkWith(services)
+
+  const makeLogFn =
+    (effectLog: (msg: string) => Effect.Effect<void>) =>
+    (msg: string, data?: Schema.JsonObject) => {
+      const logData = Option.fromNullishOr(data)
+      let logEffect = effectLog(msg)
+      if (Option.isSome(logData) && Object.keys(logData.value).length > 0) {
+        logEffect = effectLog(msg).pipe(Effect.annotateLogs(logData.value))
+      }
+      const exit = Effect.runSyncExit(Effect.sync(() => fork(logEffect)))
+      if (Exit.isFailure(exit)) shutdownLog(msg, data)
+    }
+
+  return {
+    debug: makeLogFn(Effect.logDebug),
+    info: makeLogFn(Effect.logInfo),
+    warn: makeLogFn(Effect.logWarning),
+    error: makeLogFn(Effect.logError),
+  }
+}
+
+// ── client trace logging ────────────────────────────────────────────────────
+
+/**
+ * Client-side Effect trace logger.
+ *
+ * Writes the SDK's JSON line format to CLIENT_LOG_PATH, the same file
+ * `clientLog` appends to, so all TUI logs land in one place and `gent doctor`
+ * reads the server and client logs with one parser.
+ */
+
+/**
+ * Batched JSON file logger at CLIENT_LOG_PATH; flushes on scope close.
+ *
+ * Creates the log directory first: `makeJsonFileLogger` opens the file and
+ * does not make its parent, so the directory has to exist before the open.
+ */
+export const makeClientTraceLogger = (
+  dir: string,
+  path: string,
+): Effect.Effect<
+  Logger.Logger<unknown, void>,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* Effect.ignore(fs.makeDirectory(dir, { recursive: true }))
+    return yield* makeJsonFileLogger(path)
+  })
+
+export const clientTraceLogger: Effect.Effect<
+  Logger.Logger<unknown, void>,
+  PlatformError.PlatformError,
+  FileSystem.FileSystem | Scope.Scope
+> = Effect.andThen(ensureLogDir, makeJsonFileLogger(CLIENT_LOG_PATH))
+
+// ── agent state ─────────────────────────────────────────────────────────────
+
+export const AgentStatus = Schema.Union([
+  Schema.TaggedStruct("Idle", {}),
+  Schema.TaggedStruct("Streaming", {}),
+  Schema.TaggedStruct("Error", { error: Schema.String }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+
+export type AgentStatus = Schema.Schema.Type<typeof AgentStatus>
+
+interface AgentState {
+  agent: Option.Option<AgentName>
+  status: AgentStatus
+  cost: number
+  /**
+   * What the next turn would use, resolved by the server from session
+   * settings, config, and the agent definition (`SessionSnapshot.resolved*`).
+   * Hydrated from the snapshot and refreshed after every settings change.
+   */
+  resolvedModelId: Option.Option<ModelId>
+  resolvedReasoningLevel: Option.Option<ReasoningEffort>
+}
+
+// ── session state ───────────────────────────────────────────────────────────
+
+export interface Session {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly name: string
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
+  readonly modelId: ModelId | undefined
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
+  readonly reasoningLevel: ReasoningEffort | undefined
+}
+
+/** The session's mutable settings, always carried whole. */
+export interface SessionSettings {
+  // eslint-disable-next-line effect/noNullish -- an unset model falls back to the agent's.
+  readonly modelId: ModelId | undefined
+  // eslint-disable-next-line effect/noNullish -- an unset level falls back to the agent's.
+  readonly reasoningLevel: ReasoningEffort | undefined
+}
+
+export const sessionSettings = (session: Session): SessionSettings => ({
+  modelId: session.modelId,
+  reasoningLevel: session.reasoningLevel,
+})
+
+const SessionSchema: Schema.Schema<Session> = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  name: Schema.String,
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
+  modelId: Schema.UndefinedOr(ModelId),
+  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
+  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+})
+
+export type SessionState =
+  | { readonly status: "none" }
+  | { readonly status: "creating" }
+  | { readonly status: "active"; readonly session: Session }
+
+export const SessionStateEvent = Schema.TaggedUnion({
+  CreateRequested: {},
+  CreateSucceeded: { session: SessionSchema },
+  CreateFailed: {},
+  Activated: { session: SessionSchema },
+  Clear: {},
+  UpdateName: { name: Schema.String },
+  UpdateBranch: { branchId: BranchId },
+  UpdateSettings: {
+    // eslint-disable-next-line effect/noNullish -- RPC updates preserve an unset model.
+    modelId: Schema.UndefinedOr(ModelId),
+    // eslint-disable-next-line effect/noNullish -- RPC updates preserve an unset reasoning level.
+    reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+  },
+})
+export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
+
+export const SessionState = {
+  none: (): SessionState => ({ status: "none" }),
+  creating: (): SessionState => ({ status: "creating" }),
+  active: (session: Session): SessionState => ({ status: "active", session }),
+}
+
+const mapActive = (state: SessionState, update: (session: Session) => Session): SessionState => {
+  if (state.status === "active") return SessionState.active(update(state.session))
+  return state
+}
+
+export function transitionSessionState(
+  state: SessionState,
+  event: SessionStateEvent,
+): SessionState {
+  switch (event._tag) {
+    case "CreateRequested":
+      return SessionState.creating()
+    case "CreateSucceeded":
+    case "Activated":
+      return SessionState.active(event.session)
+    case "CreateFailed":
+    case "Clear":
+      return SessionState.none()
+    case "UpdateName":
+      return mapActive(state, (session) => ({ ...session, name: event.name }))
+    case "UpdateBranch":
+      return mapActive(state, (session) => ({ ...session, branchId: event.branchId }))
+    case "UpdateSettings":
+      return mapActive(state, (session) => ({
+        ...session,
+        modelId: event.modelId,
+        reasoningLevel: event.reasoningLevel,
+      }))
+  }
+}
+
+// ── event hub ───────────────────────────────────────────────────────────────
+
+type ExtensionStatePulse = {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly extensionId: string
+}
+
+type ExtensionPulseCallback = (pulse: ExtensionStatePulse) => void
+type SessionEventCallback = (envelope: EventEnvelope) => void
+
+const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
+type ThrownInput = Parameters<typeof decodeError>[0]
+
+const formatThrown = (error: ThrownInput): string =>
+  Option.match(decodeError(error), {
+    onNone: () => String(error),
+    onSome: (cause) => cause.message,
+  })
+
+const createClientEventHub = (log: ClientLog) => {
+  const extensionStateChangedSubscribers = new Set<ExtensionPulseCallback>()
+  const sessionEventSubscribers = new Set<SessionEventCallback>()
+
+  const onExtensionStateChanged = (cb: ExtensionPulseCallback): (() => void) => {
+    extensionStateChangedSubscribers.add(cb)
+    return () => {
+      extensionStateChangedSubscribers.delete(cb)
+    }
+  }
+
+  const onSessionEvent = (cb: SessionEventCallback): (() => void) => {
+    sessionEventSubscribers.add(cb)
+    return () => {
+      sessionEventSubscribers.delete(cb)
+    }
+  }
+
+  const notifyExtensionStateChanged = (event: EventEnvelope["event"]): void => {
+    if (event._tag !== "ExtensionStateChanged") return
+    if (extensionStateChangedSubscribers.size === 0) return
+    const pulse = {
+      sessionId: event.sessionId,
+      branchId: event.branchId,
+      extensionId: event.extensionId,
+    }
+    for (const cb of extensionStateChangedSubscribers) {
+      const exit = Effect.runSyncExit(Effect.sync(() => cb(pulse)))
+      if (Exit.isFailure(exit)) {
+        log.warn("client.extensionStateChanged.subscriber.threw", {
+          extensionId: event.extensionId,
+          error: formatThrown(Cause.squash(exit.cause)),
+        })
+      }
+    }
+  }
+
+  const notifySessionEvent = (envelope: EventEnvelope): void => {
+    if (sessionEventSubscribers.size === 0) return
+    for (const cb of sessionEventSubscribers) {
+      const exit = Effect.runSyncExit(Effect.sync(() => cb(envelope)))
+      if (Exit.isFailure(exit)) {
+        log.warn("client.sessionEvent.subscriber.threw", {
+          tag: envelope.event._tag,
+          error: formatThrown(Cause.squash(exit.cause)),
+        })
+      }
+    }
+  }
+
+  return {
+    onExtensionStateChanged,
+    onSessionEvent,
+    notifyExtensionStateChanged,
+    notifySessionEvent,
+  }
+}
+
+// ── child session tracker ───────────────────────────────────────────────────
+
+/**
+ * Framework-agnostic child session tracking service.
+ *
+ * Listens for AgentRunSpawned/Succeeded/Failed on a parent event stream,
+ * opens per-child event subscriptions, and tracks child tool call state.
+ * Entries persist after completion as the single TUI source of truth.
+ * Child subscription fibers are interrupted on terminal state; closing the
+ * scope that built the tracker interrupts every remaining subscription.
+ */
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Max chars retained in streamText to avoid unbounded memory growth */
+const STREAM_TEXT_MAX_LENGTH = 2000
+
+// =============================================================================
+// Types (live projection — not durable domain schemas)
+// =============================================================================
+
+interface ChildToolCall {
+  toolCallId: ToolCallId
+  toolName: string
+  status: "running" | "completed" | "error"
+  input?: unknown
+}
+
+export interface ChildSessionEntry {
+  childSessionId: string
+  childBranchId?: string
+  toolCallId: ToolCallId
+  agentName: AgentName
+  status: "running" | "completed" | "error"
+  toolCalls: ChildToolCall[]
+  /** Accumulated stream text (live, during running) */
+  streamText: string
+  usage?: { input: number; output: number; cost?: number }
+  preview?: string
+}
+
+// =============================================================================
+// Service
+// =============================================================================
+
+export interface ChildSessionTrackerService {
+  /** Start tracking children for a parent session/branch. Subscribes to live events. */
+  readonly track: (params: { sessionId: SessionId; branchId?: BranchId }) => Effect.Effect<void>
+  /** Current children plus subsequent state snapshots for reactive consumers */
+  readonly changes: Stream.Stream<ReadonlyMap<string, ChildSessionEntry>>
+}
+
+export const makeChildSessionTracker = (
+  events: GentNamespacedClient["session"]["events"],
+): Effect.Effect<ChildSessionTrackerService, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const entries = yield* SubscriptionRef.make(new Map<string, ChildSessionEntry>())
+    const childFibers = yield* Ref.make(new Map<string, Fiber.Fiber<void>>())
+    const fiberSet = yield* FiberSet.make<void>()
+
+    const updateEntry = (
+      childSessionId: string,
+      f: (entry: ChildSessionEntry) => ChildSessionEntry,
+    ) =>
+      SubscriptionRef.modifySome(
+        entries,
+        (
+          current,
+        ): [Option.Option<ChildSessionEntry>, Option.Option<Map<string, ChildSessionEntry>>] => {
+          const entry = Option.fromNullishOr(current.get(childSessionId))
+          if (Option.isNone(entry)) return [Option.none(), Option.none()]
+          const updated = f(entry.value)
+          return [Option.some(updated), Option.some(new Map(current).set(childSessionId, updated))]
+        },
+      )
+
+    const projectChildEvent = (entry: ChildSessionEntry, event: AgentEvent): ChildSessionEntry => {
+      switch (event._tag) {
+        case "ToolCallStarted": {
+          return {
+            ...entry,
+            toolCalls: [
+              ...entry.toolCalls,
+              {
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                status: "running",
+                input: event.input,
+              },
+            ],
+          }
+        }
+
+        case "ToolCallSucceeded": {
+          return {
+            ...entry,
+            toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
+              if (tc.toolCallId === event.toolCallId) return { ...tc, status: "completed" }
+              return tc
+            }),
+          }
+        }
+
+        case "ToolCallFailed": {
+          return {
+            ...entry,
+            toolCalls: entry.toolCalls.map((tc): ChildToolCall => {
+              if (tc.toolCallId === event.toolCallId) return { ...tc, status: "error" }
+              return tc
+            }),
+          }
+        }
+
+        case "StreamChunk": {
+          const combined = entry.streamText + event.chunk
+          return {
+            ...entry,
+            streamText: combined.slice(-STREAM_TEXT_MAX_LENGTH),
+          }
+        }
+        default:
+          return entry
+      }
+    }
+
+    const subscribeChild = (childSessionId: string, branchId?: BranchId) =>
+      Effect.gen(function* () {
+        const fiber = yield* FiberSet.run(fiberSet)(
+          Stream.runForEach(
+            events({ sessionId: SessionId.make(childSessionId), branchId, after: 0 }),
+            (envelope: EventEnvelope) =>
+              updateEntry(childSessionId, (entry) => projectChildEvent(entry, envelope.event)),
+          ).pipe(Effect.catchEager(() => Effect.void)),
+        )
+        yield* Ref.update(childFibers, (m) => new Map(m).set(childSessionId, fiber))
+      })
+
+    const interruptChild = (childSessionId: string) =>
+      Effect.gen(function* () {
+        const fiber = yield* Ref.modify(
+          childFibers,
+          (fibers): [Option.Option<Fiber.Fiber<void>>, Map<string, Fiber.Fiber<void>>] => {
+            const fiber = Option.fromNullishOr(fibers.get(childSessionId))
+            if (Option.isNone(fiber)) return [Option.none(), fibers]
+            const next = new Map(fibers)
+            next.delete(childSessionId)
+            return [fiber, next]
+          },
+        )
+        if (Option.isSome(fiber)) {
+          yield* Fiber.interrupt(fiber.value).pipe(Effect.catchEager(() => Effect.void))
+        }
+      })
+
+    const handleParentEvent = (event: AgentEvent) =>
+      Effect.gen(function* () {
+        switch (event._tag) {
+          case "AgentRunSpawned": {
+            const childId = event.childSessionId
+            const toolCallId = Option.fromNullishOr(event.toolCallId)
+            if (Option.isNone(toolCallId)) return
+
+            const entry: ChildSessionEntry = {
+              childSessionId: childId,
+              childBranchId: event.childBranchId,
+              toolCallId: toolCallId.value,
+              agentName: event.agentName,
+              status: "running",
+              toolCalls: [],
+              streamText: "",
+            }
+            const added = yield* SubscriptionRef.modifySome(
+              entries,
+              (current): [boolean, Option.Option<Map<string, ChildSessionEntry>>] => {
+                if (current.has(childId)) return [false, Option.none()]
+                return [true, Option.some(new Map(current).set(childId, entry))]
+              },
+            )
+            if (!added) return
+            // Subscribe to child events for tool call hydration.
+            // Completion drains saved child history before it closes the subscription.
+            yield* subscribeChild(childId, event.childBranchId)
+            break
+          }
+
+          case "AgentRunSucceeded": {
+            const childId = event.childSessionId
+            yield* finishChild(childId)
+            const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
+              ...entry,
+              status: "completed",
+              usage: event.usage,
+              preview: event.preview,
+            }))
+            if (Option.isNone(updated)) return
+            break
+          }
+
+          case "AgentRunFailed": {
+            const childId = event.childSessionId
+            yield* finishChild(childId)
+            const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
+              ...entry,
+              status: "error",
+            }))
+            if (Option.isNone(updated)) return
+            break
+          }
+
+          // Entries persist after parent tool completion — the tracker is the single
+          // source of truth for completed subagent state in the TUI.
+        }
+      })
+
+    const finishChild = Effect.fn("ChildSessionTracker.finishChild")(function* (
+      childSessionId: string,
+    ) {
+      yield* interruptChild(childSessionId)
+      const current = Option.fromUndefinedOr(
+        (yield* SubscriptionRef.get(entries)).get(childSessionId),
+      )
+      if (Option.isNone(current)) return
+      const entry = current.value
+      // A parent completion can arrive before the child's RPC replay finishes.
+      // Fold the final durable history privately, then publish one complete snapshot.
+      yield* events({
+        sessionId: SessionId.make(childSessionId),
+        branchId: Option.getOrUndefined(
+          Option.fromUndefinedOr(entry.childBranchId).pipe(Option.map((id) => BranchId.make(id))),
+        ),
+        after: 0,
+      }).pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+        Stream.runFold(
+          (): ChildSessionEntry => ({ ...entry, toolCalls: [], streamText: "" }),
+          (state, envelope) => projectChildEvent(state, envelope.event),
+        ),
+        Effect.flatMap((snapshot) => updateEntry(childSessionId, () => snapshot)),
+        Effect.catchEager((error) =>
+          Effect.logWarning("Child event replay failed").pipe(
+            Effect.annotateLogs({ childSessionId, error: String(error) }),
+          ),
+        ),
+      )
+    })
+
+    const service: ChildSessionTrackerService = {
+      track: ({ sessionId, branchId }) =>
+        FiberSet.run(fiberSet)(
+          Stream.runForEach(
+            events({
+              sessionId,
+              branchId,
+              after: 0,
+            }),
+            (envelope: EventEnvelope) => handleParentEvent(envelope.event),
+          ).pipe(Effect.catchEager(() => Effect.void)),
+        ),
+
+      changes: SubscriptionRef.changes(entries),
+    }
+
+    return service
+  })
+
+// ── client provider ─────────────────────────────────────────────────────────
 
 interface AgentLifecycleUpdate {
   readonly status?: AgentStatus
@@ -61,29 +679,6 @@ export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate =>
       return {}
   }
 }
-
-import type {
-  ConnectionState,
-  GentNamespacedClient,
-  GentRuntime,
-  GentClientRpcError,
-  Message,
-  QueueSnapshot,
-  SessionSnapshot,
-  Session as DomainSession,
-  Branch,
-  BranchTreeNode,
-  ExtensionHealthSnapshot,
-  SteerCommand,
-} from "@gent/sdk"
-import {
-  SessionState,
-  SessionStateEvent,
-  sessionSettings,
-  transitionSessionState,
-  type Session,
-  type SessionSettings,
-} from "./session-state"
 
 const isReconnectingState = (state: ConnectionState): boolean =>
   Predicate.isTagged("connecting")(state) || Predicate.isTagged("reconnecting")(state)
@@ -1063,4 +1658,152 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   return <ClientContext.Provider value={clientValue}>{props.children}</ClientContext.Provider>
+}
+
+// ── runtime hook ────────────────────────────────────────────────────────────
+
+/**
+ * Effect execution hook for Solid
+ * Provides call (tracked) and cast (fire-and-forget) for Effect execution.
+ *
+ * Effects are forked against the host-provided `services` context — wired
+ * once at the TUI root (`<ClientProvider services={uiServices}>`) per
+ * [[central-provider-wiring]]. Component effects requiring platform
+ * services (`FileSystem`, `ChildProcessSpawner`, …) execute without any
+ * per-call-site `Effect.provide`.
+ */
+
+interface UseRuntimeReturn {
+  /** Run Effect, interrupting it when the owning component unmounts. */
+  call: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
+  /** Fire and forget - runs Effect without tracking result */
+  cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => void
+}
+
+/**
+ * Hook to run Effects with the host-provided platform context.
+ */
+export function useRuntime(): UseRuntimeReturn {
+  const { services, log } = useClient()
+
+  const fork = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    // The runtime context is captured at the UI boundary. Its map contains the
+    // services required by the caller-supplied effect.
+    Effect.runForkWith(Context.makeUnsafe<R>(services.mapUnsafe))(effect)
+
+  const call = <A, E, R>(effect: Effect.Effect<A, E, R>): void => {
+    const fiber = fork(effect)
+
+    fiber.addObserver((exit) => {
+      if (Exit.isFailure(exit)) {
+        log.error("call.failed", { error: Cause.pretty(exit.cause) })
+      }
+    })
+
+    onCleanup(() => {
+      Effect.runFork(Fiber.interrupt(fiber))
+    })
+  }
+
+  const cast = <A, E, R>(effect: Effect.Effect<A, E, R>): void => {
+    const fiber = fork(effect)
+    fiber.addObserver((exit) => {
+      if (Exit.isFailure(exit)) {
+        log.error("cast.failed", { error: Cause.pretty(exit.cause) })
+      }
+    })
+  }
+
+  return { call, cast }
+}
+
+// ── child sessions hook ─────────────────────────────────────────────────────
+
+/**
+ * Thin Solid wrapper over the TUI child session tracker.
+ *
+ * Creates a tracker, subscribes to changes, writes to Solid store.
+ * All event projection logic lives in the tracker.
+ */
+
+interface UseChildSessionsReturn {
+  getChildren: (toolCallId: string) => ChildSessionEntry[]
+}
+
+type ChildSessionClient = Pick<ClientContextValue, "sessionIdentity" | "runtime" | "client">
+
+export function useChildSessions(client: ChildSessionClient): UseChildSessionsReturn {
+  const [store, setStore] = createStore<{ entries: Record<string, ChildSessionEntry> }>({
+    entries: {},
+  })
+
+  let fiber: Option.Option<Fiber.Fiber<void>> = Option.none()
+
+  const stopAll = () => {
+    if (Option.isSome(fiber)) {
+      Effect.runFork(Fiber.interrupt(fiber.value))
+      fiber = Option.none()
+    }
+    setStore({ entries: {} })
+  }
+
+  const startTracking = (sessionId: SessionId, branchId?: BranchId) => {
+    stopAll()
+
+    // Single long-running scoped fiber: creates tracker, subscribes to changes,
+    // and blocks on Effect.never so the scope (and FiberSet) stays alive.
+    fiber = Option.some(
+      client.runtime.fork(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const tracker = yield* makeChildSessionTracker(client.client.session.events)
+
+            // Fork: pump tracker snapshots → Solid store
+            yield* Effect.forkScoped(
+              Stream.runForEach(tracker.changes, (entries) =>
+                Effect.sync(() => {
+                  setStore({ entries: Object.fromEntries(entries) })
+                }),
+              ).pipe(Effect.catchEager(() => Effect.void)),
+            )
+
+            // Start tracking (fires internal subscriptions into FiberSet)
+            yield* tracker.track({ sessionId, branchId })
+
+            // Block forever — keeps the scope alive until fiber is interrupted
+            return yield* Effect.never
+          }),
+        ).pipe(Effect.catchEager(() => Effect.void)),
+      ),
+    )
+  }
+
+  // React to session changes. The source is the identity, not the record: a
+  // rename or a model change rebuilds the record, and restarting here would
+  // interrupt the tracker fiber and drop every child row it has projected,
+  // with no refetch behind it.
+  createEffect(
+    on(
+      () => client.sessionIdentity(),
+      (identity) => {
+        if (Option.isNone(identity)) {
+          stopAll()
+          return
+        }
+        startTracking(identity.value.sessionId, identity.value.branchId)
+      },
+    ),
+  )
+
+  onCleanup(stopAll)
+
+  const getChildren = (toolCallId: string): ChildSessionEntry[] => {
+    const result: ChildSessionEntry[] = []
+    for (const entry of Object.values(store.entries)) {
+      if (entry.toolCallId === toolCallId) result.push(entry)
+    }
+    return result
+  }
+
+  return { getChildren }
 }
