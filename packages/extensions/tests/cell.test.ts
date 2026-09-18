@@ -111,6 +111,7 @@ import {
   type SequenceStep,
   textDeltaPart,
   textStep,
+  toolCallPart,
   toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
@@ -1553,7 +1554,7 @@ it.effect(
       })
       const result = Prompt.toolResultPart({
         id: toolCallId,
-        name: "delegate.wait",
+        name: "delegate.start",
         isFailure: false,
         providerExecuted: false,
         result: { output: "pong", metadata },
@@ -2511,25 +2512,57 @@ describe("external driver cell dispatch", () => {
   )
 })
 
-// ── cell/cell-child-foreground.test ─────────────────────────────────────────
+// ── cell/cell-child.test ────────────────────────────────────────────────────
 
-describe("foreground child cell", () => {
+describe("child cell", () => {
   it.scopedLive(
     "a child delegated from a cell runs its own cell instead of refusing as a nested outer cell",
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const artifact = yield* buildCellExecutable
-        // The shared model queue serves the parent turn, then the child's
-        // turn admitted from inside the parent's cell operation.
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", {
-            code: "const h = await tools.call('delegate.start', { todo: 'compute' }); const r = await tools.call('delegate.wait', h); r._tag === 'Completed' && r.output.includes('child says 2') && r.metadata.toolCalls.length === 1 && r.metadata.toolCalls[0].toolName === 'cell' && r.metadata.toolCalls[0].isError === false",
-          }),
-          toolCallStep("cell", { code: "1 + 1" }),
-          textStep("child says 2"),
-          textStep("done"),
-        ])
+        // The parent starts the child from a cell and ends its turn; the
+        // child runs its own cell. Each branch is told apart by its first
+        // user text, so the two turns never race for one script.
+        const childTask = "compute"
+        const firstText = (prompt: Prompt.Prompt) =>
+          prompt.content.flatMap((message) => {
+            if (message.role !== "user") return []
+            return message.content.flatMap((part) => {
+              if (part.type !== "text") return []
+              return [part.text]
+            })
+          })[0]
+        const step = <A>(parts: ReadonlyArray<A>) => Effect.succeed(Stream.fromIterable(parts))
+        let parentCalls = 0
+        let childCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          if (firstText(options.prompt) === childTask) {
+            childCalls += 1
+            if (childCalls === 1) {
+              return step([
+                toolCallPart("cell", { code: "1 + 1" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            return step([textDeltaPart("child says 2"), finishPart({ finishReason: "stop" })])
+          }
+          parentCalls += 1
+          if (parentCalls === 1) {
+            return step([
+              toolCallPart("cell", {
+                code: "const h = await tools.call('delegate.start', { todo: 'compute' }); typeof h.requestId === 'string'",
+              }),
+              finishPart({ finishReason: "tool-calls" }),
+            ])
+          }
+          // The turn that started the child ends here; "done" is the turn
+          // the child's completion wakes.
+          if (parentCalls === 2) {
+            return step([textDeltaPart("started"), finishPart({ finishReason: "stop" })])
+          }
+          return step([textDeltaPart("done"), finishPart({ finishReason: "stop" })])
+        })
         const fixture = defineExtension({
           id: "cell-child-foreground-fixture",
           setup: Effect.gen(function* () {
@@ -2564,27 +2597,38 @@ describe("foreground child cell", () => {
         })
         const content = "delegate from a cell"
         yield* client.message.send({ sessionId, branchId, content })
-        const messages = yield* waitFor(client.message.list({ branchId }), (items) =>
-          items.some((item) => item.role === "user" && messageSingleText(item.parts) === content),
+        // The child's completion wakes the parent; the parent's reply to it
+        // is the last thing to land.
+        const parentMessages = yield* waitFor(
+          client.message.list({ branchId }),
+          (items) =>
+            items.some(
+              (item) => item.role === "assistant" && messageSingleText(item.parts) === "done",
+            ),
+          12_000,
+          "the parent read the child's completion",
         )
-        const user = messages.find(
-          (item) => item.role === "user" && messageSingleText(item.parts) === content,
-        )
-        if (Predicate.isUndefined(user)) return yield* Effect.die("Missing parent message")
-        yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter(
-            (envelope) =>
-              envelope.event._tag === "TurnCompleted" && envelope.event.messageId === user.id,
-          ),
-          Stream.take(1),
-          Stream.runDrain,
-        )
-        const completed = yield* client.message.list({ branchId })
-        const results = completed
+        const startResults = parentMessages
           .flatMap((message) => message.parts)
           .filter((part) => part.type === "tool-result" && part.name === "cell")
-        expect(results).toHaveLength(1)
-        expect(results[0]).toMatchObject({ isFailure: false, result: { display: "true" } })
+        expect(startResults).toHaveLength(1)
+        expect(startResults[0]).toMatchObject({ isFailure: false, result: { display: "true" } })
+        const completion = parentMessages.find(
+          (item) => item.metadata?.customType === "child-completion",
+        )
+        expect(completion).toBeDefined()
+        expect(messageSingleText(completion?.parts ?? [])).toContain("child says 2")
+
+        const sessions = yield* client.session.list()
+        const child = sessions.find((session) => session.parentSessionId === sessionId)
+        if (Predicate.isUndefined(child?.activeBranchId)) {
+          return yield* Effect.die("Missing child session")
+        }
+        const childResults = (yield* client.message.list({ branchId: child.activeBranchId }))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.name === "cell")
+        expect(childResults).toHaveLength(1)
+        expect(childResults[0]).toMatchObject({ isFailure: false, result: { display: "2" } })
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
   )

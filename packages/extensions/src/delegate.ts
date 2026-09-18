@@ -5,10 +5,11 @@
  * agent. The registry is one JSON file per parent branch under
  * `~/.gent/delegates/`; every entry names the child, the tool call that owns
  * it, and whether the parent has its completion. `delegate.start` admits a
- * child and returns its handle at once; `delegate.wait` awaits the child's
- * turn here and returns its output. A child nobody waits for reports through
- * the delegate's own `turnAfter` hook, as a message on the parent branch. The
- * parent's next turn and every `delegate.list` reconcile what a crash left.
+ * child and returns its handle at admission, never its answer: the child
+ * reports through the delegate's own `turnAfter` hook, as a message on the
+ * parent branch that wakes it. The same hook stops a parent's running children
+ * when the parent's turn is interrupted. The parent's next turn and every
+ * `delegate.list` reconcile what a crash left.
  */
 import {
   Cause,
@@ -59,7 +60,6 @@ import { makeBranchStateStore } from "./branch-state-store.js"
  */
 const CHILD_DENIED_TOOLS: ReadonlyArray<string> = [
   "delegate.start",
-  "delegate.wait",
   "delegate.send",
   "delegate.cancel",
   "delegate.list",
@@ -137,7 +137,7 @@ const registry = makeBranchStateStore({
 })
 
 /**
- * A `wait` in flight claims its row under this name. The hook and the
+ * A `runChild` in flight claims its row under this name. The hook and the
  * reconcile leave a claimed row to the waiter; a claim that names another
  * process belongs to a wait that died with it, so the row is treated as
  * unclaimed.
@@ -577,19 +577,22 @@ const claimWait = (requestId: RequestId) =>
     }),
   )
 
-/** The interrupted wait settles its row so no message follows, then stops the child. */
-const abandonWait = (entry: DelegateEntry) =>
+/**
+ * Settle a running child's row as interrupted, then stop it. The row is
+ * settled first so the child's own receipt finds it delivered and sends no
+ * message: a parent that stopped its children is not woken by them.
+ */
+const stopChild = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* registry
+      .at(ctx.branchId)
       .update((entries) => {
         const current = entries.find((row) => row.requestId === entry.requestId)
         if (Predicate.isUndefined(current) || current.delivered) return entries
         return replaceEntry(entries, settled(current, { interrupted: true }, Option.none(), ""))
       })
       .pipe(Effect.ignore)
-    // A child left running after its waiter is interrupted has no owner to
-    // await or cancel it.
     yield* ctx.Session.steer({
       _tag: "Interrupt",
       sessionId: entry.sessionId,
@@ -637,7 +640,9 @@ const awaitChild = Effect.fn("Delegate.wait")(function* (requestId: RequestId) {
       messageId: startMessageId(requestId),
     }).pipe(
       Effect.catchCause(() => Effect.succeedNone),
-      Effect.onInterrupt(() => abandonWait(claimed)),
+      // A child left running after its waiter is interrupted has no owner to
+      // await or cancel it.
+      Effect.onInterrupt(() => stopChild(claimed)),
     )
     const outcome = Option.match(receipt, { onNone: (): ChildOutcome => ({}), onSome: outcomeOf })
     const usage = Option.flatMap(receipt, (event) => usageOf(Option.fromUndefinedOr(event.usage)))
@@ -679,9 +684,9 @@ interface RunChildParams {
 }
 
 /**
- * One child under the current branch, admitted and awaited here. What a
- * `delegate.start` + `delegate.wait` pair is for the model, this is for
- * `btw` and `read_session`: a private run leaves no trace.
+ * One child under the current branch, admitted and awaited here. The model
+ * never waits on a child; this is for `btw` and `read_session`, whose caller
+ * needs the answer in hand. A private run leaves no trace.
  */
 export const runChild = Effect.fn("Delegate.runChild")(function* (params: RunChildParams) {
   const run = Effect.gen(function* () {
@@ -759,6 +764,33 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   if (delivered) yield* ctx.State.changed().pipe(Effect.ignore)
 })
 
+/**
+ * A parent's interrupted turn stops the children it started and had not yet
+ * heard from. Left running, they have no owner: the parent's next turn can
+ * neither read them nor cancel them, and the gamut testbed showed six such
+ * children editing files after an Escape. A child interrupted this way ends
+ * its own turn interrupted, so the cascade reaches its children too.
+ */
+const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input: {
+  readonly branchId: BranchId
+  readonly interrupted: boolean
+}) {
+  if (!input.interrupted) return
+  const ctx = yield* ExtensionContext
+  const waiter = yield* processWaiter
+  const running = (yield* registry.at(input.branchId).read()).filter(
+    (row) =>
+      !row.private &&
+      !row.delivered &&
+      row.submitted &&
+      Predicate.isUndefined(row.completed) &&
+      row.waiter !== waiter,
+  )
+  if (running.length === 0) return
+  yield* Effect.forEach(running, stopChild, { discard: true })
+  yield* ctx.State.changed().pipe(Effect.ignore)
+})
+
 // ── tools ───────────────────────────────────────────────────────────────────
 
 export const ChildAgentHandle = Schema.Struct({
@@ -824,14 +856,14 @@ const StartParams = Schema.Struct({
 export const StartChild = tool({
   id: "delegate.start",
   description:
-    "Start one child on a self-contained task and return its handle now. The child runs as the delegate subagent with its own configured model and cannot delegate further. delegate.wait returns its output; a child nobody waits for reports as a message on this branch when it ends.",
+    "Start one child on a self-contained task and return its handle at admission, never its answer. The child runs as the delegate subagent with its own configured model and cannot delegate further. When it ends, its result arrives as a message on this branch and starts a turn by itself.",
   promptSnippet: "Start a child agent on a task",
   promptGuidelines: [
     "Use for independent work that benefits from a fresh context or parallelism. Do NOT delegate simple reads, searches, or single-file edits — do those directly.",
     "Each todo must be self-contained — children have no conversation history.",
-    "Foreground: const h = await tools.call('delegate.start', { todo }); const r = await tools.call('delegate.wait', h). Parallel: start several, then wait on each. Chain dependent work by passing earlier output into the next todo.",
-    "Background: start and do not wait. The result arrives later as a message on this branch and starts a turn by itself, so end your turn; do not poll, set an alarm, or set a monitor for it.",
-    "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and delegate.wait on a finished child returns its output.",
+    "Start every independent child from one cell, then end your turn. Do not poll, set an alarm, or set a monitor for a child: each result wakes you as a message, and several may arrive over several turns. Chain dependent work by starting the next child from the turn that read the earlier result.",
+    "Interrupting your turn stops every child you started and had not heard from.",
+    "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and read_session reads a finished child's transcript.",
     "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions.",
     "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role.",
   ],
@@ -849,58 +881,6 @@ export const StartChild = tool({
       runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
-  }),
-})
-
-const WaitMetadata = Schema.Struct({
-  sessionId: Schema.optionalKey(Schema.String),
-  agentName: Schema.optionalKey(AgentName),
-  usage: Schema.optionalKey(ChildRunUsage),
-  toolCalls: Schema.optionalKey(Schema.Array(AgentRunToolCallSchema)),
-})
-
-/** `completed` is the child's output; `error` names a turn that ended badly, with partial output. */
-const WaitResult = Schema.TaggedUnion({
-  Completed: { requestId: RequestId, output: Schema.String, metadata: WaitMetadata },
-  Error: { requestId: RequestId, error: Schema.String },
-})
-
-const WaitForChild = tool({
-  id: "delegate.wait",
-  description:
-    "Wait for a child started on this branch and return its output. Returns at once for a finished child. Interrupting this turn stops the child.",
-  promptGuidelines: [
-    "Completion is a turn receipt, not task success. Read the output before relying on it; an error result carries any partial output.",
-    "The full child transcript is at session://<sessionId>; read_session reads it.",
-  ],
-  params: Schema.Struct({ requestId: RequestId }),
-  output: WaitResult,
-  execute: Effect.fn("WaitForChild.execute")(function* (params) {
-    const entry = yield* ownedChild(params.requestId)
-    const result = yield* awaitChild(entry.requestId)
-    const withSessionRef = (text: string, sessionId?: string) => {
-      if (Predicate.isUndefined(sessionId)) return text
-      return `${text}\n\nFull session: session://${sessionId}`
-    }
-    if (result._tag === "Error") {
-      return WaitResult.cases.Error.make({
-        requestId: params.requestId,
-        error: withSessionRef(result.error, result.sessionId),
-      })
-    }
-    return WaitResult.cases.Completed.make({
-      requestId: params.requestId,
-      output: withSessionRef(result.text, result.sessionId),
-      metadata: Record.filter(
-        {
-          sessionId: result.sessionId,
-          agentName: result.agentName,
-          usage: result.usage,
-          toolCalls: result.toolCalls,
-        },
-        Predicate.isNotUndefined,
-      ),
-    })
   }),
 })
 
@@ -1047,16 +1027,19 @@ export const DelegateRpc = defineRequests(DELEGATE_EXTENSION_ID, {
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-/** Child admission and control: start, wait, send, cancel, and list. */
+/** Child admission and control: start, send, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
-    yield* host.register("tool", StartChild, WaitForChild, SendToChild, CancelChild, ListChildren)
+    yield* host.register("tool", StartChild, SendToChild, CancelChild, ListChildren)
     yield* host.register("request", DelegateRpc.Children)
+    // Every turn end is read twice: as a child's receipt for its parent, and
+    // as a parent's interrupt for its children.
     yield* host.on("turnAfter", (input) =>
       onChildTurnAfter(input).pipe(
+        Effect.andThen(onParentTurnAfter(input)),
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.completion.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),

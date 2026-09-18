@@ -103,13 +103,14 @@ updates this list in the same commit.
 Kept here so the next pass starts from them, not from a fresh survey. Each
 names the decision that left it open.
 
-- **Typed fan-in for children (ledger A3) is rejected, not open.** The
-  cell already fans in: `Promise.all` over `delegate.wait` calls returns
-  typed results (gamut run 34: six in one cell), and a `delegate.start`
-  nobody waits for returns a handle whose completion arrives as a user
-  message, with `delegate.list` for inspection. A `collect` would re-await
-  what the cell awaits. Reopen only if a run shows a child result needed
-  inside a later cell before its message lands.
+- **Typed fan-in for children (ledger A3) is rejected, not open.** A
+  `delegate.start` returns at admission and the child's completion arrives
+  as a user message that wakes the parent (gamut run 34: six starts in one
+  cell, six wakes), with `delegate.list` for inspection and `read_session`
+  for the transcript. The model never blocks on a child, as in prime-agent;
+  a `collect` would add a blocking surface the owner rejected on 2026-09-18.
+  Reopen only if a run shows a child result needed inside a later cell
+  before its message lands.
 - **The agents view keeps a server half.** The live catalog
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
@@ -285,25 +286,30 @@ Shape:
   concurrency or token budget.
 - The `@gent/delegate` extension admits a child by creating a session through the
   `Session` facade with `parentSessionId`/`parentBranchId`, then `send`ing the
-  child's first message. `delegate.start` returns the handle at once, keyed by
-  the host tool call id so a replayed call finds its child; `delegate.wait`
-  awaits the child's own turn receipt. The delegate reserves at most four
-  unfinished children per parent branch, counted from its own on-disk registry,
-  not live actors.
+  child's first message. `delegate.start` returns the handle at admission,
+  keyed by the host tool call id so a replayed call finds its child, and never
+  the answer: the model does not block on a child. The delegate reserves at
+  most four unfinished children per parent branch, counted from its own on-disk
+  registry, not live actors.
 - The delegate keeps one child registry per parent branch as a JSON file under
   `~/.gent/delegates/<branchId>.json`. `delegate.list` reads it; the delegate
   reconciles it lazily on the parent's next turn and on every read, so a caller
   that died between the child's receipt and delivery leaves a child the registry
   still resolves, never a running one nobody delivers.
-- One writer settles a child's completion. A live `delegate.wait` claims the
-  row under a per-process nonce and returns the output as its tool result; the
-  delegate's `turnAfter` hook on the child branch delivers every unclaimed
-  receipt as one idempotent follow-up message on the parent branch (metadata
-  `customType: "child-completion"`, `wake` set so a parent with no prior turn
-  still starts one). A claim naming another process is a crash leftover and
-  reads as unclaimed. An interrupted wait settles its row and interrupts the
-  child, so a parent Escape cascades through the wait; a start nobody waits
-  for outlives the parent's turn.
+- One writer settles a child's completion. The delegate's `turnAfter` hook on
+  the child branch delivers every receipt as one idempotent follow-up message
+  on the parent branch (metadata `customType: "child-completion"`, `wake` set
+  so a parent with no prior turn still starts one). The one exception is a
+  private helper run (`runChild`, used by `/btw` and `read_session`), whose
+  caller needs the answer in hand: it claims the row under a per-process nonce
+  and the hook leaves it alone; a claim naming another process is a crash
+  leftover and reads as unclaimed.
+- The same hook, read on the parent side, cascades an interrupt: when a turn
+  ends interrupted, every child it started and had not heard from is settled
+  as interrupted and then stopped, so a parent Escape stops the whole subtree
+  and no completion message wakes the parent the user just interrupted.
+  Prime-agent does not cascade a turn abort; opencode does, and the gamut
+  testbed's six children editing files after an Escape decided it.
 - `delegate.cancel` interrupts the child's turn through the facade; a finished
   child is a no-op. `delegate.send` steers a running child on its branch, read
   at its next step; a finished child refuses the message.
@@ -415,22 +421,23 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   delegate keeps its own child registry as one JSON file per parent branch under
   `~/.gent/delegates/<branchId>.json`, so a `delegate.list` survives restarts
   without any `durable_operations` row.
-- Completion has one writer. A live `delegate.wait` holds the row and returns
-  the child's output as its tool result; the delegate's `turnAfter` hook on the
-  child branch delivers every unheld receipt as one ordinary user message on the
-  parent branch (metadata `customType: "child-completion"`) with the outcome and
-  a bounded preview. Lazy reconcile covers the crash window between the receipt
-  and the hook: the delegate reconciles its registry on the parent's next turn
-  and on every `delegate.list`, so a caller that died mid-op leaves a child the
-  registry still resolves, never a running one nobody delivers.
-- The delegate ships five ordinary tools: `delegate.start`, `delegate.wait`,
-  `delegate.send`, `delegate.cancel`, `delegate.list`. `delegate.start` accepts
-  RunSpec overrides for model, reasoning, tool selection, and added
-  instructions, and always denies the child the delegation tools: fan-out is the
-  caller's decision, and a project prompt that addresses "the orchestrator"
-  reaches children too. Parents read child output through `read_session` on the
-  returned session/branch IDs. The session is the only copy of a child's output;
-  a wait result carries text, usage, tool calls, and the session id.
+- Completion has one writer: the delegate's `turnAfter` hook on the child
+  branch delivers every receipt as one ordinary user message on the parent
+  branch (metadata `customType: "child-completion"`) with the outcome and a
+  bounded preview, and the message wakes the parent. The model never waits on a
+  child; only the private helper run (`runChild`) does, and it holds its row so
+  the hook leaves it alone. Lazy reconcile covers the crash window between the
+  receipt and the hook: the delegate reconciles its registry on the parent's
+  next turn and on every `delegate.list`, so a caller that died mid-op leaves a
+  child the registry still resolves, never a running one nobody delivers.
+- The delegate ships four ordinary tools: `delegate.start`, `delegate.send`,
+  `delegate.cancel`, `delegate.list`. `delegate.start` accepts RunSpec
+  overrides for model, reasoning, tool selection, and added instructions, and
+  always denies the child the delegation tools: fan-out is the caller's
+  decision, and a project prompt that addresses "the orchestrator" reaches
+  children too. Parents read child output through `read_session` on the
+  returned session/branch IDs. The session is the only copy of a child's
+  output; the completion message carries the outcome and a preview.
 - The TUI child view reads the delegate's registry via `DelegateRpc.Children`,
   scoped to the parent branch. It repaints on the delegate's
   `ExtensionStateChanged` pulses and hydrates each child's tool calls and stream
