@@ -183,14 +183,7 @@ export const oneGenerate = (
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
-/**
- * Shared test fixtures for integration tests across packages.
- * Import from @gent/core-internal/test-utils/fixtures
- */
-
-// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
-// oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
-// oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter builds worker paths before the child runtime starts.
+/** Shared test fixtures for integration tests across packages. */
 
 /** Create a temp directory that is removed when the test scope closes. */
 export const makeTempDirectoryScoped = (prefix: string) =>
