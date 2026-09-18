@@ -9,6 +9,7 @@ import {
   rewriteRoster,
   rosterBlock,
   shellQuote,
+  stateFileFor,
   type GamutState,
 } from "../gamut"
 
@@ -69,6 +70,13 @@ describe("gamut roster block", () => {
 })
 
 describe("gamut state file", () => {
+  test("two checkouts get two state files", () => {
+    const a = stateFileFor("/Users/x/.rifts/gent/fold-tui")
+    const b = stateFileFor("/Users/x/.rifts/gent/fold-extensions")
+    expect(a).not.toBe(b)
+    expect(a.endsWith("gent-gamut-fold-tui.json")).toBe(true)
+  })
+
   const state: GamutState = {
     root: "/tmp/gent-gamut-1",
     work: "/tmp/gent-gamut-1/work",

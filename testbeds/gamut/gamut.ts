@@ -19,7 +19,7 @@
  * A plain Bun script, like `apps/tui/scripts/build.ts`: it is a driver for a
  * terminal program, not part of the shipped runtime, and it runs before any
  * Effect layer exists. The pure parts it exports are covered by
- * `packages/tooling/tests/gamut-testbed.test.ts`.
+ * `testbeds/gamut/tests/gamut.test.ts`.
  *
  * @module
  */
@@ -27,7 +27,7 @@
 import { $ } from "bun"
 import { Database } from "bun:sqlite"
 import { mkdirSync, cpSync, renameSync, existsSync, rmSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
 
@@ -149,7 +149,15 @@ export const decodeState = (text: string): GamutState => {
 
 // ── State file ──────────────────────────────────────────────────────────
 
-const STATE_FILE = join(tmpdir(), "gent-gamut-current.json")
+/**
+ * One run per checkout. Two rifts run the gamut at the same time, so the
+ * state file carries the checkout name; a shared file let one rift's `down`
+ * close the other rift's pane.
+ */
+export const stateFileFor = (checkoutRoot: string): string =>
+  join(tmpdir(), `gent-gamut-${basename(checkoutRoot)}.json`)
+
+const STATE_FILE = stateFileFor(resolve(import.meta.dir, "../.."))
 
 const readState = async (): Promise<GamutState> => {
   const file = Bun.file(STATE_FILE)
