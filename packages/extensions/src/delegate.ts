@@ -118,8 +118,8 @@ const asDelegateError = (message: string) =>
 
 // ── child turns ─────────────────────────────────────────────────────────────
 
-const startMessageId = (requestId: RequestId) => MessageId.make(`agent-start:${requestId}`)
-const runMessageId = (sessionId: SessionId) => MessageId.make(`agent-run:${sessionId}`)
+const startMessageId = (requestId: RequestId) => MessageId.make(`delegate-start:${requestId}`)
+const runMessageId = (sessionId: SessionId) => MessageId.make(`delegate-run:${sessionId}`)
 
 type TurnCompleted = Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>
 const isTurnCompleted = (event: AgentEvent): event is TurnCompleted =>
@@ -206,7 +206,7 @@ const childRunSpec = (runSpec: Option.Option<RunSpec>): RunSpec => {
 // ── completion delivery ─────────────────────────────────────────────────────
 
 /** Follow-up source for one child completion. The parent message id derives from it. */
-const childCompletionSourceId = (requestId: RequestId) => `child:${requestId}:complete`
+const childCompletionSourceId = (requestId: RequestId) => `delegate-complete:${requestId}`
 
 /** Bounded preview inside the parent message; the full output lives on the child branch. */
 const maximumPreviewChars = 4_000
@@ -460,7 +460,7 @@ export const runChild = Effect.fn("Delegate.runChild")(function* (params: RunChi
         ctx.Session.steer({
           _tag: "Interrupt",
           ...child,
-          requestId: RequestId.make(`agent-run-interrupt:${child.sessionId}`),
+          requestId: RequestId.make(`delegate-interrupt:${child.sessionId}`),
         }).pipe(Effect.ignore),
       ),
       Effect.ensuring(

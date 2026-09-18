@@ -865,7 +865,7 @@ export const QueuedTurnItem = Schema.Struct({
   /**
    * `false` withholds the tools that ask the user, which a child turn has no
    * one to answer. Only `false` is read, so absent and `true` mean the same
-   * thing, and only `agent-runner.ts` writes it.
+   * thing, and only the `@gent/delegate` extension writes it.
    *
    * It stays optional under this name because a queue row on disk may predate
    * any change: a required field rejects a row whose key is absent, and a

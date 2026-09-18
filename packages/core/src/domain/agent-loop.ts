@@ -38,7 +38,6 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
 /**
  * A storage or transport fault becomes the loop's one caller-facing error at
  * the call that raised it, keeping what actually went wrong as the cause.
- * Mirrors `asAgentRunError` in `agent-runner.ts`.
  */
 export const asAgentLoopError = (message: string) =>
   Effect.mapError((cause: unknown) => new AgentLoopError({ message, cause }))

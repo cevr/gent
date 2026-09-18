@@ -2,7 +2,7 @@
  * Wide event boundary integration — thin wrapper over effect-wide-event
  * with gent-specific turn context factories.
  *
- * One structured event per boundary: turn, tool, provider stream, RPC, agent run.
+ * One structured event per boundary: turn, tool, provider stream, RPC.
  *
  * Envelope fields (sessionId, branchId, etc.) are pre-loaded into the boundary's
  * accumulator. Internal code using WideEvent.set() should not overwrite these keys.
@@ -30,14 +30,4 @@ export const turnBoundary = (
   method: "turn",
   actor: agent,
   envelope: { sessionId, branchId },
-})
-
-export const agentRunBoundary = (
-  agentName: AgentName,
-  parentSessionId: SessionId,
-): WideEventContext => ({
-  service: "agent-run",
-  method: "run",
-  actor: agentName,
-  envelope: { parentSessionId },
 })
