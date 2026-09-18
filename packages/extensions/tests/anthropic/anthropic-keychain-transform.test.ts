@@ -24,7 +24,7 @@ const TEST_ENV: AnthropicKeychainEnv = {}
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 import type { AnthropicCredentialIO } from "../../src/anthropic/credential-service.js"
-import type { CredentialCache } from "../../src/provider-credentials.js"
+import type { CredentialCache } from "../../src/providers.js"
 import { AnthropicCredentialService } from "../../src/anthropic/credential-service.js"
 import { AnthropicBetaCache, type AnthropicBetaCacheApi } from "../../src/anthropic/beta-cache.js"
 import type { ClaudeCredentials } from "../../src/anthropic/oauth/credentials.js"

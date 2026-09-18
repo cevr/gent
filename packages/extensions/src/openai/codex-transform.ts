@@ -36,8 +36,12 @@
 import { Effect, Predicate, Option, Schema } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import type { HttpBody } from "effect/unstable/http"
-import { freshCredentials, recoverUnauthorized, withHeaders } from "../provider-http.js"
-import type { CredentialCache } from "../provider-credentials.js"
+import {
+  type CredentialCache,
+  freshCredentials,
+  recoverUnauthorized,
+  withHeaders,
+} from "../providers.js"
 import type { OpenAICredentials } from "./credential-service.js"
 
 // ── Codex routing ──

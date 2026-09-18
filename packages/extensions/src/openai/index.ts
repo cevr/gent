@@ -25,16 +25,14 @@ import { Model as AiModel } from "effect/unstable/ai"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { OpenAICredentialService, type OpenAICredentials } from "./credential-service.js"
 import {
-  EMPTY_CREDENTIAL_CELL,
+  buildOpenAiCompatConfig,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
-} from "../provider-credentials.js"
-import { buildCodexTransformClient } from "./codex-transform.js"
-import {
-  buildOpenAiCompatConfig,
+  EMPTY_CREDENTIAL_CELL,
   makeOpenAiCompatResolution,
   readOptionalEnv,
-} from "../openai-compatible-driver.js"
+} from "../providers.js"
+import { buildCodexTransformClient } from "./codex-transform.js"
 
 type PendingCallbackEntry = {
   readonly flow: OpenAIAuthorizationFlow

@@ -18,7 +18,7 @@ import {
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
-} from "../provider-credentials.js"
+} from "../providers.js"
 
 // ── Credential shape (matches AuthOauth) ──
 

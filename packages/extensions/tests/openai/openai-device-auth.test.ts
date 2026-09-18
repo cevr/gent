@@ -11,7 +11,7 @@ import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/u
 import { authorizeOpenAIDevice, type OAuthError } from "../../src/openai/oauth.js"
 import { buildOpenAIModelDriver } from "../../src/openai/index.js"
 import type { OpenAICredentials } from "../../src/openai/credential-service.js"
-import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/providers.js"
 
 interface Recorded {
   readonly path: string

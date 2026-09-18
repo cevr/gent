@@ -21,10 +21,11 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { makeKeychainClientLayer } from "./keychain-client.js"
 import { AnthropicCredentialService } from "./credential-service.js"
 import {
-  EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
-} from "../provider-credentials.js"
+  EMPTY_CREDENTIAL_CELL,
+  readOptionalEnv,
+} from "../providers.js"
 import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 import {
@@ -34,7 +35,6 @@ import {
   type AnthropicPlatformApi,
 } from "./platform-adapter.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { readOptionalEnv } from "../openai-compatible-driver.js"
 
 // Credential cache + refresh logic live in `AnthropicCredentialService`
 // (Effect-native). The OAuth path provides this service into the layer

@@ -22,7 +22,7 @@ import {
   type OpenAICredentialIO,
   type OpenAICredentials,
 } from "../../src/openai/credential-service.js"
-import type { CredentialCache } from "../../src/provider-credentials.js"
+import type { CredentialCache } from "../../src/providers.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { runEffectBoundary } from "../run-effect-boundary.js"
 // ── Fake HttpClient ──

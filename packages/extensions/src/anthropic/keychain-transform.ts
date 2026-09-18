@@ -68,9 +68,13 @@ import { Effect, Option, Schedule, Schema } from "effect"
 import { HttpClient, Headers } from "effect/unstable/http"
 import type { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { HttpClientError } from "effect/unstable/http/HttpClientError"
-import { freshCredentials, recoverUnauthorized, withHeaders } from "../provider-http.js"
+import {
+  type CredentialCache,
+  freshCredentials,
+  recoverUnauthorized,
+  withHeaders,
+} from "../providers.js"
 import type { AnthropicBetaCacheApi } from "./beta-cache.js"
-import type { CredentialCache } from "../provider-credentials.js"
 import type { ClaudeCredentials } from "./oauth/credentials.js"
 import {
   getLongContextBetasForWith,

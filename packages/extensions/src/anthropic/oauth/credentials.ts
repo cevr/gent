@@ -1,6 +1,6 @@
 import { Effect, Option, Schema } from "effect"
 import { ProviderAuthError } from "@gent/core/extensions/api"
-import { freshEnoughAt } from "../../provider-credentials.js"
+import { freshEnoughAt } from "../../providers.js"
 
 export const ClaudeCredentials = Schema.Struct({
   accessToken: Schema.String,
