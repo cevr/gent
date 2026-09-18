@@ -1,0 +1,541 @@
+import { Effect, Option, Predicate, Schema } from "effect"
+import type { ToolCapability } from "./capability.js"
+import {
+  type AgentDefinition as AgentDefinitionType,
+  AgentName,
+  type AgentName as AgentNameType,
+  type DriverRef,
+  type EffectiveModelDriver,
+  type ModelId as ModelIdType,
+  type ReasoningEffort as ReasoningEffortType,
+  RunSpecSchema,
+  SteerCommand,
+} from "./agent.js"
+import type { AgentEvent } from "./event.js"
+import { Message, QueueSnapshot } from "./message.js"
+import {
+  ActorCommandId,
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  type InteractionRequestId as InteractionRequestIdType,
+  MessageId,
+  SessionId,
+} from "./ids.js"
+import { WorkspaceId } from "../server/workspace-rpc.js"
+import { Actor } from "effect-encore"
+
+// ── agent-loop.state ────────────────────────────────────────────────────────
+
+export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+/**
+ * A storage or transport fault becomes the loop's one caller-facing error at
+ * the call that raised it, keeping what actually went wrong as the cause.
+ * Mirrors `asAgentRunError` in `agent-runner.ts`.
+ */
+export const asAgentLoopError = (message: string) =>
+  Effect.mapError((cause: unknown) => new AgentLoopError({ message, cause }))
+
+// ── Shared field groups ──
+
+const RunningTurnFields = {
+  message: Message,
+  startedAtMs: Schema.Finite,
+  agentOverride: Schema.optional(AgentName),
+  runSpec: Schema.optional(RunSpecSchema),
+  interactive: Schema.optional(Schema.Boolean),
+}
+
+// ── Turn types (not persisted in machine state) ──
+
+export type ResolvedTurn = {
+  currentTurnAgent: AgentNameType
+  messages: ReadonlyArray<Message>
+  systemPrompt: string
+  modelId: ModelIdType
+  reasoning?: ReasoningEffortType
+  temperature?: number
+  tools?: ReadonlyArray<ToolCapability>
+  agent?: AgentDefinitionType
+  driver?: DriverRef
+  /** Derived once at resolution; the resolver, retry policy, and catalog lookup share it. */
+  modelDriver: EffectiveModelDriver
+}
+
+// ── Phase-tagged loop state (flat, actor-owned) ──
+//
+// The loop is one fiber plus this Ref. While the actor entity is
+// materialized, this enum is the source of truth for "where is the loop?".
+
+export const LoopState = Schema.TaggedUnion({
+  /** No turn in progress. */
+  Idle: {},
+  /** Agentic loop running: resolve → stream → tools → repeat. */
+  Running: RunningTurnFields,
+  /** Cold state: a tool requested human approval. No turn fiber. */
+  WaitingForInteraction: {
+    ...RunningTurnFields,
+    currentTurnAgent: AgentName,
+    pendingRequestId: InteractionRequestId,
+    pendingToolCallId: Schema.String,
+  },
+})
+
+// ── Type aliases ──
+
+export type LoopState = Schema.Schema.Type<typeof LoopState>
+type IdleState = Extract<LoopState, { _tag: "Idle" }>
+export type RunningState = Extract<LoopState, { _tag: "Running" }>
+export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
+
+// ── Runtime projection (transport/UI) ──
+// Public runtime state mirrors the machine directly. No parallel `phase/status`
+// matrix — the discriminator is the state. Owned here so the public projection
+// has a single canonical declaration; `session-runtime.ts` re-exports.
+
+export const SessionRuntimeStateSchema = Schema.TaggedUnion({
+  Idle: {
+    agent: AgentName,
+    queue: QueueSnapshot,
+  },
+  Running: {
+    agent: AgentName,
+    queue: QueueSnapshot,
+  },
+  WaitingForInteraction: {
+    agent: AgentName,
+    queue: QueueSnapshot,
+  },
+})
+export type SessionRuntimeState = Schema.Schema.Type<typeof SessionRuntimeStateSchema>
+
+/** The latest model-context projection for the branch, folded from `ModelContextProjected`. */
+export const ModelContextMetrics = Schema.Struct({
+  estimatedTokens: Schema.Natural,
+  availableInputTokens: Schema.Natural,
+  contextLimitTokens: Schema.Natural,
+  omittedMessages: Schema.Natural,
+  /** The handoff marker leading the current window; absent after a summary-free window. */
+  handoffMessageId: Schema.optional(MessageId),
+  /** Projections on this branch that compacted history so far. */
+  compactions: Schema.Natural,
+})
+export type ModelContextMetrics = typeof ModelContextMetrics.Type
+
+export const SessionRuntimeMetrics = Schema.Struct({
+  turns: Schema.Finite,
+  durationMs: Schema.Finite,
+  /** Cumulative USD cost: sum of `StreamEnded.costUsd` across the session's
+   * event log. Cost is frozen into each event at emit time against the
+   * pricing snapshot available then, so replays always sum to the same
+   * total regardless of later registry refreshes. */
+  costUsd: Schema.Finite,
+  /** Input-tokens reported by the most recent `StreamEnded` (for "how close
+   * to the context window are we right now" — sums don't answer that). */
+  lastInputTokens: Schema.Finite,
+  context: Schema.optional(ModelContextMetrics),
+})
+export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
+
+// ── State builders ──
+
+/** Session totals read off the branch's event log; one pass, no storage. */
+export const foldSessionMetrics = (
+  events: ReadonlyArray<{ readonly event: AgentEvent }>,
+): SessionRuntimeMetrics => {
+  let turns = 0
+  let durationMs = 0
+  let costUsd = 0
+  let lastInputTokens = 0
+  let compactions = 0
+  let context = Option.none<ModelContextMetrics>()
+  for (const { event } of events) {
+    switch (event._tag) {
+      case "TurnCompleted":
+        turns++
+        durationMs += event.durationMs
+        break
+      case "ModelContextProjected":
+        if (event.compacted) compactions++
+        context = Option.some({
+          estimatedTokens: event.estimatedTokens,
+          availableInputTokens: event.availableInputTokens,
+          contextLimitTokens: event.contextLimitTokens,
+          omittedMessages: event.omittedMessages,
+          handoffMessageId: event.handoffMessageId,
+          compactions,
+        })
+        break
+      case "StreamEnded":
+        if (Predicate.isNotUndefined(event.usage)) lastInputTokens = event.usage.inputTokens
+        if (Predicate.isNotUndefined(event.costUsd)) costUsd += event.costUsd
+        break
+    }
+  }
+  const metrics = { turns, durationMs, costUsd, lastInputTokens }
+  return Option.match(context, {
+    onNone: () => metrics,
+    onSome: (value) => ({ ...metrics, context: value }),
+  })
+}
+
+export const buildIdleState = (): IdleState => LoopState.cases.Idle.make({})
+
+/**
+ * The fields a phase carries over from whatever admitted it. Structural, so
+ * this module never has to know about the inbox that holds the item.
+ */
+type TurnOrigin = {
+  readonly message: Message
+  readonly agentOverride?: AgentNameType
+  readonly runSpec?: typeof RunSpecSchema.Type
+  readonly interactive?: boolean
+}
+
+export const buildRunningState = (
+  item: TurnOrigin,
+  options: { startedAtMs: number },
+): RunningState =>
+  LoopState.cases.Running.make({
+    message: item.message,
+    startedAtMs: options.startedAtMs,
+    agentOverride: item.agentOverride,
+    runSpec: item.runSpec,
+    interactive: item.interactive,
+  })
+
+export const toWaitingForInteractionState = (params: {
+  state: RunningState
+  currentTurnAgent: AgentNameType
+  pendingRequestId: InteractionRequestIdType
+  pendingToolCallId: string
+}): WaitingForInteractionState =>
+  LoopState.cases.WaitingForInteraction.make({
+    message: params.state.message,
+    startedAtMs: params.state.startedAtMs,
+    agentOverride: params.state.agentOverride,
+    runSpec: params.state.runSpec,
+    interactive: params.state.interactive,
+    currentTurnAgent: params.currentTurnAgent,
+    pendingRequestId: params.pendingRequestId,
+    pendingToolCallId: params.pendingToolCallId,
+  })
+
+// ── agent-loop.entity-id ────────────────────────────────────────────────────
+
+/**
+ * Reversible entity-id encoding for the AgentLoop actor.
+ *
+ * Encore's `Entity.toLayer` keys entities by a `string` `entityId`. Per-actor
+ * state lives behind that string, so the encoding must:
+ *   - Round-trip uniquely for any `(workspaceId, sessionId, branchId)` tuple
+ *   - Be parseable from `CurrentAddress.entityId` inside the actor handler
+ *
+ * `SessionId` and `BranchId` are unconstrained branded strings, so a plain
+ * `${sessionId}:${branchId}` join collides on `:`:
+ *
+ *     encodeRaw("a:", "x")  === "a::x"
+ *     encodeRaw("a", ":x")  === "a::x"  // collision
+ *
+ * `encodeURIComponent` encodes both `:` and `/`, leaving the encoded
+ * components free of separators. Use `:` as the separator on encoded
+ * components.
+ *
+ * @module
+ */
+
+/** Encode `(workspaceId, sessionId, branchId)` into a unique reversible string. */
+export const entityIdOf = (
+  workspaceId: WorkspaceId,
+  sessionId: SessionId,
+  branchId: BranchId,
+): string =>
+  `${encodeURIComponent(workspaceId)}:${encodeURIComponent(sessionId)}:${encodeURIComponent(branchId)}`
+
+/** Parse an encoded entity id back into its `(workspaceId, sessionId, branchId)` tuple. */
+export const parseEntityId = (
+  entityId: string,
+): Effect.Effect<
+  { workspaceId: WorkspaceId; sessionId: SessionId; branchId: BranchId },
+  AgentLoopError
+> =>
+  Effect.gen(function* () {
+    const firstSep = entityId.indexOf(":")
+    let secondSep = -1
+    if (firstSep >= 0) secondSep = entityId.indexOf(":", firstSep + 1)
+    if (firstSep < 0 || secondSep < 0) {
+      return yield* new AgentLoopError({
+        message: `Invalid entity id (expected workspace/session/branch): ${entityId}`,
+      })
+    }
+    const workspaceId = yield* decodeComponent(WorkspaceId, "workspaceId")(
+      entityId.slice(0, firstSep),
+      entityId,
+    )
+    const sessionId = yield* decodeComponent(SessionId, "sessionId")(
+      entityId.slice(firstSep + 1, secondSep),
+      entityId,
+    )
+    const branchId = yield* decodeComponent(BranchId, "branchId")(
+      entityId.slice(secondSep + 1),
+      entityId,
+    )
+    return {
+      workspaceId,
+      sessionId,
+      branchId,
+    }
+  })
+
+/** Percent-decode one entity-id component, then decode it with its schema. */
+const decodeComponent =
+  <A>(schema: Schema.Codec<A, string>, label: string) =>
+  (raw: string, entityId: string): Effect.Effect<A, AgentLoopError> =>
+    Effect.try({
+      try: () => decodeURIComponent(raw),
+      catch: () =>
+        new AgentLoopError({ message: `Invalid entity id (${label} decode): ${entityId}` }),
+    }).pipe(
+      Effect.flatMap((decoded) =>
+        Schema.decodeEffect(schema)(decoded).pipe(
+          asAgentLoopError(`Invalid entity id (${label} schema): ${entityId}`),
+        ),
+      ),
+    )
+
+/**
+ * Enumerate the materialized loops belonging to one workspace.
+ *
+ * The actor registry is keyed by opaque entity id across every workspace, so
+ * reading it means decoding each id and dropping the ones that belong
+ * elsewhere. An id that fails to decode is skipped rather than failing the
+ * enumeration: one malformed key must not make the whole catalog unreadable.
+ *
+ * Lives here rather than in `SessionRuntime` because the agent loop needs the
+ * same enumeration and cannot import `SessionRuntime` — that module builds the
+ * loops, so the dependency would be a cycle.
+ */
+export const listWorkspaceLoops = (input: {
+  readonly workspaceId: WorkspaceId
+  readonly entityIds: ReadonlyArray<string>
+  readonly concurrency: number
+}): Effect.Effect<ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>> =>
+  Effect.forEach(input.entityIds, (entityId) => parseEntityId(entityId).pipe(Effect.option), {
+    concurrency: input.concurrency,
+  }).pipe(
+    Effect.map((targets) =>
+      targets.flatMap((target) => {
+        if (Option.isNone(target) || target.value.workspaceId !== input.workspaceId) return []
+        return [{ sessionId: target.value.sessionId, branchId: target.value.branchId }]
+      }),
+    ),
+  )
+
+// ── agent-loop.protocol ─────────────────────────────────────────────────────
+
+/** Route a branch-scoped command to its loop entity, keyed by the command id. */
+const branchTarget = (p: BranchCommandInput) => ({
+  entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+  primaryKey: p.commandId,
+})
+
+/** Route a message-carrying command to its loop entity, keyed by the message id. */
+const messageTarget = (p: TurnSubmissionInput | QueueFollowUpInput) => ({
+  entityId: entityIdOf(p.workspaceId, p.message.sessionId, p.message.branchId),
+  primaryKey: p.message.id,
+})
+
+/** Follow-up admission is idempotent by source: the message id is the durable key. */
+export const followUpMessageIdForSource = (input: {
+  readonly workspaceId: string
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly sourceId: string
+}) =>
+  MessageId.make(
+    `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
+  )
+
+const WorkspaceFields = {
+  workspaceId: WorkspaceId,
+}
+
+const TurnSubmissionFields = {
+  ...WorkspaceFields,
+  message: Message,
+  agentOverride: Schema.optional(AgentName),
+  runSpec: Schema.optional(RunSpecSchema),
+  interactive: Schema.optional(Schema.Boolean),
+}
+
+const QueueFollowUpFields = {
+  ...WorkspaceFields,
+  message: Message,
+  /** Start a turn for this item even on a branch with no prior history. */
+  wake: Schema.optional(Schema.Boolean),
+}
+
+const SteerFields = {
+  ...WorkspaceFields,
+  commandId: ActorCommandId,
+  command: SteerCommand,
+}
+
+const RespondInteractionFields = {
+  ...WorkspaceFields,
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: InteractionRequestId,
+}
+
+/** One command addressed to a branch: drain, read, terminate. */
+const BranchCommandFields = {
+  ...WorkspaceFields,
+  sessionId: SessionId,
+  branchId: BranchId,
+  commandId: ActorCommandId,
+}
+
+const RemoveFollowUpFields = {
+  ...BranchCommandFields,
+  messageId: MessageId,
+}
+
+const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
+  Present: { value: Schema.Unknown },
+  Missing: {},
+})
+type ExtensionRequestInputEnvelope = Schema.Schema.Type<typeof ExtensionRequestInputEnvelope>
+
+const RequestExtensionFields = {
+  ...BranchCommandFields,
+  extensionId: ExtensionId,
+  capabilityId: Schema.String,
+  input: ExtensionRequestInputEnvelope,
+}
+
+export type MessageType = Schema.Schema.Type<typeof Message>
+export type SteerCommandType = Schema.Schema.Type<typeof SteerCommand>
+
+type FieldsInput<F extends Schema.Struct.Fields> = Schema.Struct<F>["Type"]
+export type TurnSubmissionInput = FieldsInput<typeof TurnSubmissionFields>
+export type QueueFollowUpInput = FieldsInput<typeof QueueFollowUpFields>
+export type SteerInput = FieldsInput<typeof SteerFields>
+export type RespondInteractionInput = FieldsInput<typeof RespondInteractionFields>
+export type BranchCommandInput = FieldsInput<typeof BranchCommandFields>
+export type RemoveFollowUpInput = FieldsInput<typeof RemoveFollowUpFields>
+export type RequestExtensionInput = FieldsInput<typeof RequestExtensionFields>
+export type HandlerRequest<Operation> = {
+  readonly operation: Operation & { readonly _tag: string }
+}
+
+export const AgentLoop = Actor.fromEntity(
+  "AgentLoop",
+  {
+    Submit: {
+      payload: TurnSubmissionFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      id: messageTarget,
+    },
+    SubmitAndWait: {
+      payload: TurnSubmissionFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      id: messageTarget,
+    },
+    SubmitDurable: {
+      payload: TurnSubmissionFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      persisted: true,
+      id: messageTarget,
+    },
+    QueueFollowUp: {
+      payload: QueueFollowUpFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      id: messageTarget,
+    },
+    Steer: {
+      payload: SteerFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      persisted: true,
+      id: (p: SteerInput) => ({
+        entityId: entityIdOf(p.workspaceId, p.command.sessionId, p.command.branchId),
+        primaryKey: p.commandId,
+      }),
+    },
+    RespondInteraction: {
+      payload: RespondInteractionFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      persisted: true,
+      id: (p: RespondInteractionInput) => ({
+        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+        primaryKey: p.requestId,
+      }),
+    },
+    // Queue drain is a mutating state transition; route it through the
+    // branch-local actor so it serializes with the actor-owned queue.
+    DrainQueue: {
+      payload: BranchCommandFields,
+      success: QueueSnapshot,
+      error: AgentLoopError,
+      persisted: true,
+      id: branchTarget,
+    },
+    // Removing one queued follow-up mutates the queue too; same actor route.
+    RemoveFollowUp: {
+      payload: RemoveFollowUpFields,
+      success: Schema.Boolean,
+      error: AgentLoopError,
+      persisted: true,
+      id: branchTarget,
+    },
+    GetQueue: {
+      payload: BranchCommandFields,
+      success: QueueSnapshot,
+      error: AgentLoopError,
+      id: branchTarget,
+    },
+    GetState: {
+      payload: BranchCommandFields,
+      success: SessionRuntimeStateSchema,
+      error: AgentLoopError,
+      id: branchTarget,
+    },
+    RequestExtension: {
+      payload: RequestExtensionFields,
+      success: Schema.Unknown,
+      error: AgentLoopError,
+      id: branchTarget,
+    },
+    // Branch-local shutdown. Used by session terminate sweeps to close a
+    // single branch's loop resources from inside the entity's own scope.
+    /**
+     * `TerminateBranch` shuts down a single branch's loop. Distinct from
+     * generic `Interrupt` (which only flushes pending mailbox items) because
+     * session termination semantically closes branch resources and must run
+     * inside the entity's own scope. Used by `AgentLoopSessionGovernance`-driven
+     * `terminateSession` sweeps.
+     */
+    TerminateBranch: {
+      payload: BranchCommandFields,
+      success: Schema.Void,
+      error: AgentLoopError,
+      id: branchTarget,
+    },
+  },
+  {
+    state: {
+      schema: SessionRuntimeStateSchema,
+      error: AgentLoopError,
+    },
+  },
+)

@@ -29,7 +29,7 @@ updates this list in the same commit.
 2. **One actor per (workspace, session, branch).** The agent loop is an
    effect-encore entity; every session mutation crosses its mailbox.
    Receipts: `packages/core/src/runtime/agent/agent-loop.actor.ts`,
-   `packages/core/src/runtime/agent/agent-loop.entity-id.ts`.
+   `packages/core/src/domain/agent-loop.ts`.
 3. **Everything is an extension of the loop.** Core registers zero tools;
    drivers, tools, resources, reactions, and TUI facets arrive through the
    extension API. Receipts: `packages/core/src/extensions/api.ts`,
@@ -264,7 +264,7 @@ Core orchestration lives in:
 - `packages/core/src/runtime/session-runtime.ts`
 - `packages/core/src/runtime/agent/agent-loop.actor.ts`
 - `packages/core/src/runtime/agent/agent-loop.behavior.ts`
-- `packages/core/src/runtime/agent/agent-loop.state.ts`
+- `packages/core/src/domain/agent-loop.ts`
 - `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`
 - `packages/core/src/runtime/agent/turn-source.ts`
 - `packages/core/src/runtime/agent/turn-window.ts`

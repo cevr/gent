@@ -10,13 +10,12 @@ import { Predicate, Clock, Effect, Fiber, Layer, Ref, Schema, Stream } from "eff
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { TestClock } from "effect/testing"
-import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
+import { type AgentLoopError, entityIdOf } from "../../../src/domain/agent-loop"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { resolveExtensions, ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"

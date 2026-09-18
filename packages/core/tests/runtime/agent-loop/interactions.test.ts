@@ -49,7 +49,7 @@ import {
   ToolCallId,
 } from "../../../src/domain/ids"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
+import { AgentLoopError } from "../../../src/domain/agent-loop"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"

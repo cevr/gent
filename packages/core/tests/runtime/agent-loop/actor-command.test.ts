@@ -28,7 +28,7 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../../src/storage/storage"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { AgentLoop as AgentLoopActor } from "../../../src/runtime/agent/agent-loop.actor"
-import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
+import { entityIdOf } from "../../../src/domain/agent-loop"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import type { ExtensionContributions } from "../../../src/domain/extension.js"
 

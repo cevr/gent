@@ -2,7 +2,7 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { Branch, BranchTreeNode, Message, Session } from "../../domain/message.js"
-import { SessionRuntimeStateSchema } from "../../runtime/agent/agent-loop.state.js"
+import { SessionRuntimeStateSchema } from "../../domain/agent-loop.js"
 import { GentRpcError } from "../errors.js"
 import {
   CreateBranchInput,

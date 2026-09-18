@@ -26,7 +26,7 @@ import { ConfigService } from "../config.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent } from "../wide-event-boundary.js"
-import { AgentLoopError, asAgentLoopError, type RunningState } from "./agent-loop.state.js"
+import { AgentLoopError, asAgentLoopError, type RunningState } from "../../domain/agent-loop.js"
 import type { LoopInbox } from "./loop-inbox.js"
 import {
   ToolCallRecoveryOutcome,

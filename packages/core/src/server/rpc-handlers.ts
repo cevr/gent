@@ -13,7 +13,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
-import { foldSessionMetrics } from "../runtime/agent/agent-loop.state.js"
+import { foldSessionMetrics } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/agent/turn-resolve.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import {

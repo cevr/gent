@@ -80,7 +80,23 @@ import type {
 } from "../../domain/capability.js"
 import { SessionProfileCache } from "../session-profile.js"
 import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
-import { AgentLoopError, asAgentLoopError } from "./agent-loop.state.js"
+import {
+  AgentLoop,
+  AgentLoopError,
+  asAgentLoopError,
+  type BranchCommandInput,
+  followUpMessageIdForSource,
+  type HandlerRequest,
+  type MessageType,
+  parseEntityId,
+  type QueueFollowUpInput,
+  type RemoveFollowUpInput,
+  type RequestExtensionInput,
+  type RespondInteractionInput,
+  type SteerCommandType,
+  type SteerInput,
+  type TurnSubmissionInput,
+} from "../../domain/agent-loop.js"
 import { turnFailureEpoch, wantsWakeOnRecovery, type AgentLoopState } from "./loop-inbox.js"
 import {
   AgentLoopFollowUp,
@@ -93,24 +109,9 @@ import {
   MessageStorage,
   SessionOperationStorage,
 } from "../../storage/storage.js"
-import { parseEntityId } from "./agent-loop.entity-id.js"
 import { type CurrentExtensionHostContext, ProcessLocalToolReplay } from "./tools.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
-import {
-  AgentLoop,
-  type BranchCommandInput,
-  type HandlerRequest,
-  type MessageType,
-  type RemoveFollowUpInput,
-  type RequestExtensionInput,
-  followUpMessageIdForSource,
-  type QueueFollowUpInput,
-  type RespondInteractionInput,
-  type SteerCommandType,
-  type SteerInput,
-  type TurnSubmissionInput,
-} from "./agent-loop.protocol.js"
 
 /**
  * When a turn is finished, told from the outside.
@@ -920,7 +921,7 @@ const buildAgentLoopActorHandlers = (config: {
     })
   })
 
-export { AgentLoop } from "./agent-loop.protocol.js"
+export { AgentLoop } from "../../domain/agent-loop.js"
 
 export const AgentLoopLiveActor = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>

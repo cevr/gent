@@ -76,7 +76,7 @@ export {
   neverInterrupted,
   type TurnInterruptionStatus,
 } from "../runtime/agent/turn-interruption.js"
-export { AgentLoopError } from "../runtime/agent/agent-loop.state.js"
+export { AgentLoopError } from "../domain/agent-loop.js"
 
 // Reporting what the feature did to the model's context.
 export { ContextDirective, ModelContextLedger } from "../runtime/model-context-ledger.js"

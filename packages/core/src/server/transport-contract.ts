@@ -30,13 +30,10 @@ import {
   QueueSnapshot,
   Session,
 } from "../domain/message.js"
-import {
-  SessionRuntimeMetrics,
-  SessionRuntimeStateSchema,
-} from "../runtime/agent/agent-loop.state.js"
+import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../domain/agent-loop.js"
 
 export { Branch, BranchTreeNode, Session }
-export type { SessionRuntimeState } from "../runtime/agent/agent-loop.state.js"
+export type { SessionRuntimeState } from "../domain/agent-loop.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),

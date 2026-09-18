@@ -42,8 +42,13 @@ import type {
   TurnRecordStorage,
 } from "../storage/storage.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
-import { entityIdOf, listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
-import { followUpMessageIdForSource } from "./agent/agent-loop.protocol.js"
+import {
+  AgentLoopError,
+  entityIdOf,
+  followUpMessageIdForSource,
+  listWorkspaceLoops,
+  type SessionRuntimeState,
+} from "../domain/agent-loop.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import type { ExtensionRegistry } from "./extensions/registry.js"
 import type { DriverRegistry } from "./extensions/driver-registry.js"
@@ -57,8 +62,6 @@ import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js
 
 const SESSION_TERMINATION_CONCURRENCY = 16
 import { resolveExistingSessionBranch } from "./session-runtime-context.js"
-import { AgentLoopError } from "./agent/agent-loop.state.js"
-import type { SessionRuntimeState } from "./agent/agent-loop.state.js"
 
 export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
   "SessionRuntimeError",

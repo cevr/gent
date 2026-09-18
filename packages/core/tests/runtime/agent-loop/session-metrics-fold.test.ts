@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { AgentEvent } from "../../../src/domain/event"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { ModelId } from "../../../src/domain/agent"
-import { foldSessionMetrics } from "../../../src/runtime/agent/agent-loop.state"
+import { foldSessionMetrics } from "../../../src/domain/agent-loop"
 
 const sessionId = SessionId.make("s")
 const branchId = BranchId.make("b")

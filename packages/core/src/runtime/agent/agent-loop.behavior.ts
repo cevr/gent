@@ -76,7 +76,7 @@ import {
   AgentLoopError,
   asAgentLoopError,
   type RunningState,
-} from "./agent-loop.state.js"
+} from "../../domain/agent-loop.js"
 import {
   buildInitialAgentLoopState,
   makeLoopInbox,

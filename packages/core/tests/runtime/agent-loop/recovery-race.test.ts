@@ -56,7 +56,7 @@ import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
 } from "../../../src/runtime/agent/agent-loop.actor"
-import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
+import { entityIdOf } from "../../../src/domain/agent-loop"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"

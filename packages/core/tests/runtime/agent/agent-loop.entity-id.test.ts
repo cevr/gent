@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect } from "effect"
-import { entityIdOf, parseEntityId } from "../../../src/runtime/agent/agent-loop.entity-id"
+import { entityIdOf, parseEntityId } from "../../../src/domain/agent-loop"
 import { BranchId, SessionId } from "../../../src/domain/ids"
 import { DefaultWorkspaceId, WorkspaceId } from "../../../src/server/workspace-rpc"
 

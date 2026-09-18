@@ -41,7 +41,7 @@ export {
 export { messagePartsImages, messagePartsReasoning, messagePartsText } from "./domain/message.js"
 export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/message.js"
-export { type ModelContextMetrics } from "./runtime/agent/agent-loop.state.js"
+export { type ModelContextMetrics } from "./domain/agent-loop.js"
 export { GentRpcError } from "./server/errors.js"
 export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpcs.js"
 export {

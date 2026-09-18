@@ -90,7 +90,7 @@ import {
   type LoopState,
   type RunningState,
   type SessionRuntimeState,
-} from "./agent-loop.state.js"
+} from "../../domain/agent-loop.js"
 
 /**
  * Should a loop rebuilt over this stored queue take a turn straight away?

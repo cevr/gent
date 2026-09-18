@@ -100,10 +100,7 @@ import {
   SessionRuntimeError,
   type SessionRuntimeService,
 } from "../../src/runtime/session-runtime"
-import {
-  SessionRuntimeStateSchema,
-  type SessionRuntimeState,
-} from "../../src/runtime/agent/agent-loop.state"
+import { SessionRuntimeStateSchema, type SessionRuntimeState } from "../../src/domain/agent-loop"
 import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { eraseResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
 const bashStubTool = tool({

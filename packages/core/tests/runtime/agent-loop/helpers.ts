@@ -5,8 +5,9 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
   AgentLoopError,
+  entityIdOf,
   type SessionRuntimeState,
-} from "../../../src/runtime/agent/agent-loop.state"
+} from "../../../src/domain/agent-loop"
 import {
   AgentDefinition,
   AgentName,
@@ -20,7 +21,6 @@ import {
   AgentLoopTestActor,
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { entityIdOf } from "../../../src/runtime/agent/agent-loop.entity-id"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"

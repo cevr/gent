@@ -39,9 +39,12 @@ import {
 } from "../storage/storage.js"
 import { Message, type MessageMetadata } from "../domain/message.js"
 import { EventPublisher, ExtensionStatePublisher, MessageReceived } from "../domain/event.js"
-import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
-import { entityIdOf, listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
-import type { SessionRuntimeState } from "./agent/agent-loop.state.js"
+import {
+  AgentLoop as AgentLoopActor,
+  entityIdOf,
+  listWorkspaceLoops,
+  type SessionRuntimeState,
+} from "../domain/agent-loop.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 interface ExtensionSessionControlService {

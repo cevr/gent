@@ -26,7 +26,7 @@ import {
   type AgentLoopError,
   type LoopState,
   type RunningState,
-} from "../../../src/runtime/agent/agent-loop.state"
+} from "../../../src/domain/agent-loop"
 import {
   buildInitialAgentLoopState,
   makeLoopInbox,

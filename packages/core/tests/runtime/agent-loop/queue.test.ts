@@ -61,7 +61,11 @@ import {
   waitFor,
   waitForPhase,
 } from "./helpers"
-import { buildIdleState, buildRunningState } from "../../../src/runtime/agent/agent-loop.state"
+import {
+  type AgentLoopError,
+  buildIdleState,
+  buildRunningState,
+} from "../../../src/domain/agent-loop"
 import {
   buildInitialAgentLoopState,
   canStartTurnNow,
@@ -69,7 +73,6 @@ import {
   wantsWakeOnRecovery,
   type AgentLoopState,
 } from "../../../src/runtime/agent/loop-inbox"
-import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { StorageError } from "../../../src/domain/errors"
 import { ensureStorageParents } from "../../../src/test-utils"
 

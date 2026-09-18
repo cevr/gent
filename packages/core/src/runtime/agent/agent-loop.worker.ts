@@ -10,7 +10,7 @@ import {
   type AgentLoopError,
   type RunningState,
   type WaitingForInteractionState,
-} from "./agent-loop.state.js"
+} from "../../domain/agent-loop.js"
 import type { LoopInbox } from "./loop-inbox.js"
 import type { QueuedTurnItem } from "../../domain/message.js"
 import { signalActiveStreamInterrupt, type ActiveStreamHandle } from "./turn-response.js"
