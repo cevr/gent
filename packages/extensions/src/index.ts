@@ -1,8 +1,6 @@
 import { Effect, Option, Schema } from "effect"
 import {
-  defineExtension,
-  defineResource,
-  ExtensionHost,
+  type ExtensionHost,
   type GentExtension,
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
@@ -24,11 +22,7 @@ import { HandoffExtension } from "./handoff.js"
 import { GoalExtension } from "./goal.js"
 import { WakeExtension } from "./wake.js"
 import { BtwExtension } from "./btw.js"
-import { ReadTool } from "./fs-tools/read.js"
-import { WriteTool } from "./fs-tools/write.js"
-import { EditTool } from "./fs-tools/edit.js"
-import { GrepTool } from "./fs-tools/grep.js"
-import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
+import { FsToolsExtension } from "./fs-tools.js"
 import { NetworkToolsExtension } from "./network-tools.js"
 import { SessionToolsExtension } from "./session-tools.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
@@ -59,23 +53,6 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.ma
 
 // ── builtin composition ─────────────────────────────────────────────────────
 
-export const FsToolsExtension = defineExtension({
-  id: "@gent/fs-tools",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "@gent/fs-tools/file-index",
-        tag: FileIndex,
-        scope: "process",
-        layer: FileIndexLive({ home: host.home }),
-      }),
-    )
-  }),
-})
-
 export {
   CompactionExtension,
   ModelContextCompactorResource,
@@ -91,6 +68,7 @@ export {
   BtwExtension,
   AgentsViewExtension,
   SessionToolsExtension,
+  FsToolsExtension,
 }
 
 /**

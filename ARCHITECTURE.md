@@ -848,7 +848,7 @@ Explicit platform/runtime seams:
 
 ### FileIndex (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools/file-index.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept and `ExtensionContext.Files` has no `listFiles`.
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept and `ExtensionContext.Files` has no `listFiles`.
 
 App entrypoints bind concrete Bun/OS behavior:
 

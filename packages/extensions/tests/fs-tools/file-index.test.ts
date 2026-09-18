@@ -6,7 +6,7 @@ import {
   FileIndexError,
   FallbackFileIndexLive,
   FileIndexLive,
-} from "../../src/fs-tools/file-index.js"
+} from "../../src/fs-tools.js"
 
 const PlatformLayer = BunServices.layer
 const FallbackLayer = Layer.merge(
