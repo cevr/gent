@@ -40,10 +40,8 @@ export interface UnadaptedSeamFinding {
   readonly message: string
 }
 
-const DOMAIN_MAP_FILE = "packages/core/src/domain/extension-host.ts"
-const HOOK_SIGNATURES_FILE = "packages/core/src/domain/extension.ts"
-const CONTEXT_FACETS_FILE = "packages/core/src/domain/extension-services.ts"
-const RESOURCE_SCOPE_FILE = "packages/core/src/domain/resource.ts"
+/** Every seam family core declares now lives in one file; each scan is anchored on its own interface name. */
+const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 
 /** Files that may fill a seam: shipped extensions and the apps, never tests. */
 const isAdapterSource = (file: string): boolean =>
@@ -207,18 +205,18 @@ export const findUnadaptedSeams = (
     })
   }
 
-  check(DOMAIN_MAP_FILE, /interface RegistrationDomainMap/, "registration domain")
-  check(HOOK_SIGNATURES_FILE, /interface ExtensionHookSignatures/, "hook kind")
-  inFile(CONTEXT_FACETS_FILE, (text) => {
-    report(CONTEXT_FACETS_FILE, text, declaredFacets(text), "extension context facet", (seam) =>
+  check(SEAM_DECLARATION_FILE, /interface RegistrationDomainMap/, "registration domain")
+  check(SEAM_DECLARATION_FILE, /interface ExtensionHookSignatures/, "hook kind")
+  inFile(SEAM_DECLARATION_FILE, (text) => {
+    report(SEAM_DECLARATION_FILE, text, declaredFacets(text), "extension context facet", (seam) =>
       lineOf(text, seam),
     )
   })
-  inFile(RESOURCE_SCOPE_FILE, (text) => {
+  inFile(SEAM_DECLARATION_FILE, (text) => {
     const declarationLine =
       text.split("\n").findIndex((line) => line.includes("export type ResourceScope =")) + 1
     report(
-      RESOURCE_SCOPE_FILE,
+      SEAM_DECLARATION_FILE,
       text,
       declaredResourceScopes(text),
       "resource scope",

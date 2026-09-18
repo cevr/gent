@@ -1,8 +1,11 @@
 import { Effect, Layer } from "effect"
 import type { Exit, Schema } from "effect"
 import type { ExtensionId, ToolCallId } from "../../domain/ids.js"
-import type { ExtensionTurnContext } from "../../domain/extension.js"
-import { type ExtensionContext, provideExtensionServices } from "../../domain/extension-services.js"
+import {
+  type ExtensionContext,
+  type ExtensionTurnContext,
+  provideExtensionServices,
+} from "../../domain/extension.js"
 import { CurrentExtensionHostContext } from "../agent/tools.js"
 import { provideExtensionCapabilityContext } from "./extension-capability-context.js"
 

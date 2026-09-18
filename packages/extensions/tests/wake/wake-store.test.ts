@@ -13,7 +13,7 @@ import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures
 import {
   ExtensionContext,
   type ExtensionContextService,
-} from "@gent/core-internal/domain/extension-services"
+} from "@gent/core-internal/domain/extension"
 import {
   rearmPendingAlarms,
   CancelTool,

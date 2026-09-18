@@ -11,9 +11,12 @@ import {
   Schema,
   Stream,
 } from "effect"
-import type { ExtensionHostPlatform } from "../domain/extension.js"
-import { ExtensionHost, makeCollectingExtensionHost } from "../domain/extension-host.js"
-import type { ExtensionContributions } from "../domain/contribution.js"
+import {
+  type ExtensionContributions,
+  ExtensionHost,
+  type ExtensionHostPlatform,
+  makeCollectingExtensionHost,
+} from "../domain/extension.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"

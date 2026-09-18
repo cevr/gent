@@ -2,21 +2,21 @@ import { describe, it, expect } from "effect-bun-test"
 import { Context, Data, Effect, Exit, Ref } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
-import type {
-  ExtensionContributions,
-  LoadedExtension,
-  SystemPromptInput,
-  TurnAfterInput,
+import {
+  ExtensionContext,
+  type ExtensionContributions,
+  type ExtensionHostContext,
+  hook,
+  type LoadedExtension,
+  type SystemPromptInput,
+  type TurnAfterInput,
 } from "../../src/domain/extension.js"
-import { hook } from "../../src/domain/extension.js"
-import type { ExtensionHostContext } from "../../src/domain/extension-services"
 import { testExtensionHostContext } from "../../src/test-utils"
 import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
 import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
 import { AgentName } from "../../src/domain/agent"
-import { ExtensionContext } from "../../src/domain/extension-services.js"
 
 const stubHostCtx = testExtensionHostContext()
 

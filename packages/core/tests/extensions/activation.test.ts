@@ -2,15 +2,16 @@ import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import type {
-  ExtensionLoadError,
-  GentExtension,
-  LoadedExtension,
+import {
+  type ExtensionContributions,
+  type ExtensionLoadError,
+  type GentExtension,
+  type LoadedExtension,
+  registerContributions,
 } from "../../src/domain/extension.js"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import type { DiscoveredExtension } from "../../src/runtime/extensions/loader"
 import { setupExtensions, validateLoadedExtensions } from "../../src/runtime/extensions/activation"
-import type { ExtensionContributions } from "../../src/domain/contribution"
 import {
   defineExtension,
   defineResource,
@@ -18,7 +19,6 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
-import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
 import {

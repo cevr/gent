@@ -13,7 +13,7 @@ import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import * as Response from "effect/unstable/ai/Response"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import type { LoadedExtension } from "../../src/domain/extension.js"
+import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { finishPart } from "../../src/test-utils/language-model"
 import type {
   ExternalDriverContribution,
@@ -22,7 +22,6 @@ import type {
   ProviderResolution,
   TurnExecutor,
 } from "../../src/domain/driver"
-import type { ExtensionContributions } from "../../src/domain/contribution"
 import { Model, ModelId, ProviderId } from "../../src/domain/agent"
 import { ExtensionId } from "../../src/domain/ids"
 import { failingLanguageModel } from "../helpers/failing-language-model"

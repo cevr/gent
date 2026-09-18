@@ -13,9 +13,11 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Effect, Layer, Option } from "effect"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
-import type { AnyResourceContribution } from "../../src/domain/resource"
-import { defineResource } from "../../src/domain/contribution"
-import type { LoadedExtension } from "../../src/domain/extension.js"
+import {
+  type AnyResourceContribution,
+  defineResource,
+  type LoadedExtension,
+} from "../../src/domain/extension"
 import { ExtensionId } from "../../src/domain/ids"
 
 // ── Resource shape + helpers ──

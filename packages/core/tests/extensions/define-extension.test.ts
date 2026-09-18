@@ -21,8 +21,11 @@ import {
   type ExtensionHostService,
   type GentExtension,
 } from "@gent/core/extensions/api"
-import { ExtensionLoadError, type LoadedExtension } from "../../src/domain/extension"
-import { validateExtensionPackage } from "../../src/domain/extension-package-shape"
+import {
+  ExtensionLoadError,
+  type LoadedExtension,
+  validateExtensionPackage,
+} from "../../src/domain/extension"
 import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"

@@ -1,17 +1,18 @@
 import { Context, Effect, FileSystem, Layer, Option, Path, Random } from "effect"
-import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../domain/extension.js"
 import {
-  ExtensionServiceError,
   type ExtensionFileLockServiceApi,
   type ExtensionFilesService,
   type ExtensionHostAgentService,
   type ExtensionHostContext,
+  type ExtensionHostPlatform,
+  ExtensionHostProcessError,
   type ExtensionInteractionService,
   type ExtensionProcessService,
+  ExtensionServiceError,
   type ExtensionSessionService,
   type ExtensionStateFacet,
-} from "../domain/extension-services.js"
-import { makeFileWriter } from "../domain/file-writer.js"
+  makeFileWriter,
+} from "../domain/extension.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 
 type TestExtensionHostContextOverrides = Omit<

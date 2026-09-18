@@ -10,7 +10,7 @@ import { ModelResolver } from "../../../src/providers/model-resolver"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { textStep } from "../../../src/test-utils/sequence-steps"
 import { AgentEvent, EventPublisherLive } from "../../../src/domain/event"
-import { SessionMutations } from "../../../src/domain/session-mutations"
+import { type ExtensionContributions, SessionMutations } from "../../../src/domain/extension"
 import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
@@ -27,7 +27,6 @@ import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"
-import type { ExtensionContributions } from "../../../src/domain/extension.js"
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,

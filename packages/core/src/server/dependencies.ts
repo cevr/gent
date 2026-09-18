@@ -7,8 +7,11 @@ import type { AgentRunnerService } from "../domain/agent.js"
 import { Auth, AuthGuard } from "../domain/auth.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event.js"
 import type { PromptSection } from "../domain/capability.js"
-import { FileLockService } from "../domain/file-lock.js"
-import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
+import {
+  type ExtensionSetupServices,
+  FileLockService,
+  type GentExtension,
+} from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { ModelResolver } from "../providers/model-resolver.js"
 import { ProviderAuth } from "../providers/provider-auth.js"

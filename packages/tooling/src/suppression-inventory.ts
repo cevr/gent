@@ -107,7 +107,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "nodeBuiltinImport:off",
   },
   {
-    file: "packages/core/src/domain/extension-load-boundary.ts",
+    file: "packages/core/src/domain/extension.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off",
   },

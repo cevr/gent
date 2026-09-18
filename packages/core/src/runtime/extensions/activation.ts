@@ -1,13 +1,13 @@
 import { Cause, Effect, Option, Predicate } from "effect"
 import type {
+  ExtensionContributions,
+  ExtensionLoaderServices,
   FailedExtension,
   FailedExtensionPhase,
   LoadedExtension,
-  ExtensionLoaderServices,
 } from "../../domain/extension.js"
 import { getToolMetadata, isToolCapability, type PromptSection } from "../../domain/capability.js"
 import { causeMessage } from "../../domain/guards.js"
-import type { ExtensionContributions } from "../../domain/contribution.js"
 import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
 

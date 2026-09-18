@@ -16,9 +16,11 @@ import {
 import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import {
+  defineResource,
   ExtensionLoadError,
   type GentExtension,
   type LoadedExtension,
+  registerContributions,
 } from "../../src/domain/extension.js"
 import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
@@ -35,7 +37,6 @@ import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-pr
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
-import { defineResource } from "../../src/domain/resource"
 import {
   CapabilityError,
   ExtensionContext,
@@ -48,7 +49,6 @@ import { BranchId, ExtensionId, ProcessGenerationId, SessionId } from "../../src
 import { ConfigService } from "../../src/runtime/config-service"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../../src/server/errors"
-import { registerContributions } from "../../src/domain/extension-host.js"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {

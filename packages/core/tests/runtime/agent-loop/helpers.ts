@@ -37,7 +37,7 @@ import { ModelResolver } from "../../../src/providers/model-resolver"
 import { dateFromMillis, Message, type QueueSnapshot } from "../../../src/domain/message"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
-import type { AnyResourceContribution } from "../../../src/domain/resource"
+import type { AnyResourceContribution } from "../../../src/domain/extension"
 import {
   type AgentEvent,
   EventEnvelope,

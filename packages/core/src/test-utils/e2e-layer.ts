@@ -13,8 +13,15 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition, AgentRunner, AgentRunnerService } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
-import type { GentExtension, LoadedExtension, ExtensionSetupServices } from "../domain/extension.js"
-import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
+import {
+  defineResource,
+  type ExtensionContributions,
+  type ExtensionSetupServices,
+  type GentExtension,
+  type LoadedExtension,
+  makeCollectingExtensionHost,
+  registerContributions,
+} from "../domain/extension.js"
 import type { EventPublisher } from "../domain/event.js"
 import type { ExtensionId } from "../domain/ids.js"
 import { ApprovalService } from "../runtime/approval-service.js"
@@ -23,7 +30,6 @@ import { ConfigService } from "../runtime/config-service.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ExtensionHost } from "../extensions/api.js"
-import { makeCollectingExtensionHost, registerContributions } from "../domain/extension-host.js"
 import { testHostFacts } from "./index.js"
 import { buildServerRoot } from "../server/server-root.js"
 import { StateLocation } from "../server/dependencies.js"

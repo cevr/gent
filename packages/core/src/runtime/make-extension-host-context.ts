@@ -11,23 +11,24 @@ import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
-  extensionServiceError,
-  mapExtensionServiceError,
-  ExtensionServiceError as ExtensionServiceErrorClass,
-  type ExtensionFilesService,
   type ExtensionFileLockServiceApi,
+  type ExtensionFilesService,
   type ExtensionHostContext,
+  type ExtensionHostPlatform,
   type ExtensionProcessService,
+  extensionServiceError,
   type ExtensionServiceError,
+  ExtensionServiceError as ExtensionServiceErrorClass,
   type ExtensionStateFacet,
-} from "../domain/extension-services.js"
-import { makeFileWriter } from "../domain/file-writer.js"
-import { FileLockService } from "../domain/file-lock.js"
+  FileLockService,
+  makeFileWriter,
+  mapExtensionServiceError,
+  SessionMutations,
+} from "../domain/extension.js"
 import { InteractionPendingError } from "../domain/interaction.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
-import type { ExtensionHostPlatform } from "../domain/extension.js"
 import { ApprovalService } from "./approval-service.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -36,7 +37,6 @@ import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { Message, type MessageMetadata } from "../domain/message.js"
 import { EventPublisher, ExtensionStatePublisher, MessageReceived } from "../domain/event.js"
-import { SessionMutations } from "../domain/session-mutations.js"
 import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"
 import { entityIdOf, listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
 import type { SessionRuntimeState } from "./agent/agent-loop.state.js"

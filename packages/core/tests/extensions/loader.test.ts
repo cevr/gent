@@ -3,9 +3,11 @@ import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { defineExtension, ref, request } from "../../src/extensions/api.js"
-import { LoadedArtifactIdentity } from "../../src/domain/extension.js"
-import type { GentExtension } from "../../src/domain/extension.js"
-import { ExtensionHost } from "../../src/domain/extension-host.js"
+import {
+  ExtensionHost,
+  type GentExtension,
+  LoadedArtifactIdentity,
+} from "../../src/domain/extension.js"
 import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
 import { ExtensionId } from "../../src/domain/ids"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"

@@ -42,11 +42,11 @@
 import { Effect } from "effect"
 import { ExtensionId } from "../domain/ids.js"
 import {
+  type ExtensionHost,
   ExtensionLoadError,
-  type GentExtension,
   type ExtensionManifest,
+  type GentExtension,
 } from "../domain/extension.js"
-import type { ExtensionHost } from "../domain/extension-host.js"
 
 // ── Re-exports for extension authors ──
 
@@ -65,7 +65,7 @@ export {
   ChildAgentRegistryEntry,
   AgentRunError,
 } from "../domain/agent.js"
-export { requireCurrentAgent } from "../domain/extension-services.js"
+export { requireCurrentAgent } from "../domain/extension.js"
 export {
   type AnyExtensionHook,
   type GentExtension,
@@ -101,7 +101,7 @@ export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
   defineResource,
-} from "../domain/contribution.js"
+} from "../domain/extension.js"
 
 // Typed capability factories. Extension registries dispatch by factory-origin
 // metadata baked into the lowering.
@@ -128,13 +128,13 @@ export {
   ExtensionContext,
   ExtensionServiceError,
   type ExtensionContextService,
-} from "../domain/extension-services.js"
+} from "../domain/extension.js"
 export { isRecord, isRecordArray, omitUndefined } from "../domain/guards.js"
 export { headTailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../providers/ai-transcript.js"
 // ── Public API ──
 
-export { ExtensionHost, type ExtensionHostService } from "../domain/extension-host.js"
+export { ExtensionHost, type ExtensionHostService } from "../domain/extension.js"
 
 interface DefineExtensionInput<R = never> {
   readonly id: string

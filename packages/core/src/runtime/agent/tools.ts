@@ -23,7 +23,7 @@ import {
   ToolCallId,
   ToolId,
 } from "../../domain/ids.js"
-import type { ExtensionHostContext } from "../../domain/extension-services.js"
+import type { ExtensionHostContext, LoadedExtension } from "../../domain/extension.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import {
@@ -38,7 +38,6 @@ import {
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/unstable/ai/Tool"
-import type { LoadedExtension } from "../../domain/extension.js"
 import { GentPlatform } from "../gent-platform.js"
 import type { ExtraRepositories } from "../../storage/sqlite-storage.js"
 import type { FeatureMigrations } from "../../storage/schema.js"

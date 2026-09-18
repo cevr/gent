@@ -9,9 +9,12 @@
  */
 
 import { Predicate, Cause, Effect, Exit, Layer, Schema } from "effect"
-import type { LoadedExtension } from "../../../domain/extension.js"
+import type {
+  AnyResourceContribution,
+  LoadedExtension,
+  ResourceScope,
+} from "../../../domain/extension.js"
 import type { ExtensionId } from "../../../domain/ids.js"
-import type { AnyResourceContribution, ResourceScope } from "../../../domain/resource.js"
 import {
   emptyErasedResourceLayer,
   eraseResourceLayer,

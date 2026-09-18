@@ -8,7 +8,7 @@ import { SessionStorage } from "../../src/storage/session-storage"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { SessionMutations } from "../../src/domain/session-mutations"
+import { SessionMutations } from "../../src/domain/extension"
 import {
   FIXED_NOW,
   collectSessionEvents,

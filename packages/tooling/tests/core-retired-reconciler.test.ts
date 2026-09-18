@@ -30,7 +30,7 @@ describe("retired reconciler guard", () => {
 
   test("matches whole identifiers only", () => {
     const findings = findRetiredReconcilerFindings(
-      "packages/core/src/domain/resource.ts",
+      "packages/core/src/domain/extension.ts",
       "export const ResourceId = Schema.NonEmptyString.pipe(Schema.brand('ResourceId'))",
     )
     expect(findings).toEqual([])

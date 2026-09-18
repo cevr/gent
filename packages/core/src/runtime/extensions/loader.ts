@@ -1,17 +1,19 @@
 import { Effect, FileSystem, Option, Path, Predicate, Result, Schema } from "effect"
-import type {
-  ExtensionScope,
-  GentExtension,
-  LoadedExtension,
-  ExtensionSetupServices,
+import {
+  type ExtensionContributions,
+  ExtensionHost,
+  ExtensionLoadError,
+  type ExtensionScope,
+  type ExtensionSetupServices,
+  type GentExtension,
+  isClientFile,
+  type LoadedExtension,
+  makeCollectingExtensionHost,
+  sealRuntimeLoadedEffect,
+  validateExtensionPackage,
 } from "../../domain/extension.js"
-import { ExtensionLoadError, isClientFile } from "../../domain/extension.js"
-import { ExtensionHost, makeCollectingExtensionHost } from "../../domain/extension-host.js"
 import { bindRequestCapabilityExtension } from "../../domain/capability.js"
 import { ExtensionId } from "../../domain/ids.js"
-import type { ExtensionContributions } from "../../domain/contribution.js"
-import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
-import { validateExtensionPackage } from "../../domain/extension-package-shape.js"
 import { makeExtensionHostPlatform } from "./host-platform.js"
 import { isProjectExtensionDirectoryTrusted } from "./project-trust.js"
 

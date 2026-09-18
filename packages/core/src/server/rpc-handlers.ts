@@ -32,7 +32,7 @@ import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, InvalidStateError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
 import { ServerIdentity } from "./server-identity.js"
-import { SessionMutations } from "../domain/session-mutations.js"
+import { SessionMutations } from "../domain/extension.js"
 import { getBranchTree } from "./session-utils.js"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 import {
