@@ -38,16 +38,19 @@ import {
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "../../domain/capability.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import {
+  CurrentExtensionHostContext,
+  emptyErasedResourceLayer,
+  type ErasedResourceLayer,
+  ExtensionRegistry,
+  type ExtensionRegistryService,
+  provideCurrentHostCtx,
+  provideExtensionLeaf,
+} from "../extension-host.js"
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { GentPlatform } from "../gent-platform.js"
 import type { FeatureMigrations } from "../../storage/schema.js"
-import {
-  emptyErasedResourceLayer,
-  type ErasedResourceLayer,
-  provideExtensionLeaf,
-} from "../extensions/extension-effect-membrane.js"
 import {
   stopWithTurn,
   type TurnInterruptionStatus,
@@ -103,20 +106,6 @@ export class CurrentDispatchingCall extends Context.Service<
   CurrentDispatchingCall,
   DispatchingCall
 >()("@gent/core/src/runtime/agent/tools/CurrentDispatchingCall") {}
-
-// ── current-extension-host-context ──────────────────────────────────────────
-
-export class CurrentExtensionHostContext extends Context.Service<
-  CurrentExtensionHostContext,
-  ExtensionHostContext
->()("@gent/core/src/runtime/agent/tools/CurrentExtensionHostContext") {}
-
-export const provideCurrentHostCtx =
-  (hostCtx: ExtensionHostContext) =>
-  <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, Exclude<R, CurrentExtensionHostContext>> =>
-    effect.pipe(Effect.provideService(CurrentExtensionHostContext, hostCtx))
 
 // ── tool-binding-resolution ─────────────────────────────────────────────────
 

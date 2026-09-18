@@ -30,7 +30,7 @@ import { AgentRunnerService } from "../domain/agent.js"
 import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./config.js"
 import { ApprovalService } from "./approval-service.js"
-import type { ExtensionRegistryService } from "./extensions/registry.js"
+import type { ExtensionRegistryService } from "./extension-host.js"
 import {
   BranchStorage,
   MessageStorage,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
-import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
+import { ExtensionRegistry } from "../../src/runtime/extension-host"
 import { ExtensionHost, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"

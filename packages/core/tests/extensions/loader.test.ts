@@ -8,7 +8,7 @@ import {
   type GentExtension,
   LoadedArtifactIdentity,
 } from "../../src/domain/extension.js"
-import { discoverExtensions, setupExtension } from "../../src/runtime/extensions/loader"
+import { discoverExtensions, setupExtension } from "../../src/runtime/extension-host"
 import { ExtensionId } from "../../src/domain/ids"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 

@@ -50,8 +50,7 @@ import {
   type SessionRuntimeState,
 } from "../domain/agent-loop.js"
 import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
-import type { ExtensionRegistry } from "./extensions/registry.js"
-import type { DriverRegistry } from "./extensions/driver-registry.js"
+import type { DriverRegistry, ExtensionRegistry } from "./extension-host.js"
 import type { ModelRegistry } from "./model-registry.js"
 import type { ModelResolver } from "../providers/model-resolver.js"
 import type { ApprovalService } from "./approval-service.js"

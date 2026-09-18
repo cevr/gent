@@ -45,8 +45,11 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { InteractionPendingError } from "../../src/domain/interaction"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { noBranchTools, ToolRunner } from "../../src/runtime/agent/tools"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"

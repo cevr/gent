@@ -5,8 +5,11 @@ import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect
 import { BranchId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
 import { dateFromMillis, Session } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import {
   resolveTurnProfile,
   type TurnProfileDefaults,

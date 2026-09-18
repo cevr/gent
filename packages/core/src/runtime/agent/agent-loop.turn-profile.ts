@@ -2,11 +2,14 @@ import { Context, Effect } from "effect"
 import type { ExtensionHostContext } from "../../domain/extension.js"
 import type { ProcessGenerationId } from "../../domain/ids.js"
 import type { PromptSection } from "../../domain/capability.js"
-import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
-import { provideCurrentCapabilityContext } from "../extensions/extension-capability-context.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { provideCurrentHostCtx } from "./tools.js"
-
+import {
+  DriverRegistry,
+  type DriverRegistryService,
+  ExtensionRegistry,
+  type ExtensionRegistryService,
+  provideCurrentCapabilityContext,
+  provideCurrentHostCtx,
+} from "../extension-host.js"
 export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService
   readonly turnDriverRegistry: DriverRegistryService

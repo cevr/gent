@@ -6,17 +6,17 @@ import { environmentSection, type PromptSection } from "../domain/capability.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "./gent-platform.js"
 import {
+  type DiscoveredExtension,
+  discoverExtensions,
+  DriverRegistry,
+  type DriverRegistryService,
+  type ExtensionActivationResult,
   ExtensionRegistry,
   type ExtensionRegistryService,
   type ResolvedExtensions,
-} from "./extensions/registry.js"
-import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
-import {
   setupExtensions,
   validateLoadedExtensions,
-  type ExtensionActivationResult,
-} from "./extensions/activation.js"
-import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
+} from "./extension-host.js"
 import { GENT_CONFIG_DIRECTORY } from "./config.js"
 import type { ProcessGenerationId } from "../domain/ids.js"
 

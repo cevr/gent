@@ -12,7 +12,7 @@ import {
   parseModelProvider,
   ProviderId,
 } from "../domain/agent.js"
-import { DriverRegistry } from "./extensions/driver-registry.js"
+import { DriverRegistry } from "./extension-host.js"
 import { RuntimeEnvironment } from "./config.js"
 
 const MODELS_URL = "https://models.dev"

@@ -3,11 +3,12 @@ import { Cause, Effect, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import {
   DriverRegistry,
   type DriverRegistryService,
-} from "../../src/runtime/extensions/driver-registry"
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { Auth, AuthError, type AuthInfo, type AuthService } from "../../src/domain/auth"
 import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
 import { ModelResolver } from "../../src/providers/model-resolver"

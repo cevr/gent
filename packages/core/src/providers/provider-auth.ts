@@ -4,7 +4,7 @@ import { Auth, AuthApi, AuthOauth, AuthAuthorization } from "../domain/auth.js"
 import type { AuthMethod, AuthService } from "../domain/auth.js"
 import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
 import type { SessionId } from "../domain/ids.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import { DriverRegistry } from "../runtime/extension-host.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 
 const authValue = (auth: Parameters<PersistAuth>[0]): AuthApi | AuthOauth => {

@@ -2,7 +2,7 @@ import { Cause, Duration, Effect, Option, Predicate, Random, Schedule, Schema } 
 import * as AiError from "effect/unstable/ai/AiError"
 import { DEFAULT_RETRY_POLICY, type ProviderAuthError, type RetryPolicy } from "../domain/driver.js"
 import { ProviderError } from "../domain/errors.js"
-import type { DriverRegistryService } from "./extensions/driver-registry.js"
+import type { DriverRegistryService } from "./extension-host.js"
 
 /**
  * The policy of the driver a turn will call, by its effective driver id

@@ -9,8 +9,10 @@ import type {
 import { hook } from "../../src/domain/extension.js"
 import { testExtensionHostContext } from "../../src/test-utils"
 import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
-import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
+import {
+  compileExtensionHooks,
+  CurrentExtensionHostContext,
+} from "../../src/runtime/extension-host"
 import { AgentName } from "../../src/domain/agent"
 
 const stubCtx = testExtensionHostContext()

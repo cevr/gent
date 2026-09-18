@@ -6,8 +6,11 @@ import { Auth, AuthError, AuthMethod, type AuthInfo, type AuthService } from "..
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "../../src/domain/driver"
 import { ProviderAuth } from "../../src/providers/provider-auth"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 const pendingCallbacks = new Map<string, (code?: string) => string>()

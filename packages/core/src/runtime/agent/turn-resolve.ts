@@ -24,17 +24,15 @@ import { type BranchId, type SessionId } from "../../domain/ids.js"
 import type { TurnProjection } from "../../domain/extension.js"
 import { MessageStorage, SessionStorage } from "../../storage/storage.js"
 import { ConfigService } from "../config.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
+import { CurrentExtensionHostContext, ExtensionRegistry } from "../extension-host.js"
 import { compileToolPolicy } from "../extensions/tool-policy.js"
 import type { ResolvedTurn } from "../../domain/agent-loop.js"
 import { buildTurnPromptSections } from "./agent-loop.utils.js"
 import {
   attachToolBindingIdentity,
-  CurrentExtensionHostContext,
   type ResolvedToolCapability,
   staticToolEntries,
 } from "./tools.js"
-
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
   tools: ReadonlyArray<ToolCapability>

@@ -7,8 +7,11 @@ import { EventId, EventPublisher, EventStore, InteractionResolved } from "../dom
 import { SessionId, type BranchId, type RequestId } from "../domain/ids.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  type ExtensionRegistryService,
+} from "../runtime/extension-host.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"

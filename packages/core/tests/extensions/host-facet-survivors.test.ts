@@ -19,7 +19,7 @@ import { requireCurrentAgent, ExtensionServiceError } from "@gent/core/extension
 import { provideExtensionServices } from "../../src/domain/extension.js"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message.js"
 import { testExtensionFiles, testToolContext } from "../../src/test-utils/index.js"
-import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
+import { resolveExtensions } from "../../src/runtime/extension-host.js"
 import { testHostFacts } from "../../src/test-utils"
 
 const SESSION_ID = SessionId.make("test-session")

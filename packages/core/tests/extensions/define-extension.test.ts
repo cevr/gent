@@ -27,11 +27,13 @@ import {
   validateExtensionPackage,
 } from "../../src/domain/extension"
 import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability"
-import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
-import { resolveExtensions } from "../../src/runtime/extensions/registry"
+import {
+  buildResourceLayer,
+  compileExtensionHooks,
+  CurrentExtensionHostContext,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { ExtensionId } from "../../src/domain/ids"
-import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
 import { collectTestContributions, testExtensionHostContext } from "../../src/test-utils"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 

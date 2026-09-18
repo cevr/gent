@@ -6,10 +6,7 @@ import { persistAuthTo } from "./provider-auth.js"
 import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import { type AgentName, type ModelId, parseModelId } from "../domain/agent.js"
 import { ProviderError } from "../domain/errors.js"
-import {
-  DriverRegistry,
-  type DriverRegistryService,
-} from "../runtime/extensions/driver-registry.js"
+import { DriverRegistry, type DriverRegistryService } from "../runtime/extension-host.js"
 
 export interface ResolveModelRequest {
   readonly modelId: ModelId | string

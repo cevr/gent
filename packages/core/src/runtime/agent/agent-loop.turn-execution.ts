@@ -24,7 +24,7 @@ import {
 import { Message } from "../../domain/message.js"
 import { ConfigService } from "../config.js"
 import { GentPlatform } from "../gent-platform.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
+import { ExtensionRegistry } from "../extension-host.js"
 import { WideEvent } from "../wide-event-boundary.js"
 import { AgentLoopError, asAgentLoopError, type RunningState } from "../../domain/agent-loop.js"
 import type { LoopInbox } from "./loop-inbox.js"

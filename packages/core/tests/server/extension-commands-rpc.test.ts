@@ -26,7 +26,12 @@ import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { type Message, messageSingleText } from "../../src/domain/message"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import {
+  buildResourceLayer,
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { SqliteStorage } from "../../src/storage/storage"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"
@@ -34,9 +39,7 @@ import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { SlashCommandInfo } from "../../src/server/transport-contract"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
-import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
 import {
   CapabilityError,
   ExtensionContext,

@@ -2,11 +2,15 @@ import { describe, expect, it } from "effect-bun-test"
 import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
-import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
+import {
+  ExtensionRegistry,
+  provideCurrentCapabilityContext,
+  provideCurrentHostCtx,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { tool, ExtensionContext } from "@gent/core/extensions/api"
 import {
   executeToolCalls,
-  provideCurrentHostCtx,
   type ResolvedToolCapability,
   ToolRunner,
 } from "../../src/runtime/agent/tools"
@@ -15,7 +19,6 @@ import { RuntimeEnvironment } from "../../src/runtime/config"
 import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { testToolContext } from "../../src/test-utils/extension-harness"
-import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import {
   BranchId,
   ExtensionId,

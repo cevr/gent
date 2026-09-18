@@ -19,8 +19,12 @@ import { SingleRunner } from "effect/unstable/cluster"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { ModelResolver } from "../../src/providers/model-resolver"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
-import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import {
+  DriverRegistry,
+  eraseResourceLayer,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { InProcessRunner, admitChildSession } from "../../src/runtime/agent/agent-runner"
 import { getSessionDepth } from "../../src/runtime/session-depth"
 import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
@@ -102,7 +106,6 @@ import {
 } from "../../src/runtime/session-runtime"
 import { SessionRuntimeStateSchema, type SessionRuntimeState } from "../../src/domain/agent-loop"
 import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { eraseResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
 const bashStubTool = tool({
   id: "bash",
   description: "Stub bash tool for tests",

@@ -17,9 +17,12 @@ import {
   getToolMetadata,
   type PromptSection,
 } from "../../src/domain/capability"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { compileToolPolicy } from "../../src/runtime/extensions/tool-policy"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the

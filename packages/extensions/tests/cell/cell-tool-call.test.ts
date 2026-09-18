@@ -11,18 +11,15 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids.js"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction.js"
+import { type ResolvedToolCapability, ToolRunner } from "@gent/core-internal/runtime/agent/tools.js"
 import {
+  ExtensionRegistry,
   provideCurrentHostCtx,
-  type ResolvedToolCapability,
-  ToolRunner,
-} from "@gent/core-internal/runtime/agent/tools.js"
+  resolveExtensions,
+} from "../../../core/src/runtime/extension-host.js"
 import { executeBoundCellTool, cellToolResultValue } from "../../src/cell.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  ExtensionRegistry,
-  resolveExtensions,
-} from "@gent/core-internal/runtime/extensions/registry.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness.js"
 
 const extensionId = ExtensionId.make("cell-test")

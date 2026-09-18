@@ -37,8 +37,7 @@ import {
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { SessionMutationsLive } from "./session-mutations-live.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import { DriverRegistry, ExtensionRegistry } from "../runtime/extension-host.js"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "./workspace-rpc.js"
 
 interface DependencyOverrides {

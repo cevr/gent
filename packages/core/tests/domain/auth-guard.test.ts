@@ -11,8 +11,11 @@ import {
   type AuthInfo,
   ListAuthProvidersPayload,
 } from "../../src/domain/auth"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "../../src/domain/driver"
 import {

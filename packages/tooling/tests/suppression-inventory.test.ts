@@ -5,7 +5,7 @@ import {
 } from "../src/suppression-inventory"
 
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
-const membraneFile = "packages/core/src/runtime/extensions/extension-effect-membrane.ts"
+const membraneFile = "packages/core/src/runtime/extension-host.ts"
 const membraneComment = `${nextLine} anyUnknownInErrorContext:off`
 
 describe("suppression inventory guard", () => {
@@ -46,6 +46,10 @@ describe("suppression inventory guard", () => {
     const findings = findUnusedSuppressionApprovals(
       new Map([[membraneFile, `const x = 1\n  ${membraneComment}\nconst y = 2\n`]]),
     )
-    expect(findings.filter((finding) => finding.file === membraneFile)).toEqual([])
+    expect(
+      findings.filter(
+        (finding) => finding.file === membraneFile && finding.comment === membraneComment,
+      ),
+    ).toEqual([])
   })
 })

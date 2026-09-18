@@ -12,7 +12,7 @@
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path, Predicate } from "effect"
-import { setupExtensions } from "@gent/core-internal/runtime/extensions/activation.js"
+import { setupExtensions } from "@gent/core-internal/runtime/extension-host.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import {
   ACP_PROTOCOL_AGENTS,

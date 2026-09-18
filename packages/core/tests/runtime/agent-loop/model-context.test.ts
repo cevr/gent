@@ -23,8 +23,11 @@ import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { EventPublisherLive, EventStore } from "../../../src/domain/event"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
-import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
-import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../../src/runtime/extension-host"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"

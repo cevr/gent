@@ -16,9 +16,11 @@ import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.j
 import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId } from "../../src/domain/ids"
 
-import { resolveExtensions } from "../../src/runtime/extensions/registry"
-import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
+import {
+  compileExtensionHooks,
+  CurrentExtensionHostContext,
+  resolveExtensions,
+} from "../../src/runtime/extension-host"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { runToolWithCtx, testExtensionHostContext, testToolContext } from "../../src/test-utils"
 import { AgentDefinition } from "../../src/domain/agent"

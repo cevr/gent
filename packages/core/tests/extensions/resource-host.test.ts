@@ -12,7 +12,7 @@
 
 import { describe, expect, it, test } from "effect-bun-test"
 import { Context, Effect, Layer, Option } from "effect"
-import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"
+import { buildResourceLayer } from "../../src/runtime/extension-host"
 import {
   type AnyResourceContribution,
   defineResource,

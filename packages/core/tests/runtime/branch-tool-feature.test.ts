@@ -14,7 +14,7 @@ import {
   CurrentBranchToolFeature,
   type BranchToolFeature,
 } from "../../src/runtime/agent/tools"
-import { emptyErasedResourceLayer } from "../../src/runtime/extensions/extension-effect-membrane"
+import { emptyErasedResourceLayer } from "../../src/runtime/extension-host"
 
 const tableNames = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient

@@ -127,32 +127,22 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off",
   },
   {
-    file: "packages/core/src/runtime/extensions/registry.ts",
-    scope: "next-line",
-    text: "anyUnknownInErrorContext:off",
-  },
-  {
     file: "packages/core/src/domain/capability.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.",
   },
   {
-    file: "packages/core/src/runtime/extensions/extension-effect-membrane.ts",
+    file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off",
   },
   {
-    file: "packages/core/src/runtime/extensions/extension-hooks.ts",
-    scope: "next-line",
-    text: "anyUnknownInErrorContext:off",
-  },
-  {
-    file: "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
+    file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
   },
   {
-    file: "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
+    file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
   },

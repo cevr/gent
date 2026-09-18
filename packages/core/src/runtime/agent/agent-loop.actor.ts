@@ -109,7 +109,8 @@ import {
   MessageStorage,
   SessionOperationStorage,
 } from "../../storage/storage.js"
-import { type CurrentExtensionHostContext, ProcessLocalToolReplay } from "./tools.js"
+import { ProcessLocalToolReplay } from "./tools.js"
+import { type CurrentExtensionHostContext } from "../extension-host.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
 import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 

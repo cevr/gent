@@ -16,8 +16,11 @@ import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
-import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
-import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../../src/runtime/extension-host"
 import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"

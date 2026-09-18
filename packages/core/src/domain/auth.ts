@@ -26,8 +26,7 @@ import {
   resolveDefaultAgentModel,
 } from "./agent.js"
 import { SessionId } from "./ids.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import { DriverRegistry, ExtensionRegistry } from "../runtime/extension-host.js"
 
 // ── Driver-facing wire types ────────────────────────────────────────────
 

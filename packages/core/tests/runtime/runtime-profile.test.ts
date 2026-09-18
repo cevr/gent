@@ -19,8 +19,7 @@ import {
   loadRuntimeProfileDeclarations,
   type RuntimeProfileInputs,
 } from "../../src/runtime/profile"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
-import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
+import { CurrentExtensionHostContext, ExtensionRegistry } from "../../src/runtime/extension-host"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(

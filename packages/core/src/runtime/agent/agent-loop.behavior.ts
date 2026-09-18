@@ -64,10 +64,12 @@ import type { PromptSection } from "../../domain/capability.js"
 import type { StorageError } from "../../domain/errors.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import type { SessionProfileCacheService } from "../session-profile.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
-import { buildResourceLayer } from "../extensions/resource-host/resource-layer.js"
-import { DriverRegistry } from "../extensions/driver-registry.js"
-import { makeExtensionHostPlatform } from "../extensions/host-platform.js"
+import {
+  buildResourceLayer,
+  DriverRegistry,
+  ExtensionRegistry,
+  makeExtensionHostPlatform,
+} from "../extension-host.js"
 import type { ModelRegistry } from "../model-registry.js"
 import type { GentPlatform } from "../gent-platform.js"
 import { resolveTurnProfile as resolveSessionTurnProfile } from "../session-runtime-context.js"

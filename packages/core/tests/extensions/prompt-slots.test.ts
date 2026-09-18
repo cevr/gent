@@ -5,8 +5,10 @@ import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agent
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
 import { ExtensionId } from "../../src/domain/ids"
-import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
+import {
+  compileExtensionHooks,
+  CurrentExtensionHostContext,
+} from "../../src/runtime/extension-host"
 import { testExtensionHostContext } from "../../src/test-utils"
 
 const stubHostCtx = testExtensionHostContext()

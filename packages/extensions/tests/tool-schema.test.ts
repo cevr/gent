@@ -7,7 +7,7 @@ import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import { getToolId } from "@gent/core/extensions/api"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { GentPlatform } from "../../core/src/runtime/gent-platform"
-import { setupExtension } from "../../core/src/runtime/extensions/loader"
+import { setupExtension } from "../../core/src/runtime/extension-host"
 
 describe("builtin tool schemas", () => {
   it.live("are compatible with Anthropic tool structured output", () => {

@@ -10,8 +10,11 @@ import {
   registerContributions,
 } from "../../src/domain/extension.js"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import type { DiscoveredExtension } from "../../src/runtime/extensions/loader"
-import { setupExtensions, validateLoadedExtensions } from "../../src/runtime/extensions/activation"
+import {
+  type DiscoveredExtension,
+  setupExtensions,
+  validateLoadedExtensions,
+} from "../../src/runtime/extension-host"
 import {
   defineExtension,
   defineResource,

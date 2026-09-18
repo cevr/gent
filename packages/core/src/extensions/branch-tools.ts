@@ -38,7 +38,7 @@ export {
   type BranchToolLayerFactory,
   BranchToolWork,
 } from "../runtime/agent/tools.js"
-export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membrane.js"
+export { eraseResourceLayer } from "../runtime/extension-host.js"
 
 // Storage the feature contributes and reads.
 export type { FeatureMigrations } from "../storage/schema.js"

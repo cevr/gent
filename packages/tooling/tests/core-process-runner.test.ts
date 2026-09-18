@@ -38,7 +38,7 @@ describe("process runner guard", () => {
     ).toEqual([])
     expect(
       findProcessRunnerFindings(
-        "packages/core/src/runtime/extensions/host-platform.ts",
+        "packages/core/src/runtime/extension-host.ts",
         "runProcess: (command, args, options) => runProcess(command, args, options)",
       ),
     ).toEqual([])

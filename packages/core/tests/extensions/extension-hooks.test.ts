@@ -13,9 +13,11 @@ import {
 } from "../../src/domain/extension.js"
 import { testExtensionHostContext } from "../../src/test-utils"
 import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
-import { compileExtensionHooks } from "../../src/runtime/extensions/extension-hooks"
-import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
-import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
+import {
+  compileExtensionHooks,
+  CurrentExtensionHostContext,
+  provideCurrentCapabilityContext,
+} from "../../src/runtime/extension-host"
 import { AgentName } from "../../src/domain/agent"
 
 const stubHostCtx = testExtensionHostContext()

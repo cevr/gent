@@ -17,8 +17,11 @@ import {
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
-import { resolveExtensions, ExtensionRegistry } from "../../../src/runtime/extensions/registry"
-import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
+import {
+  DriverRegistry,
+  ExtensionRegistry,
+  resolveExtensions,
+} from "../../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ModelResolver } from "../../../src/providers/model-resolver"
