@@ -112,6 +112,15 @@ because both block an import merge:
 | `tests/message-list.test.tsx`          | `transcript`                                     | `transcriptCommit`                                           | different props in `native-transcript-fingerprint` and `native-transcript-commit`              |
 | `tests/message-list.test.tsx`          | `Message` (the type from `src/message-list`)     | `ListMessage`                                                | the protocol `Message` class and the render union share the name; the type-only one is aliased |
 
+| `tests/auth.test.tsx` | `apiMethod`, `oauthMethod` | `apiMethodRoute`, `oauthMethodRoute` | different labels in `auth-state` and `auth-route` |
+| `tests/client.test.tsx` | `absent`, `nullValue`, `ClientProbe` | — | identical across the client sections; one copy kept |
+| `tests/client.test.tsx` | `waitFor` | `waitForFeed` | different attempt budgets and error types |
+| `tests/client.test.tsx` | `requireClient` | `requireClientSessionState` | different error types |
+| `tests/client.test.tsx` | `SessionSnapshot` (import) | — | `@gent/sdk` re-exports the `@gent/core/protocol` value; both sections now import it from the protocol |
+| `tests/app.test.tsx` | `absent`, `nullValue` | — | identical in all three sections; one copy kept |
+| `tests/app.test.tsx` | `Session` (import) | — | same re-export; normalized to `@gent/core/protocol` |
+| `tests/app.test.tsx` | `renderFrame` (import) | — | `helpers-boundary` re-exports it from `render-harness-boundary`; both sections now import it from the harness |
+
 ## Timing
 
 Recorded after each fold.

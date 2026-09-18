@@ -828,7 +828,7 @@ follow-up work in Gent. This pass did not change delivery semantics.
 The broader FX interaction comparison remains open.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: plain pending rows and dotted rail.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/widgets-render.test.tsx`: unchanged steer, queued-summary, and restore-hint assertions.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/app.test.tsx`: unchanged steer, queued-summary, and restore-hint assertions.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/test-utils/language-model.ts`: scripted replies and delay control.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/footer/input_presentation.zig`: dotted pending-input rail.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/footer/paint_plan.zig`: bounded pending-input rows.
@@ -1495,7 +1495,7 @@ No new appearance-only test was added.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/todo-dialog.tsx`: correct list/detail branch, panel bounds, and keyboard scrolling.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: post-layout selection restore with cleanup.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/components/todo-dialog.test.tsx`: task navigation regression test.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/widgets-render.test.tsx`: existing preview expectation.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/app.test.tsx`: existing preview expectation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/todo/tools.ts`: real task creation used in the preview.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/todo/domain.ts`: task UI subject/status contract.
 - `/tmp/gent-fx-ui-todo-widget-before.ansi`: oversized preview.
@@ -1558,7 +1558,7 @@ fix, it finds one completed call and one completed tool segment. The live
 Herdr review workflow also shows one completed call after saving in vi.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/client.test.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/tools.ts`
 - `/tmp/gent-fx-ui-resumed-tool-red.log`: duplicate entry before repair.
 - `/tmp/gent-fx-ui-resumed-tool-green.log`: four feed tests pass.
@@ -1639,7 +1639,7 @@ navigation events. No appearance-only test was added. Full gate and E2E pass.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/client.test.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/server.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/session-queries.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/session.ts`
@@ -1767,7 +1767,7 @@ still open. Partial-item content changes and compact-history changes need
 separate checks. These resize results do not prove those cases.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/app-auth.test.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/app.test.tsx`
 - `/tmp/gent-fx-ui-resize-reset-narrow.ansi`
 - `/tmp/gent-fx-ui-resize-reset-wide.ansi`
 - `/tmp/gent-fx-ui-resize-reset-history-wide.txt`
