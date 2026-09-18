@@ -285,8 +285,11 @@ const up = async (presetName: string, promptArg: string | undefined, build: bool
   // GENT_DATA_DIR redirects `data.db`. Auth does NOT follow it: the auth store
   // resolves from `${home}/.gent/auth` (server/dependencies.ts), so the real
   // provider credentials keep working while the database stays isolated.
+  // Split down, not right: a right split of an already split pane leaves the
+  // TUI about 55 columns wide, the status line drops its first item (the
+  // `idle` word), and `wait` never settles.
   const split =
-    await $`herdr pane split --current --direction right --cwd ${work} --env GENT_DATA_DIR=${data}`.text()
+    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data}`.text()
   const pane = paneIdFromSplit(split)
 
   const state: GamutState = { root, work, data, pane, binary: BINARY, preset: presetName }

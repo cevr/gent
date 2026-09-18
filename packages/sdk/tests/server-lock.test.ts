@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect"
+import { ConfigProvider, Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
@@ -82,6 +82,31 @@ describe("Build Fingerprint", () => {
 })
 
 describe("Server Lock", () => {
+  it.scopedLive(
+    "a lock written under GENT_DATA_DIR lands beside that database, not under home",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const dataDir = `${home}/isolated-run`
+          const entry = makeEntry()
+          const isolated = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.provideService(
+              effect,
+              ConfigProvider.ConfigProvider,
+              ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
+            )
+          yield* isolated(writeServerLock(home, entry))
+          const fs = yield* FileSystem.FileSystem
+          expect(yield* fs.exists(`${dataDir}/server.lock`)).toBe(true)
+          expect(yield* fs.exists(`${home}/.gent/server.lock`)).toBe(false)
+          // the home-scoped reader does not see the isolated run's server
+          expect(yield* readServerLock(home)).toBeUndefined()
+          expect(yield* isolated(readServerLock(home))).toBeDefined()
+        }),
+      ),
+  )
+
   it.scopedLive("writeServerLock + readServerLock roundtrip", () =>
     provideFs(
       Effect.gen(function* () {
