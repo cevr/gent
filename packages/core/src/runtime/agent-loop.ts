@@ -72,6 +72,7 @@ import {
   type MessageType,
   parseEntityId,
   type QueueFollowUpInput,
+  dequeueFollowUpOn,
   queueFollowUpOn,
   type RemoveFollowUpInput,
   type RequestExtensionInput,
@@ -1400,7 +1401,10 @@ const makeAgentLoopBehavior = (
           if (isOwnBranch(input)) return followUp.enqueue(input)
           return queueFollowUpOn(input).pipe(provideLoopClient)
         },
-        dequeueFollowUp: (input): Effect.Effect<boolean, AgentLoopError> => followUp.dequeue(input),
+        dequeueFollowUp: (input): Effect.Effect<boolean, AgentLoopError> => {
+          if (isOwnBranch(input)) return followUp.dequeue(input)
+          return dequeueFollowUpOn(input).pipe(provideLoopClient)
+        },
         send: (input) => submitUserMessage(input).pipe(provideLoopClient),
         steer: (command) => steerLoop(command).pipe(provideLoopClient),
       },

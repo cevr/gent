@@ -63,8 +63,8 @@ import {
 import {
   AgentLoopError,
   type DequeueFollowUpPayload,
+  dequeueFollowUpOn,
   entityIdOf,
-  followUpMessageIdForSource,
   listWorkspaceLoops,
   type QueueFollowUpPayload,
   queueFollowUpOn,
@@ -526,16 +526,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       ),
 
     dequeueFollowUp: (input) =>
-      actorCommand("dequeueFollowUp", input, (ref, { workspaceId, commandId }) =>
-        ref.execute(
-          AgentLoopActor.RemoveFollowUp.make({
-            workspaceId,
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            commandId,
-            messageId: followUpMessageIdForSource({ workspaceId, ...input }),
-          }),
-        ),
+      requireSessionBranch(input).pipe(
+        Effect.andThen(dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices))),
+        Effect.catchCause((cause) => Effect.fail(wrapError("dequeueFollowUp failed", cause))),
       ),
 
     requestExtension: (input) =>

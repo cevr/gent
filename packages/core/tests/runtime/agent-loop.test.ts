@@ -9207,7 +9207,6 @@ describe("AgentRunner", () => {
           parentBranchId,
           requestId,
           toolCallId: ToolCallId.make("running-limit-tool"),
-          runSpec: makeRunSpec({ overrides: { maxModelAttempts: 32 } }),
         })
         const completed = yield* waitForCompletion(
           runner,

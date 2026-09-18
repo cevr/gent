@@ -365,6 +365,8 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
 ) {}
 /** Maximum unfinished durable start receipts owned by one parent branch. */
 export const DEFAULT_MAX_PENDING_AGENT_STARTS = 4
+/** Model attempts one child turn may spend before it stops, unless the caller sets `maxModelAttempts`. */
+export const DEFAULT_MAX_CHILD_MODEL_ATTEMPTS = 32
 
 // Agent runner types
 

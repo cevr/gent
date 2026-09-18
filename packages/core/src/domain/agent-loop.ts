@@ -713,3 +713,23 @@ export const queueFollowUpOn = Effect.fn("AgentLoop.client.queueFollowUp")(funct
     .execute(AgentLoop.QueueFollowUp.make({ workspaceId, message, wake: input.wake }))
     .pipe(asAgentLoopError(`Failed to queue follow-up ${message.id}`))
 })
+
+/** Remove a queued follow-up on a branch by source. False when absent or already running. */
+export const dequeueFollowUpOn = Effect.fn("AgentLoop.client.dequeueFollowUp")(function* (
+  input: DequeueFollowUpPayload,
+) {
+  const workspaceId = yield* CurrentWorkspaceId
+  const platform = yield* GentPlatform
+  const ref = yield* loopRefFor(input.sessionId, input.branchId)
+  return yield* ref
+    .execute(
+      AgentLoop.RemoveFollowUp.make({
+        workspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId: ActorCommandId.make(yield* platform.randomId),
+        messageId: followUpMessageIdForSource({ workspaceId, ...input }),
+      }),
+    )
+    .pipe(asAgentLoopError(`Failed to dequeue follow-up ${input.sourceId}`))
+})

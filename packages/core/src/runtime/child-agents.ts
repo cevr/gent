@@ -19,6 +19,7 @@ import {
   AgentRunResult,
   agentRunUsage,
   type ChildAgentRegistryEntry,
+  DEFAULT_MAX_CHILD_MODEL_ATTEMPTS,
   DEFAULT_MAX_PENDING_AGENT_STARTS,
   makeRunSpec,
   type RunSpec,
@@ -302,6 +303,13 @@ const asAgentRunError = Effect.mapError(toAgentRunError)
 
 const startMessageId = (requestId: RequestId) => MessageId.make(`agent-start:${requestId}`)
 
+/** A child that loops on a broken model stops at this budget unless its caller set one. */
+const childRunSpec = (runSpec: RunSpec): RunSpec =>
+  makeRunSpec({
+    ...runSpec,
+    overrides: { maxModelAttempts: DEFAULT_MAX_CHILD_MODEL_ATTEMPTS, ...runSpec.overrides },
+  })
+
 const canonicalStartInput = (input: typeof StoredAgentStartInput.Type) =>
   Schema.encodeEffect(Schema.fromJsonString(StoredAgentStartInput))(input).pipe(
     Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Schema.Json))),
@@ -539,7 +547,9 @@ export const InProcessRunner: Layer.Layer<
           content: params.prompt,
           agentOverride: params.agentName,
           interactive: false,
-          runSpec: params.runSpec,
+          // The budget applies at the prompt, so a stored start input stays
+          // what the caller gave and a repeat still matches it.
+          runSpec: childRunSpec(params.runSpec ?? {}),
           completion: params.completion,
         })
         .pipe(

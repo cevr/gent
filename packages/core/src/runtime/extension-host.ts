@@ -34,7 +34,6 @@ import {
   type ExtensionScope,
   extensionServiceError,
   ExtensionServiceError,
-  ExtensionServiceError as ExtensionServiceErrorClass,
   type ExtensionSetupServices,
   type ExtensionStateFacet,
   type ExtensionStatusInfo,
@@ -2264,6 +2263,22 @@ export const makeExtensionHostContextProvider = (
     const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
       effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
 
+    // Every addressed verb validates its durable target first, as the RPC
+    // path does: an actor opened for a branch that does not exist would fail
+    // late on a foreign key and linger.
+    const requireTarget = (
+      operation: string,
+      target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    ) =>
+      sessions((sessionStorage) =>
+        branches((branchStorage) =>
+          resolveExistingSessionBranch(target).pipe(
+            Effect.provideService(SessionStorage, sessionStorage),
+            Effect.provideService(BranchStorage, branchStorage),
+          ),
+        ),
+      ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
+
     const Process: ExtensionProcessService = {
       randomId: host.randomId,
       run: (command, args, options) =>
@@ -2374,7 +2389,7 @@ export const makeExtensionHostContextProvider = (
               onNone: () => ({
                 changed: () =>
                   Effect.fail(
-                    new ExtensionServiceErrorClass({
+                    new ExtensionServiceError({
                       service: "ExtensionState",
                       operation: "changed",
                       message: "Extension id unavailable for state change notification",
@@ -2498,13 +2513,18 @@ export const makeExtensionHostContextProvider = (
                 message: "send targets another branch; queue a follow-up on this one",
               })
             }
+            yield* requireTarget("send", params)
             yield* control((loop) => loop.send(params)).pipe(Effect.mapError(sessionError("send")))
           }).pipe(inWorkspace),
         steer: (command) =>
-          control((loop) => loop.steer(command)).pipe(
-            Effect.mapError(sessionError("steer")),
+          requireTarget("steer", command).pipe(
+            Effect.andThen(
+              control((loop) => loop.steer(command)).pipe(Effect.mapError(sessionError("steer"))),
+            ),
             inWorkspace,
           ),
+        // The subscription does its reads at pull time, so the workspace is
+        // pinned on the stream, not on the effect that builds it.
         events: (target) =>
           Stream.unwrap(
             eventStore((store) =>
@@ -2514,27 +2534,42 @@ export const makeExtensionHostContextProvider = (
                   Stream.mapError(sessionError("events")),
                 ),
               ),
-            ).pipe(inWorkspace),
-          ),
-        queueFollowUp: (params) =>
-          control((loop) =>
-            loop.queueFollowUp({
-              sourceId: params.sourceId,
-              sessionId: params.sessionId ?? runInfo.sessionId,
-              branchId: params.branchId ?? runInfo.branchId,
-              content: params.content,
-              metadata: params.metadata,
-              wake: params.wake,
-            }),
-          ).pipe(Effect.mapError(sessionError("queueFollowUp")), inWorkspace),
-        dequeueFollowUp: (params) =>
-          control((loop) =>
-            loop.dequeueFollowUp({
-              sourceId: params.sourceId,
-              sessionId: runInfo.sessionId,
-              branchId: params.branchId ?? runInfo.branchId,
-            }),
-          ).pipe(Effect.mapError(sessionError("dequeueFollowUp")), inWorkspace),
+            ),
+          ).pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
+        queueFollowUp: (params) => {
+          const target = {
+            sessionId: params.sessionId ?? runInfo.sessionId,
+            branchId: params.branchId ?? runInfo.branchId,
+          }
+          return requireTarget("queueFollowUp", target).pipe(
+            Effect.andThen(
+              control((loop) =>
+                loop.queueFollowUp({
+                  ...target,
+                  sourceId: params.sourceId,
+                  content: params.content,
+                  metadata: params.metadata,
+                  wake: params.wake,
+                }),
+              ).pipe(Effect.mapError(sessionError("queueFollowUp"))),
+            ),
+            inWorkspace,
+          )
+        },
+        dequeueFollowUp: (params) => {
+          const target = {
+            sessionId: params.sessionId ?? runInfo.sessionId,
+            branchId: params.branchId ?? runInfo.branchId,
+          }
+          return requireTarget("dequeueFollowUp", target).pipe(
+            Effect.andThen(
+              control((loop) =>
+                loop.dequeueFollowUp({ ...target, sourceId: params.sourceId }),
+              ).pipe(Effect.mapError(sessionError("dequeueFollowUp"))),
+            ),
+            inWorkspace,
+          )
+        },
         listBranches: branches((storage) => storage.listBranches(runInfo.sessionId)).pipe(
           Effect.mapError(sessionError("listBranches")),
           inWorkspace,

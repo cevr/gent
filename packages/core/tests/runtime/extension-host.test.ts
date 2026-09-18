@@ -142,10 +142,10 @@ import {
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
 import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
-import { AgentEvent, EventPublisherLive, EventStore } from "../../src/domain/event"
+import { AgentEvent, EventPublisher, EventPublisherLive, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import { SessionRuntime } from "../../src/runtime/session"
+import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
 // ── ambient-host-context.test ───────────────────────────────────────────────
 
@@ -270,6 +270,50 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
     ),
+  )
+
+  it.scopedLive(
+    "an event replay lands in the workspace the run was built under, not the puller's",
+    () =>
+      Effect.gen(function* () {
+        const runWorkspace = workspaceIdForCwd("/tmp/run-workspace")
+        const otherWorkspace = workspaceIdForCwd("/tmp/other-workspace")
+        // The branch and its one event exist only in the run's workspace.
+        yield* ensureStorageParents({ sessionId, branchId }).pipe(
+          Effect.provideService(CurrentWorkspaceId, runWorkspace),
+        )
+        const publisher = yield* EventPublisher
+        yield* publisher
+          .publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
+          .pipe(Effect.provideService(CurrentWorkspaceId, runWorkspace))
+
+        const ctx = yield* ambientContext.pipe(
+          Effect.provideService(CurrentWorkspaceId, runWorkspace),
+        )
+
+        // The subscription reads at pull time; the puller sits elsewhere.
+        const replayed = yield* ctx.Session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil((event) => event._tag === "StreamSynchronized"),
+          Stream.runCollect,
+          Effect.provideService(CurrentWorkspaceId, otherWorkspace),
+        )
+        expect(replayed.map((event) => event._tag)).toStrictEqual([
+          "SessionStarted",
+          "StreamSynchronized",
+        ])
+      }).pipe(
+        // The storage-backed store validates the session and loads the rows
+        // under the workspace in scope at pull time; the memory store reads none.
+        Effect.provide(
+          Layer.provideMerge(
+            EventPublisherLive,
+            Layer.provideMerge(
+              EventStoreLive,
+              SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+            ),
+          ),
+        ),
+      ),
   )
 })
 
@@ -4280,6 +4324,15 @@ describe("addressed session verbs via RPC", () => {
 
         const steered = yield* call(harness, Verbs.Steer, child)
         expect(steered.steered).toBe(true)
+        // A target that does not exist is refused before any loop is opened for it.
+        const phantom = yield* call(harness, Verbs.Steer, {
+          sessionId: SessionId.make("no-such-session"),
+          branchId: BranchId.make("no-such-branch"),
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(phantom)).toBe(true)
+        if (Exit.isFailure(phantom)) {
+          expect(Cause.pretty(phantom.cause)).toContain("Session not found: no-such-session")
+        }
 
         const deleted = yield* call(harness, Verbs.Delete, { sessionId: child.sessionId })
         expect(deleted.gone).toBe(true)

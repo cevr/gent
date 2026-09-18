@@ -806,13 +806,15 @@ export interface ExtensionSessionService {
     { readonly sessionId: SessionId; readonly branchId: BranchId },
     ExtensionServiceError
   >
-  /** Delete a session and every descendant; running loops stop first. */
+  /** Delete a session and every descendant. Their loops are tombstoned, not awaited; deleting the caller's own session ends its turn. */
   readonly delete: (sessionId: SessionId) => Effect.Effect<void, ExtensionServiceError>
   /**
    * One user message on another branch. `completion: "admission"` returns
    * once that loop holds the turn; a `commandId` waits for the turn to end.
    * The current branch takes `queueFollowUp`, never `send`: a turn that
-   * waits on its own loop never returns.
+   * waits on its own loop never returns. Two branches that `send` each other
+   * with a `commandId` wait on each other; `completion: "admission"` is the
+   * safe shape for mutual traffic.
    */
   readonly send: (params: {
     readonly sessionId: SessionId
@@ -843,9 +845,10 @@ export interface ExtensionSessionService {
     readonly branchId?: BranchId
     readonly wake?: boolean
   }) => Effect.Effect<void, ExtensionServiceError>
-  /** Removes a queued follow-up by source. False when absent or already running. */
+  /** Removes a queued follow-up by source; the current branch when no target is named. False when absent or already running. */
   readonly dequeueFollowUp: (params: {
     readonly sourceId: string
+    readonly sessionId?: SessionId
     readonly branchId?: BranchId
   }) => Effect.Effect<boolean, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
