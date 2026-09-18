@@ -272,7 +272,7 @@ describe("child-session depth guard", () => {
       "packages/core/src/storage/schema.ts",
       "packages/core/src/test-utils/index.ts",
       "packages/extensions/src/thread/thread.ts",
-      "apps/tui/tests/components/thread-view.test.tsx",
+      "apps/tui/tests/extensions/thread-view.client.test.tsx",
     ]) {
       expect(findUnadmittedChildSessionWriters(file, childWriter)).toEqual([])
     }
@@ -3060,7 +3060,7 @@ const x: Api.ToolCapability = Api.tool({})`,
       findingsFor([
         { file: "packages/extensions/src/client.ts", text: source },
         {
-          file: "apps/tui/tests/components/wake-tray.test.tsx",
+          file: "apps/tui/tests/extensions/wake.client.test.tsx",
           text: `import type { WakePendingType } from "@gent/extensions/client"`,
         },
       ]),

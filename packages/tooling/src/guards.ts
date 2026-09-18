@@ -2205,12 +2205,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "nodeBuiltinImport:off",
   },
   {
-    file: "apps/tui/tests/extension-effect-setup.test.ts",
+    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
   },
   {
-    file: "apps/tui/tests/extension-integration.test.ts",
+    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
   },
