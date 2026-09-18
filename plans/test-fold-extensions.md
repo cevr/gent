@@ -149,3 +149,10 @@ Wall time grew from 11.2 s to about 13 s. `bun test --parallel=3` schedules one
 worker per file, so 83 files overlapped more than 23 do. No single file is near
 the 60 s limit: the longest is `cell.test.ts` at 13.9 s on its own, then
 `delegate.test.ts` at 5.8 s. No split was needed (rule 9).
+
+`bun run gate` passes. It failed twice first, each time on
+`packages/core/tests/runtime/run-process.test.ts`, which timed out at 10 s. That
+test is outside this diff: its last change is `853a067c`, and it runs in 0.35 s
+on its own. Turbo starts every package's suite at once and each asks for three
+workers, so a real-process test can starve. Rerun the gate before you treat such
+a failure as yours.
