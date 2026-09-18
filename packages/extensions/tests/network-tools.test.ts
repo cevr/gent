@@ -1,3 +1,13 @@
+import { describe, expect, it } from "effect-bun-test"
+import { Effect, Fiber, Layer, Option, Schema } from "effect"
+import { TestClock } from "effect/testing"
+import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { WebSearchTool } from "../src/network-tools.js"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
+
+// ── network-tools/websearch.test ────────────────────────────────────────────
+
 /**
  * WebSearchTool — the only shipped tool that parses an untrusted external
  * wire format (Exa MCP over JSON or SSE).
@@ -7,13 +17,6 @@
  * `tests/anthropic/anthropic-keychain-transform.test.ts` does. No global
  * fetch swap, no network.
  */
-import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Layer, Option, Schema } from "effect"
-import { TestClock } from "effect/testing"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { WebSearchTool } from "../../src/network-tools.js"
-import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 
 const ctx = testToolContext()
 

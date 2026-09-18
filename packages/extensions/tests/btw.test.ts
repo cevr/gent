@@ -1,7 +1,3 @@
-/**
- * `/btw` answers from a copy of the branch history and leaves the branch
- * untouched. Follow-ups replay the earlier side turns inside the prompt.
- */
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -12,13 +8,20 @@ import {
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/index"
-import { e2ePreset } from "../helpers/test-preset"
+import { e2ePreset } from "./helpers/test-preset"
 import {
   BTW_EXTENSION_ID,
   SIDE_QUESTION_INSTRUCTION,
   SideQuestionProgress,
   sideQuestionPrompt,
-} from "../../src/btw.js"
+} from "../src/btw.js"
+
+// ── btw/side-question.test ──────────────────────────────────────────────────
+
+/**
+ * `/btw` answers from a copy of the branch history and leaves the branch
+ * untouched. Follow-ups replay the earlier side turns inside the prompt.
+ */
 
 const promptTexts = (options: ProviderOptions): ReadonlyArray<string> =>
   [...Prompt.make(options.prompt).content].flatMap((message) => {
