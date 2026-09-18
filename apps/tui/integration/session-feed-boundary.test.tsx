@@ -9,7 +9,7 @@ import {
   destroyRenderSetup,
   renderWithProviders,
 } from "../tests/render-harness-boundary"
-import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/in-process-layer.js"
+import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/index.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { BranchId, SessionId } from "@gent/core/protocol"

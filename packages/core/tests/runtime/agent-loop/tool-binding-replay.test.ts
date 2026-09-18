@@ -33,7 +33,7 @@ import {
   SqliteStorage,
   ToolCallBindingStorage,
 } from "../../../src/storage/storage"
-import { ensureStorageParents } from "../../../src/test-utils"
+import { createE2ELayer, ensureStorageParents } from "../../../src/test-utils"
 import {
   findPersistedToolResults,
   persistAssistantPartsWithBindings,
@@ -55,7 +55,6 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../../src/runtime/extension-host"
-import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 
 class ReplayResource extends Context.Service<ReplayResource, { readonly value: string }>()(

@@ -12,7 +12,7 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import { compileToolPolicy } from "../../src/runtime/tools"
-import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { createRpcHarness } from "../../src/test-utils/index"
 import {
   LanguageModelLayers,
   textStep,

@@ -9,7 +9,7 @@ import {
   textStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/index"
 import { BranchId } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
 import {

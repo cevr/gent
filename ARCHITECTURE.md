@@ -1097,16 +1097,14 @@ One test file per source file. No god tests. Names match source owners.
 
 ### Important files
 
-- `packages/core/src/test-utils/index.ts` — `SequenceRecorder`, recording layers
-- `packages/core/src/test-utils/in-process-layer.ts` — `baseLocalLayer`, a
-  production-root preset over `makeServerRootLayer` with in-memory SQLite,
-  storage-backed events, debug providers, and test service overrides
-- `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`, a
-  production-root preset over `makeServerRootLayer` that keeps real
-  `ToolRunner.Live`, extension setup/resource startup, event publishing, and
-  interaction recovery while expressing test storage/provider/auth/approval
-  differences through dependency overrides
-- `packages/core/src/test-utils/rpc-harness.ts` — thin RPC acceptance helper:
+- `packages/core/src/test-utils/index.ts` — `SequenceRecorder` and the
+  recording layers; `baseLocalLayer`, a production-root preset over
+  `makeServerRootLayer` with in-memory SQLite, storage-backed events, debug
+  providers, and test service overrides; `createE2ELayer`, a preset that keeps
+  real `ToolRunner.Live`, extension setup/resource startup, event publishing,
+  and interaction recovery while expressing test
+  storage/provider/auth/approval differences through dependency overrides; and
+  `createRpcHarness`, the thin RPC acceptance helper that chains
   `createE2ELayer` → `Gent.test` → seeded `session.create`
 - `packages/core/src/test-utils/language-model.ts` — `LanguageModelLayers.debug`, `sequence`, `signal`, `failing` + stream-part helpers
 - `apps/tui/tests/render-harness-boundary.tsx` — TUI render test harness

@@ -262,7 +262,7 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
   "packages/core/src/runtime/gent-platform-bun.ts",
   "packages/core/src/server/server-root.ts",
-  "packages/core/src/test-utils/extension-harness.ts",
+  "packages/core/src/test-utils/index.ts",
   // The Anthropic extension wires a keychain-aware AnthropicClient layer that
   // needs the live Bun platform to satisfy `GentPlatform` inside the
   // request-signing transform. It's a shipped builtin, not a user extension.

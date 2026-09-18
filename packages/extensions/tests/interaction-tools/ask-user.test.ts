@@ -4,8 +4,7 @@ import { narrowR } from "../../../core/tests/helpers/effect"
 
 import { AskUserTool } from "../../src/interaction-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 
 const makeCtx = (
   decision: Effect.Effect<{ readonly approved: boolean; readonly notes?: string }>,

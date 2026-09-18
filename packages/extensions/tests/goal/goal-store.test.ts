@@ -7,9 +7,7 @@ import { Effect, Exit, FileSystem, Option, PlatformError, Ref, Schema } from "ef
 import { BunFileSystem } from "@effect/platform-bun"
 import { ExtensionServiceError, makeFileWriter } from "@gent/core-internal/domain/extension"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
-import { testExtensionFiles } from "@gent/core-internal/test-utils/extension-host-context"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { runToolWithCtx, testExtensionFiles, testToolContext } from "@gent/core-internal/test-utils"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
 import { goalContinuationSource, GoalSnapshot, GoalTool } from "../../src/goal.js"
 

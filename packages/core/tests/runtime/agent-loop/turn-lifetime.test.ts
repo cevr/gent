@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
-import { createRpcHarness } from "../../../src/test-utils/rpc-harness"
+import { createRpcHarness } from "../../../src/test-utils/index"
 import { LanguageModelLayers, textStep } from "../../../src/test-utils/language-model"
 
 describe("turn lifetime", () => {

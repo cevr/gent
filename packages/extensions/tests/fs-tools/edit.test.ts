@@ -9,8 +9,7 @@ import {
   findMatch,
   EditTool,
 } from "../../src/fs-tools.js"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 describe("detectRedaction", () => {
   test("clean replacement has no redaction", () => {
     expect(Option.isNone(detectRedaction("old code", "new code"))).toBe(true)

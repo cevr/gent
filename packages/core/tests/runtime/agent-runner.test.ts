@@ -104,9 +104,13 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
-import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import {
+  assertSequence,
+  createRpcHarness,
+  RecordingEventStore,
+  SequenceRecorder,
+} from "../../src/test-utils/index"
 import { CapabilityError } from "../../src/domain/capability"
-import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
 import { SessionMutationsLive } from "../../src/server/server"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { SessionRuntimeStateSchema, type SessionRuntimeState } from "../../src/domain/agent-loop"

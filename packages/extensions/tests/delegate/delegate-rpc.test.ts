@@ -14,7 +14,7 @@ import {
   textStep,
   toolCallStep,
 } from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/index"
 import { AgentRunResult, DEFAULT_AGENT_NAME, SessionId } from "@gent/core/extensions/api"
 import type { AgentName } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"

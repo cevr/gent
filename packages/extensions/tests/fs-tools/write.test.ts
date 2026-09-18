@@ -3,9 +3,8 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { WriteTool } from "../../src/fs-tools.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
 
 const ctx = testToolContext({
   sessionId: SessionId.make("test-session"),

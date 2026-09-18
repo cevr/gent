@@ -13,7 +13,7 @@ import type { Scope } from "effect"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { Gent } from "@gent/sdk"
 import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
-import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { createE2ELayer } from "../../src/test-utils/index"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 /**

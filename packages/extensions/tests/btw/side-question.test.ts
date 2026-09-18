@@ -11,7 +11,7 @@ import {
   textStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/index"
 import { e2ePreset } from "../helpers/test-preset"
 import {
   BTW_EXTENSION_ID,

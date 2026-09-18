@@ -44,8 +44,11 @@ import {
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import { InteractionStorage, MessageStorage } from "@gent/core-internal/storage/storage.js"
-import { ensureStorageParents, testHostFacts } from "@gent/core-internal/test-utils/index.js"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
+import {
+  createE2ELayer,
+  ensureStorageParents,
+  testHostFacts,
+} from "@gent/core-internal/test-utils/index.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import {
   captureCurrentToolBinding,

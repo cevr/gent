@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Schema } from "effect"
 import { ExtensionHost, defineExtension, defineResource, request } from "@gent/core/extensions/api"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { createRpcHarness } from "../../src/test-utils/index"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ExtensionId } from "../../src/domain/ids"
 

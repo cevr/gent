@@ -4,7 +4,7 @@ import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/lan
 import { ToolCallId } from "../../src/domain/ids"
 import { AgentName, ModelId, type ReasoningEffort } from "../../src/domain/agent"
 import { ConfigService, UserConfig } from "../../src/runtime/config"
-import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { createE2ELayer } from "../../src/test-utils/index"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { makeClient, parentToolCallProbeExtension } from "./session-mutations/helpers"

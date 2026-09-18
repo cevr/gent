@@ -13,8 +13,7 @@ import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { WebSearchTool } from "../../src/network-tools.js"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 
 const ctx = testToolContext()
 

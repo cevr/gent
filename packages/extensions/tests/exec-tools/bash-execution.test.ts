@@ -20,7 +20,12 @@ import {
   toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import {
+  createRpcHarness,
+  runToolWithCtx,
+  testToolContext,
+  type TestToolContext,
+} from "@gent/core-internal/test-utils/index"
 import { shippedPreset } from "../helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
@@ -32,11 +37,6 @@ import {
 } from "../../src/exec-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
-import {
-  testToolContext,
-  type TestToolContext,
-} from "@gent/core-internal/test-utils/extension-harness"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "@gent/core-internal/storage/storage"
 import {

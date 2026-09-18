@@ -34,8 +34,7 @@ import {
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
 import { SqliteStorage } from "../../src/storage/storage"
-import { createToolTestLayer } from "../../src/test-utils/extension-harness"
-import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { createRpcHarness, createToolTestLayer } from "../../src/test-utils/index"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { ExtensionProtocolError, SlashCommandInfo } from "../../src/server/rpc"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"

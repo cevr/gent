@@ -2,8 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FallbackFileIndexLive, GrepTool } from "../../src/fs-tools.js"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils"
 
 const ToolLayer = Layer.merge(
   BunServices.layer,

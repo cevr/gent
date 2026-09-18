@@ -15,7 +15,7 @@ import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtim
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"
 import { BranchStorage, EventStorage, SessionStorage } from "../../src/storage/storage"
-import { baseLocalLayerWithProvider } from "../../src/test-utils/in-process-layer"
+import { baseLocalLayerWithProvider } from "../../src/test-utils/index"
 const cowork = AgentDefinition.make({
   name: AgentName.make("cowork"),
   model: ModelId.make("test/priced"),

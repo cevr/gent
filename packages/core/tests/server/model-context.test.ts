@@ -7,7 +7,7 @@ import {
   textDeltaPart,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createRpcHarness } from "../../src/test-utils/rpc-harness"
+import { createRpcHarness } from "../../src/test-utils/index"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 describe("model context RPC boundary", () => {

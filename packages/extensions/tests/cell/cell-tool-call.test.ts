@@ -20,7 +20,7 @@ import {
 import { executeBoundCellTool, cellToolResultValue } from "../../src/cell.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness.js"
+import { testToolContext } from "@gent/core-internal/test-utils/index.js"
 
 const extensionId = ExtensionId.make("cell-test")
 const runCellToolCall = (params: Parameters<typeof executeBoundCellTool>[0]) =>

@@ -9,8 +9,7 @@ import { narrowR } from "../../../core/tests/helpers/effect"
 import { ref } from "@gent/core/extensions/api"
 import { LanguageModelLayers, textStep } from "@gent/core-internal/test-utils/language-model"
 import { Skill, SkillEntry, Skills, SkillsExtension, SkillsRpc } from "../../src/skills.js"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { collectTestContributions } from "@gent/core-internal/test-utils"
+import { collectTestContributions, createRpcHarness } from "@gent/core-internal/test-utils/index"
 import { e2ePreset } from "../helpers/test-preset"
 
 const testSkills = [

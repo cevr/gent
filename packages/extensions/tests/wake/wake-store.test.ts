@@ -7,8 +7,7 @@ import { Deferred, Effect, Exit, FileSystem, Layer, Option, Ref, Schema } from "
 import { TestClock } from "effect/testing"
 import { BunFileSystem } from "@effect/platform-bun"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { runToolWithCtx, testLeafContext } from "@gent/core-internal/test-utils"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
+import { runToolWithCtx, testLeafContext, testToolContext } from "@gent/core-internal/test-utils"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
 import {
   ExtensionContext,

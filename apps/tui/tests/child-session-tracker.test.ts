@@ -19,7 +19,7 @@ import {
   type EventStoreService,
 } from "@gent/core-internal/domain/event"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
-import { baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer"
+import { baseLocalLayer } from "@gent/core-internal/test-utils/index"
 import {
   makeChildSessionTracker,
   type ChildSessionEntry,

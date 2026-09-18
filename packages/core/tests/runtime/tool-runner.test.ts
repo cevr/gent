@@ -14,7 +14,7 @@ import { executeToolCalls, type ResolvedToolCapability, ToolRunner } from "../..
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { testToolContext } from "../../src/test-utils/extension-harness"
+import { testToolContext } from "../../src/test-utils/index"
 import {
   BranchId,
   ExtensionId,

@@ -3,8 +3,7 @@ import { Effect } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { HandoffTool } from "../src/handoff.js"
 import { AgentRunResult, SessionId, type ExtensionContextService } from "@gent/core/extensions/api"
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 

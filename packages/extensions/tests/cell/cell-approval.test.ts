@@ -12,7 +12,7 @@ import { ExtensionId } from "@gent/core-internal/domain/ids.js"
 import { messageSingleText } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
+import { createRpcHarness } from "@gent/core-internal/test-utils/index.js"
 import {
   LanguageModelLayers,
   textStep,

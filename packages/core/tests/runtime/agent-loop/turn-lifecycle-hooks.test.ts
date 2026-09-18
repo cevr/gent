@@ -15,7 +15,7 @@ import { Effect, Ref, Stream } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
 import { ExtensionHost, defineExtension, type TurnAfterInput } from "@gent/core/extensions/api"
 import type { SteerCommand } from "../../../src/domain/agent"
-import { createRpcHarness } from "../../../src/test-utils/rpc-harness"
+import { createRpcHarness } from "../../../src/test-utils/index"
 import {
   finishPart,
   LanguageModelLayers,

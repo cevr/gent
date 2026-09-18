@@ -5,7 +5,7 @@ import { onMount } from "solid-js"
 import { App, resolveInitialState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
-import { baseLocalLayer as _baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer.js"
+import { baseLocalLayer as _baseLocalLayer } from "@gent/core-internal/test-utils/index.js"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 const baseLocalLayer = () => _baseLocalLayer({ agents: AllBuiltinAgents })
 import { Gent } from "@gent/sdk"

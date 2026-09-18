@@ -15,7 +15,7 @@ import {
   makeTempDirectoryScoped,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { createE2ELayer } from "../../src/test-utils/index"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 // The debug model answers every turn, so a test may send more than one

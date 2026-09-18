@@ -50,7 +50,7 @@ bun run --cwd apps/tui dev sessions
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
-- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core-internal/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
+- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core-internal/test-utils/index.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
 - **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **`LanguageModelLayers.debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
@@ -109,7 +109,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 - **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `SqliteStorage.TestWithSql()` for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
-- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core-internal/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core-internal/test-utils/sequence-steps`.
+- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core-internal/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live there too.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -132,11 +132,11 @@ const { layer: providerLayer, controls } =
   yield * LanguageModelLayers.sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
 // Full in-process stack (AppServicesLive + real event store + real storage)
-import { baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer"
+import { baseLocalLayer } from "@gent/core-internal/test-utils/index"
 const layer = baseLocalLayer()
 
 // RPC acceptance harness (real per-request scopes)
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/index"
 const { client, sessionId, branchId } = yield * createRpcHarness({ providerLayer, extensions })
 
 // Sequence recording for event assertions
@@ -144,7 +144,7 @@ import {
   SequenceRecorder,
   RecordingEventStore,
   assertSequence,
-} from "@gent/core-internal/test-utils"
+} from "@gent/core-internal/test-utils/index"
 assertSequence(calls, [
   { service: "EventStore", method: "publish", match: { _tag: "TurnCompleted" } },
 ])
@@ -156,16 +156,14 @@ assertSequence(calls, [
 | -------------------------------------------------- | --------------------------------------------------- |
 | `packages/core/src/storage/storage.ts`             | SQLite layer composition for focused storage tags   |
 | `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
+| `packages/core/src/test-utils/index.ts`            | recorders, harnesses, and the in-process layers     |
 | `packages/core/src/server/server.ts`               | startup wiring + dependency graph                   |
 | `packages/core/src/server/rpc.ts`                  | shared client contract                              |
 | `packages/core/src/domain/agent-loop.ts`           | loop state, entity id, and the actor protocol       |
 | `packages/core/src/runtime/agent-loop.ts`          | mailbox, worker, behavior, and the actor            |
 | `packages/core/src/runtime/turn.ts`                | per-branch turn engine used by the actor            |
 | `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
-| `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
-| `packages/core/src/test-utils/language-model.ts`   | step builders for `LanguageModelLayers.sequence`    |
-| `packages/core/src/test-utils/language-model.ts`   | `LanguageModelLayers` + stream-part helpers         |
+| `packages/core/src/test-utils/language-model.ts`   | `LanguageModelLayers`, step and stream-part helpers |
 | `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation

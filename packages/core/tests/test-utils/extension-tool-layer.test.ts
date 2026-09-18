@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
 import { ExtensionHost, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
-import { createToolTestLayer } from "../../src/test-utils/extension-harness"
+import { createToolTestLayer } from "../../src/test-utils/index"
 
 class ResourceInstance extends Context.Service<ResourceInstance, { readonly id: number }>()(
   "@gent/core/tests/test-utils/extension-tool-layer.test/ResourceInstance",

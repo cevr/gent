@@ -11,7 +11,7 @@ import {
   waitFor,
 } from "../../src/test-utils/language-model"
 import { ApprovalService } from "../../src/runtime/extension-host"
-import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { createE2ELayer } from "../../src/test-utils/index"
 import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"

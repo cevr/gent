@@ -11,7 +11,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { ref } from "@gent/core/extensions/api"
 import { LanguageModelLayers, textStep } from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
+import { createRpcHarness } from "@gent/core-internal/test-utils/index"
 import { AgentsViewExtension, AgentsViewRpc } from "../../src/agents-view.js"
 import { e2ePreset } from "../helpers/test-preset"
 

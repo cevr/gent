@@ -56,8 +56,7 @@ import {
 } from "@gent/core-internal/domain/ids.js"
 import { captureCurrentToolBinding, CurrentToolCall } from "@gent/core-internal/runtime/tools.js"
 import { toolResultMessageIdForTurn } from "@gent/core-internal/runtime/turn.js"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
-import { testHostFacts } from "@gent/core-internal/test-utils"
+import { createE2ELayer, testHostFacts } from "@gent/core-internal/test-utils/index.js"
 
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,

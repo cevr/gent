@@ -17,8 +17,7 @@ const helperAgent = AgentDefinition.make({
   name: AgentName.make("helper"),
   model: ModelId.make("openai/gpt-5.4-mini"),
 })
-import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { runToolWithCtx } from "@gent/core-internal/test-utils"
+import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
 
 const makeCtx = (overrides: {
   agentName?: AgentName

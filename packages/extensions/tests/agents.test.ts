@@ -14,11 +14,11 @@ import {
   textDeltaPart,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
 import {
+  createRpcHarness,
   testLeafContext,
   testToolContext,
-} from "@gent/core-internal/test-utils/extension-harness.js"
+} from "@gent/core-internal/test-utils/index.js"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,

@@ -7,8 +7,7 @@ import {
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createE2ELayer } from "../../src/test-utils/e2e-layer"
-import { ensureStorageParents } from "../../src/test-utils"
+import { createE2ELayer, ensureStorageParents } from "../../src/test-utils/index"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 import { ActorCommandId, BranchId, SessionId } from "../../src/domain/ids"
 import { MessageStorage, SessionStorage } from "../../src/storage/storage"

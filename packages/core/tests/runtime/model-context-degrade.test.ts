@@ -16,7 +16,7 @@ import {
   MessageStorage,
   SessionStorage,
 } from "../../src/storage/storage"
-import { baseLocalLayerWithProvider } from "../../src/test-utils/in-process-layer"
+import { baseLocalLayerWithProvider } from "../../src/test-utils/index"
 
 const CONTEXT_LIMIT_TOKENS = 40_000
 const modelId = ModelId.make("test/small-window")

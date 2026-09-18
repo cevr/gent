@@ -15,7 +15,7 @@ import { Database } from "bun:sqlite"
 import { Gent } from "@gent/sdk"
 import { LoadedArtifactIdentity, type LoadedExtension } from "../../../src/domain/extension.js"
 import { ExtensionId } from "../../../src/domain/ids"
-import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
+import { createE2ELayer } from "../../../src/test-utils/index"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,

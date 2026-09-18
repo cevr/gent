@@ -15,7 +15,7 @@ import {
   cellInteractionOwner,
   CellToolOperationStorage,
 } from "../../src/cell.js"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
+import { createE2ELayer, ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import {
   EventStorage,
@@ -43,7 +43,6 @@ import {
   ToolSourceRevision,
 } from "@gent/core-internal/domain/capability.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
-import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
 
 const cell = {
   sessionId: SessionId.make("cell-operation-session"),

@@ -17,7 +17,7 @@ import { LanguageModelLayers, textStep } from "../../src/test-utils/language-mod
 import { Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
 import { DEFAULT_AGENT_NAME, DEFAULT_MODEL_ID, ExternalDriverRef } from "../../src/domain/agent"
 import { Gent } from "@gent/sdk"
-import { createE2ELayer } from "../../src/test-utils/e2e-layer"
+import { createE2ELayer } from "../../src/test-utils/index"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config.js"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"

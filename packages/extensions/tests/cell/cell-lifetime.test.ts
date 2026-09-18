@@ -19,7 +19,7 @@ import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids.js"
 import { messageSingleText } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
+import { createE2ELayer, createRpcHarness } from "@gent/core-internal/test-utils/index.js"
 import {
   LanguageModelLayers,
   multiToolCallStep,
@@ -29,7 +29,6 @@ import {
   waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
-import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
