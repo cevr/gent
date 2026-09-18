@@ -630,7 +630,7 @@ can replace the worker. Each kernel permits three replacement attempts by
 default, including failed starts. Close cancels active work and waits for its
 cleanup. The Gent policy bridge and other platform isolation remain unfinished.
 
-The core build compiles `runtime/code-cell/main.ts` into `dist/gent-cell`.
+The core build compiles `runtime/code-cell-worker-boundary.ts` into `dist/gent-cell`.
 Turbo builds that declared dependency before the TUI copies the worker into
 `bin/gent-cell` beside `bin/gent`. Core owns the worker build; the TUI only
 packages it. The worker embeds Bun and needs no external Bun executable. Its

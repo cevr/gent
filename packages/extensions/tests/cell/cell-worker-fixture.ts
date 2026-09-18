@@ -10,7 +10,7 @@ export const buildCellWorker = Effect.gen(function* () {
   const binaryPath = yield* platform.execPath
   const directory = yield* fs.makeTempDirectoryScoped()
   const workerPath = path.join(directory, "worker.js")
-  const sourcePath = new URL("../../src/cell/main.ts", import.meta.url).pathname
+  const sourcePath = new URL("../../src/cell-worker-boundary.ts", import.meta.url).pathname
   const build = yield* ChildProcess.make(
     binaryPath,
     ["build", sourcePath, "--target=bun", "--outfile", workerPath],
@@ -27,7 +27,7 @@ export const buildCellExecutable = Effect.gen(function* () {
   const bunPath = yield* platform.execPath
   const directory = yield* fs.makeTempDirectoryScoped()
   const binaryPath = path.join(directory, "gent-cell")
-  const sourcePath = new URL("../../src/cell/main.ts", import.meta.url).pathname
+  const sourcePath = new URL("../../src/cell-worker-boundary.ts", import.meta.url).pathname
   const build = yield* ChildProcess.make(
     bunPath,
     [

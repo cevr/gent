@@ -283,7 +283,7 @@ const protectedHostFactFile = (file: string): boolean =>
   // This is the sole owner of that derivation; see its JSDoc.
   file !== "packages/core/src/server/workspace-rpc.ts" &&
   // The cell worker entry is a process entrypoint; it reads its own working directory once.
-  file !== "packages/extensions/src/cell/main.ts"
+  file !== "packages/extensions/src/cell-worker-boundary.ts"
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
