@@ -49,7 +49,7 @@ import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
 import type { InvalidStateError, NotFoundError, StorageError } from "./errors.js"
-import type { SessionRuntimeError } from "../runtime/session-runtime.js"
+import type { SessionRuntimeError } from "../runtime/session.js"
 import type {
   CreateBranchInput,
   CreateSessionInput,

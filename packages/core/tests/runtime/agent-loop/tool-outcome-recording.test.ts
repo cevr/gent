@@ -5,7 +5,7 @@ import { EventPublisherLive, MessageReceived, ToolCallSucceeded } from "../../..
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../../src/domain/ids"
 import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import { EventStorage, MessageStorage, SqliteStorage } from "../../../src/storage/storage"
-import { EventStoreLive } from "../../../src/runtime/event-store-live"
+import { EventStoreLive } from "../../../src/runtime/session"
 import { noBranchTools } from "../../../src/runtime/tools"
 import { recordToolOutcome, toolResultMessageIdForTurn } from "../../../src/runtime/turn"
 import { ensureStorageParents } from "../../../src/test-utils"

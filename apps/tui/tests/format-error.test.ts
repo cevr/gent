@@ -4,7 +4,7 @@ import { ProviderError, StorageError } from "@gent/core-internal/domain/errors"
 import { EventStoreError } from "@gent/core-internal/domain/event"
 import { DriverError, DriverFailureId, ProviderAuthError } from "@gent/core-internal/domain/driver"
 import { NotFoundError } from "@gent/core-internal/server/errors"
-import { SessionRuntimeError } from "@gent/core-internal/runtime/session-runtime"
+import { SessionRuntimeError } from "@gent/core-internal/runtime/session"
 
 describe("formatError", () => {
   test("ClientError → message", () => {

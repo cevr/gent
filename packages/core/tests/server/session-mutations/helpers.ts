@@ -11,7 +11,7 @@ import { EventPublisher, EventStore, EventStoreError } from "../../../src/domain
 import { ModelResolver } from "../../../src/runtime/provider"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { SessionRuntime, type SessionRuntimeService } from "../../../src/runtime/session-runtime"
+import { SessionRuntime, type SessionRuntimeService } from "../../../src/runtime/session"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent-loop"
 import { GentRpcs } from "../../../src/server/rpcs"
 import { RpcHandlersLive } from "../../../src/server/rpc-handlers"

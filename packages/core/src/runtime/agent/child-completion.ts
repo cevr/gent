@@ -15,7 +15,7 @@ import {
   type StoredAgentStartResult,
 } from "../../storage/storage.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
-import { SessionRuntime } from "../session-runtime.js"
+import { SessionRuntime } from "../session.js"
 import { followUpMessageIdForSource } from "../../domain/agent-loop.js"
 
 /** Follow-up source for one child completion. The parent message id derives from it. */

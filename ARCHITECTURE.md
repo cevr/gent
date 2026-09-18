@@ -261,7 +261,7 @@ service context.
 
 Core orchestration lives in:
 
-- `packages/core/src/runtime/session-runtime.ts`
+- `packages/core/src/runtime/session.ts`
 - `packages/core/src/runtime/agent-loop.ts`
 - `packages/core/src/domain/agent-loop.ts`
 - `packages/core/src/runtime/turn.ts`

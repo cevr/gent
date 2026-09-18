@@ -8,7 +8,7 @@ import { ensureStorageParents } from "../../src/test-utils"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 import { ActorCommandId, BranchId, SessionId } from "../../src/domain/ids"
 import { MessageStorage, SessionStorage } from "../../src/storage/storage"
-import { SessionRuntime } from "../../src/runtime/session-runtime"
+import { SessionRuntime } from "../../src/runtime/session"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset.js"
 

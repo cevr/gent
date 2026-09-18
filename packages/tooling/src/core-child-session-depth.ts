@@ -2,7 +2,7 @@
  * Guard: every child-session writer in core admits the nesting depth.
  *
  * `DEFAULT_MAX_AGENT_RUN_DEPTH` is enforced in one place,
- * `admitChildSessionDepth` (`packages/core/src/runtime/session-depth.ts`).
+ * `admitChildSessionDepth` (`packages/core/src/runtime/session.ts`).
  * A file that builds a `new Session({ ... parentSessionId: ... })` row is a
  * child-session writer and must call that admission, or a new writer (the
  * compaction handoff once did) nests sessions without bound.
@@ -31,7 +31,7 @@ export const findUnadmittedChildSessionWriters = (
 ): ReadonlyArray<ChildSessionDepthFinding> => {
   if (!file.startsWith(CORE_SRC)) return []
   if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) return []
-  if (file.endsWith("/session-depth.ts")) return []
+  if (file.endsWith("/runtime/session.ts")) return []
   if (new RegExp(`\\b${SHARED_CHECK}\\(`).test(text)) return []
 
   const findings: ChildSessionDepthFinding[] = []
@@ -44,7 +44,7 @@ export const findUnadmittedChildSessionWriters = (
     findings.push({
       file,
       line: text.slice(0, start).split("\n").length,
-      message: `child-session writer never calls \`${SHARED_CHECK}\`; every \`parentSessionId\` writer admits the nesting cap through \`runtime/session-depth.ts\``,
+      message: `child-session writer never calls \`${SHARED_CHECK}\`; every \`parentSessionId\` writer admits the nesting cap through \`runtime/session.ts\``,
     })
   }
   return findings

@@ -60,7 +60,7 @@ import {
   SessionStorage,
   SqliteStorage,
 } from "../../src/storage/storage"
-import { SessionRuntime } from "../../src/runtime/session-runtime"
+import { SessionRuntime } from "../../src/runtime/session"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({

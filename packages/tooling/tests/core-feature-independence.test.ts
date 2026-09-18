@@ -20,7 +20,7 @@ describe("core feature independence guard", () => {
 
   test("flags a type-only import, which still names the feature", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/session-runtime.ts",
+      "packages/core/src/runtime/session.ts",
       'import type { DispatchingToolStorage } from "./cell/dispatching-tool-storage.js"',
     )
     expect(findings.length).toBe(1)

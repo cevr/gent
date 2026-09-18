@@ -14,8 +14,7 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { makeRequestDeduper } from "../runtime/request-dedup.js"
-import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
+import { makeRequestDeduper, SessionRuntime, type SessionRuntimeError } from "../runtime/session.js"
 import { foldSessionMetrics } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"

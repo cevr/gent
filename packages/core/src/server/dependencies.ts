@@ -24,14 +24,13 @@ import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
-import { SessionRuntime } from "../runtime/session-runtime.js"
+import { EventStoreLive, SessionRuntime } from "../runtime/session.js"
 import { InteractionStorage, SqliteStorage } from "../storage/storage.js"
 import {
   decodeInteractionDecision,
   decodeInteractionParams,
   type ApprovalDecision,
 } from "../domain/interaction.js"
-import { EventStoreLive } from "../runtime/event-store-live.js"
 import { SessionMutationsLive } from "./session-mutations-live.js"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "./workspace-rpc.js"
 

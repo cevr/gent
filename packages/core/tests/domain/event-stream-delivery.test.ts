@@ -9,7 +9,7 @@ import {
 } from "../../src/domain/event"
 import { BranchId, SessionId } from "../../src/domain/ids"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
-import { EventStoreLive } from "../../src/runtime/event-store-live"
+import { EventStoreLive } from "../../src/runtime/session"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage"
 

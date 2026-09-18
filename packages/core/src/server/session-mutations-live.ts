@@ -25,13 +25,13 @@ import {
 import { SessionMutations, type SessionMutationsService } from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
-import { makeRequestDeduper } from "../runtime/request-dedup.js"
-import { admitChildSessionDepth } from "../runtime/session-depth.js"
 import {
-  SessionRuntime,
+  admitChildSessionDepth,
+  makeRequestDeduper,
   type SendUserMessagePayload,
+  SessionRuntime,
   type SessionRuntimeError,
-} from "../runtime/session-runtime.js"
+} from "../runtime/session.js"
 import {
   BranchStorage,
   type DurableOperation,

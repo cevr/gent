@@ -23,7 +23,7 @@ import {
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent-loop"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { SessionRuntime } from "../../../src/runtime/session-runtime"
+import { SessionRuntime } from "../../../src/runtime/session"
 import { MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { waitFor } from "../../../src/test-utils/fixtures"

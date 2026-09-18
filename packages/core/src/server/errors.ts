@@ -6,7 +6,7 @@ import { ExtensionId } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError } from "../runtime/config.js"
-import { SessionRuntimeError } from "../runtime/session-runtime.js"
+import { SessionRuntimeError } from "../runtime/session.js"
 import { StorageError } from "../storage/storage.js"
 
 export { InvalidStateError, NotFoundError } from "../domain/errors.js"

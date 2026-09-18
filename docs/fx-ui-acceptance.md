@@ -1642,7 +1642,7 @@ navigation events. No appearance-only test was added. Full gate and E2E pass.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/dependencies.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/session-queries.ts`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/event-store-live.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/session.ts`
 - `/tmp/gent-fx-ui-branch-route-red.log`: lost navigation before repair.
 - `/tmp/gent-fx-ui-branch-replay-red.log`: historical navigation before repair.
 - `/tmp/gent-fx-ui-branch-replay-green.log`: five feed tests pass.

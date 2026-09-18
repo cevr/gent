@@ -27,7 +27,13 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host"
 import { InProcessRunner, admitChildSession } from "../../src/runtime/agent/agent-runner"
-import { getSessionDepth } from "../../src/runtime/session-depth"
+import {
+  EventStoreLive,
+  getSessionDepth,
+  SessionRuntime,
+  SessionRuntimeError,
+  type SessionRuntimeService,
+} from "../../src/runtime/session"
 import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { waitFor } from "../../src/test-utils/fixtures"
 import {
@@ -94,15 +100,9 @@ import {
 } from "@gent/core/extensions/api"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { CapabilityError } from "../../src/domain/capability"
-import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import {
-  SessionRuntime,
-  SessionRuntimeError,
-  type SessionRuntimeService,
-} from "../../src/runtime/session-runtime"
 import { SessionRuntimeStateSchema, type SessionRuntimeState } from "../../src/domain/agent-loop"
 import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 const bashStubTool = tool({

@@ -1,46 +1,65 @@
 import {
-  Predicate,
+  Cache,
   Cause,
   Context,
   DateTime,
+  Duration,
   Effect,
+  Exit,
+  type FileSystem,
   Layer,
   Option,
-  Schema,
-  Stream,
-  type FileSystem,
   type Path,
+  Predicate,
+  Ref,
+  Schema,
   type Scope,
+  Stream,
 } from "effect"
+import {
+  type EventPublisher,
+  EventStore,
+  EventStoreError,
+  makeEventStore,
+} from "../domain/event.js"
+import {
+  type AgentLoopQueueStorage,
+  type BranchStorage,
+  EventStorage,
+  type EventStorageError,
+  type InteractionStorage,
+  type MessageStorage,
+  RelationshipStorage,
+  type SessionOperationStorage,
+  SessionStorage,
+  type ToolCallBindingStorage,
+  type TurnRecordStorage,
+} from "../storage/storage.js"
+import { omitUndefined } from "../domain/guards.js"
+import {
+  AgentName,
+  DEFAULT_MAX_AGENT_RUN_DEPTH,
+  RunSpecSchema,
+  SessionDepthLimitError,
+  type SteerCommand as SteerCommandType,
+} from "../domain/agent.js"
+import { NotFoundError } from "../domain/errors.js"
+import {
+  ActorCommandId,
+  BranchId,
+  ExtensionId,
+  type InteractionRequestId,
+  MessageId,
+  RequestId,
+  SessionId,
+} from "../domain/ids.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
-import { AgentName, RunSpecSchema, type SteerCommand as SteerCommandType } from "../domain/agent.js"
 import { Message, MessageMetadata, type QueueSnapshot } from "../domain/message.js"
-import type { EventPublisher, EventStore } from "../domain/event.js"
-import {
-  ActorCommandId,
-  BranchId,
-  ExtensionId,
-  MessageId,
-  RequestId,
-  SessionId,
-  type InteractionRequestId,
-} from "../domain/ids.js"
 import type { PromptSection } from "../domain/capability.js"
-import type {
-  AgentLoopQueueStorage,
-  BranchStorage,
-  EventStorage,
-  InteractionStorage,
-  MessageStorage,
-  SessionOperationStorage,
-  SessionStorage,
-  ToolCallBindingStorage,
-  TurnRecordStorage,
-} from "../storage/storage.js"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopLiveActor,
@@ -64,6 +83,192 @@ import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./tools.js"
 import type { ConfigService } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
+
+// ── event-store-live ────────────────────────────────────────────────────────
+
+const toEventStoreError =
+  (message: string) =>
+  (error: EventStorageError): EventStoreError =>
+    new EventStoreError({ message, cause: error })
+
+export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | SessionStorage> =
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const eventStorage = yield* EventStorage
+      const sessionStorage = yield* SessionStorage
+      const service = yield* makeEventStore({
+        append: (event, traceId) =>
+          eventStorage
+            .appendEvent(event, omitUndefined({ traceId: Option.getOrUndefined(traceId) }))
+            .pipe(Effect.mapError(toEventStoreError("Failed to append event"))),
+        load: (sessionId, afterId) =>
+          eventStorage
+            .listEvents({ sessionId, afterId })
+            .pipe(Effect.mapError(toEventStoreError("Failed to load session events"))),
+        open: ({ sessionId, branchId, after }) =>
+          Effect.gen(function* () {
+            const session = yield* sessionStorage
+              .getSession(sessionId)
+              .pipe(Effect.mapError(toEventStoreError("Failed to validate session")))
+            if (Predicate.isUndefined(session)) {
+              return yield* new EventStoreError({ message: `Session not found: ${sessionId}` })
+            }
+            yield* Effect.logInfo("EventStore.subscribe.open").pipe(
+              Effect.annotateLogs({ sessionId, branchId: branchId ?? "all", afterId: after ?? 0 }),
+            )
+            yield* Effect.addFinalizer(() =>
+              Effect.logInfo("EventStore.subscribe.close").pipe(
+                Effect.annotateLogs({ sessionId, branchId: branchId ?? "all" }),
+              ),
+            )
+          }),
+      })
+      return Layer.succeed(EventStore, service)
+    }),
+  )
+
+// ── request-dedup ───────────────────────────────────────────────────────────
+
+// Dedup cache: bound success entries by both time and count so a
+// long-running shared server does not accumulate one entry per user
+// prompt + per session create indefinitely.
+const DEDUP_SUCCESS_TTL: Duration.Input = Duration.seconds(60)
+const DEDUP_MAX_ENTRIES = 1024
+
+/**
+ * Atomic-claim dedup helper backed by `Cache.makeWith`. Concurrent callers
+ * with the same `requestId` collapse onto a single body execution via the
+ * Cache's internal `Deferred`.
+ *
+ * Eviction:
+ * - On failure: `timeToLive: Duration.zero` removes the entry immediately so
+ *   retries can re-attempt the same `requestId` under fresh state
+ *   (Cache.ts:707-710).
+ * - On success: TTL window keeps the result available for retries
+ *   (Cache.ts:705-708).
+ * - Hard cap (LRU): `Cache` re-inserts on read (Cache.ts:524-526) and evicts
+ *   the oldest-touched entry past `capacity` (Cache.ts:724-733). Under the
+ *   retry-heavy workload this dedup serves, LRU is safe: a fresh same-key
+ *   retry observes a still-fresh cache entry; an unrelated stale entry is the
+ *   one evicted to make room.
+ */
+export const makeRequestDeduper = <In, A, E>(opts: {
+  readonly body: (input: In) => Effect.Effect<A, E>
+  readonly keyOf: (input: In) => Option.Option<string>
+  readonly maxEntries?: number
+  readonly successTtl?: Duration.Input
+}): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
+  Effect.gen(function* () {
+    // Body bridge: `Cache.lookup` takes only the key, but each call has a
+    // distinct body Effect. Pending stores the body keyed by `requestId`; the
+    // running lookup pulls it out on miss. Every caller registers its body
+    // and removes it on exit via `Effect.ensuring`, which keeps `pending`
+    // free of stale-body leaks under interruption and same-key races.
+    const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
+    const successTtl = Duration.fromInputUnsafe(
+      Option.getOrElse(Option.fromUndefinedOr(opts.successTtl), () => DEDUP_SUCCESS_TTL),
+    )
+    const cache = yield* Cache.makeWith<string, A, E>(
+      (key) =>
+        Effect.gen(function* () {
+          const body = Option.fromUndefinedOr((yield* Ref.get(pending)).get(key))
+          if (Option.isNone(body))
+            return yield* Effect.die("makeRequestDeduper: missing pending body")
+          return yield* body.value
+        }),
+      {
+        capacity: Option.getOrElse(
+          Option.fromUndefinedOr(opts.maxEntries),
+          () => DEDUP_MAX_ENTRIES,
+        ),
+        timeToLive: (exit) => {
+          if (Exit.isSuccess(exit)) {
+            return successTtl
+          }
+          return Duration.zero
+        },
+      },
+    )
+    const run = (input: In) => {
+      const key = opts.keyOf(input)
+      if (Option.isNone(key)) return opts.body(input)
+      const keyValue = key.value
+      const body = opts.body(input)
+      const remove = Ref.update(pending, (m) => {
+        // Only delete if we are still the registered body — a later caller
+        // may have already overwritten us, in which case our entry is gone
+        // (or about to be removed by that caller's `ensuring`).
+        if (m.get(keyValue) !== body) return m
+        const next = new Map(m)
+        next.delete(keyValue)
+        return next
+      })
+      return Effect.gen(function* () {
+        // Always overwrite: same-key concurrent fibers all register their
+        // bodies; whichever wins the lookup race determines the outcome that
+        // every caller awaits via `Cache.get`. The `requestId` dedup contract
+        // assumes idempotency, so any caller's body produces the same result.
+        yield* Ref.update(pending, (m) => {
+          const next = new Map(m)
+          next.set(keyValue, body)
+          return next
+        })
+        return yield* Cache.get(cache, keyValue)
+      }).pipe(Effect.ensuring(remove))
+    }
+    return run
+  })
+
+// ── session-depth ───────────────────────────────────────────────────────────
+
+/**
+ * Session nesting depth: one computation and one admission rule for every
+ * child-session writer. Delegate spawns and compaction handoffs both nest a
+ * session under a parent; both go through `admitChildSessionDepth`.
+ *
+ * @module
+ */
+
+/** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
+export const getSessionDepth = Effect.fn("SessionDepth.getSessionDepth")(function* (
+  sessionId: SessionId,
+) {
+  const relationshipStorage = yield* RelationshipStorage
+  // Fail closed: an unreadable ancestry is a failure, never a root-level grant.
+  const ancestors = yield* relationshipStorage.getSessionAncestors(sessionId)
+  const root = ancestors.at(-1)
+  if (
+    ancestors[0]?.id !== sessionId ||
+    Predicate.isUndefined(root) ||
+    Predicate.isNotUndefined(root.parentSessionId)
+  ) {
+    return yield* new NotFoundError({
+      message: `Cannot determine session depth for "${sessionId}" — ancestry is missing or incomplete.`,
+    })
+  }
+  return ancestors.length - 1
+})
+
+/**
+ * Admit one more child under `parentSessionId`. Fails with
+ * `SessionDepthLimitError` when the parent already sits at the cap.
+ */
+export const admitChildSessionDepth = Effect.fn("SessionDepth.admitChildSessionDepth")(function* (
+  parentSessionId: SessionId,
+) {
+  const depth = yield* getSessionDepth(parentSessionId)
+  if (depth >= DEFAULT_MAX_AGENT_RUN_DEPTH) {
+    return yield* new SessionDepthLimitError({
+      message: `Agent run depth limit reached (max ${DEFAULT_MAX_AGENT_RUN_DEPTH}) — parent session "${parentSessionId}" is already at depth ${depth}.`,
+      parentSessionId,
+      depth,
+      max: DEFAULT_MAX_AGENT_RUN_DEPTH,
+    })
+  }
+  return depth
+})
+
+// ── session-runtime ─────────────────────────────────────────────────────────
 
 const SESSION_TERMINATION_CONCURRENCY = 16
 
@@ -536,7 +741,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 })
 
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
-  "@gent/core/src/runtime/session-runtime/SessionRuntime",
+  "@gent/core/src/runtime/session/SessionRuntime",
 ) {
   /** Client-only composition lets child runners exist before actor handlers capture services. */
   static readonly Client = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(

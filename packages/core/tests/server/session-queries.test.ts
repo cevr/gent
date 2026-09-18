@@ -13,7 +13,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { getSessionSnapshot } from "../../src/server/rpc-handlers"
 import { ConfigService } from "../../src/runtime/config"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
-import { SessionRuntimeError } from "../../src/runtime/session-runtime"
+import { SessionRuntimeError } from "../../src/runtime/session"
 import { sessionRuntimeLayer } from "./session-mutations/helpers"
 
 const makeClient = (reply = "ok") =>

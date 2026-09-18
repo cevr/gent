@@ -53,8 +53,7 @@ import {
   SessionStorage,
   StoredAgentStartInput,
 } from "../../storage/storage.js"
-import { admitChildSessionDepth } from "../session-depth.js"
-import { SessionRuntime } from "../session-runtime.js"
+import { admitChildSessionDepth, SessionRuntime } from "../session.js"
 import { ChildCompletionDelivery, turnFailureNames } from "./child-completion.js"
 
 /** Storage and transport faults become the one caller-facing error at their source. */
