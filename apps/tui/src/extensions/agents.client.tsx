@@ -177,7 +177,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
  * @module
  */
 
-export const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
+const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
 
 /**
  * Rows plus the load state, held in the setup closure.
