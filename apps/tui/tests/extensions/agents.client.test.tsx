@@ -1,4 +1,191 @@
 /** @jsxImportSource @opentui/solid */
+import { describe, expect, it } from "effect-bun-test"
+import { Clock, Deferred, Effect, Option } from "effect"
+import { createRoot, createSignal } from "solid-js"
+import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
+import type { AgentRowEntry } from "@gent/extensions/client"
+import {
+  AgentsPane,
+  makeAgentsController,
+  SubagentTray,
+  subtreeCounts,
+  trayLines,
+} from "../../src/extensions/agents.client"
+import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
+import { usePickerGeometry } from "../../src/ui"
+import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { waitForRenderedFrame } from "../helpers-boundary"
+import { makeThreadController } from "../../src/extensions/thread-view.client"
+
+// ── ../components/agents-controller.test ────────────────────────────────────
+
+/**
+ * Detail fetching for the agents view.
+ *
+ * Arrow keys move faster than a round trip, so replies can land out of order.
+ * These cover the rule that only the reply for the row still selected wins —
+ * without it, one row's cost renders next to another row's name.
+ */
+
+const row = (id: string, live = true): AgentRowEntry => ({
+  sessionId: SessionId.make(id),
+  branchId: BranchId.make(`${id}-branch`),
+  section: "idle",
+  live,
+  depth: 0,
+})
+
+const detail = (turns: number): ExtensionAgentDetail => ({
+  status: Option.none(),
+  model: Option.none(),
+  turns,
+  costUsd: 0,
+  durationMs: 0,
+  omittedMessages: 0,
+})
+
+describe("Agents controller detail", () => {
+  it.scopedLive("ignores a reply for a row the reader already moved off", () =>
+    Effect.gen(function* () {
+      // Stands in for the client's `cast`, which runs effects on the shell's
+      // own runtime; here that is the surrounding test context.
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const slow = yield* Deferred.make<ExtensionAgentDetail>()
+      const fast = yield* Deferred.make<ExtensionAgentDetail>()
+      const gates = new Map([
+        ["first", slow],
+        ["second", fast],
+      ])
+
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Effect.succeed([]),
+          (key) =>
+            Option.match(Option.fromUndefinedOr(gates.get(key.sessionId)), {
+              onNone: () => Effect.never,
+              onSome: (gate) => Deferred.await(gate),
+            }),
+          (effect) => {
+            cast(effect)
+          },
+          () => Option.none(),
+        )
+        return { controller, dispose }
+      })
+
+      // Select the first row, then move on before its reply arrives.
+      result.controller.select(Option.some(row("first")))
+      result.controller.select(Option.some(row("second")))
+
+      // The stale reply lands first and must not be shown.
+      yield* Deferred.succeed(slow, detail(111))
+      yield* Effect.yieldNow
+      expect(result.controller.detail()).toEqual(Option.none())
+
+      // The reply for the row still selected is the one that wins.
+      yield* Deferred.succeed(fast, detail(222))
+      yield* Effect.yieldNow
+      expect(Option.map(result.controller.detail(), (value) => value.turns)).toEqual(
+        Option.some(222),
+      )
+
+      result.dispose()
+    }),
+  )
+
+  it.scopedLive("clears detail when the selection goes away", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const gate = yield* Deferred.make<ExtensionAgentDetail>()
+
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Effect.succeed([]),
+          () => Deferred.await(gate),
+          (effect) => {
+            cast(effect)
+          },
+          () => Option.none(),
+        )
+        return { controller, dispose }
+      })
+
+      result.controller.select(Option.some(row("only")))
+      yield* Deferred.succeed(gate, detail(5))
+      yield* Effect.yieldNow
+      expect(Option.isSome(result.controller.detail())).toBe(true)
+
+      result.controller.select(Option.none())
+      expect(result.controller.detail()).toEqual(Option.none())
+
+      result.dispose()
+    }),
+  )
+})
+
+describe("Agents controller reload", () => {
+  it.scopedLive("re-reads the filter the reader typed, not the whole listing", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const asked: Array<string> = []
+
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          (query) => {
+            asked.push(query)
+            return Effect.succeed([])
+          },
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => Option.some({ sessionId: SessionId.make("only"), branchId: BranchId.make("only") }),
+        )
+        return { controller, dispose }
+      })
+
+      // The reader filters the pane, then deletes a row from it. The listing
+      // that comes back must still be the filtered one.
+      result.controller.refresh("dep")
+      result.controller.reload()
+      yield* Effect.yieldNow
+
+      expect(asked).toEqual(["dep", "dep"])
+      result.dispose()
+    }),
+  )
+})
+
+describe("Agents controller stored rows", () => {
+  it.scopedLive("never asks a stored session for detail, since the read would spawn its loop", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const asked: Array<string> = []
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Effect.succeed([]),
+          (key) => {
+            asked.push(key.sessionId)
+            return Effect.succeed(detail(1))
+          },
+          (effect) => {
+            cast(effect)
+          },
+          () => Option.none(),
+        )
+        controller.select(Option.some(row("stored", false)))
+        const seen = controller.detail()
+        dispose()
+        return seen
+      })
+      expect(asked).toEqual([])
+      expect(result).toEqual(Option.none())
+    }),
+  )
+})
+
+// ── ../components/agents-pane.test ──────────────────────────────────────────
+
 /**
  * Keyboard navigation for the agents overlay.
  *
@@ -6,18 +193,8 @@
  * behaviors (arrow selects, Enter fires onSelect, Escape closes), now against
  * the overlay that owns them.
  */
-import { describe, expect, it } from "effect-bun-test"
-import { Clock, Effect, Option } from "effect"
-import { createRoot, createSignal } from "solid-js"
-import { BranchId, SessionId } from "@gent/core/protocol"
-import type { AgentRowEntry } from "@gent/extensions/client"
-import { AgentsPane, makeAgentsController } from "../../src/extensions/agents.client"
-import { usePickerGeometry } from "../../src/ui"
-import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
 
-const row = (id: string, name: string, depth: number): AgentRowEntry => ({
+const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
   sessionId: SessionId.make(id),
   branchId: BranchId.make(`${id}-branch`),
   section: "inactive",
@@ -27,18 +204,18 @@ const row = (id: string, name: string, depth: number): AgentRowEntry => ({
 })
 
 /**
- * A row that has run, so `ageFor` yields a real age.
+ * A rowPane that has run, so `ageFor` yields a real age.
  *
- * The age is the only part of a row drawn against the right edge, so a
+ * The age is the only part of a rowPane drawn against the right edge, so a
  * fixture without `updatedAt` cannot overflow the budget however long its
  * name is: the width tests above passed against a visibly wrapping pane
- * because every row they drew had an empty age column.
+ * because every rowPane they drew had an empty age column.
  *
  * `updatedAt` is an instant the caller resolves from the clock, not a
  * duration: the pane reads the wall clock to format the age.
  */
 const agedRow = (id: string, name: string, updatedAt: number): AgentRowEntry => ({
-  ...row(id, name, 0),
+  ...rowPane(id, name, 0),
   section: "idle",
   live: true,
   updatedAt,
@@ -47,8 +224,8 @@ const agedRow = (id: string, name: string, updatedAt: number): AgentRowEntry => 
 describe("Agents pane navigation", () => {
   it.live("selects a child with the keyboard and closes with Escape", () =>
     Effect.gen(function* () {
-      const parent = row("agents-root", "Alpha", 0)
-      const child = row("agents-child", "Beta", 1)
+      const parent = rowPane("agents-root", "Alpha", 0)
+      const child = rowPane("agents-child", "Beta", 1)
       let selected = Option.none<AgentRowEntry>()
       const [open, setOpen] = createSignal(true)
 
@@ -92,8 +269,8 @@ describe("Agents pane navigation", () => {
 
   it.live("asks for detail about the row under the cursor and renders it", () =>
     Effect.gen(function* () {
-      const parent = row("detail-root", "Alpha", 0)
-      const child = row("detail-child", "Beta", 1)
+      const parent = rowPane("detail-root", "Alpha", 0)
+      const child = rowPane("detail-child", "Beta", 1)
       const asked: Array<string> = []
       const [detail, setDetail] = createSignal(Option.none<ExtensionAgentDetail>())
 
@@ -158,7 +335,7 @@ describe("Agents pane navigation", () => {
     Effect.gen(function* () {
       // The listing has to report a resident loop as idle — it never reads
       // state — so the detail read is the only thing that knows better.
-      const busy: AgentRowEntry = { ...row("busy", "Alpha", 0), section: "idle", live: true }
+      const busy: AgentRowEntry = { ...rowPane("busy", "Alpha", 0), section: "idle", live: true }
 
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
@@ -210,7 +387,7 @@ describe("Agents pane navigation", () => {
           <AgentsPane
             open={open()}
             controller={{
-              rows: () => [row("toggle", "Alpha", 0)],
+              rows: () => [rowPane("toggle", "Alpha", 0)],
               current: () => Option.none(),
               error: () => Option.none(),
               loading: () => false,
@@ -256,7 +433,7 @@ describe("Agents pane delete", () => {
           <AgentsPane
             open={true}
             controller={{
-              rows: () => [row("doomed", "Alpha", 0)],
+              rows: () => [rowPane("doomed", "Alpha", 0)],
               current: () => Option.none(),
               error: () => Option.none(),
               loading: () => false,
@@ -295,7 +472,11 @@ describe("Agents pane reopen", () => {
       // `open=false`. Without a cursor reset from cleanup, the controller keeps
       // the pending token for the row it last fetched and the duplicate check
       // swallows the fresh detail the reader reopened the pane to see.
-      const live: AgentRowEntry = { ...row("reopened", "Alpha", 0), section: "idle", live: true }
+      const live: AgentRowEntry = {
+        ...rowPane("reopened", "Alpha", 0),
+        section: "idle",
+        live: true,
+      }
       const asked: Array<string> = []
       const [open, setOpen] = createSignal(true)
       const [turns, setTurns] = createSignal(1)
@@ -365,7 +546,7 @@ describe("Agents pane framing", () => {
     Effect.gen(function* () {
       // The pane reads as a continuation of the composer, not a floating box
       // over the transcript: the same frame the autocomplete popup draws.
-      const idle: AgentRowEntry = { ...row("framed", "Alpha", 0), section: "idle", live: true }
+      const idle: AgentRowEntry = { ...rowPane("framed", "Alpha", 0), section: "idle", live: true }
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
@@ -437,7 +618,7 @@ describe("Agents pane framing", () => {
       // The frame rules off top and bottom and has no side border or margin,
       // so a row spends only its own left pad. Budgeting a docked pane's
       // allowance here truncates every row five columns short of the rule.
-      const wide = row("wide", "W".repeat(200), 0)
+      const wide = rowPane("wide", "W".repeat(200), 0)
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
@@ -602,10 +783,10 @@ describe("Agents pane framing", () => {
       // overspent budget still draws one unwrapped line. The numbers are the
       // only place the spend stays visible, and the wrap follows from them —
       // a row spends the body's two pad columns plus its own.
-      const seen: Array<{ row: number; section: number }> = []
+      const seen: Array<{ rowPane: number; section: number }> = []
       const Probe = () => {
         const { rowWidth, sectionWidth } = usePickerGeometry()
-        seen.push({ row: rowWidth(), section: sectionWidth() })
+        seen.push({ rowPane: rowWidth(), section: sectionWidth() })
         return <text>probe</text>
       }
       const setup = yield* Effect.promise(() =>
@@ -614,7 +795,7 @@ describe("Agents pane framing", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("probe"), "probe"),
       )
-      expect(seen[0]).toEqual({ row: 55, section: 56 })
+      expect(seen[0]).toEqual({ rowPane: 55, section: 56 })
     }),
   )
 
@@ -626,7 +807,7 @@ describe("Agents pane framing", () => {
             <AgentsPane
               open={true}
               controller={{
-                rows: () => [row("erred", "Alpha", 0)],
+                rows: () => [rowPane("erred", "Alpha", 0)],
                 current: () => Option.none(),
                 error: () => Option.some("listing failed"),
                 loading: () => false,
@@ -655,5 +836,321 @@ describe("Agents pane framing", () => {
       const body = lines.slice(top + 1, bottom)
       expect(body.some((line) => line.includes("listing failed"))).toBe(true)
     }),
+  )
+})
+
+// ── ../components/subagent-tray.test ────────────────────────────────────────
+
+/**
+ * The subagent tray under the status line.
+ *
+ * One dim line per running child of the current session, from the same rows
+ * the agents pane lists; hidden while nothing runs, and while the pane is open.
+ */
+
+const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => ({
+  sessionId: SessionId.make(id),
+  branchId: BranchId.make(`${id}-branch`),
+  section,
+  live: section !== "inactive",
+  depth: 0,
+})
+
+const child = (id: string, section: AgentRowEntry["section"], parent: string): AgentRowEntry => ({
+  ...root(id, section),
+  agent: "main",
+  name: `main: ${id} task`,
+  parentSessionId: SessionId.make(parent),
+})
+
+const rows = [
+  root("root", "idle"),
+  child("child-a", "running", "root"),
+  child("child-b", "idle", "root"),
+  child("grandchild", "inactive", "child-b"),
+  root("other-root", "running"),
+  child("other-child", "running", "other-root"),
+]
+
+describe("subtreeCounts", () => {
+  it.live("counts descendants at any depth and skips the root and other trees", () =>
+    Effect.sync(() => {
+      expect(subtreeCounts(rows, Option.some({ sessionId: "root" }))).toEqual({
+        total: 3,
+        running: 1,
+        idle: 1,
+        inactive: 1,
+      })
+      expect(subtreeCounts(rows, Option.some({ sessionId: "grandchild" })).total).toBe(0)
+      expect(subtreeCounts(rows, Option.none()).total).toBe(0)
+    }),
+  )
+})
+
+describe("trayLines", () => {
+  it.live("one line per running child, the agent prefix dropped, the rest counted", () =>
+    Effect.sync(() => {
+      const running = ["a", "b", "c", "d", "e"].map((id) => child(id, "running", "root"))
+      const lines = trayLines(running, 60)
+      expect(lines.map((line) => line.text)).toEqual([
+        "main working · a task",
+        "main working · b task",
+        "main working · c task",
+        "+2 more working",
+      ])
+      expect(lines.map((line) => line.pulse)).toEqual([true, true, true, false])
+      expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("main working · a …")
+    }),
+  )
+})
+
+describe("Subagent tray", () => {
+  it.live("lists the running child and hides when the pane opens", () =>
+    Effect.gen(function* () {
+      const [open, setOpen] = createSignal(false)
+      const refreshes: Array<string> = []
+
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SubagentTray
+            controller={{
+              rows: () => rows,
+              current: () => Option.some({ sessionId: "root", branchId: "root-branch" }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: (query) => {
+                refreshes.push(query)
+              },
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open,
+              setOpen,
+            }}
+          />
+        )),
+      )
+
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => renderFrame(setup).includes("working"), "tray"),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("main working · child-a task")
+      expect(frame).not.toContain("child-b")
+      expect(frame).not.toContain("idle")
+      expect(frame).toContain("^t agents")
+      // Mounting on a session fetched that session's rows.
+      expect(refreshes).toEqual([""])
+
+      setOpen(true)
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => !renderFrame(setup).includes("working"), "tray hidden"),
+      )
+    }),
+  )
+
+  it.live("stays hidden for a session whose children are all idle or inactive", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <SubagentTray
+            controller={{
+              rows: () => rows,
+              current: () => Option.some({ sessionId: "child-b", branchId: "b" }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              detail: () => Option.none(),
+              select: () => {},
+              open: () => false,
+              setOpen: () => {},
+            }}
+          />
+        )),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).not.toContain("working")
+      expect(renderFrame(setup)).not.toContain("agents")
+    }),
+  )
+})
+
+// ── ../components/pane-stale-reply.test ─────────────────────────────────────
+
+/**
+ * Docked panes must not write a previous session's rows, and must not write an
+ * older query's rows either.
+ *
+ * Both panes refetch across a session switch — the agents tray on `current()`
+ * changing plus a 2 s poll, the thread pane on a compaction event — so a reply
+ * can land after the shell has already moved. The key the fetch was made for
+ * is re-read when it lands; a reply for any other key is dropped.
+ *
+ * The filter fires one fetch per keystroke, so replies also race each other
+ * within one session. Only the newest refresh may write, and every reply that
+ * reaches the query clears the load state, even the ones it drops.
+ */
+
+const key = (id: string) => ({
+  sessionId: SessionId.make(id),
+  branchId: BranchId.make(`${id}-branch`),
+})
+
+const rowStaleReply = (id: string): AgentRowEntry => ({
+  sessionId: SessionId.make(id),
+  branchId: BranchId.make(`${id}-branch`),
+  section: "idle",
+  live: true,
+  depth: 0,
+})
+
+describe("Agents controller across a session switch", () => {
+  it.scopedLive("drops a reply that lands after the shell moved to another session", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+
+      // The shell starts on "first"; the test moves it while the fetch is out.
+      let active = Option.some(key("first"))
+
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Deferred.await(gate),
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => active,
+        )
+        return { controller, dispose }
+      })
+
+      // Fetch for "first" goes out, then the shell switches to "second".
+      result.controller.refresh("")
+      active = Option.some(key("second"))
+
+      // The in-flight reply carries the previous session's rows.
+      yield* Deferred.succeed(gate, [rowStaleReply("first")])
+      yield* Effect.yieldNow
+
+      expect(result.controller.rows()).toEqual([])
+      result.dispose()
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("keeps the newest filter's rows when an older one replies last", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const first = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+      const second = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+      const gates = new Map([
+        ["a", first],
+        ["ab", second],
+      ])
+
+      const active = Option.some(key("only"))
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          (query) =>
+            Option.match(Option.fromUndefinedOr(gates.get(query)), {
+              onNone: () => Effect.never,
+              onSome: (gate) => Deferred.await(gate),
+            }),
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => active,
+        )
+        return { controller, dispose }
+      })
+
+      // One fetch per keystroke; the shorter query is still out when the
+      // longer one replies.
+      result.controller.refresh("a")
+      result.controller.refresh("ab")
+
+      yield* Deferred.succeed(second, [rowStaleReply("ab-match")])
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(first, [rowStaleReply("a-match")])
+      yield* Effect.yieldNow
+
+      expect(result.controller.rows().map((entry) => String(entry.sessionId))).toEqual(["ab-match"])
+      result.dispose()
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("stops loading even when the reply is for the session the shell left", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+
+      let active = Option.some(key("first"))
+      const result = createRoot((dispose) => {
+        const controller = makeAgentsController(
+          () => Deferred.await(gate),
+          () => Effect.never,
+          (effect) => {
+            cast(effect)
+          },
+          () => active,
+        )
+        return { controller, dispose }
+      })
+
+      result.controller.refresh("")
+      expect(result.controller.loading()).toBe(true)
+      active = Option.some(key("second"))
+
+      yield* Deferred.succeed(gate, [rowStaleReply("first")])
+      yield* Effect.yieldNow
+
+      // The rows are dropped, but the pane must not draw "loading" forever.
+      expect(result.controller.rows()).toEqual([])
+      expect(result.controller.loading()).toBe(false)
+      result.dispose()
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+})
+
+describe("Thread controller across a session switch", () => {
+  it.scopedLive("drops windows fetched for the session the shell just left", () =>
+    Effect.gen(function* () {
+      const cast = Effect.runForkWith(yield* Effect.context<never>())
+      const gate = yield* Deferred.make<ReadonlyArray<Session>>()
+
+      let active = Option.some(key("first"))
+
+      const result = createRoot((dispose) => {
+        const controller = makeThreadController(
+          () => Deferred.await(gate),
+          () => Effect.succeed([]),
+          () => Effect.succeed(0),
+          (effect) => {
+            cast(effect)
+          },
+          () => active,
+        )
+        return { controller, dispose }
+      })
+
+      result.controller.refresh()
+      active = Option.some(key("second"))
+
+      yield* Deferred.succeed(gate, [
+        new Session({
+          id: SessionId.make("first"),
+          name: "First",
+          activeBranchId: BranchId.make("first-branch"),
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(1),
+        }),
+      ])
+      yield* Effect.yieldNow
+
+      expect(result.controller.sessions()).toBe(0)
+      result.dispose()
+    }).pipe(Effect.timeout("20 seconds")),
   )
 })

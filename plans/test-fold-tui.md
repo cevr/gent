@@ -20,14 +20,22 @@ their names and are not folded.
 
 ## Rule 6 — helper modules
 
-| Helper                                     | Importers                                               | Action                                                |
-| ------------------------------------------ | ------------------------------------------------------- | ----------------------------------------------------- |
-| `tests/render-harness-boundary.tsx`        | many, plus `integration/` and `packages/tooling/tests/` | keep                                                  |
-| `tests/helpers-boundary.ts`                | many                                                    | keep                                                  |
-| `tests/run-effect-boundary.ts`             | many, plus `packages/extensions/tests/`                 | keep                                                  |
-| `tests/extension-test-harness-boundary.ts` | many                                                    | keep                                                  |
-| `tests/scrollback-hold-boundary.ts`        | 2, both fold into `message-list.test.tsx`               | keep (a shared harness, not a single-importer helper) |
-| `tests/herdr-test-server-boundary.ts`      | 1 (`herdr.test.ts`)                                     | fold into `tests/extensions/builtins.test.ts`         |
+| Helper                                     | Importers                                               | Action                                        |
+| ------------------------------------------ | ------------------------------------------------------- | --------------------------------------------- |
+| `tests/render-harness-boundary.tsx`        | many, plus `integration/` and `packages/tooling/tests/` | keep                                          |
+| `tests/helpers-boundary.ts`                | many                                                    | keep                                          |
+| `tests/run-effect-boundary.ts`             | many, plus `packages/extensions/tests/`                 | keep                                          |
+| `tests/extension-test-harness-boundary.ts` | many                                                    | keep                                          |
+| `tests/scrollback-hold-boundary.ts`        | 1 after the message-list fold                           | keep — see the note below                     |
+| `tests/herdr-test-server-boundary.ts`      | 1 (`herdr.test.ts`)                                     | fold into `tests/extensions/builtins.test.ts` |
+
+`tests/scrollback-hold-boundary.ts` became a single-importer helper once
+`message-list.test.tsx` absorbed both of its callers, so rule 6 would fold it.
+It stays a separate file anyway. It holds a real Promise boundary
+(`Effect.runPromiseWith` around the renderer's `settle`), and the
+`gent/no-promise-control-flow-in-tests` lint rule exempts a file only by its
+`-boundary.ts` suffix (`lint/no-direct-env.ts:107`). Folding it into a
+`.test.tsx` file makes the gate fail. The fold was made and reverted.
 
 ## Map
 
@@ -121,6 +129,46 @@ because both block an import merge:
 | `tests/app.test.tsx` | `Session` (import) | — | same re-export; normalized to `@gent/core/protocol` |
 | `tests/app.test.tsx` | `renderFrame` (import) | — | `helpers-boundary` re-exports it from `render-harness-boundary`; both sections now import it from the harness |
 
+| `tests/extensions/agents.client.test.tsx` | `row` | `rowPane`, `rowStaleReply` | three different `AgentRowEntry` shapes |
+| `tests/extensions/loader-boundary.test.ts` | `absent`, `ids`, `skillsModule` | — | identical across the sections; one copy kept |
+| `tests/extensions/loader-boundary.test.ts` | `commands` | `commandsSeam` | different corpora in `autocomplete-contribution-order` and `autocomplete-frecency-seam` |
+| `tests/extensions/loader-boundary.test.ts` | `loadTuiExtensions` (import) | — | the integration section declares a wrapper of the same name; the plain import is dropped, `_loadTuiExtensions` remains |
+| `tests/extensions/builtins.test.ts` | `SessionId` (import) | — | `@gent/core/extensions/api` re-exports the `@gent/core/protocol` value; one import kept |
+
 ## Timing
 
-Recorded after each fold.
+`bun run test` in `apps/tui`: 14.21 s before, 10 s to 18 s after (the run
+varies by several seconds between repeats at `--parallel=3`).
+
+Rule 9: the slowest folded file is `tests/app.test.tsx` at 4.71 s on its own,
+then `tests/client.test.tsx` at 4.27 s and `tests/composer.test.tsx` at
+3.27 s. No file approaches the 60 s threshold, so no describe is split back
+out.
+
+## Fold-tool gaps found
+
+1. **An `import` inside a template literal is treated as a real import.**
+   `extension-integration.test.ts` and `extension-effect-setup.test.ts` write
+   fixture extension modules to disk as template literals. The tool deleted
+   those `import` lines from inside the strings and hoisted them to the file
+   head, which broke five fixtures and added a bogus
+   `../../../src/extensions/client-facets` specifier. Both sections were
+   restored from `git show` with only the genuine top-level imports removed.
+2. **A pre-existing target file's own content is dropped.** The first fold
+   named `tests/autocomplete.test.ts` as the target without also listing it as
+   a source, and its 15 `getFileTag` tests disappeared. They were recovered as
+   `tests/file-tag.test.ts` and folded into `tests/extensions/builtins.test.ts`.
+   Always list an existing target as its own first source.
+3. **`packages/tooling/tests/` path mentions are not repointed.** The tool
+   rewrites `.md` files and `packages/tooling/src/` only. Two tooling tests
+   named moved files and were fixed by hand.
+4. **A `@effect-diagnostics-next-line` suppression is separated from its
+   import.** The merge lifts the import but leaves the comment behind, and the
+   guard then fails on the orphan. Four orphans were dropped and the two
+   surviving node-builtin imports regained their suppression.
+5. **Renaming a colliding name can hit an object shorthand key.** In
+   `session.test.ts`, `theme` was both a local const and a shorthand property
+   (`{ theme }`), so a word-boundary rename silently renamed the property too
+   and broke the call. A rename must write `theme: themeOrder`. Renaming can
+   also reach a string literal: two `test(...)` names in
+   `autocomplete.test.ts` were rewritten before being restored.

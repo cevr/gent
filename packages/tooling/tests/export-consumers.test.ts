@@ -662,7 +662,7 @@ const x: Api.ToolCapability = Api.tool({})`,
       findingsFor([
         { file: "packages/extensions/src/client.ts", text: source },
         {
-          file: "apps/tui/tests/components/wake-tray.test.tsx",
+          file: "apps/tui/tests/extensions/wake.client.test.tsx",
           text: `import type { WakePendingType } from "@gent/extensions/client"`,
         },
       ]),

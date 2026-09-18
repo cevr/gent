@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { makeSideQuestionPane, SideQuestionPane } from "../src/extensions/btw.client"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { makeSideQuestionPane, SideQuestionPane } from "../../src/extensions/btw.client"
+import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { waitForRenderedFrame } from "../helpers-boundary"
+
+// ── ../side-question-pane.test ──────────────────────────────────────────────
 
 /** Casts queue here so the test drains them inside its own Effect. */
 const makeCastQueue = () => {

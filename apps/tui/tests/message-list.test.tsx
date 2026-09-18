@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it, test } from "effect-bun-test"
 import { Deferred, Effect, Option, Schema } from "effect"
+import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   addStep,
   emptyTurnSteps,
@@ -34,10 +35,11 @@ import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import { EditToolRenderer, ReadToolRenderer } from "../src/tool-renderers"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
-import { type CliRenderer, type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
-import { makeSettleHold } from "./scrollback-hold-boundary"
+
+// ── message-list.test ───────────────────────────────────────────────────────
 
 // ── split-footer-height.test ────────────────────────────────────────────────
 

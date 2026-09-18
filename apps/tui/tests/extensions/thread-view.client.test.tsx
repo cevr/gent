@@ -1,4 +1,31 @@
 /** @jsxImportSource @opentui/solid */
+import { describe, expect, it, test } from "effect-bun-test"
+import { Effect, Option } from "effect"
+import { createSignal } from "solid-js"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import {
+  BranchId,
+  dateFromMillis,
+  Message,
+  MessageId,
+  Session,
+  SessionId,
+} from "@gent/core/protocol"
+import {
+  detailFor,
+  summaryBody,
+  threadChain,
+  threadItems,
+  ThreadPane,
+  type ThreadWindow,
+  windowLabel,
+  windowsOf,
+} from "../../src/extensions/thread-view.client"
+import { renderFrame, renderWithProviders } from "../render-harness-boundary"
+import { waitForRenderedFrame } from "../helpers-boundary"
+
+// ── ../components/thread-view.test ──────────────────────────────────────────
+
 /**
  * The thread view over sessions and context windows.
  *
@@ -6,30 +33,6 @@
  * handoff marker opened on a branch. These cover the shape the pane draws and
  * the keyboard it answers to.
  */
-import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option } from "effect"
-import { createSignal } from "solid-js"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import {
-  BranchId,
-  Message,
-  MessageId,
-  Session,
-  SessionId,
-  dateFromMillis,
-} from "@gent/core/protocol"
-import {
-  ThreadPane,
-  detailFor,
-  summaryBody,
-  threadChain,
-  threadItems,
-  windowLabel,
-  windowsOf,
-  type ThreadWindow,
-} from "../../src/extensions/thread-view.client"
-import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
 
 const session = (id: string, parent: Option.Option<string> = Option.none()): Session =>
   new Session({

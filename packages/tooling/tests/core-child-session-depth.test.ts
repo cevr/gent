@@ -66,7 +66,7 @@ describe("child-session depth guard", () => {
       "packages/core/src/storage/schema.ts",
       "packages/core/src/test-utils/index.ts",
       "packages/extensions/src/thread/thread.ts",
-      "apps/tui/tests/components/thread-view.test.tsx",
+      "apps/tui/tests/extensions/thread-view.client.test.tsx",
     ]) {
       expect(findUnadmittedChildSessionWriters(file, childWriter)).toEqual([])
     }
