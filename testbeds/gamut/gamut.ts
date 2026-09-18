@@ -45,10 +45,11 @@ export interface Slot {
 }
 
 /**
- * A preset pins three roles. The orchestrator is agent `main` in
- * `.gent/config.json`; the worker and reviewer reach the orchestrator through
- * the roster block in `AGENTS.md`, which tells it what `overrides` to pass on
- * each `delegate` call.
+ * A preset pins three roles. The orchestrator is agent `main` and the worker
+ * is agent `delegate` in `.gent/config.json`: the pairing every child runs
+ * under with no override. The reviewer reaches the orchestrator through the
+ * roster block in `AGENTS.md`, which tells it what `overrides` to pass on a
+ * `delegate.start` call that wants the second opinion.
  */
 export interface Preset {
   readonly orchestrator: Slot
@@ -88,9 +89,9 @@ export const PRESETS: Record<string, Preset> = {
 
 // ── Pure transforms ─────────────────────────────────────────────────────
 
-/** `.gent/config.json` for a preset: the orchestrator, as agent `main`. */
+/** `.gent/config.json` for a preset: the orchestrator as agent `main`, the worker as agent `delegate`. */
 export const presetConfigJson = (preset: Preset): string =>
-  `${JSON.stringify({ agents: { main: preset.orchestrator } }, null, 2)}\n`
+  `${JSON.stringify({ agents: { main: preset.orchestrator, delegate: preset.worker } }, null, 2)}\n`
 
 const ROSTER_START = "<!-- roster -->"
 const ROSTER_END = "<!-- /roster -->"
@@ -99,7 +100,7 @@ const ROSTER_END = "<!-- /roster -->"
 export const rosterBlock = (preset: Preset): string =>
   [
     ROSTER_START,
-    `- Worker (fix or feature): \`overrides.modelId\` = \`${preset.worker.modelId}\`, \`overrides.reasoningEffort\` = \`${preset.worker.reasoningEffort}\``,
+    `- Worker (fix or feature): the \`delegate\` agent, paired in \`.gent/config.json\` as \`${preset.worker.modelId}\` at \`${preset.worker.reasoningEffort}\`. Pass no model override.`,
     `- Reviewer (second opinion on a diff): \`overrides.modelId\` = \`${preset.reviewer.modelId}\`, \`overrides.reasoningEffort\` = \`${preset.reviewer.reasoningEffort}\``,
     ROSTER_END,
   ].join("\n")
