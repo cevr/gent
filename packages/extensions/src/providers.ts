@@ -31,6 +31,7 @@ import {
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { Model as AiModel } from "effect/unstable/ai"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { type CatalogSource, catalogSource, driverListModels } from "./models-dev.js"
 
 // ── credentials ─────────────────────────────────────────────────────────────
 
@@ -370,9 +371,12 @@ const makeApiKeyCompatDriver = (params: {
   readonly envApiKey: Option.Option<string>
   readonly envVarName: string
   readonly apiUrl: Option.Option<string>
+  readonly catalog: CatalogSource
 }): ModelDriverContribution => ({
   id: params.id,
   name: params.name,
+  // The driver id is the models.dev provider id, so no mapping is needed.
+  listModels: driverListModels(params.catalog, params.id),
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; the compatible APIs name a code.
@@ -414,6 +418,7 @@ const makeApiKeyCompatExtension = (params: {
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
       const envApiKey = yield* readOptionalEnv(params.envVarName)
+      const catalog = yield* catalogSource(host.home)
       yield* host.register(
         "modelDriver",
         makeApiKeyCompatDriver({
@@ -422,6 +427,7 @@ const makeApiKeyCompatExtension = (params: {
           envApiKey,
           envVarName: params.envVarName,
           apiUrl: Option.some(params.apiUrl),
+          catalog,
         }),
       )
     }),

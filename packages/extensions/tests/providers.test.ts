@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer, Path } from "effect"
 import type { ModelDriverContribution, ProviderAuthInfo } from "@gent/core/extensions/api"
 import { collectTestContributions } from "@gent/core-internal/test-utils/index"
 import {
@@ -7,6 +7,7 @@ import {
   makeFakeFetchState,
   oneGenerate,
 } from "@gent/core-internal/test-utils/language-model"
+import { BunFileSystem } from "@effect/platform-bun"
 import { GoogleExtension, MistralExtension } from "../src/providers.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 
@@ -43,6 +44,9 @@ const onlyDriver = (drivers: ReadonlyArray<ModelDriverContribution>): ModelDrive
 const runOne = (model: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
   oneGenerate(model, state, () => chatHappyResponse("compat-model")).pipe(Effect.orDie)
 
+/** Extension setup reads its models.dev cache path, so it needs the platform. */
+const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
+
 describe("OpenAI-compatible provider drivers", () => {
   it.live("Google uses the Gemini OpenAI-compatible endpoint", () =>
     Effect.gen(function* () {
@@ -59,7 +63,8 @@ describe("OpenAI-compatible provider drivers", () => {
       )
       expect(request.headers["authorization"]).toBe("Bearer google-key")
       expect(request.body).not.toContain("prompt_cache_key")
-    }),
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer setup reads.
+    }).pipe(Effect.provide(platformLayer)),
   )
 
   it.live("Mistral uses the Mistral OpenAI-compatible endpoint", () =>
@@ -77,6 +82,7 @@ describe("OpenAI-compatible provider drivers", () => {
       expect(request.url).toBe("https://api.mistral.ai/v1/chat/completions")
       expect(request.headers["authorization"]).toBe("Bearer mistral-key")
       expect(request.body).not.toContain("prompt_cache_key")
-    }),
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer setup reads.
+    }).pipe(Effect.provide(platformLayer)),
   )
 })

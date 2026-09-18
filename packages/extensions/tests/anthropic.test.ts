@@ -69,6 +69,7 @@ import {
 } from "@gent/core/extensions/api"
 import { runEffectBoundary } from "./run-effect-boundary.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
+import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 import {
@@ -2519,7 +2520,7 @@ const buildAnthropicModelDriver = (
   ]
     ? [CredentialCell, BetaCell, EnvApiKey]
     : never
-) => buildAnthropicModelDriverLive(...args, testPlatform)
+) => buildAnthropicModelDriverLive(...args, testPlatform, testCatalogSource())
 const makeOAuthInfo = (): ProviderAuthInfo => ({
   type: "oauth",
   access: "test-access",

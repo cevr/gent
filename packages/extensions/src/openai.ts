@@ -53,6 +53,7 @@ import {
   recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
+import { type CatalogSource, catalogSource, driverListModels } from "./models-dev.js"
 import {
   OpenAiClient as OpenAiResponsesClient,
   OpenAiLanguageModel as OpenAiResponsesLanguageModel,
@@ -1426,6 +1427,7 @@ export const buildOpenAIModelDriver = (
   credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
+  catalog: CatalogSource,
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
@@ -1480,22 +1482,21 @@ export const buildOpenAIModelDriver = (
           "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
       })
     }),
-  listModels: (baseCatalog, authInfo) => {
-    // When OAuth is active, filter to allowed models + zero pricing
-    const auth = Option.fromNullishOr(authInfo)
-    if (Option.isNone(auth) || auth.value.type !== "oauth") return baseCatalog
-    return baseCatalog
-      .filter((model) => {
-        if (model.provider !== "openai") return true
-        const parts = model.id.split("/", 2)
-        const modelName = Option.fromNullishOr(parts[1])
-        return Option.isSome(modelName) && isOpenAIOAuthModel(modelName.value)
-      })
-      .map((model) => {
-        if (model.provider !== "openai") return model
-        return Model.make({ ...model, pricing: { input: 0, output: 0 } })
-      })
-  },
+  listModels: (authInfo) =>
+    driverListModels(catalog, "openai")().pipe(
+      Effect.map((models) => {
+        // When OAuth is active, filter to allowed models + zero pricing
+        const auth = Option.fromNullishOr(authInfo)
+        if (Option.isNone(auth) || auth.value.type !== "oauth") return models
+        return models
+          .filter((model) => {
+            const parts = model.id.split("/", 2)
+            const modelName = Option.fromNullishOr(parts[1])
+            return Option.isSome(modelName) && isOpenAIOAuthModel(modelName.value)
+          })
+          .map((model) => Model.make({ ...model, pricing: { input: 0, output: 0 } }))
+      }),
+    ),
   auth: {
     methods: [
       AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus (browser)" }),
@@ -1597,10 +1598,11 @@ export const OpenAIExtension = defineExtension({
     const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
     const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
+    const catalog = yield* catalogSource(host.home)
 
     yield* host.register(
       "modelDriver",
-      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey),
+      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey, catalog),
     )
   }),
 })

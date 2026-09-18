@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, type FileSystem, Option, type Path, Schema } from "effect"
 import {
   type ExtensionHost,
   type GentExtension,
@@ -77,33 +77,34 @@ export {
  */
 export { CellExtension, CellBranchTools }
 
-export const BuiltinExtensions: ReadonlyArray<GentExtension<ChildProcessSpawner | ExtensionHost>> =
-  [
-    CellExtension,
-    CompactionExtension,
-    HandoffExtension,
-    GoalExtension,
-    WakeExtension,
-    BtwExtension,
-    FsToolsExtension,
-    ExecToolsExtension,
-    NetworkToolsExtension,
-    DelegateExtension,
-    InteractionToolsExtension,
-    SessionToolsExtension,
-    AgentsExtension,
-    AgentsViewExtension,
-    WorkflowsExtension,
-    SkillsExtension,
-    AcpAgentsExtension,
-    AnthropicExtension,
-    OpenAIExtension,
-    GoogleExtension,
-    MistralExtension,
-  ].map((extension) => {
-    if (Option.isNone(BuiltinArtifactIdentity)) return extension
-    return {
-      ...extension,
-      artifactIdentity: BuiltinArtifactIdentity.value,
-    }
-  })
+export const BuiltinExtensions: ReadonlyArray<
+  GentExtension<ChildProcessSpawner | ExtensionHost | FileSystem.FileSystem | Path.Path>
+> = [
+  CellExtension,
+  CompactionExtension,
+  HandoffExtension,
+  GoalExtension,
+  WakeExtension,
+  BtwExtension,
+  FsToolsExtension,
+  ExecToolsExtension,
+  NetworkToolsExtension,
+  DelegateExtension,
+  InteractionToolsExtension,
+  SessionToolsExtension,
+  AgentsExtension,
+  AgentsViewExtension,
+  WorkflowsExtension,
+  SkillsExtension,
+  AcpAgentsExtension,
+  AnthropicExtension,
+  OpenAIExtension,
+  GoogleExtension,
+  MistralExtension,
+].map((extension) => {
+  if (Option.isNone(BuiltinArtifactIdentity)) return extension
+  return {
+    ...extension,
+    artifactIdentity: BuiltinArtifactIdentity.value,
+  }
+})

@@ -1649,10 +1649,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   )
   const modelRegistryLive =
     config.overrides?.modelRegistryLayer ??
-    Layer.provide(
-      ModelRegistry.Live,
-      Layer.mergeAll(runtimeEnvironmentLive, extensionRegistryLive, authLive),
-    )
+    Layer.provide(ModelRegistry.Live, Layer.mergeAll(extensionRegistryLive, authLive))
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
   const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
@@ -1676,7 +1673,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       authGuardLive,
       providerAuthLive,
       configServiceLive,
-      Layer.provide(modelRegistryLive, FetchHttpClient.layer),
+      modelRegistryLive,
       extensionRegistryLive,
       fileLockServiceLive,
       AgentLoopSessionGovernance.Live,

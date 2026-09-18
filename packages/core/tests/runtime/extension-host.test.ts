@@ -766,7 +766,7 @@ describe("resolveTurnProfile", () => {
  * DriverRegistry — unit tests for the unified driver lookup.
  *
  * Covers both categories (model + external) under one registry, scope precedence
- * across categories, and filterModelCatalog composition. Pinned at this seam
+ * across categories, and listModelCatalog concatenation. Pinned at this seam
  * because every agent turn dispatches through
  * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence
  * silently breaks per-cwd extension resolution.
@@ -895,36 +895,55 @@ describe("DriverRegistry", () => {
       expect(driver?.executor).toBe(projectExec)
     }),
   )
-  it.live("filterModelCatalog composes every driver's listModels filter", () =>
+  it.live("listModelCatalog concatenates every driver's own catalog", () =>
     Effect.gen(function* () {
-      const dropper: ModelDriverContribution = {
-        id: "dropper",
-        name: "Dropper",
+      const first: ModelDriverContribution = {
+        id: "first",
+        name: "First",
         resolveModel: stubResolution,
-        listModels: (catalog) => catalog.filter((model) => model.contextLength !== 0),
+        listModels: () => Effect.succeed([makeCatalogModel("first/one")]),
       }
-      const adder: ModelDriverContribution = {
-        id: "adder",
-        name: "Adder",
+      const second: ModelDriverContribution = {
+        id: "second",
+        name: "Second",
         resolveModel: stubResolution,
-        listModels: (catalog) => [...catalog, makeCatalogModel("adder/added")],
+        listModels: () => Effect.succeed([makeCatalogModel("second/one")]),
       }
-      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [dropper, adder] })])
+      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [first, second] })])
       const result = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.filterModelCatalog([
-          makeCatalogModel("test/kept"),
-          makeCatalogModel("test/dropped", false),
-        ])
+        return yield* reg.listModelCatalog()
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
-      // dropper removes the unkept entry; adder appends one — two remain
-      expect(result.length).toBe(2)
-      expect(result.some((model) => model.id === "adder/added")).toBe(true)
-      expect(result.some((model) => model.id === "test/dropped")).toBe(false)
+      expect(result.map((model) => model.id)).toEqual([
+        ModelId.make("first/one"),
+        ModelId.make("second/one"),
+      ])
     }),
   )
-  it.live("filterModelCatalog passes resolveAuth(driverId) into each driver's listModels", () =>
+  it.live("a driver without listModels contributes nothing to the catalog", () =>
+    Effect.gen(function* () {
+      const listing: ModelDriverContribution = {
+        id: "listing",
+        name: "Listing",
+        resolveModel: stubResolution,
+        listModels: () => Effect.succeed([makeCatalogModel("listing/one")]),
+      }
+      const silent: ModelDriverContribution = {
+        id: "silent",
+        name: "Silent",
+        resolveModel: stubResolution,
+      }
+      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [listing, silent] })])
+      const result = yield* Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.listModelCatalog()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer))
+      expect(result.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
+    }),
+  )
+  it.live("listModelCatalog passes resolveAuth(driverId) into each driver's listModels", () =>
     Effect.gen(function* () {
       const seenAuth: Array<{
         driverId: string
@@ -934,26 +953,28 @@ describe("DriverRegistry", () => {
         id: "auth-a",
         name: "AuthA",
         resolveModel: stubResolution,
-        listModels: (catalog, auth) => {
-          seenAuth.push({ driverId: "auth-a", auth: Option.fromUndefinedOr(auth) })
-          return catalog
-        },
+        listModels: (auth) =>
+          Effect.sync(() => {
+            seenAuth.push({ driverId: "auth-a", auth: Option.fromUndefinedOr(auth) })
+            return [makeCatalogModel("auth-a/one")]
+          }),
       }
       const driverB: ModelDriverContribution = {
         id: "auth-b",
         name: "AuthB",
         resolveModel: stubResolution,
-        listModels: (catalog, auth) => {
-          seenAuth.push({ driverId: "auth-b", auth: Option.fromUndefinedOr(auth) })
-          return catalog
-        },
+        listModels: (auth) =>
+          Effect.sync(() => {
+            seenAuth.push({ driverId: "auth-b", auth: Option.fromUndefinedOr(auth) })
+            return [makeCatalogModel("auth-b/one")]
+          }),
       }
       const layer = buildRegistry([
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
       yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.filterModelCatalog([makeCatalogModel("test/x")], (driverId) => {
+        return yield* reg.listModelCatalog((driverId) => {
           if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
           return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
         })
@@ -972,7 +993,7 @@ describe("DriverRegistry", () => {
       expect(Option.isNone(authBEntry.value.auth)).toBe(true)
     }),
   )
-  it.live("filterModelCatalog rejects malformed runtime filter output", () =>
+  it.live("listModelCatalog rejects a malformed driver catalog", () =>
     Effect.gen(function* () {
       const malformed = makeCatalogModel("broken/invalid")
       Reflect.set(malformed, "name", 42)
@@ -980,12 +1001,12 @@ describe("DriverRegistry", () => {
         id: "broken",
         name: "Broken",
         resolveModel: stubResolution,
-        listModels: () => [malformed],
+        listModels: () => Effect.succeed([malformed]),
       }
       const layer = buildRegistry([makeExt("broken-ext", "builtin", { modelDrivers: [broken] })])
       const result = yield* Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.filterModelCatalog([makeCatalogModel("test/x")])
+        return yield* reg.listModelCatalog()
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(layer),

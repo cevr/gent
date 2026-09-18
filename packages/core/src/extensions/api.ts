@@ -92,7 +92,7 @@ export {
   RequestId,
   ExtensionId,
 } from "../domain/ids.js"
-export { Model, ModelId } from "../domain/agent.js"
+export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 export { AuthMethod } from "../runtime/provider.js"
 export { type Message, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"

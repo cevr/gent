@@ -172,7 +172,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 /**
  * Registers a model provider as a driver. `id` doubles as the driver id, the
  * model returned by `resolveModel` provides an `effect/unstable/ai` LanguageModel,
- * `listModels` filters/extends the catalog, and `auth` wires the OAuth/API
+ * `listModels` supplies the driver's own catalog, and `auth` wires the OAuth/API
  * key flow. The driver registry routes a `DriverRef({ _tag: "Model", id })`
  * to the matching contribution.
  */
@@ -187,11 +187,10 @@ export interface ModelDriverContribution {
     authInfo?: ProviderAuthInfo,
     hints?: ProviderHints,
   ) => Effect.Effect<ProviderResolution, ProviderAuthError>
-  /** Filter or extend the model catalog. */
+  /** The driver's own model catalog. Core concatenates every driver's list; it fetches nothing. */
   readonly listModels?: (
-    baseCatalog: ReadonlyArray<Model>,
     authInfo?: ProviderAuthInfo,
-  ) => ReadonlyArray<Model>
+  ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
   /** Auth configuration — OAuth + API key methods + handlers. */
   readonly auth?: ProviderAuthContribution
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
