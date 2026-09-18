@@ -42,22 +42,23 @@ import { convertTools, CurrentToolCall, ToolRunner } from "./tools.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { ProviderError, type StorageError } from "../../domain/errors.js"
-import { toPrompt } from "../../providers/ai-transcript.js"
-import { SqlClient } from "effect/unstable/sql"
 import {
+  currentHandoffId,
   estimateTextTokens,
   estimateToolSchemaTokens,
+  messagesInCurrentWindow,
   MODEL_OUTPUT_RESERVE_TOKENS,
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
+  ModelContextLedger,
   ModelContextProjectionError,
+  projectContextWindow,
   projectModelContext,
+  toPrompt,
 } from "../model-context.js"
-import { ModelContextLedger } from "../model-context-ledger.js"
-import { currentHandoffId, messagesInCurrentWindow } from "../model-context-window.js"
+import { SqlClient } from "effect/unstable/sql"
 import { causeMessage } from "../../domain/guards.js"
-import { projectContextWindow } from "./turn-window.js"
 
 /**
  * Where a turn's parts come from: the model stream or an external driver.

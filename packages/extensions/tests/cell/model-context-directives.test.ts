@@ -15,7 +15,7 @@ import { CompactionExtension } from "../../src/compaction.js"
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   windowDetails,
-} from "@gent/core-internal/runtime/model-context-window.js"
+} from "@gent/core-internal/runtime/model-context.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"

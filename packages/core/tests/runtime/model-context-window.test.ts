@@ -4,14 +4,12 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { Message, dateFromMillis } from "../../src/domain/message"
 import {
+  estimateTokens,
   latestUserMessageId,
   messagesInCurrentWindow,
-  windowMarkerMessage,
-} from "../../src/runtime/model-context-window"
-import {
-  estimateTokens,
   ModelContextBudget,
   projectModelContext,
+  windowMarkerMessage,
 } from "../../src/runtime/model-context"
 
 const sessionId = SessionId.make("window-session")

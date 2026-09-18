@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { MessageId } from "../../src/domain/ids"
 import { Effect, Option } from "effect"
-import { ContextDirective, ModelContextLedger } from "../../src/runtime/model-context-ledger"
+import { ContextDirective, ModelContextLedger } from "../../src/runtime/model-context"
 
 describe("model context ledger", () => {
   it.effect("a branch starts without a projection and reports the last one recorded", () =>

@@ -3,7 +3,7 @@ import { Effect, Layer, Option, Predicate, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { Message, dateFromMillis } from "../../../src/domain/message"
-import { windowDetails } from "../../../src/runtime/model-context-window"
+import { windowDetails } from "../../../src/runtime/model-context"
 import {
   LanguageModelLayers,
   finishPart,

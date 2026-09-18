@@ -41,7 +41,7 @@ import {
   makeExtensionHostContextProvider,
   SessionProfileCache,
 } from "@gent/core-internal/runtime/extension-host.js"
-import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
+import { ModelContextLedger } from "@gent/core-internal/runtime/model-context.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import { InteractionStorage, MessageStorage } from "@gent/core-internal/storage/storage.js"
 import { ensureStorageParents, testHostFacts } from "@gent/core-internal/test-utils/index.js"

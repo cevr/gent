@@ -63,7 +63,7 @@ updates this list in the same commit.
 10. **Tool results are bounded before the model sees them.** At most 8,000
     characters inline (head and tail); the rest is paged through
     `context.read`. Receipt: `maximumModelToolResultChars` in
-    `packages/core/src/providers/ai-transcript.ts`.
+    `packages/core/src/runtime/model-context.ts`.
 11. **A model change is a durable user-role notice.** Switching models writes
     one `model-change` message the next turn reads; an effort change writes
     nothing. Receipt: `modelChangeNotice` in
@@ -94,7 +94,7 @@ updates this list in the same commit.
     When the newest turn alone overflows, the handoff anchors inside the turn
     at a step boundary and keeps the newest steps that fit half the budget.
     A summary that cannot be produced degrades to truncation with a visible
-    notice. Receipts: `packages/core/src/runtime/model-context-window.ts`,
+    notice. Receipts: `packages/core/src/runtime/model-context.ts`,
     `packages/core/src/runtime/agent/turn-source.ts`,
     `packages/extensions/src/compaction.ts`.
 
@@ -267,7 +267,7 @@ Core orchestration lives in:
 - `packages/core/src/domain/agent-loop.ts`
 - `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`
 - `packages/core/src/runtime/agent/turn-source.ts`
-- `packages/core/src/runtime/agent/turn-window.ts`
+- `packages/core/src/runtime/model-context.ts`
 - `packages/core/src/runtime/agent/turn-response.ts`
 
 Shape:

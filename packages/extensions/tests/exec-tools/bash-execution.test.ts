@@ -39,7 +39,7 @@ import { SqliteStorage } from "@gent/core-internal/storage/storage"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,
-} from "@gent/core-internal/providers/ai-transcript"
+} from "@gent/core-internal/runtime/model-context"
 import * as Prompt from "effect/unstable/ai/Prompt"
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {

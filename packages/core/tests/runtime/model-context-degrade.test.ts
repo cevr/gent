@@ -7,10 +7,7 @@ import { ActorCommandId, BranchId, MessageId, SessionId } from "../../src/domain
 import { dateFromMillis, Branch, Message, Session } from "../../src/domain/message"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep } from "../../src/test-utils/sequence-steps"
-import {
-  ModelCompactionError,
-  ModelContextCompactor,
-} from "../../src/runtime/model-context-compactor"
+import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
 import { ModelRegistry } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { getSessionSnapshot } from "../../src/server/rpc-handlers"

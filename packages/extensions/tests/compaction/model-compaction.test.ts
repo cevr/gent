@@ -12,13 +12,11 @@ import {
   textDeltaPart,
 } from "@gent/core-internal/test-utils/language-model.js"
 import {
-  ModelCompactionError,
-  ModelContextCompactor,
-} from "@gent/core-internal/runtime/model-context-compactor.js"
-import {
   estimateTextTokens,
   estimateTokens,
+  ModelCompactionError,
   ModelContextBudget,
+  ModelContextCompactor,
 } from "@gent/core-internal/runtime/model-context.js"
 import {
   compactModelContext,

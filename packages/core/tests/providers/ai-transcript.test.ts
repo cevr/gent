@@ -11,7 +11,7 @@ import {
   maximumModelToolResultChars,
   toPrompt,
   toPromptMessages,
-} from "../../src/providers/ai-transcript"
+} from "../../src/runtime/model-context"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import * as Response from "effect/unstable/ai/Response"
 import { Schema } from "effect"

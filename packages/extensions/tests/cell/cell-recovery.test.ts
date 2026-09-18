@@ -30,7 +30,7 @@ import {
   makeExtensionHostContextProvider,
   SessionProfileCache,
 } from "@gent/core-internal/runtime/extension-host.js"
-import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
+import { ModelContextLedger } from "@gent/core-internal/runtime/model-context.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import {
   AgentLoopQueueStorage,

@@ -19,7 +19,7 @@ import {
 import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/agent/tools"
 import { ProviderAuthError } from "../../src/domain/driver"
-import { toPrompt } from "../../src/providers/ai-transcript"
+import { toPrompt } from "../../src/runtime/model-context"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"

@@ -44,7 +44,7 @@ import {
   SqliteStorage,
 } from "../../../src/storage/storage"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
-import { windowMarkerMessage } from "../../../src/runtime/model-context-window"
+import { windowMarkerMessage } from "../../../src/runtime/model-context"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"

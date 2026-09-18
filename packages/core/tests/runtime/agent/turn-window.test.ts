@@ -6,18 +6,17 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "../../../src/domain/
 import { dateFromMillis, Message } from "../../../src/domain/message"
 import { ModelId } from "../../../src/domain/agent"
 import {
-  MODEL_OUTPUT_RESERVE_TOKENS,
-  ModelContextBudget,
-  ModelContextProjectionError,
-  projectModelContext,
-} from "../../../src/runtime/model-context"
-import {
   type CompactionRequest,
+  messagesInCurrentWindow,
+  MODEL_OUTPUT_RESERVE_TOKENS,
   ModelCompactionError,
+  ModelContextBudget,
   ModelContextCompactor,
-} from "../../../src/runtime/model-context-compactor"
-import { messagesInCurrentWindow, windowDetails } from "../../../src/runtime/model-context-window"
-import { projectContextWindow } from "../../../src/runtime/agent/turn-window"
+  ModelContextProjectionError,
+  projectContextWindow,
+  projectModelContext,
+  windowDetails,
+} from "../../../src/runtime/model-context"
 
 const modelId = ModelId.make("test/window-model")
 const createdAt = dateFromMillis(1_767_225_600_000)

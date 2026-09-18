@@ -7,7 +7,7 @@ import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
 import { MessageStorage, SqliteStorage } from "@gent/core-internal/storage/storage.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { CellBranchTools, handleContextCall, pageText } from "../../src/cell.js"
-import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
+import { ModelContextLedger } from "@gent/core-internal/runtime/model-context.js"
 
 const sessionId = SessionId.make("context-host-session")
 const branchId = BranchId.make("context-host-branch")

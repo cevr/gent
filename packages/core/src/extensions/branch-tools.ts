@@ -79,7 +79,7 @@ export {
 export { AgentLoopError } from "../domain/agent-loop.js"
 
 // Reporting what the feature did to the model's context.
-export { ContextDirective, ModelContextLedger } from "../runtime/model-context-ledger.js"
+export { ContextDirective, ModelContextLedger } from "../runtime/model-context.js"
 export { partToText } from "../domain/message.js"
 
 // Implementing the context compaction seam.
@@ -88,14 +88,14 @@ export {
   CompactionSummary,
   ModelCompactionError,
   ModelContextCompactor,
-} from "../runtime/model-context-compactor.js"
+} from "../runtime/model-context.js"
 export { estimateTextTokens, ModelContextBudget } from "../runtime/model-context.js"
 export { Message } from "../domain/message.js"
 export { type Usage } from "../domain/event.js"
 export { type ProviderAuthError } from "../domain/driver.js"
 export { type ProviderError } from "../domain/errors.js"
 export { responseUsage } from "../domain/message.js"
-export { toPrompt } from "../providers/ai-transcript.js"
+export { toPrompt } from "../runtime/model-context.js"
 
 // Interaction ownership: a feature that suspends for an answer owns the request.
 export { CurrentInteractionOwner, type InteractionOwnership } from "../domain/interaction.js"

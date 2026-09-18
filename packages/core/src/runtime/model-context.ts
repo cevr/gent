@@ -1,9 +1,290 @@
-import { Option, Result, Schema } from "effect"
+import {
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Result,
+  Schema,
+  type Scope,
+} from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import {
+  encodeToolOutput,
+  headTailChars,
+  Message,
+  MessageRole,
+  type RuntimeUserMessageType,
+} from "../domain/message.js"
+import {
+  ErrorOccurred,
+  EventPublisher,
+  type EventStoreError,
+  UsageSchema,
+} from "../domain/event.js"
+import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
+import { ModelId } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
-import { encodeToolOutput, Message, MessageRole } from "../domain/message.js"
-import { MessageId, ToolCallId } from "../domain/ids.js"
-import { boundToolResultForModel } from "../providers/ai-transcript.js"
-import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"
+import type { LanguageModel } from "effect/unstable/ai"
+import type { ProviderAuthError } from "../domain/driver.js"
+import type { ProviderError, StorageError } from "../domain/errors.js"
+import type { EventStorageError } from "../storage/storage.js"
+
+// ── ai-transcript ───────────────────────────────────────────────────────────
+
+interface PromptTranscriptOptions {
+  readonly systemPrompt?: string
+  readonly includeHidden?: boolean
+}
+
+const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
+
+const toSystemMessage = (message: Message): Option.Option<Prompt.SystemMessage> => {
+  const text = message.parts
+    .filter((part): part is Prompt.TextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+
+  if (text.length === 0) return Option.none()
+  return Option.some(Prompt.systemMessage({ content: text }))
+}
+
+const toUserMessage = (message: Message): Option.Option<Prompt.UserMessage> => {
+  const content: Prompt.UserMessagePart[] = []
+
+  for (const part of message.parts) {
+    switch (part.type) {
+      case "text":
+      case "file":
+        content.push(part)
+        break
+      default:
+        break
+    }
+  }
+
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.userMessage({ content }))
+}
+
+const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMessage> => {
+  const content: Prompt.AssistantMessagePart[] = []
+
+  for (const part of message.parts) {
+    switch (part.type) {
+      case "text":
+      case "reasoning":
+      case "file":
+      case "tool-call":
+      case "tool-approval-request":
+        content.push(part)
+        break
+      default:
+        break
+    }
+  }
+
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.assistantMessage({ content }))
+}
+
+/**
+ * Model-facing tool results keep this many characters; anything larger is
+ * spilled. The transcript keeps the full result, and the bounded result
+ * carries the locator the model uses to page through it.
+ */
+export const maximumModelToolResultChars = 8_000
+
+const encodeToolResultJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Json))
+
+/**
+ * Bound one tool result for the model with head-plus-tail text and a
+ * locator for the rest. The stored message and its events keep the full
+ * result; `context.read(toolCallId, { offset, limit })` in the cell pages it.
+ */
+export const boundToolResultForModel = (
+  part: Prompt.ToolResultPart,
+  maxChars: number = maximumModelToolResultChars,
+): Prompt.ToolResultPart => {
+  const encoded = encodeToolResultJson(part.result)
+  if (Option.isNone(encoded) || encoded.value.length <= maxChars) return part
+  const bounded = headTailChars(encoded.value, maxChars)
+  return Prompt.toolResultPart({
+    id: part.id,
+    name: part.name,
+    isFailure: part.isFailure,
+    providerExecuted: part.providerExecuted,
+    result: {
+      truncated: true,
+      totalChars: bounded.totalChars,
+      omittedChars: bounded.totalChars - maxChars,
+      read: `context.read("${part.id}", { offset, limit })`,
+      text: bounded.text,
+    },
+  })
+}
+
+const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
+  const content = message.parts.flatMap((part): ReadonlyArray<Prompt.ToolMessagePart> => {
+    if (part.type === "tool-result") return [boundToolResultForModel(part)]
+    if (part.type !== "tool-approval-response") return []
+    return [part]
+  })
+
+  if (content.length === 0) return Option.none()
+  return Option.some(Prompt.toolMessage({ content }))
+}
+
+const toPromptMessage = (message: Message): Option.Option<Prompt.Message> => {
+  switch (message.role) {
+    case "system":
+      return toSystemMessage(message)
+    case "user":
+      return toUserMessage(message)
+    case "assistant":
+      return toAssistantMessage(message)
+    case "tool":
+      return toToolMessage(message)
+  }
+}
+
+export const toPromptMessages = (
+  messages: ReadonlyArray<Message>,
+  options?: Pick<PromptTranscriptOptions, "includeHidden">,
+): ReadonlyArray<Prompt.Message> => {
+  const result: Prompt.Message[] = []
+
+  for (const message of messages) {
+    if (options?.includeHidden !== true && !isAiVisibleMessage(message)) continue
+    const promptMessage = toPromptMessage(message)
+    if (Option.isSome(promptMessage)) result.push(promptMessage.value)
+  }
+
+  return result
+}
+
+export const toPrompt = (
+  messages: ReadonlyArray<Message>,
+  options?: PromptTranscriptOptions,
+): Prompt.Prompt => {
+  const promptMessages = [...toPromptMessages(messages, options)]
+  const systemPrompt = options?.systemPrompt
+  if (!Predicate.isUndefined(systemPrompt) && systemPrompt !== "") {
+    promptMessages.unshift(Prompt.systemMessage({ content: systemPrompt }))
+  }
+
+  return Prompt.fromMessages(promptMessages)
+}
+
+// ── model-context-window ────────────────────────────────────────────────────
+
+/** Custom type of the durable marker that starts a context window. */
+export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-window"
+
+/** The history a handoff marker summarizes; every message in it stays durable and readable by id. */
+const ContextHandoffSummary = Schema.Struct({
+  firstMessageId: MessageId,
+  lastMessageId: MessageId,
+  count: Schema.Natural,
+  modelId: Schema.optional(ModelId),
+  usage: Schema.optional(UsageSchema),
+})
+type ContextHandoffSummary = typeof ContextHandoffSummary.Type
+
+const ContextWindowDetails = Schema.TaggedStruct(CONTEXT_WINDOW_MESSAGE_TYPE, {
+  /** The first durable message the model still sees; everything earlier leaves the projection. */
+  keepFromMessageId: MessageId,
+  /** Present when the marker's notice carries a summary of what left the window. */
+  summarized: Schema.optional(ContextHandoffSummary),
+})
+type ContextWindowDetails = typeof ContextWindowDetails.Type
+
+const isWindowDetails = Schema.is(ContextWindowDetails)
+
+/**
+ * The marker is a user message so every provider accepts it at the head of the
+ * window. A bare window carries the issuer's notice; a handoff carries the
+ * summary and the ids that let the model read what it replaced.
+ */
+export const windowMarkerMessage = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly keepFromMessageId: MessageId
+  readonly notice: string
+  readonly summarized?: ContextHandoffSummary
+  readonly createdAt: Date
+}) => {
+  let kind = "context-window"
+  if (Predicate.isNotUndefined(params.summarized)) kind = "context-handoff"
+  return Message.cases.regular.make({
+    id: MessageId.make(`${kind}:${params.branchId}:${params.keepFromMessageId}`),
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    role: "user",
+    parts: [Prompt.textPart({ text: params.notice })],
+    metadata: {
+      customType: CONTEXT_WINDOW_MESSAGE_TYPE,
+      details: ContextWindowDetails.make({
+        keepFromMessageId: params.keepFromMessageId,
+        summarized: params.summarized,
+      }),
+    },
+    createdAt: params.createdAt,
+  })
+}
+
+export const windowDetails = (message: Message): Option.Option<ContextWindowDetails> => {
+  if (message.metadata?.customType !== CONTEXT_WINDOW_MESSAGE_TYPE) return Option.none()
+  const details = message.metadata.details
+  if (!isWindowDetails(details)) return Option.none()
+  return Option.some(details)
+}
+
+/** The newest user message anchors a window: the model keeps that unit and loses what came before. */
+export const latestUserMessageId = (messages: ReadonlyArray<Message>): Option.Option<MessageId> => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (Predicate.isNotUndefined(message) && message.role === "user") {
+      if (Option.isSome(windowDetails(message))) continue
+      return Option.some(message.id)
+    }
+  }
+  return Option.none()
+}
+
+/**
+ * Applies the newest valid window marker: the marker leads, then every message from
+ * the anchor onward. A marker whose anchor is missing is ignored so nothing is lost.
+ */
+export const messagesInCurrentWindow = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyArray<Message> => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const marker = messages[index]
+    if (Predicate.isUndefined(marker)) continue
+    const details = windowDetails(marker)
+    if (Option.isNone(details)) continue
+    const anchor = messages.findIndex((message) => message.id === details.value.keepFromMessageId)
+    if (anchor < 0) continue
+    return [marker, ...messages.slice(anchor).filter((message) => message.id !== marker.id)]
+  }
+  return messages
+}
+
+/** The id of the handoff marker leading a window, when the window starts with a summary. */
+export const currentHandoffId = (window: ReadonlyArray<Message>): Option.Option<MessageId> => {
+  const first = Option.fromUndefinedOr(window[0])
+  return Option.flatMap(first, (marker) =>
+    Option.flatMap(windowDetails(marker), (details) => {
+      if (Predicate.isUndefined(details.summarized)) return Option.none()
+      return Option.some(marker.id)
+    }),
+  )
+}
+
+// ── model-context ───────────────────────────────────────────────────────────
 
 /** Input tokens the context projection keeps free for the reply. The request itself carries no output cap: each provider uses the model's own limit. */
 export const MODEL_OUTPUT_RESERVE_TOKENS = 4_096
@@ -583,7 +864,7 @@ const projectUnits = (
  * at the first kept message. The first unit always leaves, so a turn that is
  * one unit has nothing to hand off.
  */
-export const handoffAnchorWithinTurn = (
+const handoffAnchorWithinTurn = (
   messages: ReadonlyArray<Message>,
   budget: ModelContextBudget,
 ): Option.Option<MessageId> => {
@@ -630,3 +911,310 @@ export const projectModelContext = (
 
   return projectUnits(buildUnits(visible, groups.success), budget)
 }
+
+// ── model-context-compactor ─────────────────────────────────────────────────
+
+/**
+ * The context compaction seam.
+ *
+ * The loop decides when a window hands off: on overflow, or when the model
+ * asks. It gives the history that leaves the window to whichever extension
+ * installs a `ModelContextCompactor` as a process resource and gets back the
+ * notice the handoff marker carries. With none installed, an overflowing
+ * transcript is simply truncated. The loop owns the marker, its ids, and the
+ * transaction; the extension owns the summary prompt and the notice text.
+ *
+ * @module
+ */
+
+/** Why a summary was not produced. Every failure degrades to a truncated window. */
+export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
+  "ModelCompactionError",
+  {
+    modelId: ModelId,
+    reason: Schema.NonEmptyString,
+  },
+) {}
+
+/** What the handoff marker carries: the notice the model reads, and the receipt of producing it. */
+export const CompactionSummary = Schema.Struct({
+  notice: Schema.NonEmptyString,
+  modelId: ModelId,
+  usage: Schema.optional(UsageSchema),
+})
+export type CompactionSummary = typeof CompactionSummary.Type
+
+export interface CompactionRequest {
+  readonly modelId: ModelId
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  /** The history leaving the window, oldest first, an earlier handoff marker included. */
+  readonly history: ReadonlyArray<Message>
+  /** The messages that stay in the window after the handoff, oldest first. */
+  readonly kept: ReadonlyArray<Message>
+  readonly budget: ModelContextBudget
+  /** What the model asked the summary to focus on, when it asked. */
+  readonly instructions?: string
+  /** The admitted model for a summary bounded to `maxOutputTokens`. */
+  readonly summaryModel: (
+    maxOutputTokens: number,
+  ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>
+}
+
+interface ModelContextCompactorService {
+  readonly compact: (
+    request: CompactionRequest,
+  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope>
+}
+
+/** Installed by an extension as a process resource; absent when nothing summarises. */
+export class ModelContextCompactor extends Context.Service<
+  ModelContextCompactor,
+  ModelContextCompactorService
+>()("@gent/core/src/runtime/model-context/ModelContextCompactor") {}
+
+// ── model-context-ledger ────────────────────────────────────────────────────
+
+/** What the model last saw as its context, recorded after each projection. */
+const ModelContextStatus = Schema.Struct({
+  estimatedTokens: Schema.Natural,
+  availableInputTokens: Schema.Natural,
+  contextLimitTokens: Schema.Natural,
+  omittedMessages: Schema.Natural,
+  /** The handoff marker leading the window; absent when the window carries no summary. */
+  handoffMessageId: Schema.optional(MessageId),
+})
+type ModelContextStatus = typeof ModelContextStatus.Type
+
+/** A request the model made from inside a cell; the next projection consumes it. */
+export const ContextDirective = Schema.TaggedUnion({
+  Compact: { instructions: Schema.optional(Schema.String) },
+  /** The issuer says how the model recovers what the window dropped; core only keeps it durable. */
+  NewWindow: { notice: Schema.NonEmptyString },
+})
+export type ContextDirective = typeof ContextDirective.Type
+
+interface ModelContextLedgerService {
+  readonly status: Effect.Effect<Option.Option<ModelContextStatus>>
+  readonly recordProjection: (status: ModelContextStatus) => Effect.Effect<void>
+  /** A later directive replaces an earlier one; only the newest is honored. */
+  readonly schedule: (directive: ContextDirective) => Effect.Effect<void>
+  /** The directive waiting for the next projection; it stays until acknowledged or discarded. */
+  readonly pendingDirective: Effect.Effect<Option.Option<ContextDirective>>
+  /** Clears the directive once its projection succeeded; a newer directive survives. */
+  readonly acknowledgeDirective: (directive: ContextDirective) => Effect.Effect<void>
+  /** Drops whatever is pending; a new turn starts without the last turn's request. */
+  readonly discardDirective: Effect.Effect<void>
+}
+
+/** One branch's view of its model context: the last projection and any pending directive. */
+export class ModelContextLedger extends Context.Service<
+  ModelContextLedger,
+  ModelContextLedgerService
+>()("@gent/core/src/runtime/model-context/ModelContextLedger") {
+  static make = Effect.gen(function* () {
+    const statusRef = yield* Ref.make(Option.none<ModelContextStatus>())
+    const directiveRef = yield* Ref.make(Option.none<ContextDirective>())
+    return ModelContextLedger.of({
+      status: Ref.get(statusRef),
+      recordProjection: (status) => Ref.set(statusRef, Option.some(status)),
+      schedule: (directive) => Ref.set(directiveRef, Option.some(directive)),
+      pendingDirective: Ref.get(directiveRef),
+      acknowledgeDirective: (directive) =>
+        Ref.update(directiveRef, (current) =>
+          Option.filter(current, (value) => value !== directive),
+        ),
+      discardDirective: Ref.set(directiveRef, Option.none()),
+    })
+  })
+
+  static Branch = Layer.effect(ModelContextLedger, ModelContextLedger.make)
+
+  /**
+   * The ledger a branch gets when nothing schedules directives.
+   *
+   * Only a dispatching tool writes this ledger -- the model asks for a fresh
+   * window or a focused summary from inside one. A branch without such a tool
+   * still projects its context every turn, so the read side must resolve to
+   * something rather than fail. Absence means "no directive, and nowhere to
+   * record", not an error.
+   */
+  static readonly inert: ModelContextLedgerService = {
+    status: Effect.succeedNone,
+    recordProjection: () => Effect.void,
+    schedule: () => Effect.void,
+    pendingDirective: Effect.succeedNone,
+    acknowledgeDirective: () => Effect.void,
+    discardDirective: Effect.void,
+  }
+}
+
+// ── turn-window ─────────────────────────────────────────────────────────────
+
+/** What the model asked the summary to focus on, when the pending directive is a compaction. */
+const compactionInstructions = (
+  directive: Option.Option<ContextDirective>,
+): Option.Option<string> =>
+  directive.pipe(
+    Option.filter((value) => value._tag === "Compact"),
+    Option.flatMap((value) => Option.fromUndefinedOr(value.instructions)),
+  )
+
+/** The handoff marker's record of what it replaced, taken from the history's ends. */
+const summarizedRange = (history: ReadonlyArray<Message>, summary: CompactionSummary) =>
+  Option.all([Option.fromUndefinedOr(history[0]), Option.fromUndefinedOr(history.at(-1))]).pipe(
+    Option.map(([first, last]) => ({
+      firstMessageId: first.id,
+      lastMessageId: last.id,
+      count: history.length,
+      modelId: summary.modelId,
+      usage: summary.usage,
+    })),
+  )
+
+type WindowProjection = {
+  readonly durableMessages: ReadonlyArray<Message>
+  readonly compacted: boolean
+}
+
+/**
+ * Where the window hands off and whether it must. The newest user message
+ * anchors it; when the newest turn alone exceeds the budget the anchor moves
+ * inside the turn, to a step boundary. Any other projection failure is the
+ * caller's to raise.
+ */
+const handoffPlan = (
+  window: ReadonlyArray<Message>,
+  budget: ModelContextBudget,
+  fit: Result.Result<ModelContextProjection, ModelContextProjectionError>,
+): Result.Result<
+  { readonly anchor: Option.Option<MessageId>; readonly overflowing: boolean },
+  ModelContextProjectionError
+> =>
+  Result.match(fit, {
+    onSuccess: (projection) =>
+      Result.succeed({
+        anchor: latestUserMessageId(window),
+        overflowing: projection.omittedMessageIds.length > 0,
+      }),
+    onFailure: (error) => {
+      if (error.failure._tag !== "BudgetExceeded") return Result.fail(error)
+      return Result.succeed({ anchor: handoffAnchorWithinTurn(window, budget), overflowing: true })
+    },
+  })
+
+/**
+ * The window the model sees this step. A fresh window puts the issuer's notice
+ * at the head; a handoff moves the history before the newest user message
+ * behind one marker that summarizes it and names the ids it replaced. The
+ * loop hands off when the window overflows, or when the model asked.
+ */
+export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow")(function* <
+  PersistR = never,
+>(params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly modelId: ModelId
+  readonly messages: ReadonlyArray<Message>
+  readonly budget: ModelContextBudget
+  readonly directive: Option.Option<ContextDirective>
+  readonly project: (
+    messages: ReadonlyArray<Message>,
+  ) => Effect.Effect<ModelContextProjection, ModelContextProjectionError>
+  readonly persist: (
+    message: Message,
+  ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
+  readonly summaryModel: CompactionRequest["summaryModel"]
+}) {
+  const eventPublisher = yield* EventPublisher
+  const now = yield* DateTime.nowAsDate
+  let durableMessages = params.messages
+  const newWindow = params.directive.pipe(Option.filter((value) => value._tag === "NewWindow"))
+  const newWindowAnchor = Option.all([newWindow, latestUserMessageId(durableMessages)])
+  if (Option.isSome(newWindowAnchor)) {
+    const [directive, anchor] = newWindowAnchor.value
+    const marker = yield* params.persist(
+      windowMarkerMessage({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        keepFromMessageId: anchor,
+        notice: directive.notice,
+        createdAt: now,
+      }),
+    )
+    durableMessages = [...durableMessages, marker]
+  }
+
+  const window = messagesInCurrentWindow(durableMessages)
+  const fit = yield* Effect.result(params.project(window))
+  const plan = yield* Effect.fromResult(handoffPlan(window, params.budget, fit))
+  const anchor = plan.anchor.pipe(
+    Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
+  )
+  const anchorIndex = Math.max(
+    0,
+    window.findIndex((m) => Option.contains(anchor, m)),
+  )
+  const history = window.slice(0, anchorIndex)
+  const kept = window.slice(anchorIndex)
+  const requested = params.directive.pipe(Option.exists((value) => value._tag === "Compact"))
+  const overflowing = plan.overflowing
+  // Summarising is an extension's job. With no compactor installed the
+  // transcript is truncated and the omission is reported as usual.
+  const compactor = yield* Effect.serviceOption(ModelContextCompactor)
+  if (!(requested || overflowing) || history.length === 0 || Option.isNone(compactor)) {
+    return { durableMessages, compacted: false } satisfies WindowProjection
+  }
+  const summary = yield* compactor.value
+    .compact({
+      modelId: params.modelId,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      history,
+      kept,
+      budget: params.budget,
+      instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
+      summaryModel: params.summaryModel,
+    })
+    .pipe(
+      Effect.asSome,
+      Effect.catchTag("ModelCompactionError", (error) =>
+        // A summary that cannot be produced must not cost the turn: the window
+        // is truncated instead, with a visible notice.
+        Effect.gen(function* () {
+          const plain = yield* params.project(window)
+          yield* eventPublisher.publish(
+            ErrorOccurred.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              error: `Context compaction failed (${error.reason}); continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+            }),
+          )
+          return Option.none()
+        }),
+      ),
+    )
+  const handoff = Option.all([summary, anchor]).pipe(
+    Option.flatMap(([value, anchorMessage]) =>
+      summarizedRange(history, value).pipe(
+        Option.map((summarized) => ({ notice: value.notice, summarized, anchorMessage })),
+      ),
+    ),
+  )
+  if (Option.isNone(handoff))
+    return { durableMessages, compacted: false } satisfies WindowProjection
+  const marker = yield* params.persist(
+    windowMarkerMessage({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      keepFromMessageId: handoff.value.anchorMessage.id,
+      notice: handoff.value.notice,
+      summarized: handoff.value.summarized,
+      createdAt: now,
+    }),
+  )
+  return {
+    durableMessages: [...durableMessages, marker],
+    compacted: true,
+  } satisfies WindowProjection
+})
