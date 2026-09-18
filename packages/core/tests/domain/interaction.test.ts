@@ -5,18 +5,20 @@ import {
   type InteractionStorageService,
   SqliteStorage,
 } from "../../src/storage/storage"
-import { ensureStorageParents } from "../../src/test-utils"
+import { ensureStorageParents } from "../../src/test-utils/index"
 import { EventStoreError } from "../../src/domain/event"
 import {
-  makeInteractionService,
-  InteractionPendingError,
   decodeInteractionParams,
+  InteractionPendingError,
   type InteractionRequestRecord,
   type InteractionStorageConfig,
+  makeInteractionService,
 } from "../../src/domain/interaction"
 import { BranchId, InteractionRequestId, SessionId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
+
+// ── interaction-request.test ────────────────────────────────────────────────
 
 const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
   is.persist(record).pipe(
