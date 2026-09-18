@@ -1,3 +1,145 @@
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
+import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
+import {
+  Cause,
+  Config,
+  Context,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  type PlatformError,
+  Predicate,
+  Schema,
+  type Scope,
+} from "effect"
+import type { LogLevel } from "effect/LogLevel"
+import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
+
+// ── tracer ──────────────────────────────────────────────────────────────────
+
+/**
+ * Effect OpenTelemetry wiring.
+ *
+ * If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, exports spans via OTLP/HTTP.
+ * Otherwise the Effect default Tracer (a no-op) is left in place.
+ */
+
+const otlpEndpoint = Config.option(Config.string("OTEL_EXPORTER_OTLP_ENDPOINT"))
+const otlpServiceName = Config.option(Config.string("OTEL_SERVICE_NAME"))
+
+export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
+  Effect.gen(function* () {
+    const endpoint = yield* otlpEndpoint
+    if (Option.isNone(endpoint)) return Layer.empty
+    const serviceName = Option.getOrElse(yield* otlpServiceName, () => "gent")
+    const exporter = new OTLPTraceExporter({
+      url: `${endpoint.value.replace(/\/$/, "")}/v1/traces`,
+    })
+    return NodeSdk.layer(() => ({
+      resource: { serviceName },
+      spanProcessor: new BatchSpanProcessor(exporter),
+      shutdownTimeout: "500 millis",
+    }))
+  }).pipe(Effect.catchEager(() => Effect.succeed(Layer.empty))),
+)
+
+// ── log-paths ───────────────────────────────────────────────────────────────
+
+/**
+ * Centralized log path resolution — all logs go to /tmp/gent/logs/
+ *
+ * Files are named by a short hash of the cwd + process start timestamp so
+ * multiple gent instances don't clobber each other and old logs are easy to
+ * identify by time.
+ *
+ * File naming: `<hash>-<ts>-server.log`, `<hash>-<ts>-client.log`
+ */
+
+export const LOG_DIR = "/tmp/gent/logs"
+const FALLBACK_CWD_IDENTITY = "unknown-cwd"
+
+/** FNV-1a 32-bit hash → 8-char hex */
+const hashCwd = (cwd: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < cwd.length; i++) {
+    h ^= cwd.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, "0")
+}
+
+const formatStartTs = (timeOrigin: number): string =>
+  DateTime.make(timeOrigin).pipe(
+    Option.match({
+      onNone: () => "unknown",
+      onSome: (date) =>
+        DateTime.formatIso(date)
+          .replace(/[-:T.]/g, "")
+          .slice(0, 14),
+    }),
+  ) // YYYYMMDDHHMMSS
+
+let cachedStartTs: Option.Option<string> = Option.none()
+/**
+ * Read the process-start timestamp, formatted YYYYMMDDHHMMSS. Lazy and
+ * memoized so module import has no platform side effect, and so synchronous
+ * callers (TUI logger module init) share the same value as Effect callers.
+ */
+const processStartTs = (): string => {
+  if (Option.isSome(cachedStartTs)) return cachedStartTs.value
+  const startTs = formatStartTs(performance.timeOrigin)
+  cachedStartTs = Option.some(startTs)
+  return startTs
+}
+
+interface LogPaths {
+  readonly dir: string
+  readonly log: string
+  readonly client: string
+}
+
+/** The suffix each side writes. Owned here so readers never restate the rule. */
+const LOG_SUFFIX = { server: "-server.log", client: "-client.log" } satisfies Record<
+  "server" | "client",
+  string
+>
+
+/** Which side wrote a log file, by name; `None` for anything else in the directory. */
+export const classifyLogFile = (name: string): Option.Option<"server" | "client"> => {
+  if (name.endsWith(LOG_SUFFIX.server)) return Option.some("server")
+  if (name.endsWith(LOG_SUFFIX.client)) return Option.some("client")
+  return Option.none()
+}
+
+/**
+ * Build log paths for a given cwd identity. Pure — no I/O. App entrypoints
+ * (e.g. TUI) that need a stable path before Effect startup can call this
+ * directly; Effect-aware callers run {@link ensureLogDir} once at startup and
+ * then call {@link buildLogPaths}.
+ */
+export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => {
+  const prefix = `${hashCwd(cwd)}-${processStartTs()}`
+  return {
+    dir: LOG_DIR,
+    log: `${LOG_DIR}/${prefix}${LOG_SUFFIX.server}`,
+    client: `${LOG_DIR}/${prefix}${LOG_SUFFIX.client}`,
+  }
+}
+
+/** Create the log directory if it doesn't exist. Call once at startup. */
+export const ensureLogDir: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.gen(
+  function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* Effect.ignore(fs.makeDirectory(LOG_DIR, { recursive: true }))
+  },
+)
+
+// ── logger ──────────────────────────────────────────────────────────────────
+
 /**
  * Custom Effect Logger — one JSON line per entry, appended to a file.
  *
@@ -6,23 +148,6 @@
  * Uses Effect.annotateLogs for context (sessionId, branchId, agent, model).
  * Uses Effect.withLogSpan for timing data.
  */
-
-import {
-  Predicate,
-  Cause,
-  Config,
-  Context,
-  Effect,
-  FileSystem,
-  Layer,
-  Logger,
-  Option,
-  Schema,
-} from "effect"
-
-import type { LogLevel } from "effect/LogLevel"
-import type { PlatformError, Scope } from "effect"
-import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
 
 // =============================================================================
 // Helpers
@@ -126,9 +251,6 @@ export const makeJsonFileLogger = (
 // =============================================================================
 // Config
 // =============================================================================
-
-import { buildLogPaths, ensureLogDir } from "./log-paths.js"
-import { GentTracerLive } from "./tracer.js"
 
 const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
