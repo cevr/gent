@@ -1,8 +1,7 @@
 import { Effect, Schema } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { ExtensionHostProcessError, type ExtensionHostPlatform } from "../../domain/extension.js"
-import { runProcess } from "../../runtime/run-process.js"
-import { GentPlatform } from "../gent-platform.js"
+import { GentPlatform, runProcess } from "../gent-platform.js"
 import { causeMessage } from "../../domain/guards.js"
 
 const hasTimedOut = Schema.is(Schema.Struct({ timedOut: Schema.Literal(true) }))

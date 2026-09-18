@@ -31,7 +31,12 @@ import {
 } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
+import type {
+  GentPlatform,
+  GentPlatformOsInfo,
+  ProcessResult,
+  RunProcessOptions,
+} from "../runtime/gent-platform.js"
 import {
   type BranchId,
   ExtensionId,
@@ -39,7 +44,6 @@ import {
   type SessionId,
   type ToolCallId,
 } from "./ids.js"
-import type { ProcessResult, RunProcessOptions } from "../runtime/run-process.js"
 import type { AgentEvent, EventStoreError, TurnCompleted } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"

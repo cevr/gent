@@ -1,7 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { GentPlatform, runProcess } from "@gent/core-internal/runtime/gent-platform.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import { runProcess } from "@gent/core-internal/runtime/run-process"
 
 // ── operating system service ────────────────────────────────────────────────
 

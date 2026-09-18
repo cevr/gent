@@ -6,8 +6,7 @@
 import { Config, Context, Effect, FileSystem, Layer, Option, Path } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { runProcess } from "@gent/core-internal/runtime/run-process.js"
+import { GentPlatform, runProcess } from "@gent/core-internal/runtime/gent-platform.js"
 
 /** True when execPath is a compiled gent binary, not a generic runtime like bun. */
 const isCompiledBinary = (exe: string): boolean => !exe.endsWith("/bun") && !exe.includes("/.bun/")

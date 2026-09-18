@@ -2,7 +2,7 @@
  * Guard: the `ProcessRunner` service stays removed.
  *
  * Running a child process is a free function, `runProcess` in
- * `packages/core/src/runtime/run-process.ts`, over `ChildProcessSpawner`. The
+ * `packages/core/src/runtime/gent-platform.ts`, over `ChildProcessSpawner`. The
  * Tag that wrapped it added a second name for the same capability: every
  * requirement union that carried `ProcessRunner` already carried the spawner,
  * and the only real read re-provided the spawner it had just taken out. A file
@@ -57,7 +57,7 @@ export const findProcessRunnerFindings = (
     findings.push({
       file,
       line: index + 1,
-      message: `names "${name.value}", a surface of the removed process-runner service; call runProcess from runtime/run-process.ts and take ChildProcessSpawner in the requirement union`,
+      message: `names "${name.value}", a surface of the removed process-runner service; call runProcess from runtime/gent-platform.ts and take ChildProcessSpawner in the requirement union`,
     })
   }
   return findings
