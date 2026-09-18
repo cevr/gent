@@ -8,7 +8,6 @@ import {
   ExtensionId,
   makeRunSpec,
   request,
-  requireCurrentAgent,
 } from "@gent/core/extensions/api"
 import { runChild } from "./delegate.js"
 
@@ -163,7 +162,6 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         })
       }
       const ctx = yield* ExtensionContext
-      const agent = yield* requireCurrentAgent
       const runs = yield* SideQuestionRuns
       const branchId = String(ctx.branchId)
       const current = yield* runs.get(branchId)
@@ -178,7 +176,6 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         runs.update(branchId, change).pipe(Effect.andThen(pulse))
       // Services are captured here: the run continues after this request's scope closes.
       const work = runChild({
-        agent,
         prompt: sideQuestionPrompt({ question, previous: input.previous }),
         runSpec: makeRunSpec({
           history: "inherit",

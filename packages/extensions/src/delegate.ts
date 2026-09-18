@@ -13,7 +13,7 @@
 import { Cause, Effect, Fiber, Option, Predicate, Record, Schema, Stream } from "effect"
 import {
   ActorCommandId,
-  type AgentDefinition,
+  AgentDefinition,
   type AgentEvent,
   AgentName,
   AgentRunToolCallSchema,
@@ -31,7 +31,6 @@ import {
   messagesToolCalls,
   request,
   RequestId,
-  requireCurrentAgent,
   type RunSpec,
   RunSpecSchema,
   SessionId,
@@ -39,6 +38,31 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
+
+// ── the subagent ────────────────────────────────────────────────────────────
+
+/**
+ * A child never delegates. Fan-out is the caller's decision, and a project
+ * prompt that addresses "the orchestrator" reaches children too, so without
+ * this a worker reads that prompt and spawns its own workers.
+ */
+const CHILD_DENIED_TOOLS: ReadonlyArray<string> = ["delegate", "agent-child", "agent-children"]
+
+export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
+
+/**
+ * The one agent every child runs as. A child inherits nothing from its
+ * caller: not the caller's agent, not the session's model. Its model and
+ * effort come from this definition, reshaped by `agents.delegate` in
+ * `.gent/config.json` (user, then project), and a call's own `overrides`
+ * win over both. That config entry is where a pairing such as
+ * fable → opus or opus → sonnet is declared.
+ */
+const delegateAgent = AgentDefinition.make({
+  name: DELEGATE_AGENT_NAME,
+  description: "The default subagent: runs one delegated task and cannot delegate further",
+  deniedTools: CHILD_DENIED_TOOLS,
+})
 
 // ── registry ────────────────────────────────────────────────────────────────
 
@@ -185,8 +209,7 @@ const childMessages = (target: { readonly sessionId: SessionId; readonly branchI
     return branch?.messages ?? []
   })
 
-const childName = (agent: AgentDefinition, prompt: string) =>
-  `${agent.name}: ${prompt.slice(0, 60)}`
+const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
 
 /** The history override for a `create`: an inheriting child forks the parent branch. */
 const historyBranch = (inherit: boolean, branchId: BranchId) => {
@@ -379,7 +402,6 @@ const ChildRunResult = Schema.TaggedUnion({
 type ChildRunResult = typeof ChildRunResult.Type
 
 interface RunChildParams {
-  readonly agent: AgentDefinition
   readonly prompt: string
   /** `history`, `visibility`, `overrides`, `parentToolCallId`. */
   readonly runSpec?: RunSpec
@@ -396,12 +418,12 @@ export const runChild = Effect.fn("Delegate.runChild")(function* (params: RunChi
   const ctx = yield* ExtensionContext
   const runSpec = params.runSpec
   const isPrivate = runSpec?.visibility === "private"
-  const agentName = params.agent.name
+  const agentName = DELEGATE_AGENT_NAME
   const toolCallId = runSpec?.parentToolCallId
   const inherit = runSpec?.history === "inherit"
 
   const created = yield* ctx.Session.create({
-    name: childName(params.agent, params.prompt),
+    name: childName(params.prompt),
     parentSessionId: ctx.sessionId,
     parentBranchId: ctx.branchId,
     // An inheriting child forks the parent branch's history; otherwise it starts clean.
@@ -528,7 +550,6 @@ export const runChild = Effect.fn("Delegate.runChild")(function* (params: RunChi
  * message on this branch.
  */
 const startChild = Effect.fn("Delegate.startChild")(function* (params: {
-  readonly agent: AgentDefinition
   readonly prompt: string
   readonly requestId: RequestId
   readonly toolCallId: ToolCallId
@@ -540,7 +561,7 @@ const startChild = Effect.fn("Delegate.startChild")(function* (params: {
       Effect.gen(function* () {
         const existing = entries.find((entry) => entry.requestId === params.requestId)
         if (Predicate.isNotUndefined(existing)) {
-          if (existing.prompt !== params.prompt || existing.agentName !== params.agent.name) {
+          if (existing.prompt !== params.prompt) {
             return yield* new DelegateError({ message: "Agent-start request input changed" })
           }
           const child = yield* ctx.Session.getSession(existing.sessionId)
@@ -561,7 +582,7 @@ const startChild = Effect.fn("Delegate.startChild")(function* (params: {
           })
         }
         const child = yield* ctx.Session.create({
-          name: childName(params.agent, params.prompt),
+          name: childName(params.prompt),
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           requestId: params.requestId,
@@ -569,7 +590,7 @@ const startChild = Effect.fn("Delegate.startChild")(function* (params: {
         const entry: DelegateEntry = {
           requestId: params.requestId,
           ...child,
-          agentName: params.agent.name,
+          agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           toolCallId: params.toolCallId,
           background: true,
@@ -809,13 +830,7 @@ export const DelegateRpc = defineRequests(DELEGATE_EXTENSION_ID, {
 
 // ── delegate tool and extension ─────────────────────────────────────────────
 
-/**
- * A child never delegates. Fan-out is the caller's decision, and a project
- * prompt that addresses "the orchestrator" reaches children too, so without
- * this a worker reads that prompt and spawns its own workers.
- */
-const CHILD_DENIED_TOOLS: ReadonlyArray<string> = ["delegate", "agent-child", "agent-children"]
-
+/** A call's `deniedTools` replaces the definition's, so the delegation tools are denied again here. */
 const childOverrides = (overrides: (typeof DelegateParams.Type)["overrides"]) => ({
   ...overrides,
   deniedTools: [...CHILD_DENIED_TOOLS, ...(overrides?.deniedTools ?? [])],
@@ -855,7 +870,7 @@ const DelegateResult = Schema.TaggedUnion({
 export const DelegateTool = tool({
   id: "delegate",
   description:
-    "Delegate one self-contained task to a child that inherits this agent and model but cannot delegate further. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch and starts a turn by itself, so end your turn to wait and do not set an alarm or a monitor for it.",
+    "Delegate one self-contained task to the delegate subagent, which runs its own configured model and cannot delegate further. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch and starts a turn by itself, so end your turn to wait and do not set an alarm or a monitor for it.",
   promptSnippet: "Delegate work to child agents",
   promptGuidelines: [
     "Use for independent work that benefits from a fresh context or parallelism",
@@ -871,7 +886,6 @@ export const DelegateTool = tool({
   output: DelegateResult,
   execute: Effect.fn("DelegateTool.execute")(function* (params: typeof DelegateParams.Type) {
     const ctx = yield* ExtensionContext
-    const agent = yield* requireCurrentAgent
 
     // Both outcomes point the parent at the child's session when there is one.
     const withSessionRef = (text: string, sessionId?: string) => {
@@ -888,7 +902,6 @@ export const DelegateTool = tool({
       }
       const requestId = RequestId.make(ctx.toolCallId)
       const child = yield* startChild({
-        agent,
         prompt: params.todo,
         requestId,
         toolCallId: ctx.toolCallId,
@@ -899,7 +912,6 @@ export const DelegateTool = tool({
 
     // Foreground mode: a child session in this runtime, awaited here.
     const result = yield* runChild({
-      agent,
       prompt: params.todo,
       runSpec: makeRunSpec({
         parentToolCallId: ctx.toolCallId,
@@ -934,6 +946,7 @@ export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
+    yield* host.register("agent", delegateAgent)
     yield* host.register("tool", DelegateTool, ControlChildAgent, ListChildAgents)
     yield* host.register("request", DelegateRpc.Children)
     yield* host.on("turnAfter", (input) =>

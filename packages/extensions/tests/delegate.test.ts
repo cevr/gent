@@ -6,13 +6,14 @@ import {
   FileSystem,
   Option,
   Predicate,
+  Record,
   Schema,
   Stream,
   Struct,
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
-import { DelegateEntry, DelegateTool } from "../src/delegate.js"
+import { ConfigService, RuntimeEnvironment, UserConfig } from "@gent/core-internal/runtime/config"
+import { DELEGATE_AGENT_NAME, DelegateEntry, DelegateTool } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "./helpers/builtin-agents.js"
 import {
@@ -34,7 +35,7 @@ import {
 import { type BranchId, RequestId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
-import { SteerCommand } from "@gent/core-internal/domain/agent"
+import { ModelId, SteerCommand } from "@gent/core-internal/domain/agent"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
 // ── delegate/harness ────────────────────────────────────────────────────────
@@ -50,13 +51,25 @@ const decodeRegistry = Schema.decodeUnknownSync(registryCodec)
 const encodeRegistry = Schema.encodeSync(registryCodec)
 const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
-const harnessWithHome = (providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"]) =>
+const harnessWithHome = (
+  providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"],
+  options: { readonly config?: UserConfig } = {},
+) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("delegate-")
     const harness = yield* createRpcHarness({
       ...e2ePreset,
       providerLayer,
       extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home, platform: "darwin" })],
+      ...Record.filter(
+        {
+          configServiceLayer: Option.map(
+            Option.fromUndefinedOr(options.config),
+            ConfigService.Test,
+          ).pipe(Option.getOrUndefined),
+        },
+        Predicate.isNotUndefined,
+      ),
     })
     const fs = yield* FileSystem.FileSystem
     const registryOf = (branchId: BranchId) =>
@@ -136,7 +149,7 @@ const sendPrompt = (harness: Harness, content: string) =>
 
 describe("foreground delegation with a real child", () => {
   it.live(
-    "returns the child's text, inherits the caller's agent, and is listed under its tool call",
+    "returns the child's text, runs as the delegate agent, and is listed under its tool call",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -155,7 +168,7 @@ describe("foreground delegation with a real child", () => {
           expect(parseJson(succeeded.output)).toMatchObject({
             _tag: "Completed",
             output: expect.stringContaining("pong"),
-            metadata: { agentName: DEFAULT_AGENT_NAME },
+            metadata: { agentName: DELEGATE_AGENT_NAME },
           })
 
           const child = yield* childOf(harness)
@@ -163,11 +176,58 @@ describe("foreground delegation with a real child", () => {
           expect(entry).toMatchObject({
             sessionId: child.sessionId,
             branchId: child.branchId,
-            agentName: DEFAULT_AGENT_NAME,
+            agentName: DELEGATE_AGENT_NAME,
             toolCallId: succeeded.toolCallId,
             background: false,
             completed: { streamFailed: false },
             preview: "pong",
+          })
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "the child runs the model paired in config for the delegate agent, not the caller's",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            {
+              ...toolCallStep("delegate", { todo: "Reply with the single word pong" }),
+              assertRequest: (request) => {
+                expect(request.model).toBe("test/parent-model")
+              },
+            },
+            {
+              ...textStep("pong"),
+              assertRequest: (request) => {
+                expect(request.model).toBe("test/child-model")
+                expect(request.reasoning).toBe("low")
+              },
+            },
+            textStep("child said pong"),
+          ])
+          const harness = yield* harnessWithHome(providerLayer, {
+            config: new UserConfig({
+              agents: {
+                [DEFAULT_AGENT_NAME]: { modelId: ModelId.make("test/parent-model") },
+                [DELEGATE_AGENT_NAME]: {
+                  modelId: ModelId.make("test/child-model"),
+                  reasoningEffort: "low",
+                },
+              },
+            }),
+          })
+          const resultFiber = yield* delegateResult(harness)
+          yield* sendPrompt(harness, "delegate this task")
+          const succeeded = yield* Fiber.join(resultFiber)
+          expect(succeeded?._tag).toBe("ToolCallSucceeded")
+          if (succeeded?._tag !== "ToolCallSucceeded") return
+          // A child on the wrong model fails its request, which the parent reads as an Error result.
+          expect(parseJson(succeeded.output)).toMatchObject({
+            _tag: "Completed",
+            output: expect.stringContaining("pong"),
           })
         }).pipe(Effect.timeout("8 seconds")),
       ),

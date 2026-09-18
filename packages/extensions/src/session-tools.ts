@@ -8,7 +8,6 @@ import {
   makeRunSpec,
   type Message,
   messagePartsDisplayText,
-  requireCurrentAgent,
   SessionId,
   tool,
 } from "@gent/core/extensions/api"
@@ -134,9 +133,7 @@ export const ReadSessionTool = tool({
     const goal = Option.fromNullishOr(params.goal)
     if (Option.isSome(goal)) {
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${goal.value}`
-      const agent = yield* requireCurrentAgent
       const result = yield* runChild({
-        agent,
         prompt,
         runSpec: makeRunSpec({
           visibility: "private",
