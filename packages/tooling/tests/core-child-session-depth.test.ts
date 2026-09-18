@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findUnadmittedChildSessionWriters } from "../src/core-child-session-depth"
+import { findUnadmittedChildSessionWriters } from "../src/guards"
 
 const childWriter = `
 yield* sessionStorage.createSession(

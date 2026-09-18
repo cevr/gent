@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { adaptedSeamsIn, findUnadaptedSeams } from "../src/core-unadapted-seams"
+import { adaptedSeamsIn, findUnadaptedSeams } from "../src/guards"
 
 const SEAMS_FILE = "packages/core/src/domain/extension.ts"
 

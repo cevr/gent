@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findTuiSessionIdentityReads } from "../src/tui-session-identity"
+import { findTuiSessionIdentityReads } from "../src/guards"
 
 const FILE = "apps/tui/src/hooks/use-thing.ts"
 

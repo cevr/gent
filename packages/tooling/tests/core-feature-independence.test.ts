@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  ASSEMBLY_SITES,
-  findCoreFeatureIndependenceFindings,
-} from "../src/core-feature-independence"
+import { ASSEMBLY_SITES, findCoreFeatureIndependenceFindings } from "../src/guards"
 
 const CELL_IMPORT = 'import { CellExecution } from "../cell/cell-execution.js"'
 

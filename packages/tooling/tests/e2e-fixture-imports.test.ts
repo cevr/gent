@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findE2eFixtureImportFindings } from "../src/e2e-fixture-imports"
+import { findE2eFixtureImportFindings } from "../src/guards"
 
 const noFixtureSource = [
   'import { describe, expect, it } from "effect-bun-test"',

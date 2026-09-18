@@ -3,7 +3,7 @@ import {
   findReadersWithoutWriters,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
-} from "../src/lint-config-guards"
+} from "../src/guards"
 
 const CONFIG = ".oxlintrc.json"
 const PLUGIN = "lint/no-direct-env.ts"

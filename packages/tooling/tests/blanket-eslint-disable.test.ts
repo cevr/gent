@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  findBannedEslintDisableBlocks,
-  findBlanketEslintDisables,
-} from "../src/blanket-eslint-disable"
+import { findBannedEslintDisableBlocks, findBlanketEslintDisables } from "../src/guards"
 
 const directive = ["eslint", "disable"].join("-")
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { REMOVED_IDENTIFIERS, findProcessRunnerFindings } from "../src/core-process-runner"
+import { REMOVED_IDENTIFIERS, findProcessRunnerFindings } from "../src/guards"
 
 describe("process runner guard", () => {
   test("flags every removed identifier once per line", () => {
@@ -47,9 +47,7 @@ describe("process runner guard", () => {
   test("ignores docs, plans and the tooling package itself", () => {
     expect(findProcessRunnerFindings("ARCHITECTURE.md", "ProcessRunner")).toEqual([])
     expect(findProcessRunnerFindings("plans/arch-core.md", "ProcessRunnerLive")).toEqual([])
-    expect(
-      findProcessRunnerFindings("packages/tooling/src/core-process-runner.ts", "ProcessRunner"),
-    ).toEqual([])
+    expect(findProcessRunnerFindings("packages/tooling/src/guards.ts", "ProcessRunner")).toEqual([])
     expect(
       findProcessRunnerFindings(
         "packages/tooling/tests/core-process-runner.test.ts",

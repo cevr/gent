@@ -6,7 +6,7 @@ import {
   findUnconsumedExports,
   type ExportFacts,
   type PackageJson,
-} from "../src/export-consumers"
+} from "../src/guards"
 
 const CORE_FILE = "packages/core/src/runtime/provider.ts"
 const SDK_FILE = "packages/sdk/src/log-paths.ts"

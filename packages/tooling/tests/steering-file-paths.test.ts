@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findSteeringFilePaths, isSteeringFile } from "../src/steering-file-paths"
+import { findSteeringFilePaths, isSteeringFile } from "../src/guards"
 
 const TRACKED = [
   "packages/core/src/runtime/provider.ts",

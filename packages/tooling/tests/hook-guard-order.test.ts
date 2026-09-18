@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findHookGuardOrder, HOOK_FILE } from "../src/hook-guard-order"
+import { findHookGuardOrder, HOOK_FILE } from "../src/guards"
 
 const messagesOf = (text: string, file = HOOK_FILE): ReadonlyArray<string> =>
   findHookGuardOrder(file, text).map((finding) => finding.message)

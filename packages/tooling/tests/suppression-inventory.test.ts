@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  findSuppressionInventoryFindings,
-  findUnusedSuppressionApprovals,
-} from "../src/suppression-inventory"
+import { findSuppressionInventoryFindings, findUnusedSuppressionApprovals } from "../src/guards"
 
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"
