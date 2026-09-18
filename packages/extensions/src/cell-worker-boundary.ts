@@ -1,4 +1,3 @@
-/* oxlint-disable effect/noGlobals, effect/noNodeBuiltinImport, gent/no-bun-outside-adapter -- Bun compilation, realm evaluation and the worker entry's process descriptors belong to this worker-only adapter. */
 import {
   Context,
   Deferred,
@@ -432,6 +431,7 @@ export const runCellWorker = Effect.scoped(
   }),
 )
 
+/* oxlint-disable effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun. */
 // ── process entry ───────────────────────────────────────────────────────────
 
 /** Frames use dedicated descriptors so cell code keeps stdout and stderr for itself.
