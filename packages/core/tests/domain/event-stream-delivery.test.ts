@@ -1,9 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
-import { AgentEvent, EventId, EventStore, type EventEnvelope } from "../../src/domain/event"
+import {
+  AgentEvent,
+  type EventEnvelope,
+  EventId,
+  EventStore,
+  SESSION_NOTIFICATION_CAPACITY,
+} from "../../src/domain/event"
 import { BranchId, SessionId } from "../../src/domain/ids"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
-import { SESSION_NOTIFICATION_CAPACITY } from "../../src/domain/session-pubsub-registry"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { BranchStorage } from "../../src/storage/branch-storage"

@@ -3,10 +3,10 @@ import { agentRunUsage, type AgentName } from "../../domain/agent.js"
 import {
   type AgentEvent,
   childRunSucceeded,
+  EventPublisher,
   EventStore,
   type TurnCompleted,
 } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
 import { headTailChars, latestAssistantText } from "../../domain/message.js"
 import { MessageId, type RequestId } from "../../domain/ids.js"
 import { MessageStorage } from "../../storage/message-storage.js"

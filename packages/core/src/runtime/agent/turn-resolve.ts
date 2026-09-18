@@ -14,8 +14,7 @@ import {
   type RunSpec,
 } from "../../domain/agent.js"
 import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
-import { ErrorOccurred } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
+import { ErrorOccurred, EventPublisher } from "../../domain/event.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
 import type { TurnProjection } from "../../domain/extension.js"
 import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"

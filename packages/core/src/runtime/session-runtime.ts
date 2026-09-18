@@ -19,8 +19,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type { SqlClient } from "effect/unstable/sql"
 import { AgentName, RunSpecSchema, type SteerCommand as SteerCommandType } from "../domain/agent.js"
 import { Message, MessageMetadata, type QueueSnapshot } from "../domain/message.js"
-import type { EventStore } from "../domain/event.js"
-import type { EventPublisher } from "../domain/event-publisher.js"
+import type { EventPublisher, EventStore } from "../domain/event.js"
 import {
   ActorCommandId,
   BranchId,

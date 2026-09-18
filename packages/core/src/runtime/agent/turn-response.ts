@@ -3,16 +3,16 @@ import type * as Response from "effect/unstable/ai/Response"
 import { DEFAULT_AGENT_NAME, type AgentName as AgentNameType } from "../../domain/agent.js"
 import { TurnError } from "../../domain/driver.js"
 import {
+  type AgentEvent,
   ErrorOccurred,
+  EventPublisher,
   StreamChunk as EventStreamChunk,
   StreamEnded,
   ToolCallFailed,
   ToolCallStarted,
   ToolCallSucceeded,
-  type AgentEvent,
   type Usage,
 } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { causeMessage } from "../../domain/guards.js"

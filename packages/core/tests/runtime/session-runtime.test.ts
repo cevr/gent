@@ -19,7 +19,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import { Branch, dateFromMillis, type QueueSnapshot, Session } from "../../src/domain/message"
 import { textStep } from "../../src/test-utils/sequence-steps"
-import { AgentEvent } from "../../src/domain/event"
+import { AgentEvent, EventPublisherLive } from "../../src/domain/event"
 import { type CallRecord } from "../../src/test-utils"
 import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
@@ -30,7 +30,6 @@ import {
   type LanguageModelStreamPart,
 } from "../../src/test-utils/language-model"
 import { ModelResolver } from "../../src/providers/model-resolver"
-import { EventPublisherLive } from "../../src/domain/event-publisher"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"

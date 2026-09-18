@@ -23,10 +23,11 @@ import {
   AgentEvent,
   EventEnvelope,
   EventId,
+  EventPublisher,
+  EventPublisherLive,
   EventStore,
   EventStoreError,
 } from "../../../src/domain/event"
-import { EventPublisher, EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { EventStorage } from "../../../src/storage/event-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"

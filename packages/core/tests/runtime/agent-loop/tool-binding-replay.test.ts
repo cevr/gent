@@ -17,8 +17,7 @@ import {
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "../../../src/domain/tool-binding"
-import { MessageReceived, ToolCallSucceeded } from "../../../src/domain/event"
-import { EventPublisher } from "../../../src/domain/event-publisher"
+import { EventPublisher, MessageReceived, ToolCallSucceeded } from "../../../src/domain/event"
 import {
   ExtensionContext,
   ExtensionHost,

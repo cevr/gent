@@ -9,8 +9,7 @@
  */
 
 import { Context, Effect, Layer, Option } from "effect"
-import { EventPublisher } from "../domain/event-publisher.js"
-import { EventStoreError, InteractionPresented } from "../domain/event.js"
+import { EventPublisher, EventStoreError, InteractionPresented } from "../domain/event.js"
 import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import {

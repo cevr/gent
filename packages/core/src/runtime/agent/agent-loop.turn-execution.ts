@@ -5,9 +5,8 @@ import {
   type AgentName as AgentNameType,
   DEFAULT_AGENT_NAME,
 } from "../../domain/agent.js"
-import { StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
+import { EventPublisher, StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
 import { omitUndefined } from "../../domain/guards.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
 import { type BranchId, InteractionRequestId, type SessionId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { TurnError } from "../../domain/driver.js"

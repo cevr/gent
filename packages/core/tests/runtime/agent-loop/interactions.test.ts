@@ -27,13 +27,13 @@ import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
   AgentEvent,
+  EventPublisherLive,
   EventStore,
   MessageReceived,
   ToolCallSucceeded,
 } from "../../../src/domain/event"
 import { InteractionPendingError } from "../../../src/domain/interaction-request"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import {

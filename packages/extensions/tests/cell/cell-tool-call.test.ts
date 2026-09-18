@@ -2,8 +2,7 @@ import { expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { tool } from "@gent/core/extensions/api"
-import { EventStore } from "@gent/core-internal/domain/event.js"
-import { EventPublisherLive } from "@gent/core-internal/domain/event-publisher.js"
+import { EventPublisherLive, EventStore } from "@gent/core-internal/domain/event.js"
 import {
   BranchId,
   ExtensionId,

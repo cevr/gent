@@ -15,8 +15,7 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids
 import type { TurnError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/errors"
 import { finishPart, textDeltaPart } from "../../src/test-utils/language-model"
-import { UsageSchema, type AgentEvent } from "../../src/domain/event"
-import { EventPublisher } from "../../src/domain/event-publisher"
+import { type AgentEvent, EventPublisher, UsageSchema } from "../../src/domain/event"
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")

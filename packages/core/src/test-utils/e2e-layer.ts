@@ -15,7 +15,7 @@ import type { AgentDefinition, AgentRunner, AgentRunnerService } from "../domain
 import { Auth } from "../domain/auth.js"
 import type { GentExtension, LoadedExtension, ExtensionSetupServices } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
-import type { EventPublisher } from "../domain/event-publisher.js"
+import type { EventPublisher } from "../domain/event.js"
 import type { ExtensionId } from "../domain/ids.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import type { InteractionStorage } from "../storage/interaction-storage.js"

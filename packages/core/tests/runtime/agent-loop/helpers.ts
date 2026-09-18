@@ -38,10 +38,15 @@ import { dateFromMillis, Message, type QueueSnapshot } from "../../../src/domain
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../../src/domain/resource"
-import { EventEnvelope, EventId, EventStore, type AgentEvent } from "../../../src/domain/event"
+import {
+  type AgentEvent,
+  EventEnvelope,
+  EventId,
+  type EventPublisher,
+  EventPublisherLive,
+  EventStore,
+} from "../../../src/domain/event"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import type { EventPublisher } from "../../../src/domain/event-publisher"
-import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage, type StorageError } from "../../../src/storage/sqlite-storage"
 import { BranchStorage } from "../../../src/storage/branch-storage"
 import { SessionStorage } from "../../../src/storage/session-storage"

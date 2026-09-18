@@ -12,9 +12,8 @@ import {
 } from "../../src/runtime/agent/tools"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
-import type { AgentEvent, ToolCallStarted } from "../../src/domain/event"
+import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { EventPublisher } from "../../src/domain/event-publisher"
 import { testToolContext } from "../../src/test-utils/extension-harness"
 import { provideCurrentCapabilityContext } from "../../src/runtime/extensions/extension-capability-context"
 import {

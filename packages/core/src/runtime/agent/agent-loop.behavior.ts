@@ -35,8 +35,7 @@ import {
 } from "./tools.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { AgentEvent } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
+import { type AgentEvent, EventPublisher } from "../../domain/event.js"
 import {
   emptyLoopQueueState,
   isRuntimeUserMessage,

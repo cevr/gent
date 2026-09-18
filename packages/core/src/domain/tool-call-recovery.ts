@@ -18,7 +18,7 @@ import type { CurrentAgentLoopTurnProfile } from "../runtime/agent/agent-loop.tu
 import type { ToolRunner } from "../runtime/agent/tools.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { MessageStorage } from "../storage/message-storage.js"
-import type { EventPublisher } from "./event-publisher.js"
+import type { EventPublisher } from "./event.js"
 
 /**
  * What recovering one pending call produced.

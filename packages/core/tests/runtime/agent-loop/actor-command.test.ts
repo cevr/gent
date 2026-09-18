@@ -16,7 +16,7 @@ import {
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { EventPublisherLive } from "../../../src/domain/event"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"

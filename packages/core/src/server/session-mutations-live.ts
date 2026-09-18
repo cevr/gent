@@ -2,18 +2,18 @@ import { Predicate, DateTime, Effect, Layer, Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { SqlClient } from "effect/unstable/sql"
 import {
+  type AgentEvent,
   BranchCreated,
   BranchSwitched,
+  type EventEnvelope,
+  EventPublisher,
   EventStore,
+  type EventStoreError,
   MessageReceived,
   SessionNameUpdated,
   SessionSettingsUpdated,
   SessionStarted,
-  type AgentEvent,
-  type EventEnvelope,
-  type EventStoreError,
 } from "../domain/event.js"
-import { EventPublisher } from "../domain/event-publisher.js"
 import { BranchId, MessageId, type RequestId, SessionId } from "../domain/ids.js"
 import {
   Branch,

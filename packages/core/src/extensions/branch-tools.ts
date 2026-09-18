@@ -44,7 +44,7 @@ export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membr
 export type { FeatureMigrations } from "../storage/schema.js"
 export { InteractionStorage } from "../storage/interaction-storage.js"
 export { MessageStorage } from "../storage/message-storage.js"
-export { EventPublisher } from "../domain/event-publisher.js"
+export { EventPublisher } from "../domain/event.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
 export {
   makeOwnedToolCallReader,

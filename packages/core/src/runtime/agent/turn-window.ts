@@ -1,6 +1,5 @@
 import { DateTime, Effect, Option, Result } from "effect"
-import { ErrorOccurred, type EventStoreError } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
+import { ErrorOccurred, EventPublisher, type EventStoreError } from "../../domain/event.js"
 import { type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { Message } from "../../domain/message.js"
 import { type ModelId } from "../../domain/agent.js"

@@ -4,13 +4,14 @@ import {
   AgentEvent,
   type EventEnvelope,
   EventId,
+  EventPublisher,
+  EventPublisherLive,
   EventStore,
   type EventStoreService,
   makeSerializedEventDelivery,
 } from "../../src/domain/event"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { dateFromMillis } from "../../src/domain/message"
-import { EventPublisher, EventPublisherLive } from "../../src/domain/event-publisher"
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 

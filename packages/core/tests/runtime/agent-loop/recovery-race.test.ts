@@ -43,8 +43,7 @@ import {
   Message,
   Session,
 } from "../../../src/domain/message"
-import { EventStore, MessageReceived } from "../../../src/domain/event"
-import { EventPublisherLive } from "../../../src/domain/event-publisher"
+import { EventPublisherLive, EventStore, MessageReceived } from "../../../src/domain/event"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { BranchStorage } from "../../../src/storage/branch-storage"
 import { SessionStorage } from "../../../src/storage/session-storage"
