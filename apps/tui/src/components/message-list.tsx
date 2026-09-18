@@ -9,8 +9,7 @@ import {
   ToolFrameBody,
   useSpinnerClock,
 } from "../ui"
-import type { ToolCall } from "./tool-renderers/index"
-import { GenericToolRenderer } from "./tool-renderers/generic"
+import { GenericToolRenderer, type ToolCall } from "../tool-renderers"
 import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"

@@ -9,7 +9,7 @@ import {
   interactionRendererContribution,
   rendererContribution,
 } from "../client-facets.js"
-import { BUILTIN_TOOL_RENDERERS } from "../../components/tool-renderers/index"
+import { BUILTIN_TOOL_RENDERERS } from "../../tool-renderers"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
 import { ClientShell } from "../client-services"

@@ -26,7 +26,7 @@
 import { Option, type Effect, type ManagedRuntime } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
-import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"

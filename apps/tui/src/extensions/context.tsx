@@ -24,7 +24,7 @@ import { Effect, Option, Scope } from "effect"
 import { useRequiredContext } from "../utils"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
-import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"

@@ -4,7 +4,7 @@ import { textWidth } from "./platform/text-width-adapter"
 import type { GentClientRpcError } from "@gent/sdk"
 import { GentConnectionError, GentRpcError } from "@gent/core/protocol"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import type { ToolCall } from "./components/tool-renderers/types"
+import type { ToolCall } from "./tool-renderers"
 
 // ── solid context access ────────────────────────────────────────────────────
 

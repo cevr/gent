@@ -34,7 +34,7 @@ class TuiExtensionResolveError extends Schema.TaggedError<TuiExtensionResolveErr
     return this.detail
   }
 }
-import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
 

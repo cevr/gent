@@ -28,7 +28,7 @@ import {
   type ToolInteraction,
 } from "@gent/sdk"
 import type { AssistantSegment, Message, SessionItem } from "../components/message-list"
-import type { ToolCall } from "../components/tool-renderers"
+import type { ToolCall } from "../tool-renderers"
 import { addStep, emptyTurnSteps, type SessionEvent } from "../components/session-event-label"
 import { formatConnectionIssue, formatToolInput, randomId } from "../utils"
 import type { ClientContextValue, ClientLog } from "../client"

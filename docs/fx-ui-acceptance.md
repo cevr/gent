@@ -1249,7 +1249,7 @@ renderer question, not a failed result decode.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools/read-session.ts`: extraction result schema.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/delegate/delegate-tool.ts`: valid delegate output field.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/search-sessions.tsx`: result decode and match presentation.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/read-session.tsx`: extraction summary.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/tool-renderers.tsx`: extraction summary.
 - `/tmp/gent-fx-ui-debug-results-visible.ansi`: corrected visible results.
 - `/tmp/gent-fx-ui-debug-results-history.txt`: retained output; latest seed supersedes older debug output.
 - `/tmp/gent-fx-ui-debug-results-gate.log`: passing full gate.
@@ -1586,7 +1586,7 @@ returns to one compact prompt call. This follows the FX separation between
 normal tool summaries and full inspection. No appearance-only test was added.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/generic.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/tool-renderers.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/utils.ts`
 - `/tmp/gent-fx-ui-generic-detail-herdr.ansi`: full prompt arguments and result.
 - `/tmp/gent-fx-ui-generic-detail-normal.ansi`: restored compact summary.
@@ -1672,7 +1672,7 @@ signs also carry meaning. These calculations and emitted colors do not prove
 the appearance of a light terminal background. That live check remains open.
 
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render.zig`: neutral line text and marker colors.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/edit.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/tool-renderers.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/themes/fx.json`
 - `/tmp/gent-fx-ui-diff-dark.ansi`: dark diff capture.
 - `/tmp/gent-fx-ui-diff-light.ansi`: light diff capture.
