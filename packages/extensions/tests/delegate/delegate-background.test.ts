@@ -1,6 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Struct } from "effect"
-import { DelegateTool } from "../../src/delegate/delegate-tool.js"
+import { DelegateTool } from "../../src/delegate.js"
 import { BranchId, RequestId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils"
 import { AllBuiltinAgents } from "../helpers/builtin-agents.js"

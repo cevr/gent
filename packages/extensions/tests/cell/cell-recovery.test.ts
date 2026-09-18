@@ -9,8 +9,7 @@ import {
   DEFAULT_AGENT_NAME,
   makeRunSpec,
 } from "@gent/core-internal/domain/agent.js"
-import { ControlChildAgent } from "../../src/delegate/child-agent-tools.js"
-import { DelegateTool } from "../../src/delegate/delegate-tool.js"
+import { ControlChildAgent, DelegateTool } from "../../src/delegate.js"
 import { admitChildSession } from "@gent/core-internal/runtime/agent/agent-runner.js"
 import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-storage.js"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
