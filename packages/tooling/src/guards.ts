@@ -1032,6 +1032,8 @@ export const findHookGuardOrder = (
  * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
  *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
  *   kept turning a rule off for nothing.
+ * - A `tsconfig.locks.json` include that names no tracked file. Two deleted
+ *   test files kept their entries; `tsc` never complained.
  * - A rule defined under `lint/` that the root config never enables. Five such
  *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
  *   all, because shipped code would have failed it.
@@ -1121,6 +1123,38 @@ export const findUnmatchedOverrideGlobs = (
         message: `oxlint override \`files: "${glob}"\` matches no tracked file; delete the override, or fix the glob`,
       })
     }
+  }
+  return findings
+}
+
+/** The `include` list of a `tsconfig.locks.json`; the rest passes through. */
+export const LocksTsconfigSchema = Schema.Struct({
+  include: Schema.optional(Schema.Array(Schema.String)),
+})
+
+export type LocksTsconfig = typeof LocksTsconfigSchema.Type
+
+/**
+ * A lock tsconfig lists the test files whose `@ts-expect-error` lines prove a
+ * type surface stays closed. `tsc` ignores an include that names no file, so
+ * a deleted test kept its entry for months and the lock it claimed was gone.
+ */
+export const findMissingLockIncludes = (
+  configFile: string,
+  configText: string,
+  config: LocksTsconfig,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<LintConfigFinding> => {
+  const configDir = configFile.slice(0, configFile.lastIndexOf("/") + 1)
+  const findings: Array<LintConfigFinding> = []
+  for (const include of config.include ?? []) {
+    const path = `${configDir}${include}`
+    if (trackedFiles.some((file) => file === path || file.startsWith(`${path}/`))) continue
+    findings.push({
+      file: configFile,
+      line: lineOfGlob(configText, include),
+      message: `lock include \`${include}\` names no tracked file; the lock it claims is gone, delete the entry`,
+    })
   }
   return findings
 }
