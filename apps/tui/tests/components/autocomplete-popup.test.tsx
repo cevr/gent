@@ -12,7 +12,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { AutocompletePopup } from "../../src/components/autocomplete-popup"
-import { useExtensionUI } from "../../src/extensions/context"
+import { useExtensionUI } from "../../src/extensions/host"
 import { useScopedKeyboard } from "../../src/terminal"
 import type { AutocompleteItem } from "../../src/extensions/client-facets.js"
 import { renderWithProviders } from "../render-harness-boundary"

@@ -23,7 +23,7 @@ import {
   type SelectListRow,
 } from "../ui"
 import { truncate } from "../utils"
-import { useExtensionUI } from "../extensions/context"
+import { useExtensionUI } from "../extensions/host"
 import { useClient } from "../client"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import type { AutocompleteState } from "./composer-interaction-state"

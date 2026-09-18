@@ -177,9 +177,9 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                        |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray                       |
 
-Extension pipeline: `context.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
+Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 
-- Builtins are statically imported in `context.tsx` for Bun compiled binary compatibility
+- Builtins are statically imported in `host.tsx` for Bun compiled binary compatibility
 - User/project extensions discovered via filesystem scan (`loader-boundary.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientLifecycle`

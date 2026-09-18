@@ -15,7 +15,7 @@ import { executeShell } from "../utils/shell"
 import { ComposerInteractionEvent, type AutocompleteState } from "./composer-interaction-state"
 import { ComposerEvent } from "./composer-state"
 import type { ApprovalResult } from "@gent/core/protocol"
-import { useExtensionUI } from "../extensions/context"
+import { useExtensionUI } from "../extensions/host"
 
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150

@@ -8,7 +8,7 @@ import type {
   ClientShellDefinition,
   ClientShellTransportDefinition,
 } from "../src/extensions/client-facets"
-import { makeClientRuntime } from "../src/extensions/client-runtime"
+import { makeClientRuntime } from "../src/extensions/host"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 export type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }

@@ -9,7 +9,7 @@ import { useTheme } from "../theme"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { useComposerController } from "./use-composer-controller"
 import { useSessionController } from "../routes/session-controller"
-import { useExtensionUI } from "../extensions/context"
+import { useExtensionUI } from "../extensions/host"
 import { useRequiredContext } from "../utils"
 import { useTerminalDimensions } from "../terminal"
 

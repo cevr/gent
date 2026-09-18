@@ -39,7 +39,7 @@ import {
   type BorderLabelItem,
 } from "../utils/session-labels"
 import { createSessionController, SessionControllerContext } from "./session-controller"
-import { useExtensionUI } from "../extensions/context"
+import { useExtensionUI } from "../extensions/host"
 import { useClient } from "../client"
 import { Auth } from "../auth"
 import type { BorderLabelColor, WidgetSlot } from "../extensions/client-facets.js"

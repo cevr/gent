@@ -911,7 +911,7 @@ describe("package entry points", () => {
 
 describe("a namesake does not vouch for an export", () => {
   const TUI_FILE = "apps/tui/src/extensions/loader-boundary.ts"
-  const TUI_CONSUMER = "apps/tui/src/extensions/context.tsx"
+  const TUI_CONSUMER = "apps/tui/src/extensions/host.tsx"
 
   /** `use` keeps the probe file's own surface alive so only the name under test is measured. */
   const usedElsewhere = {

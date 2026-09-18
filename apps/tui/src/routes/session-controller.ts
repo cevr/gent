@@ -31,7 +31,7 @@ import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useAutocompleteFrecency } from "../hooks/use-autocomplete-frecency"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../terminal"
 import { useSessionShell } from "../session-shell"
-import { useExtensionUI } from "../extensions/context"
+import { useExtensionUI } from "../extensions/host"
 import { useSessionFeed } from "../hooks/use-session-feed"
 import {
   SessionUiEvent,

@@ -12,7 +12,7 @@ import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // esli
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { Cause, Effect, Option, Schema } from "effect"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
-import { makeClientRuntime } from "../src/extensions/client-runtime"
+import { makeClientRuntime } from "../src/extensions/host"
 import { BranchId, SessionId } from "@gent/core/protocol"
 class ExtensionIntegrationTestError extends Schema.TaggedError<ExtensionIntegrationTestError>()(
   "ExtensionIntegrationTestError",

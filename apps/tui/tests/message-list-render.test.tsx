@@ -15,7 +15,7 @@ import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import { EditToolRenderer, ReadToolRenderer } from "../src/tool-renderers"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
-import { useExtensionUI } from "../src/extensions/context"
+import { useExtensionUI } from "../src/extensions/host"
 import { SyntaxStyle, type CliRendererExternalOutputEvent } from "@opentui/core"
 
 const absent = Option.getOrUndefined(Option.none())

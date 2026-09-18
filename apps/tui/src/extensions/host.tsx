@@ -1,3 +1,95 @@
+import { Effect, Layer, ManagedRuntime, Option, Scope } from "effect"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import {
+  type AutocompleteContribution,
+  type ClientActivitySnapshot,
+  type ClientLifecycleDefinition,
+  type ClientRuntime,
+  type ClientShellDefinition,
+  type ClientShellTransportDefinition,
+  type ClientWorkspaceDefinition,
+  type InteractionRendererComponent,
+  makeClientActivityLayer,
+  makeClientLifecycleLayer,
+  makeClientShellLayer,
+  makeClientTransportLayer,
+  makeClientWorkspaceLayer,
+  type OverlayComponent,
+} from "./client-facets.js"
+import {
+  type Accessor,
+  createContext,
+  createEffect,
+  createSignal,
+  type JSX,
+  onCleanup,
+  onMount,
+} from "solid-js"
+import { useRequiredContext } from "../utils"
+import { builtinClientModules } from "./builtins"
+import type { ToolRenderer } from "../tool-renderers"
+import type { HeadlessToolRenderer } from "../headless"
+import type { Command } from "../commands"
+import {
+  loadExtensionUi,
+  type ResolvedBorderLabel,
+  type ResolvedTuiExtensions,
+  type ResolvedWidget,
+} from "./loader-boundary"
+import type { BranchId, SessionId } from "@gent/core/extensions/api"
+import { useWorkspace } from "../workspace"
+import { useClient } from "../client"
+
+// ── per-provider client runtime ─────────────────────────────────────────────
+
+/**
+ * One client `ManagedRuntime` for every surface that loads client
+ * extensions: the interactive shell, the headless runner, and tests.
+ *
+ * A surface supplies the transport, the workspace, and the `run`/`cast`
+ * pair of its connected runtime. Shell UI callbacks, the activity
+ * provider, and the lifecycle cleanup registry default to no-ops so a
+ * surface without a UI (headless) does not restate them.
+ */
+
+interface ClientRuntimeDeps {
+  readonly transport: ClientShellTransportDefinition
+  readonly workspace: ClientWorkspaceDefinition
+  /** `run`/`cast` are required; every UI callback defaults to a no-op. */
+  readonly shell: Pick<ClientShellDefinition, "run" | "cast"> &
+    Partial<Omit<ClientShellDefinition, "run" | "cast">>
+  /** Current UI activity; absent when the surface has no activity to report. */
+  readonly activity?: () => ClientActivitySnapshot
+  /** Cleanup registry; absent when the surface disposes the runtime whole. */
+  readonly lifecycle?: Pick<ClientLifecycleDefinition, "addCleanup">
+}
+
+const noopShell: Omit<ClientShellDefinition, "run" | "cast"> = {
+  sendMessage: () => {},
+  openOverlay: () => {},
+  closeOverlay: () => {},
+  switchSession: () => {},
+}
+
+const noopLifecycle: Pick<ClientLifecycleDefinition, "addCleanup"> = { addCleanup: () => {} }
+
+export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
+  ManagedRuntime.make(
+    Layer.mergeAll(
+      BunFileSystem.layer,
+      makeClientActivityLayer(deps.activity),
+      BunServices.layer,
+      makeClientTransportLayer(deps.transport),
+      makeClientWorkspaceLayer(deps.workspace),
+      makeClientShellLayer({ ...noopShell, ...deps.shell }),
+      makeClientLifecycleLayer(
+        Option.getOrElse(Option.fromUndefinedOr(deps.lifecycle), () => noopLifecycle),
+      ),
+    ),
+  )
+
+// ── extension UI provider ───────────────────────────────────────────────────
+
 /**
  * ExtensionUIProvider — Solid context for resolved TUI extensions.
  *
@@ -11,39 +103,7 @@
  * `builtins/tool-renderers.client.tsx`.
  */
 
-import {
-  createEffect,
-  createContext,
-  createSignal,
-  onCleanup,
-  onMount,
-  type Accessor,
-  type JSX,
-} from "solid-js"
-import { Effect, Option, Scope } from "effect"
-import { useRequiredContext } from "../utils"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
-import { builtinClientModules } from "./builtins"
-import type { ToolRenderer } from "../tool-renderers"
-import type { HeadlessToolRenderer } from "../headless"
-import type { Command } from "../commands"
-import {
-  loadExtensionUi,
-  type ResolvedBorderLabel,
-  type ResolvedTuiExtensions,
-  type ResolvedWidget,
-} from "./loader-boundary"
-import type {
-  AutocompleteContribution,
-  ClientActivitySnapshot,
-  ClientRuntime,
-  InteractionRendererComponent,
-  OverlayComponent,
-} from "./client-facets.js"
-import { makeClientRuntime } from "./client-runtime"
-import type { BranchId, SessionId } from "@gent/core/extensions/api"
-import { useWorkspace } from "../workspace"
-import { useClient } from "../client"
 
 interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void

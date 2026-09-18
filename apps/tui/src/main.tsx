@@ -40,7 +40,7 @@ import { ComposerDraftsProvider } from "./components/composer-drafts"
 import { detectColorScheme } from "./theme"
 import { SessionShellProvider } from "./session-shell"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
-import { ExtensionUIProvider } from "./extensions/context"
+import { ExtensionUIProvider, makeClientRuntime } from "./extensions/host"
 import {
   AppBootstrapError,
   resolveInteractiveBootstrap,
@@ -52,7 +52,6 @@ import { DEFAULT_HEADLESS_TOOL_RENDERERS, runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import { builtinClientModules } from "./extensions/builtins"
 import { loadExtensionUi } from "./extensions/loader-boundary"
-import { makeClientRuntime } from "./extensions/client-runtime"
 import type { ClientRuntime } from "./extensions/client-facets.js"
 import {
   CliStartupError,

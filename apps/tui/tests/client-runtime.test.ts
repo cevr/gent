@@ -14,7 +14,7 @@ import {
   ClientTransport,
   ClientWorkspace,
 } from "../src/extensions/client-facets"
-import { makeClientRuntime } from "../src/extensions/client-runtime"
+import { makeClientRuntime } from "../src/extensions/host"
 import { makeClientTestTransport } from "./extension-test-harness-boundary"
 import { createMockRuntime } from "./render-harness-boundary"
 import { runRuntimeEffectBoundary } from "./run-effect-boundary"

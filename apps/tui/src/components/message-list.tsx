@@ -10,7 +10,7 @@ import {
   useSpinnerClock,
 } from "../ui"
 import { GenericToolRenderer, type ToolCall } from "../tool-renderers"
-import { useExtensionUI } from "../extensions/context"
+import { useExtensionUI } from "../extensions/host"
 import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "@gent/sdk"

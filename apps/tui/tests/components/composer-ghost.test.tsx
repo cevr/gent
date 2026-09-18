@@ -23,7 +23,7 @@ import {
 } from "../../src/components/composer-interaction-state"
 import { ComposerState } from "../../src/components/composer-state"
 import { useCommand } from "../../src/commands"
-import { useExtensionUI } from "../../src/extensions/context"
+import { useExtensionUI } from "../../src/extensions/host"
 import {
   SessionControllerContext,
   type SessionController,

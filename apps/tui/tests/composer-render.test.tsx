@@ -11,7 +11,7 @@ import { ComposerState } from "../src/components/composer-state"
 import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
 import { SessionUiState } from "../src/routes/session-ui-state"
 import { PromptSearchState } from "../src/pickers"
-import { useExtensionUI } from "../src/extensions/context"
+import { useExtensionUI } from "../src/extensions/host"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 
