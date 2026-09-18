@@ -10,7 +10,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import { CellExtension } from "./cell/cell-extension.js"
 import { CompactionExtension, ModelContextCompactorResource } from "./compaction.js"
 import { CellBranchTools } from "./cell/cell-storage.js"
-import { ExecToolsExtension } from "./exec-tools/index.js"
+import { ExecToolsExtension } from "./exec-tools.js"
 import { DelegateExtension } from "./delegate.js"
 import { AgentsExtension } from "./agents.js"
 import { AgentsViewExtension } from "./agents-view.js"

@@ -5,7 +5,7 @@ import {
   splitCdCommand,
   injectGitTrailers,
   stripBackground,
-} from "../../src/exec-tools/bash.js"
+} from "../../src/exec-tools.js"
 
 import { SessionId } from "@gent/core-internal/domain/ids"
 

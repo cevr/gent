@@ -19,11 +19,13 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { shippedPreset } from "../helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BackgroundBashSupervisorLive, BashParams, BashTool } from "../../src/exec-tools/bash.js"
 import {
   BackgroundBashStorage,
   BackgroundBashStorageError,
-} from "../../src/exec-tools/bash-storage.js"
+  BackgroundBashSupervisorLive,
+  BashParams,
+  BashTool,
+} from "../../src/exec-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
