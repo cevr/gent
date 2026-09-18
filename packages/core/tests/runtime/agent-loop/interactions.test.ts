@@ -48,9 +48,8 @@ import {
   SessionId,
   ToolCallId,
 } from "../../../src/domain/ids"
-import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
+import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../../src/runtime/agent-loop"
 import { AgentLoopError } from "../../../src/domain/agent-loop"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"

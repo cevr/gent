@@ -45,8 +45,15 @@ import {
 } from "../../../src/storage/storage"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { windowMarkerMessage } from "../../../src/runtime/model-context"
-import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+import {
+  AgentLoopSessionGovernance,
+  type AgentLoopState,
+  AgentLoopTestActor,
+  buildInitialAgentLoopState,
+  canStartTurnNow,
+  makeLoopInbox,
+  wantsWakeOnRecovery,
+} from "../../../src/runtime/agent-loop"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
@@ -65,13 +72,6 @@ import {
   buildIdleState,
   buildRunningState,
 } from "../../../src/domain/agent-loop"
-import {
-  buildInitialAgentLoopState,
-  canStartTurnNow,
-  makeLoopInbox,
-  wantsWakeOnRecovery,
-  type AgentLoopState,
-} from "../../../src/runtime/agent/loop-inbox"
 import { StorageError } from "../../../src/domain/errors"
 import { ensureStorageParents } from "../../../src/test-utils"
 

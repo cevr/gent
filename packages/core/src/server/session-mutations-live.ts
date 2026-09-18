@@ -24,7 +24,7 @@ import {
 } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
+import { AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { admitChildSessionDepth } from "../runtime/session-depth.js"
 import {

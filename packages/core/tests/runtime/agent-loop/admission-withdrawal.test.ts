@@ -28,15 +28,13 @@ import {
   type RunningState,
 } from "../../../src/domain/agent-loop"
 import {
-  buildInitialAgentLoopState,
-  makeLoopInbox,
   type AgentLoopState,
-} from "../../../src/runtime/agent/loop-inbox"
-import { AgentLoopQueueStorage } from "../../../src/storage/storage"
-import {
+  buildInitialAgentLoopState,
   emptyAdmissionGate,
   makeAgentLoopWorker,
-} from "../../../src/runtime/agent/agent-loop.worker"
+  makeLoopInbox,
+} from "../../../src/runtime/agent-loop"
+import { AgentLoopQueueStorage } from "../../../src/storage/storage"
 import { makeTurnInterruption } from "../../../src/runtime/tools.js"
 
 const sessionId = SessionId.make("withdrawal-session")

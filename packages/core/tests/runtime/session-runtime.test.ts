@@ -40,7 +40,7 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import {
   BranchId,
   ExtensionId,

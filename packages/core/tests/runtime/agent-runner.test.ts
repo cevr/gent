@@ -38,7 +38,7 @@ import {
   messageSingleText,
   Session,
 } from "../../src/domain/message"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {

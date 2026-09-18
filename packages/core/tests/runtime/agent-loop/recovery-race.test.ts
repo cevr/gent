@@ -54,10 +54,10 @@ import {
 import { ActorCommandId, BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import {
   AgentLoop as AgentLoopActor,
+  AgentLoopSessionGovernance,
   AgentLoopTestActor,
-} from "../../../src/runtime/agent/agent-loop.actor"
+} from "../../../src/runtime/agent-loop"
 import { entityIdOf } from "../../../src/domain/agent-loop"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"

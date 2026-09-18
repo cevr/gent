@@ -9,11 +9,11 @@ const CELL_IMPORT = 'import { CellExecution } from "../cell/cell-execution.js"'
 describe("core feature independence guard", () => {
   test("flags a core file that imports a feature directory", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/agent/agent-loop.behavior.ts",
+      "packages/core/src/runtime/agent-loop.ts",
       CELL_IMPORT,
     )
     expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/runtime/agent/agent-loop.behavior.ts:1",
+      "packages/core/src/runtime/agent-loop.ts:1",
     ])
     expect(findings[0]?.message).toContain("cell")
   })

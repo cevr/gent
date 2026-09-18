@@ -20,7 +20,7 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../../src/runtime/extension-host"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+import { AgentLoopSessionGovernance } from "../../../src/runtime/agent-loop"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"

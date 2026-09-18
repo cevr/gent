@@ -41,7 +41,11 @@ import type {
   ToolCallBindingStorage,
   TurnRecordStorage,
 } from "../storage/storage.js"
-import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
+import {
+  AgentLoop as AgentLoopActor,
+  AgentLoopLiveActor,
+  AgentLoopSessionGovernance,
+} from "./agent-loop.js"
 import {
   AgentLoopError,
   entityIdOf,
@@ -49,7 +53,6 @@ import {
   listWorkspaceLoops,
   type SessionRuntimeState,
 } from "../domain/agent-loop.js"
-import { AgentLoopSessionGovernance } from "./agent/agent-loop.session-governance.js"
 import {
   type ApprovalService,
   type DriverRegistry,

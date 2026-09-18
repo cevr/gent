@@ -14,7 +14,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { ActorCommandId, BranchId, SessionId } from "../../../src/domain/ids"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
-import { AgentLoop } from "../../../src/runtime/agent/agent-loop.actor"
+import { AgentLoop } from "../../../src/runtime/agent-loop"
 
 describe("agent-loop op primary keys", () => {
   const workspaceId = DefaultWorkspaceId

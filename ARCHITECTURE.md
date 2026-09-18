@@ -28,7 +28,7 @@ updates this list in the same commit.
    `packages/core/src/extensions/api.ts`.
 2. **One actor per (workspace, session, branch).** The agent loop is an
    effect-encore entity; every session mutation crosses its mailbox.
-   Receipts: `packages/core/src/runtime/agent/agent-loop.actor.ts`,
+   Receipts: `packages/core/src/runtime/agent-loop.ts`,
    `packages/core/src/domain/agent-loop.ts`.
 3. **Everything is an extension of the loop.** Core registers zero tools;
    drivers, tools, resources, reactions, and TUI facets arrive through the
@@ -262,20 +262,17 @@ service context.
 Core orchestration lives in:
 
 - `packages/core/src/runtime/session-runtime.ts`
-- `packages/core/src/runtime/agent/agent-loop.actor.ts`
-- `packages/core/src/runtime/agent/agent-loop.behavior.ts`
+- `packages/core/src/runtime/agent-loop.ts`
 - `packages/core/src/domain/agent-loop.ts`
 - `packages/core/src/runtime/turn.ts`
-- `packages/core/src/runtime/turn.ts`
 - `packages/core/src/runtime/model-context.ts`
-- `packages/core/src/runtime/turn.ts`
 
 Shape:
 
 - `SessionRuntime` is the single public session engine.
 - `AgentLoop` is an actor-backed internal control plane. There is no public
-  `AgentLoop` service facade; `session-runtime.ts` talks to
-  `agent-loop.actor.ts` directly. The actor entity id includes
+  `AgentLoop` service facade; `session-runtime.ts` talks to the actor in
+  `agent-loop.ts` directly. The actor entity id includes
   `(workspaceId, sessionId, branchId)`.
 - The turn worker holds the cluster entity keep-alive while a turn runs.
   The mailbox request can return before the model finishes. The worker releases
@@ -1137,13 +1134,13 @@ Both exported from `@gent/core-internal/test-utils/e2e-layer`.
 
 Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
 
-| Boundary     | Service       | File                                   |
-| ------------ | ------------- | -------------------------------------- |
-| Agent turn   | `agent-loop`  | `runtime/agent/agent-loop.behavior.ts` |
-| Tool call    | `tool-runner` | `runtime/tools.ts`                     |
-| Model stream | `model`       | `runtime/agent/agent-loop.behavior.ts` |
-| RPC request  | `rpc`         | `server/rpc-handlers.ts`               |
-| Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts`        |
+| Boundary     | Service       | File                            |
+| ------------ | ------------- | ------------------------------- |
+| Agent turn   | `agent-loop`  | `runtime/agent-loop.ts`         |
+| Tool call    | `tool-runner` | `runtime/tools.ts`              |
+| Model stream | `model`       | `runtime/agent-loop.ts`         |
+| RPC request  | `rpc`         | `server/rpc-handlers.ts`        |
+| Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts` |
 
 Logging conventions:
 

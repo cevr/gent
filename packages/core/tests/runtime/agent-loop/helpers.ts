@@ -18,9 +18,9 @@ import {
 } from "../../../src/domain/agent"
 import {
   AgentLoop as AgentLoopActor,
+  AgentLoopSessionGovernance,
   AgentLoopTestActor,
-} from "../../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+} from "../../../src/runtime/agent-loop"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import {

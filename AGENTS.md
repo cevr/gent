@@ -152,20 +152,21 @@ assertSequence(calls, [
 
 ## Key Files
 
-| File                                                     | Purpose                                             |
-| -------------------------------------------------------- | --------------------------------------------------- |
-| `packages/core/src/storage/storage.ts`                   | SQLite layer composition for focused storage tags   |
-| `packages/core/src/storage/schema.ts`                    | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/index.ts`                  | `SequenceRecorder`, recording layers                |
-| `packages/core/src/server/dependencies.ts`               | startup wiring + dependency graph                   |
-| `packages/core/src/server/transport-contract.ts`         | shared client contract                              |
-| `packages/core/src/runtime/agent/agent-loop.actor.ts`    | actor protocol, entity id, and mailbox handlers     |
-| `packages/core/src/runtime/agent/agent-loop.behavior.ts` | per-branch turn engine used by the actor            |
-| `packages/core/src/runtime/wide-event-boundary.ts`       | `effect-wide-event` integration + context factories |
-| `packages/core/src/test-utils/in-process-layer.ts`       | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
-| `packages/core/src/test-utils/sequence-steps.ts`         | step builders for `LanguageModelLayers.sequence`    |
-| `packages/core/src/test-utils/language-model.ts`         | `LanguageModelLayers` + stream-part helpers         |
-| `apps/tui/tsconfig.json`                                 | `jsxImportSource: "@opentui/solid"` required        |
+| File                                               | Purpose                                             |
+| -------------------------------------------------- | --------------------------------------------------- |
+| `packages/core/src/storage/storage.ts`             | SQLite layer composition for focused storage tags   |
+| `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
+| `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
+| `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
+| `packages/core/src/server/transport-contract.ts`   | shared client contract                              |
+| `packages/core/src/domain/agent-loop.ts`           | loop state, entity id, and the actor protocol       |
+| `packages/core/src/runtime/agent-loop.ts`          | mailbox, worker, behavior, and the actor            |
+| `packages/core/src/runtime/turn.ts`                | per-branch turn engine used by the actor            |
+| `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
+| `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
+| `packages/core/src/test-utils/sequence-steps.ts`   | step builders for `LanguageModelLayers.sequence`    |
+| `packages/core/src/test-utils/language-model.ts`   | `LanguageModelLayers` + stream-part helpers         |
+| `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
 

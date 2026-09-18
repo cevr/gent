@@ -156,7 +156,7 @@ import {
 } from "./model-context.js"
 import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "./gent-platform.js"
-import type { LoopInbox } from "./agent/loop-inbox.js"
+import type { LoopInbox } from "./agent-loop.js"
 
 // ── agent-loop.utils ────────────────────────────────────────────────────────
 

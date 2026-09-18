@@ -13,9 +13,9 @@ import { TestClock } from "effect/testing"
 import { type AgentLoopError, entityIdOf } from "../../../src/domain/agent-loop"
 import {
   AgentLoop as AgentLoopActor,
+  AgentLoopSessionGovernance,
   AgentLoopTestActor,
-} from "../../../src/runtime/agent/agent-loop.actor"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
+} from "../../../src/runtime/agent-loop"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/turn"
 import {
   ApprovalService,
