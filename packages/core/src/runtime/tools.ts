@@ -1,43 +1,55 @@
 import {
   Cause,
   Context,
+  Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Match,
   Option,
   Path,
   Predicate,
+  Ref,
   Schema,
   Sink,
   Stream,
 } from "effect"
 import {
+  encodeToolOutput,
+  stringifyOutput,
+  summarizeOutput,
+  ToolResultFailure,
+} from "../domain/message.js"
+import {
   type ExtraRepositories,
+  type MessageStorage,
   type OwnedToolCallAddress,
   ToolCallBindingStorage,
-} from "../../storage/storage.js"
+} from "../storage/storage.js"
 import {
   type BranchId,
   type ExtensionId,
+  InteractionRequestId,
   type MessageId,
   type ProcessGenerationId,
   type SessionId,
   ToolCallId,
   ToolId,
-} from "../../domain/ids.js"
-import type { ExtensionHostContext, LoadedExtension } from "../../domain/extension.js"
+} from "../domain/ids.js"
+import type { ExtensionHostContext, LoadedExtension, TurnProjection } from "../domain/extension.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   getToolId,
   getToolMetadata,
+  type PromptSection,
   ToolBindingIdentity,
   ToolBindingSource,
   type ToolCapability,
   ToolSchemaRevision,
   ToolSourceRevision,
-} from "../../domain/capability.js"
+} from "../domain/capability.js"
 import {
   CurrentExtensionHostContext,
   emptyErasedResourceLayer,
@@ -46,33 +58,109 @@ import {
   type ExtensionRegistryService,
   provideCurrentHostCtx,
   provideExtensionLeaf,
-} from "../extension-host.js"
+} from "./extension-host.js"
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { GentPlatform } from "../gent-platform.js"
-import type { FeatureMigrations } from "../../storage/schema.js"
-import {
-  stopWithTurn,
-  type TurnInterruptionStatus,
-  TurnInterruptSignal,
-} from "./turn-interruption.js"
-import { InteractionPendingError } from "../../domain/interaction.js"
+import { GentPlatform } from "./gent-platform.js"
+import type { FeatureMigrations } from "../storage/schema.js"
+import { InteractionPendingError } from "../domain/interaction.js"
 import {
   EventPublisher,
   ToolCallFailed,
   ToolCallStarted,
   ToolCallSucceeded,
-} from "../../domain/event.js"
-import {
-  encodeToolOutput,
-  stringifyOutput,
-  summarizeOutput,
-  ToolResultFailure,
-} from "../../domain/message.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary.js"
+} from "../domain/event.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "./wide-event-boundary.js"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
-import type { AgentName as AgentNameType } from "../../domain/agent.js"
+import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"
+import type { CurrentAgentLoopTurnProfile } from "./agent/agent-loop.turn-profile.js"
+
+// ── turn-interruption ───────────────────────────────────────────────────────
+
+/**
+ * Whether the turn now running has been interrupted.
+ *
+ * The loop, the turn executor and the branch's tools all need this one bit,
+ * but they need different halves of it: the worker interrupts a turn and
+ * begins the next one, while a running turn and the tools it dispatches only
+ * ask. A shared `Ref.Ref<boolean>` gave every one of them both halves and left
+ * the meaning of `true` and `false` to be re-derived at each call site.
+ *
+ * Naming the two transitions keeps that meaning in one place: `interrupt`
+ * stops the turn now running, and `beginTurn` declares that a fresh turn
+ * starts uninterrupted.
+ *
+ * @module
+ */
+
+/** Asks whether the turn now running has been interrupted. */
+export interface TurnInterruptionStatus {
+  readonly interrupted: Effect.Effect<boolean>
+}
+
+/** The full control surface: the read side plus the two transitions. */
+export interface TurnInterruption extends TurnInterruptionStatus {
+  /** Stop the turn now running. Work that checks `interrupted` will see it. */
+  readonly interrupt: Effect.Effect<void>
+  /** A fresh turn begins, so it is not interrupted. */
+  readonly beginTurn: Effect.Effect<void>
+  /** Completes when the turn now running is interrupted; work races it to stop. */
+  readonly awaitInterrupt: Effect.Effect<void>
+}
+
+export const makeTurnInterruption: Effect.Effect<TurnInterruption> = Effect.gen(function* () {
+  // One latch per turn: a bit can only be polled, a latch can also be raced.
+  const latch = yield* Ref.make(yield* Deferred.make<void>())
+  return {
+    interrupted: Ref.get(latch).pipe(Effect.flatMap(Deferred.isDone)),
+    interrupt: Ref.get(latch).pipe(Effect.flatMap((turn) => Deferred.succeed(turn, void 0))),
+    beginTurn: Deferred.make<void>().pipe(Effect.flatMap((turn) => Ref.set(latch, turn))),
+    awaitInterrupt: Ref.get(latch).pipe(Effect.flatMap(Deferred.await)),
+  }
+})
+
+/**
+ * A status that is never interrupted.
+ *
+ * Branch work built outside a running loop -- a test that exercises a tool on
+ * its own -- has no turn to be interrupted.
+ */
+export const neverInterrupted: TurnInterruptionStatus = {
+  interrupted: Effect.succeed(false),
+}
+
+/**
+ * The running turn's interrupt, as a tool call sees it. The loop provides it
+ * for every call it dispatches; a tool run with no turn -- a test, a direct
+ * host call -- is never interrupted.
+ */
+const TurnInterruptSignal = Context.Reference<Effect.Effect<void>>(
+  "@gent/core/src/runtime/tools/TurnInterruptSignal",
+  { defaultValue: () => Effect.never },
+)
+
+/**
+ * A tool stops with its turn, and its call still gets a result. The interrupt
+ * waits for the tool to exit: a tool that runs uninterruptible and cancels its
+ * own work reports what it chose to; any other tool reports the interrupt.
+ */
+const stopWithTurn = <A, E, R>(execute: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const interruption = yield* TurnInterruptSignal
+    const fiber = yield* Effect.forkChild(execute)
+    const exit = yield* Effect.raceFirst(
+      Fiber.await(fiber),
+      interruption.pipe(Effect.andThen(Fiber.interrupt(fiber)), Effect.andThen(Fiber.await(fiber))),
+    )
+    if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+      return yield* new ToolResultFailure({
+        message: "The turn was interrupted.",
+        result: { error: "The turn was interrupted.", reason: "Interrupted" },
+      })
+    }
+    return yield* exit
+  })
 
 // ── current-tool-call ───────────────────────────────────────────────────────
 
@@ -82,7 +170,7 @@ export class CurrentToolCall extends Context.Service<
   OwnedToolCallAddress & {
     readonly toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   }
->()("@gent/core/src/runtime/agent/tools/CurrentToolCall") {}
+>()("@gent/core/src/runtime/tools/CurrentToolCall") {}
 
 // ── current-dispatching-call ────────────────────────────────────────────────
 
@@ -105,7 +193,7 @@ interface DispatchingCall {
 export class CurrentDispatchingCall extends Context.Service<
   CurrentDispatchingCall,
   DispatchingCall
->()("@gent/core/src/runtime/agent/tools/CurrentDispatchingCall") {}
+>()("@gent/core/src/runtime/tools/CurrentDispatchingCall") {}
 
 // ── tool-binding-resolution ─────────────────────────────────────────────────
 
@@ -421,7 +509,7 @@ interface ProcessLocalToolReplayService {
 export class ProcessLocalToolReplay extends Context.Service<
   ProcessLocalToolReplay,
   ProcessLocalToolReplayService
->()("@gent/core/src/runtime/agent/tools/ProcessLocalToolReplay") {
+>()("@gent/core/src/runtime/tools/ProcessLocalToolReplay") {
   static Live: Layer.Layer<ProcessLocalToolReplay> = Layer.effect(
     ProcessLocalToolReplay,
     Effect.gen(function* () {
@@ -521,7 +609,7 @@ interface BranchToolWorkApi {
  * not provide this, and interruption is a no-op.
  */
 export class BranchToolWork extends Context.Service<BranchToolWork, BranchToolWorkApi>()(
-  "@gent/core/src/runtime/agent/tools/BranchToolWork",
+  "@gent/core/src/runtime/tools/BranchToolWork",
 ) {}
 
 export interface BranchToolFeature<A> {
@@ -554,7 +642,7 @@ export const noBranchTools: BranchToolFeature<never> = {
  * shipping a feature binds it; core reads it and merges what it gets.
  */
 export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<never>>(
-  "@gent/core/src/runtime/agent/tools/CurrentBranchToolFeature",
+  "@gent/core/src/runtime/tools/CurrentBranchToolFeature",
   { defaultValue: () => noBranchTools },
 )
 
@@ -584,7 +672,7 @@ export interface ResolvedToolCapability {
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 
 class ToolExecutionFailure extends Schema.TaggedError<ToolExecutionFailure>(
-  "@gent/core/src/runtime/agent/tools/ToolExecutionFailure",
+  "@gent/core/src/runtime/tools/ToolExecutionFailure",
 )("ToolExecutionFailure", {
   message: Schema.String,
 }) {}
@@ -930,7 +1018,7 @@ const runTestTool = (toolCall: ToolCall) =>
 
 /** @effect-expect-leaking ExtensionRegistry */
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
-  "@gent/core/src/runtime/agent/tools/ToolRunner",
+  "@gent/core/src/runtime/tools/ToolRunner",
 ) {
   static Live: Layer.Layer<ToolRunner> = Layer.succeed(
     ToolRunner,
@@ -966,7 +1054,7 @@ const TOOL_CONCURRENCY = 8
 
 /** InteractionPendingError enriched with the toolCallId that triggered it */
 export class ToolInteractionPending extends Schema.TaggedError<ToolInteractionPending>(
-  "@gent/core/src/runtime/agent/tools/ToolInteractionPending",
+  "@gent/core/src/runtime/tools/ToolInteractionPending",
 )("ToolInteractionPending", {
   pending: InteractionPendingError,
   toolCallId: ToolCallId,
@@ -1049,3 +1137,213 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   }
   return results
 })
+
+// ── tool-policy ─────────────────────────────────────────────────────────────
+
+/**
+ * The tool policy one turn runs with.
+ *
+ * Pure: it takes the resolved capabilities, the agent definition and the
+ * turn's projections, and answers which tools the model sees, which tools the
+ * host may run, and what prompt sections the projections contribute. Nothing
+ * here reaches a service, a layer or the filesystem — the registry resolves
+ * the extensions, this compiles the policy they imply.
+ *
+ * @module
+ */
+
+interface CompiledToolPolicy {
+  readonly tools: ReadonlyArray<ToolCapability>
+  readonly modelTools: ReadonlyArray<ToolCapability>
+  readonly promptSections: ReadonlyArray<PromptSection>
+}
+
+const applyToolProjection = (
+  tools: ToolCapability[],
+  projection: TurnProjection,
+  allToolsByName: ReadonlyMap<string, ToolCapability>,
+): ToolCapability[] => {
+  const policy = Option.fromUndefinedOr(projection.toolPolicy)
+  if (Option.isNone(policy)) return tools
+
+  const overrideSet = Option.fromUndefinedOr(policy.value.overrideSet)
+  if (Option.isSome(overrideSet)) {
+    return overrideSet.value.flatMap((name) => {
+      const tool = allToolsByName.get(name)
+      if (Predicate.isUndefined(tool)) return []
+      return [tool]
+    })
+  }
+
+  const include = Option.fromUndefinedOr(policy.value.include)
+  if (Option.isSome(include)) {
+    const existing = new Set(tools.map((tool) => String(getToolId(tool))))
+    for (const name of include.value) {
+      if (existing.has(name)) continue
+      const tool = allToolsByName.get(name)
+      if (Predicate.isUndefined(tool)) continue
+      tools.push(tool)
+      existing.add(name)
+    }
+  }
+
+  const exclude = Option.fromUndefinedOr(policy.value.exclude)
+  if (Option.isSome(exclude)) {
+    const excludeSet = new Set(exclude.value)
+    return tools.filter((tool) => !excludeSet.has(String(getToolId(tool))))
+  }
+  return tools
+}
+
+const collectProjectionPromptSections = (
+  projections: ReadonlyArray<TurnProjection>,
+): PromptSection[] => {
+  const sections: PromptSection[] = []
+  for (const projection of projections) {
+    const promptSections = Option.fromUndefinedOr(projection.promptSections)
+    if (Option.isSome(promptSections)) sections.push(...promptSections.value)
+  }
+  return sections
+}
+
+/**
+ * Compile the active tool set and prompt sections for a turn.
+ *
+ * Pipeline:
+ * 1. Agent allow/deny filtering
+ * 2. Extension projection fragments (include/exclude/overrideSet)
+ * 3. Re-apply agent deny list (extensions can't escape denials)
+ * 4. Collect extension-contributed prompt sections
+ */
+export const compileToolPolicy = (
+  allTools: ReadonlyArray<ToolCapability>,
+  agent: AgentDefinition,
+  turn: { readonly interactive?: boolean },
+  extensionProjections: ReadonlyArray<TurnProjection>,
+): CompiledToolPolicy => {
+  const allToolsByName = new Map(allTools.map((t) => [String(getToolId(t)), t]))
+
+  // 1. Agent allow/deny filtering
+  let tools = filterToolsForAgent(allTools, agent)
+
+  // 2. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
+  for (const projection of extensionProjections) {
+    tools = applyToolProjection(tools, projection, allToolsByName)
+  }
+
+  // 4. Re-apply agent deny list — extensions can't escape denials
+  tools = applyDenyFilter(tools, agent)
+
+  // 5. Filter interactive tools in non-interactive contexts (headless, subagent)
+  if (turn.interactive === false) {
+    tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
+  }
+
+  let modelSet = Option.none<ReadonlyArray<string>>()
+  for (const projection of extensionProjections) {
+    if (Predicate.isNotUndefined(projection.toolPolicy?.modelSet)) {
+      modelSet = Option.some(projection.toolPolicy.modelSet)
+    }
+  }
+  const modelTools = Option.match(modelSet, {
+    onNone: () => tools,
+    onSome: (names) => {
+      const selected = new Set(names)
+      return tools.filter((tool) => selected.has(String(getToolId(tool))))
+    },
+  })
+  return {
+    tools,
+    modelTools,
+    promptSections: collectProjectionPromptSections(extensionProjections),
+  }
+}
+
+// Tool filtering — pure helper for agent tool visibility
+
+const filterToolsForAgent = (
+  allTools: ReadonlyArray<ToolCapability>,
+  agent: AgentDefinition,
+): ToolCapability[] => {
+  let tools: ToolCapability[]
+
+  if (!Predicate.isUndefined(agent.allowedTools)) {
+    const names = new Set(agent.allowedTools)
+    tools = allTools.filter((t) => names.has(String(getToolId(t))))
+  } else {
+    tools = [...allTools]
+  }
+
+  if (!Predicate.isUndefined(agent.deniedTools)) {
+    tools = applyDenyFilter(tools, agent)
+  }
+
+  return tools
+}
+
+/** Re-apply deny filter — extensions can't escape agent denials. */
+const applyDenyFilter = (
+  tools: ReadonlyArray<ToolCapability>,
+  agent: AgentDefinition,
+): ToolCapability[] => {
+  if (Predicate.isUndefined(agent.deniedTools)) return [...tools]
+  const denied = new Set(agent.deniedTools)
+  return tools.filter((t) => !denied.has(String(getToolId(t))))
+}
+
+// ── tool-call-recovery ──────────────────────────────────────────────────────
+
+/**
+ * Recovering a tool call that was in flight when the process died.
+ *
+ * The loop knows a call was admitted and never recorded a result. It does not
+ * know whether the tool kept a durable receipt it can settle from, or whether
+ * the call should simply be re-issued to the model. A tool that keeps such
+ * receipts answers here; anything else is re-issued.
+ *
+ * Core defines the question. No implementation means every pending call is
+ * re-issued, which is the correct behavior for a tool with no durable state.
+ */
+
+/**
+ * What recovering one pending call produced.
+ *
+ * `NotRecovered` covers both "not my call" and "no receipt for it", because
+ * the loop treats them identically: re-issue.
+ */
+export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
+  NotRecovered: {},
+  /** Settled from a receipt; the result is recorded as if the call returned. */
+  Settled: { result: Schema.Any },
+  /** Waiting on an interaction; the turn suspends until it resolves. */
+  Suspended: { requestId: InteractionRequestId },
+})
+export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
+
+/** Recovery runs inside the turn and settles receipts with the turn's runtime services. */
+type ToolCallRecoveryServices =
+  | CurrentAgentLoopTurnProfile
+  | EventPublisher
+  | GentPlatform
+  | MessageStorage
+  | ToolRunner
+
+interface ToolCallRecoveryApi {
+  /** Recover one pending call, or report that it is not recoverable here. */
+  readonly recover: (params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly assistantMessageId: MessageId
+    readonly toolCall: Prompt.ToolCallPart
+  }) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, ToolCallRecoveryServices>
+}
+
+export class ToolCallRecoveryError extends Schema.TaggedError<ToolCallRecoveryError>()(
+  "@gent/core/src/runtime/tools/ToolCallRecoveryError",
+  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
+
+export class ToolCallRecoveryService extends Context.Service<
+  ToolCallRecoveryService,
+  ToolCallRecoveryApi
+>()("@gent/core/src/runtime/tools/ToolCallRecoveryService") {}

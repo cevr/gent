@@ -16,7 +16,7 @@ import {
 } from "../../src/runtime/extension-host.js"
 import { EventPublisherLive, EventStore } from "../../src/domain/event.js"
 import { MessageStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage.js"
-import { noBranchTools } from "../../src/runtime/agent/tools.js"
+import { noBranchTools } from "../../src/runtime/tools.js"
 import { ensureStorageParents } from "../../src/test-utils/index.js"
 import { testHostFacts } from "../../src/test-utils"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc.js"

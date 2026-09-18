@@ -50,10 +50,7 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core-internal/domain/ids.js"
-import {
-  captureCurrentToolBinding,
-  CurrentToolCall,
-} from "@gent/core-internal/runtime/agent/tools.js"
+import { captureCurrentToolBinding, CurrentToolCall } from "@gent/core-internal/runtime/tools.js"
 import { toolResultMessageIdForTurn } from "@gent/core-internal/runtime/agent/agent-loop.utils.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"

@@ -50,7 +50,7 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import {
   captureCurrentToolBinding,
   type ResolvedToolCapability,
-} from "@gent/core-internal/runtime/agent/tools.js"
+} from "@gent/core-internal/runtime/tools.js"
 import { runAgentLoopTurnProfile } from "@gent/core-internal/runtime/agent/agent-loop.turn-profile.js"
 
 const cell = {

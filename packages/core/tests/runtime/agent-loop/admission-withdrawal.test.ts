@@ -38,7 +38,7 @@ import {
   makeAgentLoopWorker,
 } from "../../../src/runtime/agent/agent-loop.worker"
 import { TurnOutcome } from "../../../src/runtime/agent/agent-loop.turn-execution"
-import { makeTurnInterruption } from "../../../src/runtime/agent/turn-interruption.js"
+import { makeTurnInterruption } from "../../../src/runtime/tools.js"
 
 const sessionId = SessionId.make("withdrawal-session")
 const branchId = BranchId.make("withdrawal-branch")

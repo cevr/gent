@@ -17,7 +17,7 @@ import {
   ModelResolver,
 } from "../../src/runtime/provider"
 import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
-import { convertTools } from "../../src/runtime/agent/tools"
+import { convertTools } from "../../src/runtime/tools"
 import { ProviderAuthError } from "../../src/domain/driver"
 import { toPrompt } from "../../src/runtime/model-context"
 import { dateFromMillis, Message } from "../../src/domain/message"

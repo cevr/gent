@@ -10,11 +10,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host"
 import { tool, ExtensionContext } from "@gent/core/extensions/api"
-import {
-  executeToolCalls,
-  type ResolvedToolCapability,
-  ToolRunner,
-} from "../../src/runtime/agent/tools"
+import { executeToolCalls, type ResolvedToolCapability, ToolRunner } from "../../src/runtime/tools"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"

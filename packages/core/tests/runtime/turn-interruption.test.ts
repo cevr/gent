@@ -1,9 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import {
-  makeTurnInterruption,
-  neverInterrupted,
-} from "../../src/runtime/agent/turn-interruption.js"
+import { makeTurnInterruption, neverInterrupted } from "../../src/runtime/tools.js"
 
 describe("turn interruption", () => {
   it.live("a turn is not interrupted before anything interrupts it", () =>

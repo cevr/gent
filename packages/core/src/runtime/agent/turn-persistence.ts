@@ -23,7 +23,7 @@ import {
   type StorageTransaction,
   ToolCallBindingStorage,
 } from "../../storage/storage.js"
-import type { ResolvedToolCapability } from "./tools.js"
+import type { ResolvedToolCapability } from "../tools.js"
 
 type ToolTerminalEvent = Extract<
   AgentEvent,

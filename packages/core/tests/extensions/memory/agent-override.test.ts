@@ -12,7 +12,7 @@ import { textStep } from "../../../src/test-utils/sequence-steps"
 import { AgentEvent, EventPublisherLive } from "../../../src/domain/event"
 import { type ExtensionContributions, SessionMutations } from "../../../src/domain/extension"
 import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
-import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import {
   ApprovalService,
   DriverRegistry,

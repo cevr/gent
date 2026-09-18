@@ -32,7 +32,7 @@ import { ExtensionHost } from "../extensions/api.js"
 import { testHostFacts } from "./index.js"
 import { buildServerRoot } from "../server/server-root.js"
 import { StateLocation } from "../server/dependencies.js"
-import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/agent/tools.js"
+import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/tools.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,

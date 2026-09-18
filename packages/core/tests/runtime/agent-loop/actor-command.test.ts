@@ -10,7 +10,7 @@ import {
   ExtensionRegistry,
   resolveExtensions,
 } from "../../../src/runtime/extension-host"
-import { noBranchTools, ProcessLocalToolReplay, ToolRunner } from "../../../src/runtime/agent/tools"
+import { noBranchTools, ProcessLocalToolReplay, ToolRunner } from "../../../src/runtime/tools"
 import { narrowR } from "../../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { dateFromMillis, Branch, Session } from "../../../src/domain/message"

@@ -30,7 +30,7 @@ import {
   resolveExtensions,
 } from "../../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
-import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import {
   finishPart,
   LanguageModelLayers,

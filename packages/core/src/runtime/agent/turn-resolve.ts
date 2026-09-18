@@ -25,14 +25,14 @@ import type { TurnProjection } from "../../domain/extension.js"
 import { MessageStorage, SessionStorage } from "../../storage/storage.js"
 import { ConfigService } from "../config.js"
 import { CurrentExtensionHostContext, ExtensionRegistry } from "../extension-host.js"
-import { compileToolPolicy } from "../extensions/tool-policy.js"
-import type { ResolvedTurn } from "../../domain/agent-loop.js"
-import { buildTurnPromptSections } from "./agent-loop.utils.js"
 import {
   attachToolBindingIdentity,
+  compileToolPolicy,
   type ResolvedToolCapability,
   staticToolEntries,
-} from "./tools.js"
+} from "../tools.js"
+import type { ResolvedTurn } from "../../domain/agent-loop.js"
+import { buildTurnPromptSections } from "./agent-loop.utils.js"
 export interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
   tools: ReadonlyArray<ToolCapability>

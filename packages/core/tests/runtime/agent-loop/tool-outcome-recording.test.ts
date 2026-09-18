@@ -6,7 +6,7 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "../../../src/domain/
 import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import { EventStorage, MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { EventStoreLive } from "../../../src/runtime/event-store-live"
-import { noBranchTools } from "../../../src/runtime/agent/tools"
+import { noBranchTools } from "../../../src/runtime/tools"
 import { recordToolOutcome } from "../../../src/runtime/agent/turn-persistence"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { ensureStorageParents } from "../../../src/test-utils"

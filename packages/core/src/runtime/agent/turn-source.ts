@@ -38,7 +38,7 @@ import {
 } from "./turn-response.js"
 import { persistMessageParts, persistMessageReceived } from "./turn-persistence.js"
 import { type ResolvedTurnContext } from "./turn-resolve.js"
-import { convertTools, CurrentToolCall, ToolRunner } from "./tools.js"
+import { convertTools, CurrentToolCall, ToolRunner } from "../tools.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { ProviderError, type StorageError } from "../../domain/errors.js"

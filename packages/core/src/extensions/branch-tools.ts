@@ -37,7 +37,7 @@ export {
   type BranchToolFeature,
   type BranchToolLayerFactory,
   BranchToolWork,
-} from "../runtime/agent/tools.js"
+} from "../runtime/tools.js"
 export { eraseResourceLayer } from "../runtime/extension-host.js"
 
 // Storage the feature contributes and reads.
@@ -55,14 +55,14 @@ export {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
-} from "../domain/tool-call-recovery.js"
+} from "../runtime/tools.js"
 
 // Identifying and resolving the calls a feature dispatches.
 export { ToolBindingIdentity } from "../domain/capability.js"
-export { innerOperationBindingIdentity, resolveStoredToolBinding } from "../runtime/agent/tools.js"
-export { CurrentDispatchingCall } from "../runtime/agent/tools.js"
-export { CurrentToolCall } from "../runtime/agent/tools.js"
-export { type ResolvedToolCapability, ToolRunner } from "../runtime/agent/tools.js"
+export { innerOperationBindingIdentity, resolveStoredToolBinding } from "../runtime/tools.js"
+export { CurrentDispatchingCall } from "../runtime/tools.js"
+export { CurrentToolCall } from "../runtime/tools.js"
+export { type ResolvedToolCapability, ToolRunner } from "../runtime/tools.js"
 export { getToolMetadata } from "../domain/capability.js"
 export { summarizeOutput } from "../domain/message.js"
 
@@ -72,10 +72,7 @@ export {
   type AgentLoopTurnProfile,
   runAgentLoopTurnProfile,
 } from "../runtime/agent/agent-loop.turn-profile.js"
-export {
-  neverInterrupted,
-  type TurnInterruptionStatus,
-} from "../runtime/agent/turn-interruption.js"
+export { neverInterrupted, type TurnInterruptionStatus } from "../runtime/tools.js"
 export { AgentLoopError } from "../domain/agent-loop.js"
 
 // Reporting what the feature did to the model's context.

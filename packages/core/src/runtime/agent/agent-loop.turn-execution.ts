@@ -29,9 +29,18 @@ import { WideEvent } from "../wide-event-boundary.js"
 import { AgentLoopError, asAgentLoopError, type RunningState } from "../../domain/agent-loop.js"
 import type { LoopInbox } from "./loop-inbox.js"
 import {
+  executeToolCalls,
+  processLocalReplayBindingKey,
+  processLocalReplayResultKey,
+  ProcessLocalToolReplay,
+  type ResolvedToolCapability,
+  resolveReplayToolBinding,
+  ToolBindingReplayError,
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
-} from "../../domain/tool-call-recovery.js"
+  ToolInteractionPending,
+  type TurnInterruption,
+} from "../tools.js"
 import {
   continuationMessageIdForTurn,
   finalStepMessageIdForTurn,
@@ -58,18 +67,7 @@ import {
   ToolResultReplayError,
 } from "./turn-persistence.js"
 import { type ResolvedTurnContext, resolveTurnContext } from "./turn-resolve.js"
-import {
-  executeToolCalls,
-  processLocalReplayBindingKey,
-  processLocalReplayResultKey,
-  ProcessLocalToolReplay,
-  type ResolvedToolCapability,
-  resolveReplayToolBinding,
-  ToolBindingReplayError,
-  ToolInteractionPending,
-} from "./tools.js"
 import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
-import type { TurnInterruption } from "./turn-interruption.js"
 import type { TurnLedger } from "./turn-ledger.js"
 import {
   computeStreamEndedCost,

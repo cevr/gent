@@ -13,7 +13,7 @@ import {
   noBranchTools,
   CurrentBranchToolFeature,
   type BranchToolFeature,
-} from "../../src/runtime/agent/tools"
+} from "../../src/runtime/tools"
 import { emptyErasedResourceLayer } from "../../src/runtime/extension-host"
 
 const tableNames = Effect.gen(function* () {

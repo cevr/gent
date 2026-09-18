@@ -15,7 +15,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host.js"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage.js"
-import { noBranchTools } from "../../src/runtime/agent/tools.js"
+import { noBranchTools } from "../../src/runtime/tools.js"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { AgentName } from "../../src/domain/agent.js"
 import { requireCurrentAgent, ExtensionServiceError } from "@gent/core/extensions/api"

@@ -58,7 +58,7 @@ import {
 } from "./extension-host.js"
 import type { ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
-import type { ToolRunner } from "./agent/tools.js"
+import type { ToolRunner } from "./tools.js"
 import type { ConfigService } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 

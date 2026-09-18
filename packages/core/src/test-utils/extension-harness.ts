@@ -13,7 +13,7 @@ import {
 } from "../domain/extension.js"
 import { getToolMetadata, type ToolCapability } from "../domain/capability.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
-import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/agent/tools.js"
+import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/tools.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { LanguageModelLayers } from "./language-model.js"
 import {

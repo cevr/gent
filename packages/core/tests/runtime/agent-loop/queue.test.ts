@@ -50,7 +50,7 @@ import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loo
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
-import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import { ApprovalService } from "../../../src/runtime/extension-host"
 import {
   makeAgentLoopService,

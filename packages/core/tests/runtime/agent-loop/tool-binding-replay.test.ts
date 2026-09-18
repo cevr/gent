@@ -48,7 +48,7 @@ import {
   resolveReplayToolBinding,
   resolveStoredToolBinding,
   ToolRunner,
-} from "../../../src/runtime/agent/tools"
+} from "../../../src/runtime/tools"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import {
   ExtensionRegistry,

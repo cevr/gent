@@ -28,7 +28,7 @@ import {
   ExtensionRegistry,
   resolveExtensions,
 } from "../../../src/runtime/extension-host"
-import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
+import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
 

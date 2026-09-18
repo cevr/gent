@@ -84,7 +84,7 @@ import {
   CurrentBranchToolFeature,
   noBranchTools,
   ToolRunner,
-} from "../../src/runtime/agent/tools"
+} from "../../src/runtime/tools"
 import {
   defineExtension,
   ExtensionContext,

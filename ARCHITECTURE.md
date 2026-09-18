@@ -44,7 +44,7 @@ updates this list in the same commit.
 6. **Tool calls replay from durable bindings.** A resumed turn re-delivers a
    tool result from `tool_call_bindings`; it never re-runs the tool.
    Receipts: `packages/core/src/storage/storage.ts`,
-   `packages/core/src/runtime/agent/tools.ts`.
+   `packages/core/src/runtime/tools.ts`.
 7. **Approvals are one-shot and fail closed.** A guarded call asks once
    through the durable interaction request; nothing is saved; no answerer
    means no. Core has no rule schema, rule storage, or `permission.*` RPC.
@@ -570,7 +570,7 @@ Key properties:
 - **Invalid replay.** Changed bindings and corrupt completed-result data fail
   explicitly. A paired failed result keeps later model turns usable. A corrupt
   completed result does not give permission to repeat the tool.
-- **One binding policy.** `runtime/agent/tools.ts` owns
+- **One binding policy.** `runtime/tools.ts` owns
   current capture, durable lookup, identity checks, and invalid local-binding
   cleanup for native and external tool adapters. A missing durable row
   permits only a same-process, same-generation capability with no durable
@@ -694,7 +694,7 @@ the claim incomplete; the next call reports a typed unknown outcome without
 running the source again. A saved result does not restore VM working state.
 Inner operation bindings and durable approvals use the stores described below.
 
-`runtime/agent/tools.ts` carries the transcript-owned call address
+`runtime/tools.ts` carries the transcript-owned call address
 and the turn's selected tool bindings.
 The shared turn dispatcher supplies it for each bound tool invocation, including
 explicit tool invocation. `runtime/code-cell.ts` uses that address
@@ -1140,7 +1140,7 @@ Wide event boundaries (one structured log per unit of work) via `effect-wide-eve
 | Boundary     | Service       | File                                   |
 | ------------ | ------------- | -------------------------------------- |
 | Agent turn   | `agent-loop`  | `runtime/agent/agent-loop.behavior.ts` |
-| Tool call    | `tool-runner` | `runtime/agent/tools.ts`               |
+| Tool call    | `tool-runner` | `runtime/tools.ts`                     |
 | Model stream | `model`       | `runtime/agent/agent-loop.behavior.ts` |
 | RPC request  | `rpc`         | `server/rpc-handlers.ts`               |
 | Agent run    | `agent-run`   | `runtime/agent/agent-runner.ts`        |

@@ -23,11 +23,7 @@ import { InProcessRunner } from "../runtime/agent/agent-runner.js"
 import { ChildCompletionDelivery } from "../runtime/agent/child-completion.js"
 import { AgentLoopLiveActor } from "../runtime/agent/agent-loop.actor.js"
 import { AgentLoopSessionGovernance } from "../runtime/agent/agent-loop.session-governance.js"
-import {
-  type BranchToolFeature,
-  CurrentBranchToolFeature,
-  ToolRunner,
-} from "../runtime/agent/tools.js"
+import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { InteractionStorage, SqliteStorage } from "../storage/storage.js"

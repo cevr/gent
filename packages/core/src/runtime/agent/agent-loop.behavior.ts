@@ -30,9 +30,10 @@ import { Entity, Sharding } from "effect/unstable/cluster"
 import {
   BranchToolWork,
   CurrentBranchToolFeature,
+  makeTurnInterruption,
   type ProcessLocalToolReplay,
   ToolRunner,
-} from "./tools.js"
+} from "../tools.js"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { type AgentEvent, EventPublisher } from "../../domain/event.js"
@@ -88,7 +89,6 @@ import { makeTurnLedger } from "./turn-ledger.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
 import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
-import { makeTurnInterruption } from "./turn-interruption.js"
 
 type AgentLoopRuntimeServices =
   | SessionStorage

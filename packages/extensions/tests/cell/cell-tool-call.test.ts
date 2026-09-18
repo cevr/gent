@@ -11,7 +11,7 @@ import {
   ToolCallId,
 } from "@gent/core-internal/domain/ids.js"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction.js"
-import { type ResolvedToolCapability, ToolRunner } from "@gent/core-internal/runtime/agent/tools.js"
+import { type ResolvedToolCapability, ToolRunner } from "@gent/core-internal/runtime/tools.js"
 import {
   ExtensionRegistry,
   provideCurrentHostCtx,

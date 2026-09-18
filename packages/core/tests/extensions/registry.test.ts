@@ -22,7 +22,7 @@ import {
   ExtensionRegistry,
   resolveExtensions,
 } from "../../src/runtime/extension-host"
-import { compileToolPolicy } from "../../src/runtime/extensions/tool-policy"
+import { compileToolPolicy } from "../../src/runtime/tools"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the
