@@ -1,12 +1,12 @@
-import { Effect, Option } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { Effect, Option, Schema } from "effect"
 import {
-  defineResource,
-  type GentExtension,
   defineExtension,
+  defineResource,
   ExtensionHost,
+  type GentExtension,
+  LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
-import { BuiltinArtifactIdentity } from "./artifact-identity.js"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CellExtension } from "./cell/cell-extension.js"
 import { CompactionExtension, ModelContextCompactorResource } from "./compaction/index.js"
 import { CellBranchTools } from "./cell/cell-storage.js"
@@ -32,6 +32,32 @@ import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
 import { NetworkToolsExtension } from "./network-tools.js"
 import { SessionToolsExtension } from "./session-tools.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
+
+// ── artifact-identity ───────────────────────────────────────────────────────
+
+/**
+ * The compiled build replaces this symbol with a build-owned token before it
+ * bundles the builtin extensions. Source-mode execution has no trusted build
+ * boundary, so it remains unsupported for durable artifact replay.
+ */
+declare const __GENT_BUILTIN_ARTIFACT_ID__: unknown
+
+const buildArtifactId = Option.flatMap(
+  Effect.runSync(
+    Effect.try({
+      try: () => Option.some(__GENT_BUILTIN_ARTIFACT_ID__),
+      catch: () => Option.none<unknown>(),
+    }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<unknown>()))),
+  ),
+  Schema.decodeUnknownOption(Schema.NonEmptyString),
+)
+
+const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.map(
+  buildArtifactId,
+  (value) => LoadedArtifactIdentity.make(value),
+)
+
+// ── builtin composition ─────────────────────────────────────────────────────
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
