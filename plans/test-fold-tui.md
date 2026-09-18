@@ -1,6 +1,7 @@
 # Test fold map — apps/tui
 
-Before: 90 test/helper files (88 test files run by `bun run test`), 695 tests, 14.21 s.
+Before: 90 files (88 test files run by `bun run test`, 6 helpers), 695 tests,
+14.21 s. After: 30 files (24 test files, 6 helpers), 695 tests, 7.7 s.
 
 One test file per source concern under `apps/tui/src/`. The target directory
 mirrors `src/`: a concern under `src/extensions/` gets
@@ -137,8 +138,10 @@ because both block an import merge:
 
 ## Timing
 
-`bun run test` in `apps/tui`: 14.21 s before, 10 s to 18 s after (the run
-varies by several seconds between repeats at `--parallel=3`).
+`bun run test` in `apps/tui`: 14.21 s before; 7.75 s, 7.58 s and 7.69 s over
+three runs after. 88 test files before, 24 after. 695 tests before and after,
+with every describe-plus-test name matched one for one against a junit report
+of the pre-fold tree.
 
 Rule 9: the slowest folded file is `tests/app.test.tsx` at 4.71 s on its own,
 then `tests/client.test.tsx` at 4.27 s and `tests/composer.test.tsx` at
