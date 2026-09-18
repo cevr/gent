@@ -17,8 +17,7 @@ import {
   Scope,
 } from "effect"
 import { clientTraceLogger } from "./utils/client-trace-logger"
-import { LinkOpener } from "./services/link-opener"
-import { OsService } from "./services/os-service"
+import { LinkOpener, OsService } from "./os"
 import {
   RunSpecSchema,
   AgentName as AgentNameSchema,

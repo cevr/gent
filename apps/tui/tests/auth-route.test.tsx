@@ -2,7 +2,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Context, Deferred, Effect, Layer, Option, Scope } from "effect"
-import { LinkOpener, LinkOpenerError } from "../src/services/link-opener"
+import { LinkOpener, LinkOpenerError } from "../src/os"
 import { Auth } from "../src/routes/auth"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"

@@ -8,7 +8,7 @@ import { useRenderer } from "@opentui/solid"
 import { useEnv } from "../../workspace"
 import { useRuntime } from "../../hooks/use-runtime"
 import { useTheme } from "../../theme"
-import { openExternalEditor, resolveEditor } from "../../utils/external-editor"
+import { openExternalEditor, resolveEditor } from "../../os"
 
 const decodeMetadata = Schema.decodeUnknownOption(
   Schema.Struct({
