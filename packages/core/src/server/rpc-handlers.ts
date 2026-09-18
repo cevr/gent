@@ -1,5 +1,5 @@
 import { Predicate, Clock, Effect, Layer, Option, Stream } from "effect"
-import { GentRpcs } from "./rpcs"
+import { GentRpcs } from "./rpcs.js"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
 import { ProviderAuthError } from "../domain/driver.js"
@@ -20,10 +20,7 @@ import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-eve
 import { BranchStorage } from "../storage/branch-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { makeStorageTransaction } from "../storage/sqlite-storage.js"
-import {
-  projectMessagesWithToolInteractions,
-  toolCallDurations,
-} from "../domain/message-part-display.js"
+import { projectMessagesWithToolInteractions, toolCallDurations } from "../domain/message.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { InteractionRequestMismatchError } from "../domain/interaction-request.js"
 import { omitUndefined } from "../domain/guards.js"

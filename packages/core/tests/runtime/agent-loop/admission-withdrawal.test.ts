@@ -12,7 +12,13 @@ import {
 } from "effect"
 import type { ActiveStreamHandle } from "../../../src/runtime/agent/turn-response"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { dateFromMillis, Message } from "../../../src/domain/message"
+import {
+  dateFromMillis,
+  emptyLoopQueueState,
+  type LoopQueueState,
+  Message,
+  type QueuedTurnItem,
+} from "../../../src/domain/message"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import {
   buildIdleState,
@@ -26,11 +32,6 @@ import {
   makeLoopInbox,
   type AgentLoopState,
 } from "../../../src/runtime/agent/loop-inbox"
-import {
-  emptyLoopQueueState,
-  type LoopQueueState,
-  type QueuedTurnItem,
-} from "../../../src/domain/queue"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import {
   emptyAdmissionGate,

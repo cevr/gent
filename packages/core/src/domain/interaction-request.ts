@@ -15,8 +15,8 @@
 
 import { Clock, Effect, Option, Predicate, Ref, Schema } from "effect"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { EventStoreError } from "./event"
-import { BranchId, InteractionRequestId, SessionId } from "./ids"
+import { EventStoreError } from "./event.js"
+import { BranchId, InteractionRequestId, SessionId } from "./ids.js"
 
 // ============================================================================
 // Approval schemas

@@ -23,8 +23,13 @@ import {
   RequestId,
   SessionId,
 } from "../domain/ids.js"
-import { Branch, BranchTreeNode, ProjectedMessage, Session } from "../domain/message.js"
-import { QueueSnapshot } from "../domain/queue.js"
+import {
+  Branch,
+  BranchTreeNode,
+  ProjectedMessage,
+  QueueSnapshot,
+  Session,
+} from "../domain/message.js"
 import {
   SessionRuntimeMetrics,
   SessionRuntimeStateSchema,

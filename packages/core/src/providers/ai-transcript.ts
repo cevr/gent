@@ -1,7 +1,6 @@
 import { Option, Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import type { Message } from "../domain/message.js"
-import { headTailChars } from "../domain/head-tail.js"
+import { headTailChars, type Message } from "../domain/message.js"
 
 interface PromptTranscriptOptions {
   readonly systemPrompt?: string

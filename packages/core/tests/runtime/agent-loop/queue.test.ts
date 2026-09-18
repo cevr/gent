@@ -23,7 +23,14 @@ import {
 } from "../../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../../src/test-utils/sequence-steps"
 import { tool } from "@gent/core/extensions/api"
-import { dateFromMillis, Message } from "../../../src/domain/message"
+import {
+  dateFromMillis,
+  emptyLoopQueueState,
+  LoopQueueState,
+  type LoopQueueState as LoopQueueStateType,
+  Message,
+  type QueuedTurnItem,
+} from "../../../src/domain/message"
 import { EventStore, MessageReceived, TurnCompleted } from "../../../src/domain/event"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
@@ -56,12 +63,6 @@ import {
   wantsWakeOnRecovery,
   type AgentLoopState,
 } from "../../../src/runtime/agent/loop-inbox"
-import {
-  emptyLoopQueueState,
-  LoopQueueState,
-  type LoopQueueState as LoopQueueStateType,
-  type QueuedTurnItem,
-} from "../../../src/domain/queue"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { StorageError } from "../../../src/domain/errors"

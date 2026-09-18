@@ -18,7 +18,7 @@ import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/u
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
 import { AgentName, RunSpecSchema, type SteerCommand as SteerCommandType } from "../domain/agent.js"
-import type { QueueSnapshot } from "../domain/queue.js"
+import { Message, MessageMetadata, type QueueSnapshot } from "../domain/message.js"
 import type { EventStore } from "../domain/event.js"
 import type { EventPublisher } from "../domain/event-publisher.js"
 import {
@@ -30,7 +30,6 @@ import {
   SessionId,
   type InteractionRequestId,
 } from "../domain/ids.js"
-import { Message, MessageMetadata } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
 import type { BranchStorage } from "../storage/branch-storage.js"

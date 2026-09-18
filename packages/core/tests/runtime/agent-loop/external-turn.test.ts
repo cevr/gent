@@ -24,11 +24,13 @@ import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src/domain/message"
 import {
+  assistantMessageIdForTurn,
+  dateFromMillis,
+  Message,
   messagePartsText,
   messagePartsToolCallParts,
-} from "../../../src/domain/message-part-display"
+} from "../../../src/domain/message"
 import {
   AgentDefinition,
   AgentName,

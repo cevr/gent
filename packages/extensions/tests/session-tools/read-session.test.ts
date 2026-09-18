@@ -2,12 +2,12 @@ import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { renderMessageParts, renderSessionTree } from "../../src/session-tools.js"
-import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-display"
 import {
-  dateFromMillis,
   Branch,
+  dateFromMillis,
   Message,
   type MessagePart,
+  messagePartsDisplayText,
 } from "@gent/core-internal/domain/message"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 

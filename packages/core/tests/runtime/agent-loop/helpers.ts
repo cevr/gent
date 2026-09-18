@@ -34,7 +34,7 @@ import {
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { dateFromMillis, Message } from "../../../src/domain/message"
+import { dateFromMillis, Message, type QueueSnapshot } from "../../../src/domain/message"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../../src/domain/resource"
@@ -50,7 +50,6 @@ import {
   SequenceRecorder,
   ensureStorageParents,
 } from "../../../src/test-utils"
-import type { QueueSnapshot } from "../../../src/domain/queue"
 import type { BranchId, InteractionRequestId, SessionId } from "../../../src/domain/ids"
 import { ActorCommandId, ExtensionId, MessageId } from "../../../src/domain/ids"
 import type { TurnStreamPart } from "../../../src/domain/driver"

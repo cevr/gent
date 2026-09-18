@@ -13,7 +13,7 @@ import {
 } from "effect"
 import type { Scope } from "effect"
 
-import { Message } from "./message"
+import { clipChars, Message } from "./message.js"
 import {
   branded,
   BranchId,
@@ -22,10 +22,9 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
-} from "./ids"
-import { AgentName, ModelId, ReasoningEffort } from "./agent"
-import { makeCursorReplayStream, makeSessionPubSubRegistry } from "./session-pubsub-registry"
-import { clipChars } from "./head-tail"
+} from "./ids.js"
+import { AgentName, ModelId, ReasoningEffort } from "./agent.js"
+import { makeCursorReplayStream, makeSessionPubSubRegistry } from "./session-pubsub-registry.js"
 
 // ============================================================================
 // Shared sub-schemas

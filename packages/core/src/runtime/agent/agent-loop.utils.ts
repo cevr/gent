@@ -1,7 +1,10 @@
 import type { AgentDefinition } from "../../domain/agent.js"
 import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
-import { assistantMessageIdForTurn, type Message } from "../../domain/message.js"
-import { messagePartsToolCallParts } from "../../domain/message-part-display.js"
+import {
+  assistantMessageIdForTurn,
+  type Message,
+  messagePartsToolCallParts,
+} from "../../domain/message.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Predicate } from "effect"
 import type { PromptSection } from "../../domain/prompt.js"

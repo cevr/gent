@@ -4,13 +4,13 @@ import { finishPart, reasoningDeltaPart, textDeltaPart } from "../../src/test-ut
 import type { AgentEvent } from "../../src/domain/event"
 import { AgentName } from "../../src/domain/agent"
 import { BranchId, SessionId } from "../../src/domain/ids"
-import { assistantMessageIdForTurn } from "../../src/domain/message"
-import { MessageStorage } from "../../src/storage/message-storage"
 import {
+  assistantMessageIdForTurn,
   messagePartsReasoning,
   messagePartsText,
   messagePartsToolCallParts,
-} from "../../src/domain/message-part-display"
+} from "../../src/domain/message"
+import { MessageStorage } from "../../src/storage/message-storage"
 import {
   makeAgentLoopService,
   makeExternalLayerWithEvents,

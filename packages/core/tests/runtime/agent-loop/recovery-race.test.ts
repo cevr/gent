@@ -35,7 +35,14 @@ import {
   LanguageModelLayers,
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
-import { dateFromMillis, Branch, Message, Session } from "../../../src/domain/message"
+import {
+  Branch,
+  dateFromMillis,
+  LoopQueueState,
+  type LoopQueueState as LoopQueueStateType,
+  Message,
+  Session,
+} from "../../../src/domain/message"
 import { EventStore, MessageReceived } from "../../../src/domain/event"
 import { EventPublisherLive } from "../../../src/domain/event-publisher"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
@@ -57,10 +64,6 @@ import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
-import {
-  LoopQueueState,
-  type LoopQueueState as LoopQueueStateType,
-} from "../../../src/domain/queue"
 import { StorageError } from "../../../src/domain/errors"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"

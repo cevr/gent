@@ -16,13 +16,15 @@ import { EventPublisher } from "../../domain/event-publisher.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import { causeMessage } from "../../domain/guards.js"
-import { normalizeResponseParts } from "../../domain/response-part-normalization.js"
 import {
+  encodeToolOutput,
+  normalizeResponseParts,
   projectResponsePartsToMessageParts,
   responseUsage,
-} from "../../domain/response-to-prompt.js"
+  stringifyOutput,
+  summarizeOutput,
+} from "../../domain/message.js"
 import { ProviderError } from "../../domain/errors.js"
-import { encodeToolOutput, summarizeOutput, stringifyOutput } from "../../domain/tool-output.js"
 import type { AssistantResponsePart, ToolResponsePart } from "./turn-persistence.js"
 
 /**

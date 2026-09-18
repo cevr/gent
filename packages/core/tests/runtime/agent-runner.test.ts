@@ -25,13 +25,18 @@ import { InProcessRunner, admitChildSession } from "../../src/runtime/agent/agen
 import { getSessionDepth } from "../../src/runtime/session-depth"
 import { ChildCompletionDelivery } from "../../src/runtime/agent/child-completion"
 import { waitFor } from "../../src/test-utils/fixtures"
-import { messageSingleText } from "../../src/domain/message-part-display"
+import {
+  Branch,
+  dateFromMillis,
+  emptyQueueSnapshot,
+  Message,
+  messageSingleText,
+  Session,
+} from "../../src/domain/message"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { emptyQueueSnapshot } from "../../src/domain/queue"
-import { dateFromMillis, Session, Branch, Message } from "../../src/domain/message"
 import {
   AgentDefinition,
   AgentName,

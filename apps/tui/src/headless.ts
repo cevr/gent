@@ -11,7 +11,7 @@ import {
   Stdio,
   Stream,
 } from "effect"
-import { formatHeadTail } from "@gent/core-internal/domain/head-tail.js"
+import { formatHeadTail } from "@gent/core-internal/domain/message.js"
 import { formatGenericToolText, toolArgSummary, type ToolInput } from "./utils.js"
 import type { AgentName, BranchId, RunSpec, SessionId } from "@gent/core/protocol"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"

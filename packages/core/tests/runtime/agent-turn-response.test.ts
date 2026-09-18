@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Layer, Option, Ref, Schema, Stream, type Scope } from "effect"
-import { responseUsage } from "../../src/domain/response-to-prompt"
+import { responseUsage } from "../../src/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 import {
   collectExternalTurnResponse,

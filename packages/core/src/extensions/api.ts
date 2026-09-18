@@ -96,7 +96,7 @@ export { Model, ModelId } from "../domain/agent.js"
 export { AuthMethod } from "../domain/auth.js"
 export { type Message, type Branch } from "../domain/message.js"
 export type { Question } from "../domain/event.js"
-export { messagePartsDisplayText } from "../domain/message-part-display.js"
+export { messagePartsDisplayText } from "../domain/message.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
@@ -123,14 +123,14 @@ export {
 } from "../domain/capability/request.js"
 export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError } from "../domain/capability.js"
-export { ToolResultFailure } from "../domain/tool-output.js"
+export { ToolResultFailure } from "../domain/message.js"
 export {
   ExtensionContext,
   ExtensionServiceError,
   type ExtensionContextService,
 } from "../domain/extension-services.js"
 export { isRecord, isRecordArray, omitUndefined } from "../domain/guards.js"
-export { headTailChars } from "../domain/head-tail.js"
+export { headTailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../providers/ai-transcript.js"
 // ── Public API ──
 

@@ -31,9 +31,8 @@ import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { EventStorage } from "../../../src/storage/event-storage"
 import { MessageStorage } from "../../../src/storage/message-storage"
 import { SequenceRecorder } from "../../../src/test-utils"
-import { emptyQueueSnapshot } from "../../../src/domain/queue"
+import { assistantMessageIdForTurn, emptyQueueSnapshot } from "../../../src/domain/message"
 import { BranchId, MessageId, RequestId, SessionId } from "../../../src/domain/ids"
-import { assistantMessageIdForTurn } from "../../../src/domain/message"
 import {
   makeAgentLoopService,
   makeExtRegistry,

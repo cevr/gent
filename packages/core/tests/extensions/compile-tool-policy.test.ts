@@ -16,7 +16,7 @@ import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import { waitFor } from "../../src/test-utils/fixtures"
-import { messageSingleText } from "../../src/domain/message-part-display"
+import { messageSingleText } from "../../src/domain/message"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 describe("compileToolPolicy", () => {

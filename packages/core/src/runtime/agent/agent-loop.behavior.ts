@@ -37,7 +37,14 @@ import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { AgentEvent } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
-import { isRuntimeUserMessage, type Message, type MessageMetadata } from "../../domain/message.js"
+import {
+  emptyLoopQueueState,
+  isRuntimeUserMessage,
+  type LoopQueueState,
+  type Message,
+  type MessageMetadata,
+  type QueuedTurnItem,
+} from "../../domain/message.js"
 import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
@@ -76,11 +83,6 @@ import {
   type AgentLoopState,
   type LoopInbox,
 } from "./loop-inbox.js"
-import {
-  emptyLoopQueueState,
-  type LoopQueueState,
-  type QueuedTurnItem,
-} from "../../domain/queue.js"
 import type { ActiveStreamHandle } from "./turn-response.js"
 import { makeTurnLedger } from "./turn-ledger.js"
 import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"

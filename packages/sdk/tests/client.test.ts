@@ -6,8 +6,11 @@ import { extractText, extractImages, type Message as DomainMessage } from "../sr
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message"
-import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message-part-display"
+import {
+  dateFromMillis,
+  Message,
+  projectMessagesWithToolInteractions,
+} from "@gent/core-internal/domain/message"
 import {
   WORKSPACE_ID_HEADER,
   workspaceHeadersForCwd,

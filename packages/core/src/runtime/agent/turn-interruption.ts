@@ -15,7 +15,7 @@
  */
 
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Ref } from "effect"
-import { ToolResultFailure } from "../../domain/tool-output.js"
+import { ToolResultFailure } from "../../domain/message.js"
 
 /** Asks whether the turn now running has been interrupted. */
 export interface TurnInterruptionStatus {

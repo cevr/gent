@@ -1,8 +1,7 @@
 import { Schema } from "effect"
 import { Actor } from "effect-encore"
 import { AgentName, RunSpecSchema, SteerCommand } from "../../domain/agent.js"
-import { Message } from "../../domain/message.js"
-import { QueueSnapshot } from "../../domain/queue.js"
+import { Message, QueueSnapshot } from "../../domain/message.js"
 import {
   ActorCommandId,
   BranchId,

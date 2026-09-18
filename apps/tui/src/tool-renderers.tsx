@@ -21,7 +21,7 @@ import {
   type ToolInput,
   truncatePath,
 } from "./utils"
-import { formatHeadTail, headTail } from "@gent/core-internal/domain/head-tail.js"
+import { formatHeadTail, headTail } from "@gent/core-internal/domain/message.js"
 import {
   BashHeadlessToolRenderer,
   CellHeadlessToolRenderer,

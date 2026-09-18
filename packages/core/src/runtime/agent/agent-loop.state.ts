@@ -11,8 +11,7 @@ import {
   RunSpecSchema,
 } from "../../domain/agent.js"
 import type { AgentEvent } from "../../domain/event.js"
-import { Message } from "../../domain/message.js"
-import { QueueSnapshot } from "../../domain/queue.js"
+import { Message, QueueSnapshot } from "../../domain/message.js"
 import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,

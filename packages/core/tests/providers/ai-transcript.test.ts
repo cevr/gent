@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { normalizeResponseParts } from "../../src/domain/response-part-normalization"
-import { projectResponsePartsToMessageParts } from "../../src/domain/response-to-prompt"
+import {
+  dateFromMillis,
+  Message,
+  normalizeResponseParts,
+  projectResponsePartsToMessageParts,
+} from "../../src/domain/message"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,
@@ -9,7 +13,6 @@ import {
   toPromptMessages,
 } from "../../src/providers/ai-transcript"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { dateFromMillis, Message } from "../../src/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 import { Schema } from "effect"
 

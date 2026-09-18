@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { headTail, formatHeadTail, headTailChars } from "../../src/domain/head-tail"
+import { headTail, formatHeadTail, headTailChars } from "../../src/domain/message"
 
 describe("headTail", () => {
   test("returns all items when under limit", () => {

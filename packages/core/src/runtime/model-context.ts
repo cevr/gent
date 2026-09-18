@@ -1,7 +1,6 @@
 import { Option, Result, Schema } from "effect"
 import type { ToolCapability } from "../domain/capability/tool.js"
-import { encodeToolOutput } from "../domain/tool-output.js"
-import { Message, MessageRole } from "../domain/message.js"
+import { encodeToolOutput, Message, MessageRole } from "../domain/message.js"
 import { MessageId, ToolCallId } from "../domain/ids.js"
 import { boundToolResultForModel } from "../providers/ai-transcript.js"
 import { CONTEXT_WINDOW_MESSAGE_TYPE } from "./model-context-window.js"

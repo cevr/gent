@@ -69,17 +69,18 @@ import {
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { DEFAULT_AGENT_NAME } from "../../domain/agent.js"
 import type { BranchId, MessageId, SessionId } from "../../domain/ids.js"
-import { Message } from "../../domain/message.js"
-import { messagePartsTextLines, messageSingleText } from "../../domain/message-part-display.js"
 import {
   emptyLoopQueueState,
   FollowUpQueueEntryInfo,
+  type LoopQueueState,
+  Message,
+  messagePartsTextLines,
+  messageSingleText,
+  type QueuedTurnItem,
+  type QueueEntryInfo,
   QueueSnapshot,
   SteeringQueueEntryInfo,
-  type LoopQueueState,
-  type QueueEntryInfo,
-  type QueuedTurnItem,
-} from "../../domain/queue.js"
+} from "../../domain/message.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import {
   AgentLoopError,

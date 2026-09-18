@@ -12,7 +12,7 @@ import {
 } from "effect"
 import { canonicalJsonString } from "effect-encore"
 import { SqlClient } from "effect/unstable/sql"
-import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
+import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary.js"
 import {
   AgentRunFailed,
   AgentRunSpawned,
@@ -41,8 +41,7 @@ import {
   SessionId,
   type ToolCallId,
 } from "../../domain/ids.js"
-import { latestAssistantText, messagesToolCalls } from "../../domain/message-part-display.js"
-import { Branch, Session } from "../../domain/message.js"
+import { Branch, latestAssistantText, messagesToolCalls, Session } from "../../domain/message.js"
 import { GentPlatform } from "../gent-platform.js"
 import { BranchStorage } from "../../storage/branch-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"

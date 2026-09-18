@@ -1,20 +1,21 @@
 import { describe, expect, test } from "bun:test"
 import {
+  dateFromMillis,
+  latestAssistantText,
+  Message,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
   messagePartsTextLines,
-  latestAssistantText,
-  messagesToolCalls,
-  projectMessagesWithToolInteractions,
   messagePartsToolCallParts,
   messageSingleText,
+  messagesToolCalls,
+  projectMessagesWithToolInteractions,
+  projectResponsePartsToMessageParts,
   toolCallDurations,
-} from "../../src/domain/message-part-display"
+} from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
-import { projectResponsePartsToMessageParts } from "../../src/domain/response-to-prompt"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { dateFromMillis, Message } from "../../src/domain/message"
 import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"

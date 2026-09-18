@@ -53,7 +53,12 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { ShardingConfig } from "effect/unstable/cluster"
 import { Actor } from "effect-encore"
 import { type AgentName, type RunSpec } from "../../domain/agent.js"
-import { Message, type MessageMetadata } from "../../domain/message.js"
+import {
+  emptyLoopQueueState,
+  Message,
+  type MessageMetadata,
+  type QueuedTurnItem,
+} from "../../domain/message.js"
 
 const isActiveLoopState = Predicate.or(
   Predicate.isTagged("Running"),
@@ -73,7 +78,6 @@ import { SessionProfileCache } from "../session-profile.js"
 import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import { AgentLoopError, asAgentLoopError } from "./agent-loop.state.js"
 import { turnFailureEpoch, wantsWakeOnRecovery, type AgentLoopState } from "./loop-inbox.js"
-import { emptyLoopQueueState, type QueuedTurnItem } from "../../domain/queue.js"
 import {
   AgentLoopFollowUp,
   type AgentLoopBehavior,

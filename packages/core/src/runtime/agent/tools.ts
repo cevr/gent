@@ -58,8 +58,8 @@ import {
   stringifyOutput,
   summarizeOutput,
   ToolResultFailure,
-} from "../../domain/tool-output.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary"
+} from "../../domain/message.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary.js"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 import type { AgentName as AgentNameType } from "../../domain/agent.js"

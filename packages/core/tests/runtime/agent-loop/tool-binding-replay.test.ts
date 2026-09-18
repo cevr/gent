@@ -10,7 +10,7 @@ import {
   ToolCallId,
   ToolId,
 } from "../../../src/domain/ids"
-import { Message, dateFromMillis } from "../../../src/domain/message"
+import { dateFromMillis, encodeToolOutput, Message } from "../../../src/domain/message"
 import {
   ToolBindingIdentity,
   ToolBindingSource,
@@ -49,7 +49,6 @@ import {
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { EventStorage } from "../../../src/storage/event-storage"
-import { encodeToolOutput } from "../../../src/domain/tool-output"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"

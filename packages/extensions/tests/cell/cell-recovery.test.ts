@@ -16,7 +16,12 @@ import {
 } from "@gent/core-internal/domain/agent.js"
 import { ControlChildAgent, DelegateTool } from "../../src/delegate.js"
 import { admitChildSession } from "@gent/core-internal/runtime/agent/agent-runner.js"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
+import {
+  assistantMessageIdForTurn,
+  dateFromMillis,
+  Message,
+  messageSingleText,
+} from "@gent/core-internal/domain/message.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
@@ -37,11 +42,6 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core-internal/domain/ids.js"
-import {
-  assistantMessageIdForTurn,
-  Message,
-  dateFromMillis,
-} from "@gent/core-internal/domain/message.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { AgentLoopQueueStorage } from "@gent/core-internal/storage/agent-loop-queue-storage.js"
 import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage.js"

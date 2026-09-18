@@ -6,7 +6,7 @@ import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/
 import { ExtensionHost, defineExtension } from "@gent/core/extensions/api"
 import { DelegateExtension } from "../../src/delegate.js"
 import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension.js"
-import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
+import { messageSingleText } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"

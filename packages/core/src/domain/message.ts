@@ -1,7 +1,98 @@
-import { Predicate, Schema } from "effect"
+import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
-import { ModelId, ReasoningEffort } from "./agent"
+import { BranchId, MessageId, SessionId, ToolCallId } from "./ids.js"
+import {
+  AgentName,
+  type AgentRunToolCall,
+  AgentRunToolCallSchema,
+  ModelId,
+  ReasoningEffort,
+  RunSpecSchema,
+} from "./agent.js"
+import type { EventEnvelope, Usage } from "./event.js"
+import * as Response from "effect/unstable/ai/Response"
+
+// ── head-tail ───────────────────────────────────────────────────────────────
+
+/**
+ * Head + tail projections of a bounded view over a longer sequence: the
+ * first half, a truncation marker, the last half.
+ */
+
+interface HeadTailResult<T> {
+  readonly head: T[]
+  readonly tail: T[]
+  readonly truncatedCount: number
+}
+
+interface HeadTailCharsResult {
+  readonly text: string
+  readonly truncated: boolean
+  readonly totalChars: number
+}
+
+/**
+ * Truncate an array to head + tail. For when all items are known upfront.
+ */
+export function headTail<T>(items: readonly T[], maxItems: number = 100): HeadTailResult<T> {
+  const total = items.length
+  if (total <= maxItems) {
+    return { head: [...items], tail: [], truncatedCount: 0 }
+  }
+
+  const half = Math.floor(maxItems / 2)
+  const head = items.slice(0, half)
+  const tail = items.slice(-half)
+
+  return { head, tail, truncatedCount: total - half * 2 }
+}
+
+/**
+ * Format head+tail arrays with truncation marker.
+ */
+export function formatHeadTail(
+  items: readonly unknown[],
+  maxItems: number = 100,
+  truncatedMsg: (count: number) => string = (n) => `... [${n} lines truncated] ...`,
+): string {
+  const { head, tail, truncatedCount } = headTail(items, maxItems)
+
+  if (truncatedCount === 0) {
+    return head.map(String).join("\n")
+  }
+
+  return [...head.map(String), "", truncatedMsg(truncatedCount), "", ...tail.map(String)].join("\n")
+}
+
+/**
+ * Truncate raw text to head + tail by characters.
+ */
+export function headTailChars(text: string, maxChars: number = 64_000): HeadTailCharsResult {
+  const total = text.length
+  if (total <= maxChars) {
+    return { text, truncated: false, totalChars: total }
+  }
+
+  const half = Math.floor(maxChars / 2)
+  const head = text.slice(0, half)
+  const tail = text.slice(-half)
+
+  return {
+    text: `${head}\n\n... [${total - maxChars} characters truncated] ...\n\n${tail}`,
+    truncated: true,
+    totalChars: total,
+  }
+}
+
+/**
+ * Keep the head of `text` up to `maxChars`. A longer text ends in `marker`.
+ */
+export function clipChars(text: string, maxChars: number, marker: string = "…"): string {
+  if (text.length <= maxChars) return text
+  return text.slice(0, maxChars) + marker
+}
+
+// ── message ─────────────────────────────────────────────────────────────────
 
 export const dateFromMillis = (millis: number): Date => Schema.decodeSync(DateFromNumber)(millis)
 
@@ -286,3 +377,808 @@ export const isRuntimeUserMessage = (message: {
   readonly role: MessageRole
   readonly metadata?: MessageMetadata
 }): boolean => message.role === "user" && isRuntimeUserMessageType(message.metadata?.customType)
+
+// ── tool-output ─────────────────────────────────────────────────────────────
+
+/** Structured failure data. The runner, not the tool, owns transcript identity. */
+export class ToolResultFailure extends Schema.TaggedError<ToolResultFailure>()(
+  "ToolResultFailure",
+  { message: Schema.String, result: Schema.Json },
+) {}
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
+
+// The event transcript stores this lossless JSON form for replay. Keep the
+// human-facing summary and display string separate from this value.
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool output is decoded at this schema boundary.
+export const encodeToolOutput = (value: unknown): string => encodeJson(value)
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Persisted tool output crosses a schema boundary.
+export const decodeToolOutput = (value: string): Option.Option<unknown> =>
+  Result.try(() => decodeJson(value)).pipe(Result.getSuccess)
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
+const tryStringifyJson = (value: unknown): Option.Option<string> =>
+  Result.try(() => encodeJson(value)).pipe(Result.getSuccess)
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
+const tryPrettyStringifyJson = (value: unknown): Option.Option<string> =>
+  Result.try(() => {
+    const encoded = encodeJson(value)
+    const decoded = decodeJson(encoded)
+    // oxlint-disable-next-line effect/noGlobals, effect/noNullish -- Pretty output preserves the established tool transcript format.
+    const pretty = JSON.stringify(decoded, null, 2)
+    if (Predicate.isUndefined(pretty)) return String(value)
+    return pretty
+  }).pipe(Result.getSuccess)
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
+export const stringifyOutput = (value: unknown): string => {
+  if (Predicate.isString(value)) return value
+  return Option.getOrElse(tryPrettyStringifyJson(value), () => String(value))
+}
+
+/** One-line tool summary for transcripts and the tool row; ASCII marker for plain terminals. */
+const clipSummary = (text: string): string => clipChars(text, 100, "...")
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
+export const summarizeOutput = (value: unknown): string => {
+  if (Predicate.isString(value)) return clipSummary(value.split("\n")[0] ?? "")
+  return Option.match(tryStringifyJson(value), {
+    onNone: () => String(value),
+    onSome: clipSummary,
+  })
+}
+
+// ── message-part-display ────────────────────────────────────────────────────
+
+interface ImagePartProjection {
+  readonly mediaType: string
+}
+
+interface ToolCallPartProjection {
+  readonly id: string
+  readonly toolName: string
+  readonly input: unknown
+}
+
+interface ToolResultPartProjection {
+  readonly id: string
+  readonly toolName: string
+  readonly value: unknown
+  readonly summary: string
+  readonly text: string
+  readonly isError: boolean
+}
+
+interface ToolResultState {
+  readonly summary: string
+  readonly output: string
+  readonly isError: boolean
+}
+
+interface IndexedToolResultState extends ToolResultState {
+  readonly messageIndex: number
+  readonly partIndex: number
+}
+
+interface ToolCallPosition {
+  readonly messageIndex: number
+  readonly partIndex: number
+}
+
+interface IndexedToolCallState extends ToolCallPartProjection {
+  readonly position: ToolCallPosition
+}
+
+interface MessagePartsDisplayTextOptions {
+  readonly maxToolChars?: number
+}
+
+type JsonEncoderInput = Parameters<typeof encodeToolOutput>[0]
+
+const stringifyDisplayValue = (value: JsonEncoderInput): string => {
+  const encoded = Result.try(() => encodeToolOutput(value))
+  if (Result.isFailure(encoded)) return String(value)
+  return encoded.success
+}
+
+// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+const messagePartText = (part: MessagePart): string | undefined => {
+  if (part.type === "text") return part.text
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  return undefined
+}
+
+// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+const messagePartReasoning = (part: MessagePart): string | undefined => {
+  if (part.type === "reasoning") return part.text
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  return undefined
+}
+
+// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+const messagePartImage = (part: MessagePart): ImagePartProjection | undefined => {
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  if (part.type !== "file" || !part.mediaType.startsWith("image/")) return undefined
+  return { mediaType: part.mediaType }
+}
+
+// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+const messagePartToolCall = (part: MessagePart): ToolCallPartProjection | undefined => {
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  if (part.type !== "tool-call") return undefined
+  return {
+    id: part.id,
+    toolName: part.name,
+    input: part.params,
+  }
+}
+
+// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+const messagePartToolResult = (part: MessagePart): ToolResultPartProjection | undefined => {
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  if (part.type !== "tool-result") return undefined
+  return {
+    id: part.id,
+    toolName: part.name,
+    value: part.result,
+    summary: summarizeOutput(part.result),
+    text: stringifyOutput(part.result),
+    isError: part.isFailure,
+  }
+}
+
+export const messagePartsText = (parts: ReadonlyArray<MessagePart>): string =>
+  parts.flatMap((part) => messagePartText(part) ?? []).join("")
+
+export const messagePartsTextLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
+  parts.flatMap((part) => {
+    const text = messagePartText(part)
+    if (Predicate.isUndefined(text)) return []
+    return [text]
+  })
+
+// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+export const messageSingleText = (parts: ReadonlyArray<MessagePart>): string | undefined => {
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  if (parts.length !== 1) return undefined
+  const [part] = parts
+  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
+  if (Predicate.isUndefined(part)) return undefined
+  return messagePartText(part)
+}
+
+export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
+  parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
+
+/**
+ * The answer a child run hands back: the last assistant message's text, or its
+ * reasoning when the model wrote nothing else.
+ */
+export const latestAssistantText = (
+  messages: ReadonlyArray<{ readonly role: string; readonly parts: ReadonlyArray<MessagePart> }>,
+): string => {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (Predicate.isUndefined(message) || message.role !== "assistant") continue
+    const text = messagePartsTextLines(message.parts)[0] ?? ""
+    if (text.length > 0) return text
+    return messagePartsReasoningLines(message.parts).join("\n")
+  }
+  return ""
+}
+
+const decodeToolArgs = Schema.decodeUnknownOption(AgentRunToolCallSchema.fields.args)
+
+/** Every finished tool call on a branch, paired with its result. Object params only. */
+export const messagesToolCalls = (
+  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<MessagePart> }>,
+): ReadonlyArray<AgentRunToolCall> => {
+  const parts = messages.flatMap((message) => message.parts)
+  const calls = new Map<string, Pick<AgentRunToolCall, "toolName" | "args">>()
+  for (const part of parts) {
+    if (part.type !== "tool-call") continue
+    calls.set(part.id, {
+      toolName: part.name,
+      args: Option.getOrElse(decodeToolArgs(part.params), () => ({})),
+    })
+  }
+  return parts.flatMap((part) => {
+    if (part.type !== "tool-result") return []
+    const call = calls.get(part.id)
+    return [
+      { toolName: call?.toolName ?? part.name, args: call?.args ?? {}, isError: part.isFailure },
+    ]
+  })
+}
+
+const messagePartsReasoningLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
+  parts.flatMap((part) => {
+    const reasoning = messagePartReasoning(part)
+    if (Predicate.isUndefined(reasoning)) return []
+    return [reasoning]
+  })
+
+export const messagePartsImages = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<ImagePartProjection> =>
+  parts.flatMap((part) => {
+    const image = messagePartImage(part)
+    if (Predicate.isUndefined(image)) return []
+    return [image]
+  })
+
+export const messagePartsToolCallParts = (
+  parts: ReadonlyArray<MessagePart>,
+): ReadonlyArray<Prompt.ToolCallPart> =>
+  parts.flatMap((part) => {
+    if (part.type === "tool-call") return [part]
+    return []
+  })
+
+const buildToolResultMapFromMessages = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyMap<string, ReadonlyArray<IndexedToolResultState>> => {
+  const resultMap = new Map<string, IndexedToolResultState[]>()
+  for (const [messageIndex, message] of messages.entries()) {
+    if (message.role !== "tool") continue
+    for (const [partIndex, part] of message.parts.entries()) {
+      const result = messagePartToolResult(part)
+      if (Predicate.isUndefined(result)) continue
+      const results = resultMap.get(result.id) ?? []
+      results.push({
+        messageIndex,
+        partIndex,
+        summary: result.summary,
+        output: result.text,
+        isError: result.isError,
+      })
+      resultMap.set(result.id, results)
+    }
+  }
+  return resultMap
+}
+
+const comparePosition = (left: ToolCallPosition, right: ToolCallPosition): number => {
+  if (left.messageIndex !== right.messageIndex) return left.messageIndex - right.messageIndex
+  return left.partIndex - right.partIndex
+}
+
+const indexedToolCalls = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyMap<string, ReadonlyArray<IndexedToolCallState>> => {
+  const calls = new Map<string, IndexedToolCallState[]>()
+  for (const [messageIndex, message] of messages.entries()) {
+    for (const [partIndex, part] of message.parts.entries()) {
+      const toolCall = messagePartToolCall(part)
+      if (Predicate.isUndefined(toolCall)) continue
+      const existing = calls.get(toolCall.id) ?? []
+      existing.push({ ...toolCall, position: { messageIndex, partIndex } })
+      calls.set(toolCall.id, existing)
+    }
+  }
+  return calls
+}
+
+const buildToolResultPairings = (
+  messages: ReadonlyArray<Message>,
+  resultMap: ReadonlyMap<string, ReadonlyArray<IndexedToolResultState>>,
+): ReadonlyMap<string, ToolResultState> => {
+  const pairings = new Map<string, ToolResultState>()
+  const callsById = indexedToolCalls(messages)
+  for (const [toolCallId, calls] of callsById) {
+    const results = resultMap.get(toolCallId) ?? []
+    let resultIndex = 0
+    for (const call of calls) {
+      while (resultIndex < results.length) {
+        const candidate = results[resultIndex]
+        if (Predicate.isUndefined(candidate) || comparePosition(candidate, call.position) > 0) break
+        resultIndex++
+      }
+      const result = results[resultIndex]
+      if (Predicate.isUndefined(result)) continue
+      pairings.set(`${call.position.messageIndex}:${call.position.partIndex}`, result)
+      resultIndex++
+    }
+  }
+  return pairings
+}
+
+const findResultForToolCall = (
+  callMessageIndex: number,
+  callPartIndex: number,
+  pairings: ReadonlyMap<string, ToolResultState>,
+): Option.Option<ToolResultState> =>
+  Option.fromUndefinedOr(pairings.get(`${callMessageIndex}:${callPartIndex}`))
+
+/** Wall time per tool call, from its started receipt to its terminal receipt. */
+export const toolCallDurations = (
+  events: ReadonlyArray<EventEnvelope>,
+): ReadonlyMap<ToolCallId, number> => {
+  const started = new Map<ToolCallId, number>()
+  const durations = new Map<ToolCallId, number>()
+  for (const envelope of events) {
+    const event = envelope.event
+    if (event._tag === "ToolCallStarted") {
+      started.set(event.toolCallId, envelope.createdAt)
+      continue
+    }
+    if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
+    const startedAt = started.get(event.toolCallId)
+    if (Predicate.isUndefined(startedAt)) continue
+    durations.set(event.toolCallId, Math.max(0, envelope.createdAt - startedAt))
+  }
+  return durations
+}
+
+const messagePartsToolInteractions = (
+  parts: ReadonlyArray<MessagePart>,
+  resultForToolCall: (partIndex: number) => Option.Option<ToolResultState>,
+  durations: ReadonlyMap<ToolCallId, number>,
+): ReadonlyArray<ToolInteraction> => {
+  const interactions: ToolInteraction[] = []
+  for (const [partIndex, part] of parts.entries()) {
+    const toolCall = messagePartToolCall(part)
+    if (Predicate.isUndefined(toolCall)) continue
+    const id = ToolCallId.make(toolCall.id)
+    const result = resultForToolCall(partIndex)
+    let status: ToolInteraction["status"] = "running"
+    if (Option.isSome(result)) {
+      status = "completed"
+      if (result.value.isError) status = "error"
+    }
+    interactions.push({
+      id,
+      toolName: toolCall.toolName,
+      status,
+      input: toolCall.input,
+      summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
+      output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
+      durationMs: durations.get(id),
+    })
+  }
+  return interactions
+}
+
+export const projectMessagesWithToolInteractions = (
+  messages: ReadonlyArray<Message>,
+  durations: ReadonlyMap<ToolCallId, number> = new Map(),
+): ReadonlyArray<ProjectedMessage> => {
+  const resultMap = buildToolResultMapFromMessages(messages)
+  const pairings = buildToolResultPairings(messages, resultMap)
+  return messages.map((message, index) =>
+    projectMessage(
+      message,
+      messagePartsToolInteractions(
+        message.parts,
+        (partIndex) => findResultForToolCall(index, partIndex, pairings),
+        durations,
+      ),
+    ),
+  )
+}
+
+/**
+ * Human-readable transcript display. Renders user-visible text plus tool
+ * calls/results; reasoning and images stay available through focused helpers.
+ */
+export const messagePartsDisplayText = (
+  parts: ReadonlyArray<MessagePart>,
+  options: MessagePartsDisplayTextOptions = {},
+): string => {
+  const maxToolChars = options.maxToolChars ?? 500
+  const chunks: string[] = []
+
+  for (const part of parts) {
+    const text = messagePartText(part)
+    if (!Predicate.isUndefined(text)) {
+      chunks.push(text)
+      continue
+    }
+
+    const toolCall = messagePartToolCall(part)
+    if (!Predicate.isUndefined(toolCall)) {
+      chunks.push(
+        `### tool: ${toolCall.toolName}\n${clipChars(
+          stringifyDisplayValue(toolCall.input),
+          maxToolChars,
+        )}`,
+      )
+      continue
+    }
+
+    const toolResult = messagePartToolResult(part)
+    if (!Predicate.isUndefined(toolResult)) {
+      chunks.push(`result: ${clipChars(toolResult.text, maxToolChars)}`)
+    }
+  }
+
+  return chunks.join("\n")
+}
+
+/** One durable message part as text for a model; `context.read` and summary prompts share it. */
+export const partToText = (part: MessagePart): string => {
+  switch (part.type) {
+    case "text":
+      return part.text
+    case "reasoning":
+      return `[reasoning] ${part.text}`
+    case "tool-call":
+      return `[tool-call ${part.name} ${part.id}] ${encodeToolOutput(part.params)}`
+    case "tool-result":
+      return `[tool-result ${part.name} ${part.id}] ${encodeToolOutput(part.result)}`
+    case "file":
+      return `[file ${part.mediaType}]`
+    case "tool-approval-request":
+      return `[tool-approval-request ${part.toolCallId}]`
+    case "tool-approval-response": {
+      let status = "denied"
+      if (part.approved) status = "approved"
+      return `[tool-approval-response ${part.approvalId}] ${status}`
+    }
+  }
+}
+
+// ── queue ───────────────────────────────────────────────────────────────────
+
+const QueueEntryFields = {
+  id: MessageId,
+  content: Schema.String,
+  createdAt: Schema.Finite,
+  agentOverride: Schema.optional(AgentName),
+}
+
+const SteeringEntry = Schema.TaggedStruct("Steering", QueueEntryFields)
+const FollowUpEntry = Schema.TaggedStruct("FollowUp", QueueEntryFields)
+
+export const QueueEntryInfo = Schema.Union([SteeringEntry, FollowUpEntry]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
+export type QueueEntryInfo = typeof QueueEntryInfo.Type
+
+export const SteeringQueueEntryInfo = QueueEntryInfo.cases.Steering
+export type SteeringQueueEntryInfo = typeof QueueEntryInfo.cases.Steering.Type
+export const FollowUpQueueEntryInfo = QueueEntryInfo.cases.FollowUp
+export type FollowUpQueueEntryInfo = typeof QueueEntryInfo.cases.FollowUp.Type
+
+export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")({
+  steering: Schema.Array(QueueEntryInfo),
+  followUp: Schema.Array(QueueEntryInfo),
+}) {}
+
+export const emptyQueueSnapshot = (): QueueSnapshot =>
+  new QueueSnapshot({ steering: [], followUp: [] })
+
+// ── Persisted queue ──
+//
+// The on-disk format of `agent_loop_queues.queue_json`. A row written by any
+// shipped build must still decode, so no field here is renamed, re-shaped, or
+// promoted from optional to required. `runtime/agent/loop-inbox.ts` is the
+// only module that interprets these values; this file declares their shape.
+
+export const QueuedTurnItem = Schema.Struct({
+  message: Message,
+  agentOverride: Schema.optional(AgentName),
+  runSpec: Schema.optional(RunSpecSchema),
+  /**
+   * `false` withholds the tools that ask the user, which a child turn has no
+   * one to answer. Only `false` is read, so absent and `true` mean the same
+   * thing, and only `agent-runner.ts` writes it.
+   *
+   * It stays optional under this name because a queue row on disk may predate
+   * any change: a required field rejects a row whose key is absent, and a
+   * renamed one drops a stored `false` and hands the child the tools it was
+   * denied. Both were measured, not assumed.
+   */
+  interactive: Schema.optional(Schema.Boolean),
+  /** The admitter asked for a turn even when the branch has no prior history. */
+  wake: Schema.optional(Schema.Boolean),
+  /**
+   * The message id is a durable source key (`followUpMessageIdForSource`), so
+   * re-admission replaces this item by id and it is never merged into a
+   * neighbour; merging would lose the identity the key exists for.
+   */
+  keyed: Schema.optional(Schema.Boolean),
+})
+export type QueuedTurnItem = typeof QueuedTurnItem.Type
+
+export const LoopQueueState = Schema.Struct({
+  steering: Schema.Array(QueuedTurnItem),
+  followUp: Schema.Array(QueuedTurnItem),
+  inFlight: Schema.optional(QueuedTurnItem),
+})
+export type LoopQueueState = typeof LoopQueueState.Type
+
+export const emptyLoopQueueState = (): LoopQueueState => ({
+  steering: [],
+  followUp: [],
+})
+
+// ── response-part-normalization ─────────────────────────────────────────────
+
+const appendNormalizedTextPart = (parts: Array<Response.AnyPart>, text: string): void => {
+  if (text === "") return
+  const last = parts.at(-1)
+  if (last?.type === "text") {
+    parts[parts.length - 1] = Response.makePart("text", { text: `${last.text}${text}` })
+    return
+  }
+  parts.push(Response.makePart("text", { text }))
+}
+
+const appendNormalizedReasoningPart = (parts: Array<Response.AnyPart>, text: string): void => {
+  if (text === "") return
+  const last = parts.at(-1)
+  if (last?.type === "reasoning") {
+    parts[parts.length - 1] = Response.makePart("reasoning", {
+      text: `${last.text}${text}`,
+    })
+    return
+  }
+  parts.push(Response.makePart("reasoning", { text }))
+}
+
+interface NormalizedResponseState {
+  readonly normalized: Array<Response.AnyPart>
+  readonly activeTextDeltas: Map<string, string>
+  readonly activeReasoningDeltas: Map<string, string>
+  readonly toolCallIds: Set<string>
+  readonly toolResultIds: Set<string>
+}
+
+type TextResponsePart = Extract<
+  Response.AnyPart,
+  { readonly type: "text" | "text-start" | "text-delta" | "text-end" }
+>
+
+type ReasoningResponsePart = Extract<
+  Response.AnyPart,
+  { readonly type: "reasoning" | "reasoning-start" | "reasoning-delta" | "reasoning-end" }
+>
+
+const normalizeTextResponsePart = (
+  state: NormalizedResponseState,
+  part: TextResponsePart,
+): void => {
+  switch (part.type) {
+    case "text":
+      appendNormalizedTextPart(state.normalized, part.text)
+      return
+    case "text-start":
+      state.activeTextDeltas.set(part.id, "")
+      return
+    case "text-delta":
+      if (state.activeTextDeltas.has(part.id)) {
+        state.activeTextDeltas.set(
+          part.id,
+          `${state.activeTextDeltas.get(part.id) ?? ""}${part.delta}`,
+        )
+      } else {
+        appendNormalizedTextPart(state.normalized, part.delta)
+      }
+      return
+    case "text-end":
+      appendNormalizedTextPart(state.normalized, state.activeTextDeltas.get(part.id) ?? "")
+      state.activeTextDeltas.delete(part.id)
+      return
+  }
+}
+
+const normalizeReasoningResponsePart = (
+  state: NormalizedResponseState,
+  part: ReasoningResponsePart,
+): void => {
+  switch (part.type) {
+    case "reasoning":
+      appendNormalizedReasoningPart(state.normalized, part.text)
+      return
+    case "reasoning-start":
+      state.activeReasoningDeltas.set(part.id, "")
+      return
+    case "reasoning-delta":
+      if (state.activeReasoningDeltas.has(part.id)) {
+        state.activeReasoningDeltas.set(
+          part.id,
+          `${state.activeReasoningDeltas.get(part.id) ?? ""}${part.delta}`,
+        )
+      } else {
+        appendNormalizedReasoningPart(state.normalized, part.delta)
+      }
+      return
+    case "reasoning-end":
+      appendNormalizedReasoningPart(
+        state.normalized,
+        state.activeReasoningDeltas.get(part.id) ?? "",
+      )
+      state.activeReasoningDeltas.delete(part.id)
+      return
+  }
+}
+
+const normalizePassthroughResponsePart = (
+  state: NormalizedResponseState,
+  part: Response.AnyPart,
+): void => {
+  switch (part.type) {
+    case "tool-result":
+      if (part.preliminary === true || state.toolResultIds.has(part.id)) return
+      state.toolResultIds.add(part.id)
+      state.normalized.push(part)
+      return
+    case "tool-call":
+      if (!state.toolCallIds.has(part.id)) {
+        state.toolCallIds.add(part.id)
+        state.normalized.push(part)
+      }
+      return
+    case "file":
+    case "tool-approval-request":
+    case "source":
+    case "response-metadata":
+    case "finish":
+      state.normalized.push(part)
+      return
+    default:
+      return
+  }
+}
+
+export const normalizeResponseParts = (
+  parts: ReadonlyArray<Response.AnyPart>,
+): ReadonlyArray<Response.AnyPart> => {
+  const state: NormalizedResponseState = {
+    normalized: [],
+    activeTextDeltas: new Map<string, string>(),
+    activeReasoningDeltas: new Map<string, string>(),
+    toolCallIds: new Set<string>(),
+    toolResultIds: new Set<string>(),
+  }
+
+  for (const part of parts) {
+    if (
+      part.type === "text" ||
+      part.type === "text-start" ||
+      part.type === "text-delta" ||
+      part.type === "text-end"
+    ) {
+      normalizeTextResponsePart(state, part)
+      continue
+    }
+
+    if (
+      part.type === "reasoning" ||
+      part.type === "reasoning-start" ||
+      part.type === "reasoning-delta" ||
+      part.type === "reasoning-end"
+    ) {
+      normalizeReasoningResponsePart(state, part)
+      continue
+    }
+
+    normalizePassthroughResponsePart(state, part)
+  }
+
+  for (const text of state.activeTextDeltas.values()) {
+    appendNormalizedTextPart(state.normalized, text)
+  }
+  for (const text of state.activeReasoningDeltas.values()) {
+    appendNormalizedReasoningPart(state.normalized, text)
+  }
+
+  return state.normalized
+}
+
+// ── response-to-prompt ──────────────────────────────────────────────────────
+
+export const responseUsage = (usage: Response.FinishPart["usage"]): Option.Option<Usage> => {
+  const inputTokens = usage?.inputTokens?.total
+  const outputTokens = usage?.outputTokens?.total
+  if (
+    Predicate.isUndefined(inputTokens) ||
+    Predicate.isUndefined(outputTokens) ||
+    !Number.isSafeInteger(inputTokens) ||
+    !Number.isSafeInteger(outputTokens) ||
+    inputTokens < 0 ||
+    outputTokens < 0
+  )
+    return Option.none()
+  const cacheReadTokens = Option.fromUndefinedOr(usage.inputTokens.cacheRead).pipe(
+    Option.filter((count) => Number.isSafeInteger(count) && count >= 0),
+  )
+  const cacheWriteTokens = Option.fromUndefinedOr(usage.inputTokens.cacheWrite).pipe(
+    Option.filter((count) => Number.isSafeInteger(count) && count >= 0),
+  )
+  return Option.some({
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: Option.getOrUndefined(cacheReadTokens),
+    cacheWriteTokens: Option.getOrUndefined(cacheWriteTokens),
+  })
+}
+
+type AssistantMessagePart =
+  | Prompt.TextPart
+  | Prompt.ReasoningPart
+  | Prompt.FilePart
+  | Prompt.ToolCallPart
+  | Prompt.ToolApprovalRequestPart
+
+interface MessagePartProjection {
+  readonly assistant: ReadonlyArray<AssistantMessagePart>
+  readonly tool: ReadonlyArray<Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart>
+}
+
+const responsePartToAssistantMessagePart = (
+  part: Response.AnyPart,
+): Option.Option<AssistantMessagePart> => {
+  switch (part.type) {
+    case "text":
+      return Option.some(Prompt.textPart({ text: part.text }))
+    case "reasoning":
+      return Option.some(Prompt.reasoningPart({ text: part.text }))
+    case "file":
+      // Only images replay into the transcript; the provider gets a data URL back.
+      if (!part.mediaType.startsWith("image/")) return Option.none()
+      return Option.some(
+        Prompt.filePart({
+          data: `data:${part.mediaType};base64,${Buffer.from(part.data).toString("base64")}`,
+          mediaType: part.mediaType,
+        }),
+      )
+    case "tool-call":
+      return Option.some(
+        Prompt.toolCallPart({
+          id: part.id,
+          name: part.name,
+          params: part.params,
+          providerExecuted: part.providerExecuted,
+        }),
+      )
+    case "tool-approval-request":
+      return Option.some(
+        Prompt.toolApprovalRequestPart({
+          approvalId: part.approvalId,
+          toolCallId: part.toolCallId,
+        }),
+      )
+    default:
+      return Option.none()
+  }
+}
+
+const responsePartToToolResultPart = (
+  part: Response.AnyPart,
+): Option.Option<Prompt.ToolResultPart> => {
+  if (part.type !== "tool-result" || part.preliminary === true) return Option.none()
+  return Option.some(
+    Prompt.toolResultPart({
+      id: part.id,
+      name: part.name,
+      isFailure: part.isFailure,
+      providerExecuted: false,
+      result: part.encodedResult,
+    }),
+  )
+}
+
+export const projectResponsePartsToMessageParts = (
+  parts: ReadonlyArray<Response.AnyPart>,
+): MessagePartProjection => {
+  const normalized = normalizeResponseParts(parts)
+  const assistant: Array<AssistantMessagePart> = []
+  const tool: Array<Prompt.ToolResultPart | Prompt.ToolApprovalResponsePart> = []
+
+  for (const part of normalized) {
+    const assistantPart = responsePartToAssistantMessagePart(part)
+    if (Option.isSome(assistantPart)) {
+      assistant.push(assistantPart.value)
+      continue
+    }
+    const toolPart = responsePartToToolResultPart(part)
+    if (Option.isSome(toolPart)) tool.push(toolPart.value)
+  }
+
+  return { assistant, tool }
+}
