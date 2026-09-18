@@ -1,4 +1,4 @@
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
+import { CellBranchTools, CellTool } from "../../src/cell.js"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Predicate, Ref, Schema, Stream } from "effect"
@@ -10,7 +10,6 @@ import {
 } from "@gent/core-internal/domain/extension.js"
 import { ExtensionId } from "@gent/core-internal/domain/ids.js"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
-import { CellTool } from "../../src/cell/cell-tool.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"

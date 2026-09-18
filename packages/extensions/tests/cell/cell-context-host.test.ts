@@ -7,9 +7,8 @@ import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { handleContextCall, pageText } from "../../src/cell/cell-context-host.js"
+import { CellBranchTools, handleContextCall, pageText } from "../../src/cell.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
 
 const sessionId = SessionId.make("context-host-session")
 const branchId = BranchId.make("context-host-branch")
