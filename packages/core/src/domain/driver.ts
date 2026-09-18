@@ -33,7 +33,7 @@ import type { AuthAuthorizationMethod, AuthMethod } from "./auth.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExtensionHostContext } from "./extension-services.js"
 import type { BranchId, SessionId } from "./ids.js"
-import type { InteractionPendingError } from "./interaction-request.js"
+import type { InteractionPendingError } from "./interaction.js"
 import type { Message } from "./message.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))

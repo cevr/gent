@@ -8,7 +8,7 @@ import {
 import { EventPublisher, StreamEnded, StreamStarted, TurnCompleted } from "../../domain/event.js"
 import { omitUndefined } from "../../domain/guards.js"
 import { type BranchId, InteractionRequestId, type SessionId } from "../../domain/ids.js"
-import { InteractionPendingError } from "../../domain/interaction-request.js"
+import { InteractionPendingError } from "../../domain/interaction.js"
 import { TurnError } from "../../domain/driver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"

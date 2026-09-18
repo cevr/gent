@@ -12,11 +12,7 @@ import type { AgentEvent, TurnCompleted } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ExtensionHostPlatform, ExtensionTurnContext } from "./extension.js"
 import type { ProcessResult, RunProcessOptions } from "../runtime/run-process.js"
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  InteractionPendingError,
-} from "./interaction-request.js"
+import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
 import {
   ExtensionId,
   type BranchId,

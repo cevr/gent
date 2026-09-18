@@ -14,7 +14,7 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc.js"
-import { encodeInteractionDecision } from "../../src/domain/interaction-request.js"
+import { encodeInteractionDecision } from "../../src/domain/interaction.js"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 

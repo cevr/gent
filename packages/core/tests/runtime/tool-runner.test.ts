@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Predicate, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { InteractionPendingError } from "../../src/domain/interaction-request"
+import { InteractionPendingError } from "../../src/domain/interaction"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool, ExtensionContext } from "@gent/core/extensions/api"
 import {

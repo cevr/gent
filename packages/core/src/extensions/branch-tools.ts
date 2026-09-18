@@ -101,8 +101,8 @@ export { responseUsage } from "../domain/message.js"
 export { toPrompt } from "../providers/ai-transcript.js"
 
 // Interaction ownership: a feature that suspends for an answer owns the request.
-export { CurrentInteractionOwner, type InteractionOwnership } from "../domain/interaction-owner.js"
-export { ApprovalDecisionSchema, InteractionRequestRecord } from "../domain/interaction-request.js"
+export { CurrentInteractionOwner, type InteractionOwnership } from "../domain/interaction.js"
+export { ApprovalDecisionSchema, InteractionRequestRecord } from "../domain/interaction.js"
 
 // Ids and domain values a feature names.
 export { InteractionRequestId, ToolId } from "../domain/ids.js"

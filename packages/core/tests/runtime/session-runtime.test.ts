@@ -44,7 +44,7 @@ import {
   SessionId,
   ToolCallId,
 } from "../../src/domain/ids"
-import { InteractionPendingError } from "../../src/domain/interaction-request"
+import { InteractionPendingError } from "../../src/domain/interaction"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { noBranchTools, ToolRunner } from "../../src/runtime/agent/tools"

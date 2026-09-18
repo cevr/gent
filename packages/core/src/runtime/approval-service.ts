@@ -10,14 +10,14 @@
 
 import { Context, Effect, Layer, Option } from "effect"
 import { EventPublisher, EventStoreError, InteractionPresented } from "../domain/event.js"
-import { CurrentInteractionOwner } from "../domain/interaction-owner.js"
-import type { InteractionRequestId } from "../domain/ids.js"
 import {
-  makeInteractionService,
   type ApprovalDecision,
+  CurrentInteractionOwner,
   type InteractionService,
   type InteractionStorageConfig,
-} from "../domain/interaction-request.js"
+  makeInteractionService,
+} from "../domain/interaction.js"
+import type { InteractionRequestId } from "../domain/ids.js"
 import type { GentPlatform } from "./gent-platform.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 

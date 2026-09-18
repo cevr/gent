@@ -13,7 +13,7 @@ import {
   decodeInteractionParams,
   type InteractionRequestRecord,
   type InteractionStorageConfig,
-} from "../../src/domain/interaction-request"
+} from "../../src/domain/interaction"
 import { BranchId, InteractionRequestId, SessionId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"

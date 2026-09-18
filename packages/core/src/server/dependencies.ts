@@ -32,7 +32,7 @@ import {
   decodeInteractionDecision,
   decodeInteractionParams,
   type ApprovalDecision,
-} from "../domain/interaction-request.js"
+} from "../domain/interaction.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { SessionMutationsLive } from "./session-mutations-live.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"

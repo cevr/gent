@@ -49,7 +49,7 @@ updates this list in the same commit.
    through the durable interaction request; nothing is saved; no answerer
    means no. Core has no rule schema, rule storage, or `permission.*` RPC.
    Receipts: `packages/core/src/runtime/approval-service.ts`,
-   `packages/core/src/domain/interaction-request.ts`.
+   `packages/core/src/domain/interaction.ts`.
 8. **Each model step is classified once.** The stream fold produces a
    `StepOutcome`; persistence and the continue/stop/run-tools policy are
    exhaustive matches on it, and the tag travels on `StreamEnded.outcome`.

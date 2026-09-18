@@ -1542,7 +1542,7 @@ Source:
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/prompt-presenter-live.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/interaction-commands.ts`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/domain/interaction-request.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/domain/interaction.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/transport-contract.ts`
 
 ### Resumed tool status

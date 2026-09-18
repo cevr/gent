@@ -3,7 +3,12 @@ import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
-import { CurrentInteractionOwner } from "@gent/core-internal/domain/interaction-owner.js"
+import {
+  CurrentInteractionOwner,
+  encodeInteractionDecision,
+  InteractionPendingError,
+  InteractionRequestRecord,
+} from "@gent/core-internal/domain/interaction.js"
 import {
   CellBranchTools,
   CellExecutionStorage,
@@ -32,11 +37,6 @@ import {
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "@gent/core-internal/domain/tool-binding.js"
-import {
-  encodeInteractionDecision,
-  InteractionRequestRecord,
-  InteractionPendingError,
-} from "@gent/core-internal/domain/interaction-request.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"

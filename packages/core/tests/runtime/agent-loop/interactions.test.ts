@@ -32,7 +32,7 @@ import {
   MessageReceived,
   ToolCallSucceeded,
 } from "../../../src/domain/event"
-import { InteractionPendingError } from "../../../src/domain/interaction-request"
+import { InteractionPendingError } from "../../../src/domain/interaction"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"

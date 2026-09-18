@@ -6,7 +6,7 @@ import { testToolContext } from "@gent/core-internal/test-utils/extension-harnes
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
 import { BunFileSystem } from "@effect/platform-bun"
-import type { ApprovalDecision } from "@gent/core-internal/domain/interaction-request.js"
+import type { ApprovalDecision } from "@gent/core-internal/domain/interaction.js"
 import type { ExtensionContextService } from "@gent/core/extensions/api"
 
 const interactionDeciding = (

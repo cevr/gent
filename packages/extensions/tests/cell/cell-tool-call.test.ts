@@ -10,7 +10,7 @@ import {
   SessionId,
   ToolCallId,
 } from "@gent/core-internal/domain/ids.js"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request.js"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction.js"
 import {
   provideCurrentHostCtx,
   type ResolvedToolCapability,

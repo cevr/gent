@@ -23,7 +23,7 @@ import {
 } from "../domain/extension-services.js"
 import { makeFileWriter } from "../domain/file-writer.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { InteractionPendingError } from "../domain/interaction-request.js"
+import { InteractionPendingError } from "../domain/interaction.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"

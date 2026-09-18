@@ -1,9 +1,6 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, SchemaGetter as Getter } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import {
-  InteractionRequestRecord,
-  InteractionRequestStatus,
-} from "../domain/interaction-request.js"
+import { InteractionRequestRecord, InteractionRequestStatus } from "../domain/interaction.js"
 import { SessionId, BranchId } from "../domain/ids.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import { StorageError, storageError } from "../domain/errors.js"

@@ -9,7 +9,7 @@ import {
   ToolCallId,
   InteractionRequestId,
 } from "@gent/core-internal/domain/ids.js"
-import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request.js"
+import { InteractionPendingError } from "@gent/core-internal/domain/interaction.js"
 import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message.js"
 import {
   CellBranchTools,

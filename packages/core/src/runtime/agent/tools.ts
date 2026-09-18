@@ -50,7 +50,7 @@ import {
   type TurnInterruptionStatus,
   TurnInterruptSignal,
 } from "./turn-interruption.js"
-import { InteractionPendingError } from "../../domain/interaction-request.js"
+import { InteractionPendingError } from "../../domain/interaction.js"
 import {
   EventPublisher,
   ToolCallFailed,

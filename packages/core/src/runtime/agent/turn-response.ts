@@ -14,7 +14,7 @@ import {
   type Usage,
 } from "../../domain/event.js"
 import { ToolCallId, type BranchId, type MessageId, type SessionId } from "../../domain/ids.js"
-import type { InteractionPendingError } from "../../domain/interaction-request.js"
+import type { InteractionPendingError } from "../../domain/interaction.js"
 import { causeMessage } from "../../domain/guards.js"
 import {
   encodeToolOutput,

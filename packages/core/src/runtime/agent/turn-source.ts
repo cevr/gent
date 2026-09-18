@@ -7,7 +7,7 @@ import {
   ProviderRetrying,
 } from "../../domain/event.js"
 import { type BranchId, type MessageId, type SessionId, ToolCallId } from "../../domain/ids.js"
-import type { InteractionPendingError } from "../../domain/interaction-request.js"
+import type { InteractionPendingError } from "../../domain/interaction.js"
 import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../../domain/driver.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"

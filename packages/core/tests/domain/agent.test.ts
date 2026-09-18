@@ -7,7 +7,7 @@ import {
   DEFAULT_AGENT_NAME,
 } from "../../src/domain/agent"
 import { SessionId } from "../../src/domain/ids"
-import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction-request"
+import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction"
 
 describe("AgentName brand", () => {
   test("DEFAULT_AGENT_NAME is branded as AgentName", () => {
