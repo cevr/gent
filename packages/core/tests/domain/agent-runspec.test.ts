@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { makeRunSpec } from "../../src/domain/agent"
+import { makeRunSpec, ModelId } from "../../src/domain/agent"
 import { ToolCallId } from "../../src/domain/ids"
-import { ModelId } from "../../src/domain/model"
 
 describe("run spec construction", () => {
   test("empty input produces empty spec — no spurious keys", () => {

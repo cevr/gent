@@ -1,4 +1,4 @@
-import { ModelId } from "../../src/domain/model"
+import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME, ModelId } from "../../src/domain/agent"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -17,7 +17,6 @@ import {
 import { narrowR } from "../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message"
 import type { QueueSnapshot } from "../../src/domain/queue"
 import { textStep } from "../../src/test-utils/sequence-steps"

@@ -43,7 +43,7 @@ export {
   messagePartsReasoning,
   messagePartsText,
 } from "./domain/message-part-display.js"
-export { Model, ModelId, ProviderId } from "./domain/model.js"
+export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/queue.js"
 export { type ModelContextMetrics } from "./runtime/agent/agent-loop.state.js"
 export { GentRpcError } from "./server/errors.js"

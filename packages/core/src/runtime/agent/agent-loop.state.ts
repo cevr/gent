@@ -1,17 +1,17 @@
 import { Effect, Option, Predicate, Schema } from "effect"
 import type { ToolCapability } from "../../domain/capability/tool.js"
 import {
-  AgentName,
-  RunSpecSchema,
   type AgentDefinition as AgentDefinitionType,
+  AgentName,
+  type AgentName as AgentNameType,
   type DriverRef,
   type EffectiveModelDriver,
-  type AgentName as AgentNameType,
+  type ModelId as ModelIdType,
   type ReasoningEffort as ReasoningEffortType,
+  RunSpecSchema,
 } from "../../domain/agent.js"
 import type { AgentEvent } from "../../domain/event.js"
 import { Message } from "../../domain/message.js"
-import type { ModelId as ModelIdType } from "../../domain/model.js"
 import { QueueSnapshot } from "../../domain/queue.js"
 import {
   InteractionRequestId,

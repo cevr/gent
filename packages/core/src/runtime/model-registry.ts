@@ -5,13 +5,13 @@ import { Auth } from "../domain/auth.js"
 import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import {
+  byReleaseDateDesc,
   Model,
   ModelId,
-  ProviderId,
-  byReleaseDateDesc,
+  type ModelPricing,
   parseModelProvider,
-} from "../domain/model.js"
-import type { ModelPricing } from "../domain/model.js"
+  ProviderId,
+} from "../domain/agent.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { RuntimeEnvironment } from "./runtime-environment.js"
 

@@ -17,9 +17,8 @@
  */
 
 import { Effect, Option, Ref } from "effect"
-import type { AgentName as AgentNameType } from "../../domain/agent.js"
+import type { AgentName as AgentNameType, ModelId as ModelIdType } from "../../domain/agent.js"
 import type { Usage } from "../../domain/event.js"
-import type { ModelId as ModelIdType } from "../../domain/model.js"
 import { emptyTurnMetrics, type TurnMetrics } from "./turn-response.js"
 
 /**

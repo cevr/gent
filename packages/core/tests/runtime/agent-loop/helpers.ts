@@ -7,7 +7,14 @@ import {
   AgentLoopError,
   type SessionRuntimeState,
 } from "../../../src/runtime/agent/agent-loop.state"
-import type { SteerCommand } from "../../../src/domain/steer"
+import {
+  AgentDefinition,
+  AgentName,
+  ExternalDriverRef,
+  ModelId,
+  type RunSpec,
+  type SteerCommand,
+} from "../../../src/domain/agent"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopTestActor,
@@ -22,19 +29,12 @@ import { RuntimeEnvironment } from "../../../src/runtime/runtime-environment"
 import { ConfigService } from "../../../src/runtime/config-service"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import {
-  AgentDefinition,
-  AgentName,
-  ExternalDriverRef,
-  type RunSpec,
-} from "../../../src/domain/agent"
-import {
   finishPart,
   LanguageModelLayers,
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { dateFromMillis, Message } from "../../../src/domain/message"
-import { ModelId } from "../../../src/domain/model"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../../src/domain/resource"

@@ -24,7 +24,7 @@ import type {
   ProviderAuthInfo,
 } from "../../domain/driver.js"
 import { DriverError, DriverFailureId } from "../../domain/driver.js"
-import { Model } from "../../domain/model.js"
+import { Model } from "../../domain/agent.js"
 
 const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
 

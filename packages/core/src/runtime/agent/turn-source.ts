@@ -8,7 +8,7 @@ import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../.
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
 import type { Message } from "../../domain/message.js"
-import { calculateCost, type ModelId } from "../../domain/model.js"
+import { calculateCost, type ModelId } from "../../domain/agent.js"
 import { ModelRegistry } from "../model-registry.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../wide-event-boundary.js"

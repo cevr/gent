@@ -10,8 +10,7 @@
 import { describe, test, expect } from "bun:test"
 import { Predicate, Schema } from "effect"
 import { ToolCallId } from "../../src/domain/ids"
-import { ModelId } from "../../src/domain/model"
-import { RunSpecSchema } from "../../src/domain/agent"
+import { ModelId, RunSpecSchema } from "../../src/domain/agent"
 
 // ── Tests ──
 

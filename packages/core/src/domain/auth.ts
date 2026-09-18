@@ -15,10 +15,12 @@
 import { Predicate, Context, Effect, Layer, Option, Schema } from "effect"
 import type { FileSystem, Path } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
-import { ProviderId, parseModelProvider, type ModelId } from "./model.js"
 import {
   AgentName,
   DriverRef,
+  type ModelId,
+  parseModelProvider,
+  ProviderId,
   resolveAgentDriver,
   resolveAgentModel,
   resolveDefaultAgentModel,

@@ -33,13 +33,14 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { emptyQueueSnapshot } from "../../src/domain/queue"
 import { dateFromMillis, Session, Branch, Message } from "../../src/domain/message"
 import {
-  AgentRunnerService,
-  type AgentRunner,
   AgentDefinition,
-  DEFAULT_AGENT_NAME,
   AgentName,
+  type AgentRunner,
+  AgentRunnerService,
+  DEFAULT_AGENT_NAME,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   makeRunSpec,
+  ModelId,
 } from "../../src/domain/agent"
 import { AllBuiltinAgents, builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import {
@@ -50,7 +51,6 @@ import {
   SessionId,
   ToolCallId,
 } from "../../src/domain/ids"
-import { ModelId } from "../../src/domain/model"
 import { AgentEvent, EventStore, EventStoreError, TurnCompleted } from "../../src/domain/event"
 import { EventPublisher, EventPublisherLive } from "../../src/domain/event-publisher"
 import { makeStorageTransaction, SqliteStorage } from "../../src/storage/sqlite-storage"

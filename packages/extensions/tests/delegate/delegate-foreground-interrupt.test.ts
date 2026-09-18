@@ -7,7 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Option, Stream } from "effect"
 import { RequestId } from "@gent/core-internal/domain/ids"
-import { SteerCommand } from "@gent/core-internal/domain/steer"
+import { SteerCommand } from "@gent/core-internal/domain/agent"
 import {
   finishPart,
   LanguageModelLayers,

@@ -8,9 +8,8 @@ import {
   decodeDateFromMillis,
 } from "../../domain/message.js"
 import { AgentEvent, EventId } from "../../domain/event.js"
-import { ModelId } from "../../domain/model.js"
+import { isReasoningEffort, ModelId } from "../../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
-import { isReasoningEffort } from "../../domain/agent.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const StoredPromptPart = Schema.Union([

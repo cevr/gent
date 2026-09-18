@@ -7,13 +7,13 @@ import { Option } from "effect"
 import {
   AgentDefinition,
   AgentName,
+  type DriverRef,
+  effectiveModelDriver,
   ExternalDriverRef,
   ModelDriverRef,
-  effectiveModelDriver,
+  ModelId,
   resolveAgentDriver,
-  type DriverRef,
 } from "../../src/domain/agent"
-import { ModelId } from "../../src/domain/model"
 
 const makeAgent = (
   name: string,

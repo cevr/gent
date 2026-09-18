@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { Actor } from "effect-encore"
-import { AgentName, RunSpecSchema } from "../../domain/agent.js"
+import { AgentName, RunSpecSchema, SteerCommand } from "../../domain/agent.js"
 import { Message } from "../../domain/message.js"
 import { QueueSnapshot } from "../../domain/queue.js"
 import {
@@ -11,7 +11,6 @@ import {
   MessageId,
   SessionId,
 } from "../../domain/ids.js"
-import { SteerCommand } from "../../domain/steer.js"
 import { WorkspaceId } from "../../server/workspace-rpc.js"
 import { entityIdOf } from "./agent-loop.entity-id.js"
 

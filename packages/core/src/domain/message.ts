@@ -1,8 +1,7 @@
 import { Predicate, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
-import { ReasoningEffort } from "./agent"
-import { ModelId } from "./model"
+import { ModelId, ReasoningEffort } from "./agent"
 
 export const dateFromMillis = (millis: number): Date => Schema.decodeSync(DateFromNumber)(millis)
 

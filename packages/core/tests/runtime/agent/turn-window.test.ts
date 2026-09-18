@@ -5,7 +5,7 @@ import { type AgentEvent, EventEnvelope, EventId } from "../../../src/domain/eve
 import { EventPublisher } from "../../../src/domain/event-publisher"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../../src/domain/ids"
 import { dateFromMillis, Message } from "../../../src/domain/message"
-import { ModelId } from "../../../src/domain/model"
+import { ModelId } from "../../../src/domain/agent"
 import {
   MODEL_OUTPUT_RESERVE_TOKENS,
   ModelContextBudget,

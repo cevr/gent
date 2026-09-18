@@ -7,7 +7,7 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../.
 import { Message, dateFromMillis } from "../../../src/domain/message"
 import { Auth } from "../../../src/domain/auth"
 import type { ModelDriverContribution } from "../../../src/domain/driver"
-import { Model, ModelId, ProviderId } from "../../../src/domain/model"
+import { Model, ModelId, ProviderId } from "../../../src/domain/agent"
 import {
   finishPart,
   LanguageModelLayers,

@@ -17,7 +17,7 @@ import type { ProviderAuthError } from "../domain/driver.js"
 import { UsageSchema } from "../domain/event.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Message } from "../domain/message.js"
-import { ModelId } from "../domain/model.js"
+import { ModelId } from "../domain/agent.js"
 import type { ProviderError } from "../domain/errors.js"
 import type { ModelContextBudget } from "./model-context.js"
 

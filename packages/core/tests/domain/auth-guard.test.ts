@@ -20,11 +20,12 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
+  ModelId,
+  ProviderId,
 } from "../../src/domain/agent"
 import { Effect, Layer, Schema } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { ExtensionId, SessionId } from "../../src/domain/ids"
-import { ModelId, ProviderId } from "../../src/domain/model"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 
 const stubModel = AiModel.make(

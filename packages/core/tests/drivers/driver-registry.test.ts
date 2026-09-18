@@ -23,7 +23,7 @@ import type {
   TurnExecutor,
 } from "../../src/domain/driver"
 import type { ExtensionContributions } from "../../src/domain/contribution"
-import { Model, ModelId, ProviderId } from "../../src/domain/model"
+import { Model, ModelId, ProviderId } from "../../src/domain/agent"
 import { ExtensionId } from "../../src/domain/ids"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 const noopInvalidate = Effect.void

@@ -2,11 +2,14 @@ import { CellBranchTools, CellTool } from "../../src/cell.js"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Layer, Option, Schema, Stream } from "effect"
-import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent.js"
+import {
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
+  SteerCommand,
+} from "@gent/core-internal/domain/agent.js"
 import { ExtensionHost, defineExtension, tool } from "@gent/core/extensions/api"
 import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension.js"
 import { RequestId } from "@gent/core-internal/domain/ids.js"
-import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import type { Message } from "@gent/core-internal/domain/message.js"
 import { CompactionExtension } from "../../src/compaction.js"
 import {

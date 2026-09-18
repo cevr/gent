@@ -8,7 +8,7 @@ import { BranchStorage } from "../../src/storage/branch-storage"
 import { MessageStorage } from "../../src/storage/message-storage"
 import { SessionStorage } from "../../src/storage/session-storage"
 import { SessionMutations } from "../../src/domain/session-mutations"
-import type { ModelId } from "../../src/domain/model"
+import type { ModelId } from "../../src/domain/agent"
 import {
   FIXED_NOW,
   createActiveSessionFixture,

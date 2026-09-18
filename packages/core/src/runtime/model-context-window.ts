@@ -3,7 +3,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId } from "../domain/ids.js"
 import { Message, type RuntimeUserMessageType } from "../domain/message.js"
-import { ModelId } from "../domain/model.js"
+import { ModelId } from "../domain/agent.js"
 
 /** Custom type of the durable marker that starts a context window. */
 export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-window"

@@ -1,4 +1,4 @@
-import { ModelId } from "../../../src/domain/model"
+import { AgentDefinition, DEFAULT_AGENT_NAME, ModelId } from "../../../src/domain/agent"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -8,7 +8,6 @@ import { ApprovalService } from "../../../src/runtime/approval-service"
 import { noBranchTools, ProcessLocalToolReplay, ToolRunner } from "../../../src/runtime/agent/tools"
 import { narrowR } from "../../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
 import { dateFromMillis, Branch, Session } from "../../../src/domain/message"
 import {
   finishPart,

@@ -28,14 +28,13 @@
 import { Context, Schema, type Effect, type Layer, type Option, type Stream } from "effect"
 import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
-import type { AgentDefinition } from "./agent.js"
+import type { AgentDefinition, Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth.js"
 import type { ToolCapability } from "./capability/tool.js"
 import type { ExtensionHostContext } from "./extension-services.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { InteractionPendingError } from "./interaction-request.js"
 import type { Message } from "./message.js"
-import type { Model } from "./model.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type

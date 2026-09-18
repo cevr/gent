@@ -5,7 +5,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import { BranchId, MessageId, SessionId } from "@gent/core-internal/domain/ids.js"
 import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { ModelId } from "@gent/core-internal/domain/model.js"
+import { ModelId } from "@gent/core-internal/domain/agent.js"
 import {
   finishPart,
   LanguageModelLayers,

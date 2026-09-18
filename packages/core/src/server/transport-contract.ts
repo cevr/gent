@@ -4,6 +4,7 @@ import {
   AgentDefinition,
   AgentName,
   DriverRef,
+  ModelId,
   ReasoningEffort,
   RunSpecSchema,
 } from "../domain/agent.js"
@@ -14,7 +15,6 @@ import {
   ListAuthProvidersPayload,
 } from "../domain/auth.js"
 import { EventEnvelope } from "../domain/event.js"
-import { ModelId } from "../domain/model.js"
 import {
   BranchId,
   ExtensionId,
@@ -107,7 +107,7 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   metrics: SessionRuntimeMetrics,
 }) {}
 
-export { SteerCommand } from "../domain/steer.js"
+export { SteerCommand } from "../domain/agent.js"
 
 export const QueueTarget = Schema.Struct({
   sessionId: SessionId,

@@ -7,7 +7,7 @@ import {
   type RpcGroup as RpcGroupNs,
 } from "effect/unstable/rpc"
 import { SessionId } from "../domain/ids.js"
-import { Model } from "../domain/model.js"
+import { Model } from "../domain/agent.js"
 import { GentRpcError } from "./errors.js"
 import { SessionRpcs } from "./rpcs/session.js"
 import {

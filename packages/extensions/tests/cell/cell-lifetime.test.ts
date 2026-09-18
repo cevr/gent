@@ -3,7 +3,12 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { ExtensionHost, defineExtension, tool } from "@gent/core/extensions/api"
-import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent.js"
+import {
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  SteerCommand,
+} from "@gent/core-internal/domain/agent.js"
 import { ChildAgentHandle, DelegateExtension } from "../../src/delegate.js"
 import { ReadSessionTool } from "../../src/session-tools.js"
 import {
@@ -11,7 +16,6 @@ import {
   type LoadedExtension,
 } from "@gent/core-internal/domain/extension.js"
 import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids.js"
-import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"

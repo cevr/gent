@@ -2,17 +2,17 @@ import { Effect, Option, Predicate } from "effect"
 import { omitUndefined } from "../../domain/guards.js"
 import {
   AgentDefinition,
+  type AgentName as AgentNameType,
+  type AgentRunOverrides,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
   effectiveModelDriver,
+  type ModelId,
+  type ReasoningEffort,
   resolveAgentDriver,
   resolveAgentModel,
-  type AgentName as AgentNameType,
-  type AgentRunOverrides,
-  type ReasoningEffort,
   type RunSpec,
 } from "../../domain/agent.js"
-import type { ModelId } from "../../domain/model.js"
 import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
 import { ErrorOccurred } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
