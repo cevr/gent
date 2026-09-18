@@ -1,7 +1,7 @@
 import { createMemo, For, Show, type Accessor } from "solid-js"
 import { Match, Option, Predicate, Schema } from "effect"
 import type { SyntaxStyle } from "@opentui/core"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import type { ToolCall } from "./tool-renderers/index"

@@ -3,7 +3,7 @@
  */
 
 import { createMemo, createSignal, For, Show } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { Option, Predicate, Schema } from "effect"
 import type { RGBA } from "@opentui/core"
 import {

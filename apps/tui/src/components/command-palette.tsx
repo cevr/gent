@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { createEffect, createMemo, createResource, createSignal, Show } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { matchSorter } from "match-sorter"
 import { Option } from "effect"
 import { useClient } from "../client/index"

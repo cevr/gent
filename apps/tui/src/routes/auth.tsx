@@ -47,8 +47,7 @@ import {
   providerFor,
   transitionAuth,
 } from "./auth-state"
-import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "../terminal"
 
 interface AuthProps {
   // eslint-disable-next-line effect/noNullish -- route props omit a session outside an active session.

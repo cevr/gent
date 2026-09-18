@@ -28,8 +28,7 @@ import { ClientTransport } from "../client-transport"
 import { ClientLifecycle, ClientShell } from "../client-services"
 import { ChromePanel } from "../../components/chrome-panel"
 import { useTheme } from "../../theme"
-import { useTerminalDimensions } from "../../terminal-dimensions"
-import { useScopedKeyboard } from "../../keyboard/context"
+import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
 
 const BTW_OVERLAY_ID = "btw"
 

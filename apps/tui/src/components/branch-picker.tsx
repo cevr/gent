@@ -24,7 +24,7 @@
 import { createEffect, createSignal, Show } from "solid-js"
 import { Effect, Option } from "effect"
 import { useTheme } from "../theme"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { useClient } from "../client/index"
 import { useRuntime } from "../hooks/use-runtime"
 import { ChromePanel } from "./chrome-panel"

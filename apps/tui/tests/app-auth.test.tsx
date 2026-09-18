@@ -11,7 +11,7 @@ import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
 import { renderFrame, waitForRenderedFrame } from "./helpers-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
-import { useTerminalDimensions } from "../src/terminal-dimensions"
+import { useTerminalDimensions } from "../src/terminal"
 
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 

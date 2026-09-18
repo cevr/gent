@@ -279,7 +279,7 @@ snapshot path moved into the session component.
 Source evidence:
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: native commits, snapshot ownership, footer allocation, and transcript viewport.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/terminal-dimensions.tsx`: terminal geometry independent of the footer.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/terminal.tsx`: terminal geometry independent of the footer.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: live transcript integration and overlay allocation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: transcript view state.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-controller.ts`: transcript, return, and tool-detail keys.

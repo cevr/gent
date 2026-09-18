@@ -15,7 +15,7 @@
  */
 
 import type { JSX } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
 
 /**

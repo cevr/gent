@@ -10,7 +10,7 @@
  */
 
 import { createMemo, createSignal, Show } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme"
 import { truncate } from "../utils"

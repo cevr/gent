@@ -13,7 +13,7 @@
 import { Option, Predicate } from "effect"
 import { createEffect, For, on, Show } from "solid-js"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { useTerminalDimensions } from "../../terminal-dimensions"
+import { useTerminalDimensions } from "../../terminal"
 import { useTheme } from "../../theme"
 import { truncate, workingIconFrame } from "../../utils"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"

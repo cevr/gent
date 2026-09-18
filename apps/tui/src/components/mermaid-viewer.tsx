@@ -4,11 +4,10 @@
  */
 
 import { createSignal, Show, createMemo, createEffect } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 import { Option } from "effect"
 import { useTheme } from "../theme"
 import { renderMermaidToAscii, extractMermaidBlocks } from "../utils/mermaid"
-import { useScopedKeyboard } from "../keyboard/context"
 import {
   MermaidViewerEvent,
   MermaidViewerState,

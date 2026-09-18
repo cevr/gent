@@ -30,8 +30,7 @@ import {
   selectable,
   type SelectListRow,
 } from "../../components/select-list"
-import { useScopedKeyboard } from "../../keyboard/context"
-import { useTerminalDimensions } from "../../terminal-dimensions"
+import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
 import { useTheme } from "../../theme"
 import { formatAge, formatDuration, truncate, workingIconFrame } from "../../utils"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"

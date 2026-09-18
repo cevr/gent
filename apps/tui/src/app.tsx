@@ -6,7 +6,7 @@ import { ThemeProvider } from "./theme"
 import { CommandProvider } from "./command/context"
 import { Session } from "./routes/session"
 import { useClient } from "./client/index"
-import { KeyboardScopeProvider, useScopedKeyboard } from "./keyboard/context"
+import { KeyboardScopeProvider, useScopedKeyboard } from "./terminal"
 import { useRenderer } from "@opentui/solid"
 import { useEnv } from "./env/context"
 

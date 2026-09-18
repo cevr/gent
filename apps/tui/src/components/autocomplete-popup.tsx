@@ -12,13 +12,12 @@
  */
 
 import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 import { truncate } from "../utils"
-import { useScopedKeyboard } from "../keyboard/context"
 import { useExtensionUI } from "../extensions/context"
 import { useClient } from "../client/index"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"

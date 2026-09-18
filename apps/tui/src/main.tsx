@@ -30,7 +30,7 @@ import {
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { App } from "./app"
-import { TerminalDimensionsProvider } from "./terminal-dimensions"
+import { TerminalDimensionsProvider } from "./terminal"
 import { ComposerDraftsProvider } from "./components/composer-drafts"
 import { detectColorScheme } from "./theme"
 import { ClientProvider } from "./client/index"

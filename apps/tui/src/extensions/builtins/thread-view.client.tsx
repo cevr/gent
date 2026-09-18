@@ -31,7 +31,7 @@ import {
   selectable,
   type SelectListRow,
 } from "../../components/select-list"
-import { useTerminalDimensions } from "../../terminal-dimensions"
+import { useTerminalDimensions } from "../../terminal"
 import { useTheme } from "../../theme"
 import {
   clientCommandContribution,

@@ -1,5 +1,5 @@
 import { Show } from "solid-js"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
 import { ChromePanel } from "./chrome-panel"
 import { MessageId, type Message } from "@gent/core/protocol"

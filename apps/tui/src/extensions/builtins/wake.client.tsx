@@ -17,7 +17,7 @@ import {
   type WakePendingType,
 } from "@gent/extensions/client.js"
 import { useTheme } from "../../theme"
-import { useTerminalDimensions } from "../../terminal-dimensions"
+import { useTerminalDimensions } from "../../terminal"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import { clientContributions, defineClientExtension, widgetContribution } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"

@@ -25,7 +25,7 @@ import { Match, Option, Schema } from "effect"
 import { createEffect, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useScrollSync } from "../hooks/use-scroll-sync"
-import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
+import { useScopedKeyboard, type ScopedKeyboardEvent } from "../terminal"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme"
 

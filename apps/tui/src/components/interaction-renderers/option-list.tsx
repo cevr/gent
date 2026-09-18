@@ -10,8 +10,7 @@ import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core"
 import { Option } from "effect"
 import type { QuestionOption } from "@gent/core/protocol"
 import { useTheme } from "../../theme"
-import { useScopedKeyboard } from "../../keyboard/context"
-import { useTerminalDimensions } from "../../terminal-dimensions"
+import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
 import { textWidth } from "../../platform/text-width-adapter"
 
 const markdownSyntaxStyle = SyntaxStyle.create()

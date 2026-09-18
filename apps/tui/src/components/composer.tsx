@@ -11,7 +11,7 @@ import { useComposerController } from "./use-composer-controller"
 import { useSessionController } from "../routes/session-controller"
 import { useExtensionUI } from "../extensions/context"
 import { useRequiredContext } from "../utils"
-import { useTerminalDimensions } from "../terminal-dimensions"
+import { useTerminalDimensions } from "../terminal"
 
 interface ComposerContextValue {
   // eslint-disable-next-line effect/noNullish -- AutocompletePopup uses null for its closed Solid state.
