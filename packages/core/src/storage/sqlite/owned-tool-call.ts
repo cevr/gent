@@ -5,7 +5,7 @@ import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ToolCallBindingKey } from "../../domain/capability.js"
 import { StorageError } from "../../domain/errors.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
-import { decodeStoredPromptPart } from "./rows.js"
+import { decodeStoredPromptPart } from "../schema.js"
 
 export interface OwnedToolCallAddress extends ToolCallBindingKey {
   readonly sessionId: SessionId

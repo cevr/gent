@@ -43,7 +43,7 @@ describe("child-session depth guard", () => {
 
   test("ignores storage readers, test fixtures, and files outside core", () => {
     for (const file of [
-      "packages/core/src/storage/sqlite/rows.ts",
+      "packages/core/src/storage/schema.ts",
       "packages/core/src/test-utils/index.ts",
       "packages/extensions/src/thread/thread.ts",
       "apps/tui/tests/components/thread-view.test.tsx",

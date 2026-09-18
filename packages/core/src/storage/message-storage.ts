@@ -16,7 +16,7 @@ import {
   groupMessageChunkRows,
   toSqlNull,
   MESSAGE_CHUNK_SELECT,
-} from "./sqlite/rows.js"
+} from "./schema.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 

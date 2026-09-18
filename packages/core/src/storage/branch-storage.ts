@@ -9,7 +9,7 @@ import type { Branch } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError, storageError } from "../domain/errors.js"
 import { SqlClient } from "effect/unstable/sql"
-import { branchFromRow, toSqlNull, type BranchRow } from "./sqlite/rows.js"
+import { branchFromRow, toSqlNull, type BranchRow } from "./schema.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 export interface BranchStorageService {

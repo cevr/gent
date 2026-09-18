@@ -5,7 +5,7 @@ import { SessionId, BranchId } from "../domain/ids.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import { StorageError, storageError } from "../domain/errors.js"
 import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
-import { toSqlNull } from "./sqlite/rows.js"
+import { toSqlNull } from "./schema.js"
 
 const InteractionRequestRow = Schema.Struct({
   request_id: Schema.String,

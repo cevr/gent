@@ -20,7 +20,7 @@ import {
   type SessionRow,
   MESSAGE_CHUNK_SELECT,
   SESSION_COLUMNS,
-} from "./sqlite/rows.js"
+} from "./schema.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 interface RelationshipStorageService {

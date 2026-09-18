@@ -16,7 +16,7 @@ import {
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { StorageError, storageError, storageErrorExcept } from "../domain/errors.js"
 import { SqlClient } from "effect/unstable/sql"
-import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./sqlite/rows.js"
+import { decodeEvent, decodeEventRow, encodeEvent, toSqlNull } from "./schema.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
 
 const LatestEventIdRow = Schema.Struct({ id: Schema.Finite })
