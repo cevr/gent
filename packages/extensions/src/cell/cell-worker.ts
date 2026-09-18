@@ -7,7 +7,7 @@ import {
   CellResponse,
   maximumPendingCellCalls,
   maximumCallsPerCell,
-} from "./cell-protocol.js"
+} from "../cell-protocol.js"
 
 export class CellWorkerTransport extends Context.Service<
   CellWorkerTransport,

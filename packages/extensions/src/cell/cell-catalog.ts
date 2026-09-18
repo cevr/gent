@@ -1,7 +1,7 @@
 import { type ResolvedToolCapability, getToolMetadata } from "@gent/core/extensions/branch-tools"
 import { Effect, Hash, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { CellCatalog, CellCatalogEntry } from "./cell-protocol.js"
+import { CellCatalog, CellCatalogEntry } from "../cell-protocol.js"
 
 const encodeEntries = Schema.encodeSync(Schema.fromJsonString(Schema.Array(CellCatalogEntry)))
 const decodeEntry = Schema.decodeUnknownEffect(CellCatalogEntry)

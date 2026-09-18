@@ -17,7 +17,7 @@ import {
 import { type Context, Effect, Option } from "effect"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
 import { CellOperationHost } from "./cell-kernel.js"
-import { type CellCatalog, CellEvaluationError } from "./cell-protocol.js"
+import { type CellCatalog, CellEvaluationError } from "../cell-protocol.js"
 import { CurrentCellToolOperation } from "./current-cell-tool-operation.js"
 import { cellInteractionOwner } from "./cell-interaction-owner.js"
 import { handleContextCall, isContextCall } from "./cell-context-host.js"

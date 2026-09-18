@@ -20,7 +20,7 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
 import { makeCellToolHost } from "../../src/cell/cell-tool-host.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
-import { CellResponse } from "../../src/cell/cell-protocol.js"
+import { CellResponse } from "../../src/cell-protocol.js"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
 import {
   LoadedArtifactIdentity,

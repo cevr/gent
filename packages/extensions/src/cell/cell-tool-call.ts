@@ -3,7 +3,7 @@ import { ToolRunner, type ResolvedToolCapability } from "@gent/core/extensions/b
 import { Effect, Option, Schema } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import { CellToolCallSuspended } from "./cell-kernel.js"
-import { CellEvaluationError, type CellResponse } from "./cell-protocol.js"
+import { CellEvaluationError, type CellResponse } from "../cell-protocol.js"
 
 const JsonText = Schema.fromJsonString(Schema.Json)
 // Tool results are Schema-encoded values. Optional fields left `undefined` are

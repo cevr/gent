@@ -8,13 +8,15 @@ import {
   type CellCatalogEntry,
   CellEvaluation,
   CellEvaluationError,
+  encodeSnapshot,
   makeBoundedOutput,
   maximumCellBindings,
   maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
   maximumCellSourceLength,
-} from "./cell-protocol.js"
-import { encodeSnapshot, type SnapshotBinding, snapshotReviverSource } from "./cell-snapshot.js"
+  type SnapshotBinding,
+  snapshotReviverSource,
+} from "../cell-protocol.js"
 
 /** Facts about the worker process, supplied by its entry. */
 export class CellWorkerEnvironment extends Context.Service<

@@ -21,11 +21,12 @@ import {
   CellEvaluationError,
   CellRequest,
   type CellResponse,
+  type CellSnapshot,
   maximumCallsPerCell,
   maximumCellSourceLength,
   maximumPendingCellCalls,
-} from "./cell-protocol.js"
-import type { CellSnapshot, SnapshotBinding } from "./cell-snapshot.js"
+  type SnapshotBinding,
+} from "../cell-protocol.js"
 
 /** Supplied by the caller for each evaluation. Only the catalog is retained in the worker. */
 export class CellOperationHost extends Context.Service<

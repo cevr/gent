@@ -13,7 +13,7 @@ import { InteractionPendingError } from "@gent/core-internal/domain/interaction-
 import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message.js"
 import { CellExecution } from "../../src/cell/cell-execution.js"
 import { CellOperationHost, CellToolCallSuspended } from "../../src/cell/cell-kernel.js"
-import { CellEvaluationError } from "../../src/cell/cell-protocol.js"
+import { CellEvaluationError } from "../../src/cell-protocol.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"

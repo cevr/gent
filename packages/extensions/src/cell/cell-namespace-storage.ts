@@ -2,7 +2,7 @@ import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { StorageError } from "@gent/core/extensions/branch-tools"
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { CellSnapshot } from "./cell-snapshot.js"
+import { CellSnapshot } from "../cell-protocol.js"
 
 const SnapshotJson = Schema.fromJsonString(CellSnapshot)
 const NamespaceRow = Schema.Struct({ snapshot_json: Schema.String })

@@ -7,7 +7,7 @@ import {
 } from "@gent/core/extensions/branch-tools"
 import { Effect, Option, Predicate, Schema } from "effect"
 import { CellToolOperationStorage } from "./cell-tool-operation-storage.js"
-import { CellEvaluationError } from "./cell-protocol.js"
+import { CellEvaluationError } from "../cell-protocol.js"
 
 /** Host calls under this prefix serve the cell's `context` namespace, not a selected tool. */
 const CONTEXT_CALL_PREFIX = "context."

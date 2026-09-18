@@ -34,7 +34,7 @@ import { makeCellToolHost, resumeCellToolOperation } from "../../src/cell/cell-t
 import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
 import { recoverCellExecution } from "../../src/cell/cell-recovery.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
-import { CellResponse } from "../../src/cell/cell-protocol.js"
+import { CellResponse } from "../../src/cell-protocol.js"
 import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
 import { CellExecutionStorage } from "../../src/cell/cell-execution-storage.js"
 import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-storage.js"

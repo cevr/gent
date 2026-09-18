@@ -16,7 +16,7 @@ import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { openCellProcess } from "../../src/cell/cell-process.js"
 import { CellOperationHost, openCellKernel } from "../../src/cell/cell-kernel.js"
-import { CellProtocolError, CellRequest, type CellResponse } from "../../src/cell/cell-protocol.js"
+import { CellProtocolError, CellRequest, type CellResponse } from "../../src/cell-protocol.js"
 import { buildCellExecutable, buildCellWorker as buildWorker } from "./cell-worker-fixture.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)

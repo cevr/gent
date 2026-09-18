@@ -35,7 +35,7 @@ import {
   type CellEvaluation,
   CellEvaluationError,
   type CellRestoreReport,
-} from "./cell-protocol.js"
+} from "../cell-protocol.js"
 
 /** The worker binary this build ships next to the executable. */
 const CELL_WORKER_BINARY = "gent-cell"

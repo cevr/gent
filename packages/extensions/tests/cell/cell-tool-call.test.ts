@@ -18,7 +18,7 @@ import {
   type ResolvedToolCapability,
 } from "@gent/core-internal/runtime/agent/tool-runner.js"
 import { executeBoundCellTool, cellToolResultValue } from "../../src/cell/cell-tool-call.js"
-import { CellResponse } from "../../src/cell/cell-protocol.js"
+import { CellResponse } from "../../src/cell-protocol.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   ExtensionRegistry,

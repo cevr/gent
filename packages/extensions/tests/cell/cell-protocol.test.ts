@@ -12,7 +12,7 @@ import {
   cellOutputBoundary,
   makeCellOutputScanner,
   makeBoundedOutput,
-} from "../../src/cell/cell-protocol.js"
+} from "../../src/cell-protocol.js"
 
 describe("cell process protocol", () => {
   it.live("preserves a Unicode request split across pipe reads", () =>

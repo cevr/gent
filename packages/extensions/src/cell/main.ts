@@ -2,14 +2,15 @@
 import { BunRuntime } from "@effect/platform-bun"
 import { Effect, Layer, Predicate, Semaphore, Stream } from "effect"
 import { CellWorkerEnvironment } from "./bun-evaluator-boundary.js"
-import { cellRequestFd, cellResponseFd } from "./cell-process.js"
 import {
   CellProtocolError,
   cellOutputBoundary,
+  cellRequestFd,
+  cellResponseFd,
   decodeCellRequest,
   encodeCellResponse,
   makeCellFrameReader,
-} from "./cell-protocol.js"
+} from "../cell-protocol.js"
 import { CellWorkerTransport, runCellWorker } from "./cell-worker.js"
 
 /** Frames use dedicated descriptors so cell code keeps stdout and stderr for itself.

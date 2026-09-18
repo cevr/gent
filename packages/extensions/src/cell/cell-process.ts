@@ -11,18 +11,15 @@ import {
   makeBoundedOutput,
   maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
-} from "./cell-protocol.js"
+  cellRequestFd,
+  cellResponseFd,
+} from "../cell-protocol.js"
 
 export class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProcessError", {
   phase: Schema.Literals(["launch", "io", "exit"]),
   message: Schema.String,
   diagnostics: Schema.String,
 }) {}
-
-/** Worker-to-host frames travel on this descriptor; the worker owns stdout for cell output. */
-export const cellResponseFd = 3
-/** Host-to-worker frames travel on this descriptor. */
-export const cellRequestFd = 4
 
 /**
  * The worker runs under a shell that points its stderr at its stdout, so all cell
