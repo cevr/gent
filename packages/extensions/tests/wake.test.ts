@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Exit, FileSystem, Layer, Option, Ref, Schema } from "effect"
+import { Clock, Deferred, Effect, Exit, FileSystem, Layer, Option, Ref, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
 import {
@@ -312,9 +312,12 @@ const contextWith = (
 /**
  * `WakeAlarms.schedule` drops the id from `pending` only after the fired entry's
  * finalizer rewrote the branch file, so an empty `pending` means the fire fully
- * settled. The finalizer does real file I/O, so the wait has to give the fiber
- * turns rather than spin: each turn advances the virtual clock by a millisecond,
- * which both yields and releases anything sleeping. Exhaustion fails loudly; a
+ * settled. The finalizer does real file I/O, so the wait is bounded by real
+ * time, not by a turn count: two thousand scheduler turns pass in a few
+ * milliseconds, and under gate load a write can take longer than that, which
+ * is how this wait once reported "still pending" on a fire that was landing.
+ * Each turn advances the virtual clock (releases anything sleeping) and then
+ * sleeps on the wall clock (lets the I/O land). Exhaustion fails loudly; a
  * silent give-up would let a later assertion read a half-finished fire.
  */
 const settled = (
@@ -322,7 +325,8 @@ const settled = (
   wakeId: Option.Option<string> = Option.none(),
 ) =>
   Effect.gen(function* () {
-    for (let turn = 0; turn < 2000; turn += 1) {
+    const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
       const running = yield* ids
       const done = Option.match(wakeId, {
         onNone: () => running.length === 0,
@@ -330,9 +334,14 @@ const settled = (
       })
       if (done) return
       yield* TestClock.adjust("1 milli")
+      // gent/no-sleep: allow the wait is for real file I/O, which only the wall clock paces
+      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
     }
     expect("wake timers still pending").toBe("no wake timer pending")
   })
+
+/** The real clock, beside the `TestClock` the alarms run on. */
+const wallClock = Clock.Clock.defaultValue()
 
 const readFile = (home: string) =>
   Effect.gen(function* () {
