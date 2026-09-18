@@ -17,17 +17,19 @@ import { SessionProfileCache } from "../runtime/session-profile.js"
 import { foldSessionMetrics } from "../runtime/agent/agent-loop.state.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/agent/turn-resolve.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { EventStorage } from "../storage/event-storage.js"
-import { makeStorageTransaction } from "../storage/sqlite-storage.js"
+import {
+  BranchStorage,
+  EventStorage,
+  makeStorageTransaction,
+  MessageStorage,
+  RelationshipStorage,
+  SessionStorage,
+} from "../storage/storage.js"
 import { projectMessagesWithToolInteractions, toolCallDurations } from "../domain/message.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { resolveExistingSessionBranch } from "../runtime/session-runtime-context.js"
-import { MessageStorage } from "../storage/message-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ExtensionProtocolError, InvalidStateError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"

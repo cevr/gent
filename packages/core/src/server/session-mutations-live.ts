@@ -32,19 +32,20 @@ import {
   type SendUserMessagePayload,
   type SessionRuntimeError,
 } from "../runtime/session-runtime.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
 import {
+  BranchStorage,
   type DurableOperation,
   DurableOperations,
+  makeStorageTransaction,
+  MessageStorage,
+  RelationshipStorage,
   SessionOperationStorage,
+  SessionStorage,
+  type StorageError,
   type StoredBranchResult,
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
-} from "../storage/session-operation-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
-import { type StorageError, makeStorageTransaction } from "../storage/sqlite-storage.js"
+} from "../storage/storage.js"
 import { NotFoundError } from "./errors.js"
 import type { CreateSessionInput } from "./transport-contract.js"
 import { CurrentWorkspaceId } from "./workspace-rpc.js"

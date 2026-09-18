@@ -14,10 +14,12 @@ import {
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { getSessionSnapshot } from "../../src/server/rpc-handlers"
-import { EventStorage } from "../../src/storage/event-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import {
+  BranchStorage,
+  EventStorage,
+  MessageStorage,
+  SessionStorage,
+} from "../../src/storage/storage"
 import { baseLocalLayerWithProvider } from "../../src/test-utils/in-process-layer"
 
 const CONTEXT_LIMIT_TOKENS = 40_000

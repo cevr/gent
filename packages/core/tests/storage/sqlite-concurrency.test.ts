@@ -1,11 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Effect, Layer, Ref } from "effect"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { EventStorage } from "../../src/storage/event-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import {
+  BranchStorage,
+  EventStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import { SessionStarted } from "../../src/domain/event"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"

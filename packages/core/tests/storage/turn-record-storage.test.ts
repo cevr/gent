@@ -4,15 +4,15 @@ import { SqlClient } from "effect/unstable/sql"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { CurrentWorkspaceId, DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
 import {
+  BranchStorage,
   emptyTurnRecord,
-  TurnRecordStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
   turnRecordAtStep,
-} from "../../src/storage/turn-record-storage"
+  TurnRecordStorage,
+} from "../../src/storage/storage"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 const WORKSPACE_B = WorkspaceId.make("b".repeat(64))

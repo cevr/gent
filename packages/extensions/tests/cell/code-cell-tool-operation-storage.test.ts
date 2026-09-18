@@ -17,7 +17,12 @@ import {
 } from "../../src/cell.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import { EventStorage } from "@gent/core-internal/storage/event-storage.js"
+import {
+  EventStorage,
+  InteractionStorage,
+  MessageStorage,
+  SqliteStorage,
+} from "@gent/core-internal/storage/storage.js"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -38,9 +43,6 @@ import {
   ToolSourceRevision,
 } from "@gent/core-internal/domain/capability.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
-import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
 
 const cell = {

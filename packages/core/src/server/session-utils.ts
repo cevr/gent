@@ -1,7 +1,7 @@
 import { Predicate, Effect } from "effect"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Branch, BranchTreeNode } from "../domain/message.js"
-import { BranchStorage } from "../storage/branch-storage.js"
+import { BranchStorage } from "../storage/storage.js"
 import type { StorageError } from "../domain/errors.js"
 
 type MutableBranchTreeNode = Omit<BranchTreeNode, "children"> & {

@@ -1,7 +1,6 @@
 import { Effect, Layer, Option, Predicate } from "effect"
 import { EventStore, EventStoreError, makeEventStore } from "../domain/event.js"
-import { EventStorage, type EventStorageError } from "../storage/event-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
+import { EventStorage, type EventStorageError, SessionStorage } from "../storage/storage.js"
 import { omitUndefined } from "../domain/guards.js"
 
 const toEventStoreError =

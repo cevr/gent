@@ -28,9 +28,7 @@ import {
   EventStore,
   EventStoreError,
 } from "../../../src/domain/event"
-import { SqliteStorage } from "../../../src/storage/sqlite-storage"
-import { EventStorage } from "../../../src/storage/event-storage"
-import { MessageStorage } from "../../../src/storage/message-storage"
+import { EventStorage, MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { SequenceRecorder } from "../../../src/test-utils"
 import { assistantMessageIdForTurn, emptyQueueSnapshot } from "../../../src/domain/message"
 import { BranchId, MessageId, RequestId, SessionId } from "../../../src/domain/ids"

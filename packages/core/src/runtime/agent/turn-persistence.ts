@@ -16,10 +16,13 @@ import {
   stringifyOutput,
   summarizeOutput,
 } from "../../domain/message.js"
-import { EventStorage } from "../../storage/event-storage.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import { makeStorageTransaction, type StorageTransaction } from "../../storage/sqlite-storage.js"
-import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
+import {
+  EventStorage,
+  makeStorageTransaction,
+  MessageStorage,
+  type StorageTransaction,
+  ToolCallBindingStorage,
+} from "../../storage/storage.js"
 import type { ResolvedToolCapability } from "./tools.js"
 
 type ToolTerminalEvent = Extract<

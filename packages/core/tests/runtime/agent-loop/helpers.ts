@@ -47,9 +47,12 @@ import {
   EventStore,
 } from "../../../src/domain/event"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { SqliteStorage, type StorageError } from "../../../src/storage/sqlite-storage"
-import { BranchStorage } from "../../../src/storage/branch-storage"
-import { SessionStorage } from "../../../src/storage/session-storage"
+import {
+  BranchStorage,
+  SessionStorage,
+  SqliteStorage,
+  type StorageError,
+} from "../../../src/storage/storage"
 import {
   RecordingEventStore,
   SequenceRecorder,

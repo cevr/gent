@@ -9,8 +9,12 @@ import {
 import { type BranchId, type MessageId, type SessionId, ToolCallId } from "../../domain/ids.js"
 import type { InteractionPendingError } from "../../domain/interaction.js"
 import { ExternalToolRunner, type ProviderAuthError, type TurnError } from "../../domain/driver.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
+import {
+  EventStorage,
+  MessageStorage,
+  SessionOperationStorage,
+  ToolCallBindingStorage,
+} from "../../storage/storage.js"
 import type { Message } from "../../domain/message.js"
 import { calculateCost, type ModelId } from "../../domain/agent.js"
 import { ModelRegistry } from "../model-registry.js"
@@ -30,13 +34,11 @@ import {
   provideCurrentHostCtx,
   ToolRunner,
 } from "./tools.js"
-import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { ProviderError, type StorageError } from "../../domain/errors.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
 import { ModelResolver, type ResolveModelRequest } from "../../providers/model-resolver.js"
-import { EventStorage } from "../../storage/event-storage.js"
 import { SqlClient } from "effect/unstable/sql"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import {

@@ -154,7 +154,7 @@ assertSequence(calls, [
 
 | File                                                     | Purpose                                             |
 | -------------------------------------------------------- | --------------------------------------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`            | SQLite layer composition for focused storage tags   |
+| `packages/core/src/storage/storage.ts`                   | SQLite layer composition for focused storage tags   |
 | `packages/core/src/storage/schema.ts`                    | SQLite schema, migration, and initialization logic  |
 | `packages/core/src/test-utils/index.ts`                  | `SequenceRecorder`, recording layers                |
 | `packages/core/src/server/dependencies.ts`               | startup wiring + dependency graph                   |

@@ -7,9 +7,11 @@ import { Clock, Effect, Option } from "effect"
 import type { Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Branch, Message, Session, dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+} from "@gent/core-internal/storage/storage.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 

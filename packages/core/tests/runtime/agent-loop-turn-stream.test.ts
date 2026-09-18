@@ -10,7 +10,7 @@ import {
   messagePartsText,
   messagePartsToolCallParts,
 } from "../../src/domain/message"
-import { MessageStorage } from "../../src/storage/message-storage"
+import { MessageStorage } from "../../src/storage/storage"
 import {
   makeAgentLoopService,
   makeExternalLayerWithEvents,

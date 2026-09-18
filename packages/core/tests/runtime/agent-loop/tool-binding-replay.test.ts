@@ -26,9 +26,13 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { MessageStorage } from "../../../src/storage/message-storage"
-import { makeStorageTransaction, SqliteStorage } from "../../../src/storage/sqlite-storage"
-import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
+import {
+  EventStorage,
+  makeStorageTransaction,
+  MessageStorage,
+  SqliteStorage,
+  ToolCallBindingStorage,
+} from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import {
   findPersistedToolResults,
@@ -47,7 +51,6 @@ import {
 } from "../../../src/runtime/agent/tools"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
-import { EventStorage } from "../../../src/storage/event-storage"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { SessionProfileCache } from "../../../src/runtime/session-profile"

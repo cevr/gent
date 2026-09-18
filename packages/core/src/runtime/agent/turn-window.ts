@@ -4,7 +4,7 @@ import { type BranchId, type MessageId, type SessionId } from "../../domain/ids.
 import type { Message } from "../../domain/message.js"
 import { type ModelId } from "../../domain/agent.js"
 import type { StorageError } from "../../domain/errors.js"
-import type { EventStorageError } from "../../storage/event-storage.js"
+import type { EventStorageError } from "../../storage/storage.js"
 import {
   handoffAnchorWithinTurn,
   type ModelContextBudget,

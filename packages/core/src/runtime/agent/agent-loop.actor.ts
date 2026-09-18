@@ -88,9 +88,11 @@ import {
   causeToAgentLoopError,
   makeAgentLoopBehavior,
 } from "./agent-loop.behavior.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
+import {
+  AgentLoopQueueStorage,
+  MessageStorage,
+  SessionOperationStorage,
+} from "../../storage/storage.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { type CurrentExtensionHostContext, ProcessLocalToolReplay } from "./tools.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"

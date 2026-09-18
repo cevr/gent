@@ -14,7 +14,7 @@ import {
 import { testExtensionHostContext } from "../../src/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { SqliteStorage } from "../../src/storage/storage"
 import {
   loadRuntimeProfileDeclarations,
   type RuntimeProfileInputs,

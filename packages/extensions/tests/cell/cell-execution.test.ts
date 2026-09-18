@@ -19,10 +19,12 @@ import {
 } from "../../src/cell.js"
 import { CellEvaluationError } from "../../src/cell-protocol.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "@gent/core-internal/storage/storage.js"
 import { buildCellWorker } from "./cell-worker-fixture.js"
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)

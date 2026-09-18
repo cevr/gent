@@ -8,7 +8,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { SqliteStorage } from "../../src/storage/storage"
 import type { FeatureMigrations } from "../../src/storage/schema"
 
 const appliedMigrations = Effect.gen(function* () {

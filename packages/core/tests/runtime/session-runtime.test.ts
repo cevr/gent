@@ -53,10 +53,12 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimeEnvironment } from "../../src/runtime/runtime-environment"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {

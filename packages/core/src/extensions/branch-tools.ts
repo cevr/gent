@@ -42,14 +42,11 @@ export { eraseResourceLayer } from "../runtime/extensions/extension-effect-membr
 
 // Storage the feature contributes and reads.
 export type { FeatureMigrations } from "../storage/schema.js"
-export { InteractionStorage } from "../storage/interaction-storage.js"
-export { MessageStorage } from "../storage/message-storage.js"
+export { InteractionStorage } from "../storage/storage.js"
+export { MessageStorage } from "../storage/storage.js"
 export { EventPublisher } from "../domain/event.js"
 export { GentPlatform } from "../runtime/gent-platform.js"
-export {
-  makeOwnedToolCallReader,
-  type OwnedToolCallAddress,
-} from "../storage/sqlite/owned-tool-call.js"
+export { makeOwnedToolCallReader, type OwnedToolCallAddress } from "../storage/storage.js"
 export { StorageError } from "../domain/errors.js"
 export { EventStoreError } from "../domain/event.js"
 

@@ -11,9 +11,7 @@ import { BranchId, SessionId } from "../../src/domain/ids"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage"
 
 const sessionId = SessionId.make("session-delivery")
 const branchId = BranchId.make("branch-delivery")

@@ -29,8 +29,7 @@ import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimeEnvironment } from "../runtime/runtime-environment.js"
-import { SqliteStorage } from "../storage/sqlite-storage.js"
-import { InteractionStorage } from "../storage/interaction-storage.js"
+import { InteractionStorage, SqliteStorage } from "../storage/storage.js"
 import {
   decodeInteractionDecision,
   decodeInteractionParams,

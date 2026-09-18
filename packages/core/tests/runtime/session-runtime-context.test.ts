@@ -22,8 +22,12 @@ import {
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { SqliteStorage, StorageError } from "../../src/storage/sqlite-storage"
-import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
+import {
+  SessionStorage,
+  type SessionStorageService,
+  SqliteStorage,
+  StorageError,
+} from "../../src/storage/storage"
 import type { ExternalDriverContribution } from "../../src/domain/driver"
 import { testHostFacts } from "../../src/test-utils"
 

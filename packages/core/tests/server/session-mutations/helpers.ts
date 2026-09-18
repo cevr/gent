@@ -17,9 +17,14 @@ import { GentRpcs } from "../../../src/server/rpcs"
 import { RpcHandlersLive } from "../../../src/server/rpc-handlers"
 import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
 import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../../src/server/workspace-rpc"
-import { BranchStorage, type BranchStorageService } from "../../../src/storage/branch-storage"
-import { SessionStorage, type SessionStorageService } from "../../../src/storage/session-storage"
-import { SqliteStorage, StorageError } from "../../../src/storage/sqlite-storage"
+import {
+  BranchStorage,
+  type BranchStorageService,
+  SessionStorage,
+  type SessionStorageService,
+  SqliteStorage,
+  StorageError,
+} from "../../../src/storage/storage"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"

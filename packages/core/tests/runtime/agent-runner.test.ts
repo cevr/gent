@@ -64,13 +64,16 @@ import {
   EventStoreError,
   TurnCompleted,
 } from "../../src/domain/event"
-import { makeStorageTransaction, SqliteStorage } from "../../src/storage/sqlite-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
-import { SessionOperationStorage } from "../../src/storage/session-operation-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { EventStorage } from "../../src/storage/event-storage"
-import { RelationshipStorage } from "../../src/storage/relationship-storage"
+import {
+  BranchStorage,
+  EventStorage,
+  makeStorageTransaction,
+  MessageStorage,
+  RelationshipStorage,
+  SessionOperationStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import {
   type BranchToolFeature,
   BranchToolWork,

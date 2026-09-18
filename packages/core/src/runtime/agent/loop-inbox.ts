@@ -81,7 +81,7 @@ import {
   QueueSnapshot,
   SteeringQueueEntryInfo,
 } from "../../domain/message.js"
-import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
+import { AgentLoopQueueStorage } from "../../storage/storage.js"
 import {
   AgentLoopError,
   asAgentLoopError,

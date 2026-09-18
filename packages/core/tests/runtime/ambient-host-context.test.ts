@@ -13,12 +13,10 @@ import { makeExtensionHostContextProvider } from "../../src/runtime/make-extensi
 import { ApprovalService } from "../../src/runtime/approval-service.js"
 import { resolveExtensions } from "../../src/runtime/extensions/registry.js"
 import { EventPublisherLive, EventStore } from "../../src/domain/event.js"
-import { MessageStorage } from "../../src/storage/message-storage.js"
-import { SqliteStorage } from "../../src/storage/sqlite-storage.js"
+import { MessageStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage.js"
 import { noBranchTools } from "../../src/runtime/agent/tools.js"
 import { ensureStorageParents } from "../../src/test-utils/index.js"
 import { testHostFacts } from "../../src/test-utils"
-import { SessionStorage } from "../../src/storage/session-storage.js"
 import { CurrentWorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc.js"
 import { dateFromMillis, Session } from "../../src/domain/message.js"
 

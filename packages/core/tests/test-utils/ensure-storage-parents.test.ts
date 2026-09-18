@@ -3,7 +3,7 @@ import { Effect, Layer, Ref } from "effect"
 import { SessionId } from "../../src/domain/ids"
 import type { Session } from "../../src/domain/message"
 import { ensureStorageParents } from "../../src/test-utils"
-import { SessionStorage, type SessionStorageService } from "../../src/storage/session-storage"
+import { SessionStorage, type SessionStorageService } from "../../src/storage/storage"
 
 const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
   Layer.succeed(SessionStorage, {

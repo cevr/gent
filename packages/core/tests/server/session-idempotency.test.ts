@@ -19,10 +19,12 @@ import { makeRequestDeduper } from "../../src/runtime/request-dedup"
 import { SessionMutations } from "../../src/domain/extension"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import type { SteerCommand } from "../../src/domain/agent"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import {
   FIXED_NOW,
   createActiveSessionFixture,

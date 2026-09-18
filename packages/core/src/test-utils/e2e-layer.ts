@@ -25,7 +25,7 @@ import {
 import type { EventPublisher } from "../domain/event.js"
 import type { ExtensionId } from "../domain/ids.js"
 import { ApprovalService } from "../runtime/approval-service.js"
-import type { InteractionStorage } from "../storage/interaction-storage.js"
+import type { InteractionStorage } from "../storage/storage.js"
 import { ConfigService } from "../runtime/config-service.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import type { SessionProfileCache } from "../runtime/session-profile.js"

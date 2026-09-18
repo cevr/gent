@@ -17,7 +17,7 @@ import type { BranchId, MessageId, SessionId } from "./ids.js"
 import type { CurrentAgentLoopTurnProfile } from "../runtime/agent/agent-loop.turn-profile.js"
 import type { ToolRunner } from "../runtime/agent/tools.js"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import type { MessageStorage } from "../storage/message-storage.js"
+import type { MessageStorage } from "../storage/storage.js"
 import type { EventPublisher } from "./event.js"
 
 /**

@@ -32,7 +32,7 @@ import {
   makeLoopInbox,
   type AgentLoopState,
 } from "../../../src/runtime/agent/loop-inbox"
-import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
+import { AgentLoopQueueStorage } from "../../../src/storage/storage"
 import {
   emptyAdmissionGate,
   makeAgentLoopWorker,

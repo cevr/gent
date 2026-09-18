@@ -43,16 +43,16 @@ import {
 } from "../../domain/ids.js"
 import { Branch, latestAssistantText, messagesToolCalls, Session } from "../../domain/message.js"
 import { GentPlatform } from "../gent-platform.js"
-import { BranchStorage } from "../../storage/branch-storage.js"
-import { SessionStorage } from "../../storage/session-storage.js"
 import {
+  BranchStorage,
+  EventStorage,
+  makeStorageTransaction,
+  MessageStorage,
+  type RelationshipStorage,
   SessionOperationStorage,
+  SessionStorage,
   StoredAgentStartInput,
-} from "../../storage/session-operation-storage.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import { EventStorage } from "../../storage/event-storage.js"
-import type { RelationshipStorage } from "../../storage/relationship-storage.js"
-import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
+} from "../../storage/storage.js"
 import { admitChildSessionDepth } from "../session-depth.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { ChildCompletionDelivery, turnFailureNames } from "./child-completion.js"

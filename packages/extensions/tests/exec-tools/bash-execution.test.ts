@@ -35,7 +35,7 @@ import {
   type TestToolContext,
 } from "@gent/core-internal/test-utils/extension-harness"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage"
+import { SqliteStorage } from "@gent/core-internal/storage/storage"
 import {
   boundToolResultForModel,
   maximumModelToolResultChars,

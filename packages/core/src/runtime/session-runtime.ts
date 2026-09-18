@@ -30,12 +30,17 @@ import {
   type InteractionRequestId,
 } from "../domain/ids.js"
 import type { PromptSection } from "../domain/capability.js"
-import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
-import type { BranchStorage } from "../storage/branch-storage.js"
-import type { EventStorage } from "../storage/event-storage.js"
-import type { MessageStorage } from "../storage/message-storage.js"
-import type { SessionStorage } from "../storage/session-storage.js"
-import type { SessionOperationStorage } from "../storage/session-operation-storage.js"
+import type {
+  AgentLoopQueueStorage,
+  BranchStorage,
+  EventStorage,
+  InteractionStorage,
+  MessageStorage,
+  SessionOperationStorage,
+  SessionStorage,
+  ToolCallBindingStorage,
+  TurnRecordStorage,
+} from "../storage/storage.js"
 import { AgentLoop as AgentLoopActor, AgentLoopLiveActor } from "./agent/agent-loop.actor.js"
 import { entityIdOf, listWorkspaceLoops } from "./agent/agent-loop.entity-id.js"
 import { followUpMessageIdForSource } from "./agent/agent-loop.protocol.js"
@@ -47,9 +52,6 @@ import type { ModelResolver } from "../providers/model-resolver.js"
 import type { ApprovalService } from "./approval-service.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tools.js"
-import type { ToolCallBindingStorage } from "../storage/tool-call-binding-storage.js"
-import type { TurnRecordStorage } from "../storage/turn-record-storage.js"
-import type { InteractionStorage } from "../storage/interaction-storage.js"
 import type { ConfigService } from "./config-service.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 

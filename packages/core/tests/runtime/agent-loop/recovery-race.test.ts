@@ -44,10 +44,13 @@ import {
   Session,
 } from "../../../src/domain/message"
 import { EventPublisherLive, EventStore, MessageReceived } from "../../../src/domain/event"
-import { SqliteStorage } from "../../../src/storage/sqlite-storage"
-import { BranchStorage } from "../../../src/storage/branch-storage"
-import { SessionStorage } from "../../../src/storage/session-storage"
-import { EventStorage } from "../../../src/storage/event-storage"
+import {
+  AgentLoopQueueStorage,
+  BranchStorage,
+  EventStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../../src/storage/storage"
 import { ActorCommandId, BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import {
   AgentLoop as AgentLoopActor,
@@ -62,7 +65,6 @@ import { ConfigService } from "../../../src/runtime/config-service"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import { StorageError } from "../../../src/domain/errors"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 import { makeExtRegistry } from "../agent-loop/helpers"

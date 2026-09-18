@@ -8,11 +8,13 @@ import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/do
 import { StorageError } from "@gent/core-internal/domain/errors.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
-import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "@gent/core-internal/storage/storage.js"
 import { CellBranchTools, CellExecutionStorage } from "../../src/cell.js"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
-import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
-import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 
 const now = dateFromMillis(1_767_225_600_000)
 const code = "await tools.write({ path: 'result.txt', content: 'once' })"

@@ -2,11 +2,13 @@ import { describe, expect, it, test } from "effect-bun-test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Predicate, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { RelationshipStorage } from "../../src/storage/relationship-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import {
+  BranchStorage,
+  MessageStorage,
+  RelationshipStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 

@@ -43,7 +43,7 @@ updates this list in the same commit.
    `packages/core/src/server/session-mutations-live.ts`.
 6. **Tool calls replay from durable bindings.** A resumed turn re-delivers a
    tool result from `tool_call_bindings`; it never re-runs the tool.
-   Receipts: `packages/core/src/storage/tool-call-binding-storage.ts`,
+   Receipts: `packages/core/src/storage/storage.ts`,
    `packages/core/src/runtime/agent/tools.ts`.
 7. **Approvals are one-shot and fail closed.** A guarded call asks once
    through the durable interaction request; nothing is saved; no answerer

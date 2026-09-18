@@ -44,7 +44,16 @@ import {
   type MessageMetadata,
   type QueuedTurnItem,
 } from "../../domain/message.js"
-import type { SessionOperationStorage } from "../../storage/session-operation-storage.js"
+import {
+  type AgentLoopQueueStorage,
+  EventStorage,
+  type InteractionStorage,
+  MessageStorage,
+  type SessionOperationStorage,
+  type SessionStorage,
+  ToolCallBindingStorage,
+  TurnRecordStorage,
+} from "../../storage/storage.js"
 import type { BranchId, InteractionRequestId, MessageId, SessionId } from "../../domain/ids.js"
 import {
   ExtensionHostContextProvider,
@@ -53,13 +62,6 @@ import {
 import type { ConfigService } from "../config-service.js"
 import type { PromptSection } from "../../domain/capability.js"
 import type { StorageError } from "../../domain/errors.js"
-import type { SessionStorage } from "../../storage/session-storage.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import type { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
-import { EventStorage } from "../../storage/event-storage.js"
-import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
-import { TurnRecordStorage } from "../../storage/turn-record-storage.js"
-import type { InteractionStorage } from "../../storage/interaction-storage.js"
 import { ModelResolver } from "../../providers/model-resolver.js"
 import type { SessionProfileCacheService } from "../session-profile.js"
 import { ExtensionRegistry } from "../extensions/registry.js"

@@ -10,10 +10,18 @@ import { omitUndefined } from "../../domain/guards.js"
 import { type BranchId, InteractionRequestId, type SessionId } from "../../domain/ids.js"
 import { InteractionPendingError } from "../../domain/interaction.js"
 import { TurnError } from "../../domain/driver.js"
-import { MessageStorage } from "../../storage/message-storage.js"
-import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
+import {
+  emptyTurnRecord,
+  makeStorageTransaction,
+  MessageStorage,
+  type PendingToolCall,
+  SessionOperationStorage,
+  ToolCallBindingStorage,
+  type TurnRecord,
+  turnRecordAtStep,
+  TurnRecordStorage,
+} from "../../storage/storage.js"
 import { Message } from "../../domain/message.js"
-import { makeStorageTransaction } from "../../storage/sqlite-storage.js"
 import { ConfigService } from "../config-service.js"
 import { GentPlatform } from "../gent-platform.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
@@ -60,14 +68,6 @@ import {
   ToolBindingReplayError,
   ToolInteractionPending,
 } from "./tools.js"
-import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
-import {
-  emptyTurnRecord,
-  type PendingToolCall,
-  type TurnRecord,
-  turnRecordAtStep,
-  TurnRecordStorage,
-} from "../../storage/turn-record-storage.js"
 import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 import type { TurnInterruption } from "./turn-interruption.js"
 import type { TurnLedger } from "./turn-ledger.js"

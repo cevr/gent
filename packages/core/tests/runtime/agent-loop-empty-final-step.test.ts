@@ -15,7 +15,7 @@ import { LanguageModelLayers, finishPart, textDeltaPart } from "../../src/test-u
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
-import { MessageStorage } from "../../src/storage/message-storage"
+import { MessageStorage } from "../../src/storage/storage"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { AgentEvent } from "../../src/domain/event"
 import { SequenceRecorder } from "../../src/test-utils"

@@ -9,11 +9,11 @@ import {
 } from "../../domain/event.js"
 import { headTailChars, latestAssistantText } from "../../domain/message.js"
 import { MessageId, type RequestId } from "../../domain/ids.js"
-import { MessageStorage } from "../../storage/message-storage.js"
 import {
+  MessageStorage,
   SessionOperationStorage,
   type StoredAgentStartResult,
-} from "../../storage/session-operation-storage.js"
+} from "../../storage/storage.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
 import { SessionRuntime } from "../session-runtime.js"
 import { followUpMessageIdForSource } from "./agent-loop.protocol.js"

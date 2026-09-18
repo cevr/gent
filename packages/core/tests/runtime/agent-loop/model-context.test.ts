@@ -15,7 +15,7 @@ import {
 } from "../../../src/test-utils/language-model"
 import { multiToolCallStep, textStep } from "../../../src/test-utils/sequence-steps"
 import { tool } from "@gent/core/extensions/api"
-import { MessageStorage } from "../../../src/storage/message-storage"
+import { MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
@@ -29,7 +29,6 @@ import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/exten
 import { ModelResolver } from "../../../src/providers/model-resolver"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { SqliteStorage } from "../../../src/storage/sqlite-storage"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"
 

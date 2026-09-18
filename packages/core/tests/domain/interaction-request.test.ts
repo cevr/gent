@@ -1,10 +1,10 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Clock, Effect, Layer, Schema } from "effect"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
 import {
   InteractionStorage,
   type InteractionStorageService,
-} from "../../src/storage/interaction-storage"
+  SqliteStorage,
+} from "../../src/storage/storage"
 import { ensureStorageParents } from "../../src/test-utils"
 import { EventStoreError } from "../../src/domain/event"
 import {

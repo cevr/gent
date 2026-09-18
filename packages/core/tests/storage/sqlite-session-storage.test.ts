@@ -4,18 +4,18 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect, Exit, FileSystem, Layer, Path, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { GentPlatform } from "../../src/runtime/gent-platform"
-import { EventStorage } from "../../src/storage/event-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { AgentLoopQueueStorage } from "../../src/storage/agent-loop-queue-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
-import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
+  AgentLoopQueueStorage,
+  BranchStorage,
   DurableOperations,
+  EventStorage,
+  MessageStorage,
   SessionOperationStorage,
-} from "../../src/storage/session-operation-storage"
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import { ErrorOccurred } from "../../src/domain/event"
 import { BranchId, MessageId, RequestId, SessionId } from "../../src/domain/ids"

@@ -13,7 +13,11 @@ import {
   Sink,
   Stream,
 } from "effect"
-import type { OwnedToolCallAddress } from "../../storage/sqlite/owned-tool-call.js"
+import {
+  type ExtraRepositories,
+  type OwnedToolCallAddress,
+  ToolCallBindingStorage,
+} from "../../storage/storage.js"
 import {
   type BranchId,
   type ExtensionId,
@@ -25,7 +29,6 @@ import {
 } from "../../domain/ids.js"
 import type { ExtensionHostContext, LoadedExtension } from "../../domain/extension.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { ToolCallBindingStorage } from "../../storage/tool-call-binding-storage.js"
 import {
   getToolId,
   getToolMetadata,
@@ -39,7 +42,6 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { GentPlatform } from "../gent-platform.js"
-import type { ExtraRepositories } from "../../storage/sqlite-storage.js"
 import type { FeatureMigrations } from "../../storage/schema.js"
 import {
   emptyErasedResourceLayer,

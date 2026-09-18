@@ -9,7 +9,7 @@ import { Effect, Predicate } from "effect"
 import { DEFAULT_MAX_AGENT_RUN_DEPTH, SessionDepthLimitError } from "../domain/agent.js"
 import { NotFoundError } from "../domain/errors.js"
 import type { SessionId } from "../domain/ids.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
+import { RelationshipStorage } from "../storage/storage.js"
 
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
 export const getSessionDepth = Effect.fn("SessionDepth.getSessionDepth")(function* (

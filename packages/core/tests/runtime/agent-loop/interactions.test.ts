@@ -34,7 +34,12 @@ import {
 } from "../../../src/domain/event"
 import { InteractionPendingError } from "../../../src/domain/interaction"
 import { ApprovalService } from "../../../src/runtime/approval-service"
-import { SqliteStorage } from "../../../src/storage/sqlite-storage"
+import {
+  EventStorage,
+  MessageStorage,
+  SqliteStorage,
+  ToolCallBindingStorage,
+} from "../../../src/storage/storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import {
   BranchId,
@@ -53,9 +58,6 @@ import { ConfigService } from "../../../src/runtime/config-service"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
 import { ModelResolver } from "../../../src/providers/model-resolver"
-import { MessageStorage } from "../../../src/storage/message-storage"
-import { EventStorage } from "../../../src/storage/event-storage"
-import { ToolCallBindingStorage } from "../../../src/storage/tool-call-binding-storage"
 import { ToolResultReplayError } from "../../../src/runtime/agent/turn-persistence"
 import {
   makeAgentLoopService,

@@ -13,7 +13,7 @@ import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { Branch, dateFromMillis } from "../../src/domain/message.js"
 import { StorageError } from "../../src/domain/errors.js"
-import { BranchStorage } from "../../src/storage/branch-storage.js"
+import { BranchStorage } from "../../src/storage/storage.js"
 import { getBranchTree, buildBranchTree } from "../../src/server/session-utils.js"
 
 const SESSION_ID = SessionId.make("test-session")

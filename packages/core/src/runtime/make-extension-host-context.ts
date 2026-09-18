@@ -31,10 +31,12 @@ import { MessageId, type BranchId, type SessionId } from "../domain/ids.js"
 import { RuntimeEnvironment, type RuntimeEnvironmentApi } from "./runtime-environment.js"
 import { ApprovalService } from "./approval-service.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { MessageStorage } from "../storage/message-storage.js"
-import { RelationshipStorage } from "../storage/relationship-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
+import {
+  BranchStorage,
+  MessageStorage,
+  RelationshipStorage,
+  SessionStorage,
+} from "../storage/storage.js"
 import { Message, type MessageMetadata } from "../domain/message.js"
 import { EventPublisher, ExtensionStatePublisher, MessageReceived } from "../domain/event.js"
 import { AgentLoop as AgentLoopActor } from "./agent/agent-loop.protocol.js"

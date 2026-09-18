@@ -10,9 +10,7 @@ import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-u
 import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { getSessionSnapshot } from "../../src/server/rpc-handlers"
-import { EventStorage } from "../../src/storage/event-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import { BranchStorage, EventStorage, SessionStorage } from "../../src/storage/storage"
 import { baseLocalLayerWithProvider } from "../../src/test-utils/in-process-layer"
 const cowork = AgentDefinition.make({
   name: AgentName.make("cowork"),

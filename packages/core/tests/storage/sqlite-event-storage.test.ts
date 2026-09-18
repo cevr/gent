@@ -1,10 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { EventDecodeError, EventStorage } from "../../src/storage/event-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import {
+  BranchStorage,
+  EventDecodeError,
+  EventStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
 import {
   ErrorOccurred,

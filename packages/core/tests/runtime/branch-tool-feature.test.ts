@@ -8,8 +8,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { MessageStorage } from "../../src/storage/message-storage"
+import { MessageStorage, SqliteStorage } from "../../src/storage/storage"
 import {
   noBranchTools,
   CurrentBranchToolFeature,

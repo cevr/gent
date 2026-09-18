@@ -20,8 +20,7 @@ import {
 import { BranchId, SessionId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
-import { BranchStorage } from "../storage/branch-storage.js"
-import { SessionStorage } from "../storage/session-storage.js"
+import { BranchStorage, SessionStorage } from "../storage/storage.js"
 import {
   EventStore,
   EventEnvelope,

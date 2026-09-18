@@ -7,7 +7,7 @@ import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError } from "../runtime/config-service.js"
 import { SessionRuntimeError } from "../runtime/session-runtime.js"
-import { StorageError } from "../storage/sqlite-storage.js"
+import { StorageError } from "../storage/storage.js"
 
 export { InvalidStateError, NotFoundError } from "../domain/errors.js"
 

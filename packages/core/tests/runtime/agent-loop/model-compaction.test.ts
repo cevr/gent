@@ -9,7 +9,7 @@ import {
   finishPart,
   textDeltaPart,
 } from "../../../src/test-utils/language-model"
-import { MessageStorage } from "../../../src/storage/message-storage"
+import { MessageStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { ModelContextCompactorLive } from "../../../../extensions/tests/helpers/test-preset"
 import { makeAgentLoopService, makeLayer, makeMessage, runAgentLoop } from "./helpers"

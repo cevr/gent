@@ -19,7 +19,7 @@ import {
 } from "../domain/interaction.js"
 import type { InteractionRequestId } from "../domain/ids.js"
 import type { GentPlatform } from "./gent-platform.js"
-import { InteractionStorage } from "../storage/interaction-storage.js"
+import { InteractionStorage } from "../storage/storage.js"
 
 const makeApprovalInteractionService: Effect.Effect<
   InteractionService,

@@ -37,8 +37,12 @@ import {
   MessageReceived,
   TurnCompleted,
 } from "../../../src/domain/event"
-import { SqliteStorage } from "../../../src/storage/sqlite-storage"
-import { EventStorage } from "../../../src/storage/event-storage"
+import {
+  AgentLoopQueueStorage,
+  EventStorage,
+  MessageStorage,
+  SqliteStorage,
+} from "../../../src/storage/storage"
 import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { windowMarkerMessage } from "../../../src/runtime/model-context-window"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
@@ -58,7 +62,6 @@ import {
   waitFor,
   waitForPhase,
 } from "./helpers"
-import { MessageStorage } from "../../../src/storage/message-storage"
 import { buildIdleState, buildRunningState } from "../../../src/runtime/agent/agent-loop.state"
 import {
   buildInitialAgentLoopState,
@@ -67,7 +70,6 @@ import {
   wantsWakeOnRecovery,
   type AgentLoopState,
 } from "../../../src/runtime/agent/loop-inbox"
-import { AgentLoopQueueStorage } from "../../../src/storage/agent-loop-queue-storage"
 import type { AgentLoopError } from "../../../src/runtime/agent/agent-loop.state"
 import { StorageError } from "../../../src/domain/errors"
 import { ensureStorageParents } from "../../../src/test-utils"

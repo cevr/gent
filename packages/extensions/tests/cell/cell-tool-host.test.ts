@@ -41,9 +41,8 @@ import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
 import { CellResponse } from "../../src/cell-protocol.js"
 import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
-import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
-import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
+import { InteractionStorage, MessageStorage } from "@gent/core-internal/storage/storage.js"
+import { ensureStorageParents, testHostFacts } from "@gent/core-internal/test-utils/index.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import {
@@ -51,7 +50,6 @@ import {
   type ResolvedToolCapability,
 } from "@gent/core-internal/runtime/agent/tools.js"
 import { runAgentLoopTurnProfile } from "@gent/core-internal/runtime/agent/agent-loop.turn-profile.js"
-import { testHostFacts } from "@gent/core-internal/test-utils"
 
 const cell = {
   sessionId: SessionId.make("recorded-host-session"),

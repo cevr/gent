@@ -29,7 +29,12 @@ import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
 import { CellResponse } from "../../src/cell-protocol.js"
-import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
+import {
+  AgentLoopQueueStorage,
+  InteractionStorage,
+  MessageStorage,
+  ToolCallBindingStorage,
+} from "@gent/core-internal/storage/storage.js"
 import {
   LoadedArtifactIdentity,
   type LoadedExtension,
@@ -42,9 +47,6 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core-internal/domain/ids.js"
-import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
-import { AgentLoopQueueStorage } from "@gent/core-internal/storage/agent-loop-queue-storage.js"
-import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage.js"
 import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
 import {
   captureCurrentToolBinding,

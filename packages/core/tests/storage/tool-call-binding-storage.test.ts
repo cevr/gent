@@ -20,11 +20,13 @@ import {
 } from "../../src/domain/ids"
 import { StorageError } from "../../src/domain/errors"
 import { CurrentWorkspaceId, DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
-import { MessageStorage } from "../../src/storage/message-storage"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { ToolCallBindingStorage } from "../../src/storage/tool-call-binding-storage"
-import { BranchStorage } from "../../src/storage/branch-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+  ToolCallBindingStorage,
+} from "../../src/storage/storage"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 const WORKSPACE_A = WorkspaceId.make("a".repeat(64))

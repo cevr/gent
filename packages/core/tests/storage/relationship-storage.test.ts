@@ -7,9 +7,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Option } from "effect"
-import { SqliteStorage } from "../../src/storage/sqlite-storage"
-import { RelationshipStorage } from "../../src/storage/relationship-storage"
-import { SessionStorage } from "../../src/storage/session-storage"
+import { RelationshipStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage"
 import { dateFromMillis, Session } from "../../src/domain/message"
 import { SessionId } from "../../src/domain/ids"
 
