@@ -19,7 +19,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
-import { CurrentResolveModelAssertion } from "../providers/model-resolver.js"
+import { CurrentResolveModelAssertion } from "../runtime/provider.js"
 
 type LanguageModelToolMap = Record<string, AiTool.Any>
 export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = LanguageModelToolMap> =

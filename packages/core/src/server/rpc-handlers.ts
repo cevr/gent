@@ -1,11 +1,10 @@
 import { Predicate, Clock, Effect, Layer, Option, Stream } from "effect"
 import { GentRpcs } from "./rpcs.js"
 import type { DriverRef } from "../domain/agent.js"
-import { Auth, AuthApi, AuthGuard } from "../domain/auth.js"
+import { Auth, AuthApi, AuthGuard, ModelRegistry, ProviderAuth } from "../runtime/provider.js"
 import { ProviderAuthError } from "../domain/driver.js"
 import { EventId, EventPublisher, EventStore, InteractionResolved } from "../domain/event.js"
 import { SessionId, type BranchId, type RequestId } from "../domain/ids.js"
-import { ProviderAuth } from "../providers/provider-auth.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import {
   ApprovalService,
@@ -15,7 +14,6 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { ModelRegistry } from "../runtime/model-registry.js"
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { foldSessionMetrics } from "../domain/agent-loop.js"

@@ -5,7 +5,7 @@ import * as AiModel from "effect/unstable/ai/Model"
 import { BunServices } from "@effect/platform-bun"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../../src/domain/ids"
 import { Message, dateFromMillis } from "../../../src/domain/message"
-import { Auth } from "../../../src/domain/auth"
+import { Auth, ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import type { ModelDriverContribution } from "../../../src/domain/driver"
 import { Model, ModelId, ProviderId } from "../../../src/domain/agent"
 import {
@@ -22,14 +22,12 @@ import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { EventPublisherLive, EventStore } from "../../../src/domain/event"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
 import {
   ApprovalService,
   DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
 } from "../../../src/runtime/extension-host"
-import { ModelResolver } from "../../../src/providers/model-resolver"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents"
 import { makeMessage, makeAgentLoopService, makeLayer, runAgentLoop } from "./helpers"

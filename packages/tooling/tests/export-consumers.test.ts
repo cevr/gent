@@ -8,7 +8,7 @@ import {
   type PackageJson,
 } from "../src/export-consumers"
 
-const CORE_FILE = "packages/core/src/runtime/retry.ts"
+const CORE_FILE = "packages/core/src/runtime/provider.ts"
 const SDK_FILE = "packages/sdk/src/log-paths.ts"
 const SDK_CONSUMER = "packages/sdk/src/logger.ts"
 const API_FILE = "packages/core/src/extensions/api.ts"

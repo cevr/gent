@@ -17,7 +17,7 @@ import {
 } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { ModelResolver } from "../../src/providers/model-resolver"
+import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
 import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import {
   ApprovalService,
@@ -40,7 +40,6 @@ import {
 } from "../../src/domain/message"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent/agent-loop.session-governance"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
-import { ModelRegistry } from "../../src/runtime/model-registry"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   AgentDefinition,

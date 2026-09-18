@@ -10,7 +10,7 @@ import {
   AuthGuard,
   type AuthInfo,
   ListAuthProvidersPayload,
-} from "../../src/domain/auth"
+} from "../../src/runtime/provider"
 import {
   DriverRegistry,
   ExtensionRegistry,

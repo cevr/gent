@@ -4,7 +4,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { AgentRunnerService } from "../domain/agent.js"
-import { Auth, AuthGuard } from "../domain/auth.js"
+import { Auth, AuthGuard, ModelRegistry, ModelResolver, ProviderAuth } from "../runtime/provider.js"
 import { EventPublisherLive, type EventPublisher } from "../domain/event.js"
 import type { PromptSection } from "../domain/capability.js"
 import {
@@ -13,8 +13,6 @@ import {
   type GentExtension,
 } from "../domain/extension.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { ModelResolver } from "../providers/model-resolver.js"
-import { ProviderAuth } from "../providers/provider-auth.js"
 import {
   ApprovalService,
   DriverRegistry,
@@ -32,7 +30,6 @@ import {
 } from "../runtime/agent/tools.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
-import { ModelRegistry } from "../runtime/model-registry.js"
 import { InteractionStorage, SqliteStorage } from "../storage/storage.js"
 import {
   decodeInteractionDecision,

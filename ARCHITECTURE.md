@@ -59,7 +59,7 @@ updates this list in the same commit.
 9. **Retry policy belongs to the driver.** The loop re-runs a step; the
    driver says which failures are transient and how long to wait. Receipts:
    `RetryPolicy` in `packages/core/src/domain/driver.ts`,
-   `packages/core/src/runtime/retry.ts`.
+   `packages/core/src/runtime/provider.ts`.
 10. **Tool results are bounded before the model sees them.** At most 8,000
     characters inline (head and tail); the rest is paged through
     `context.read`. Receipt: `maximumModelToolResultChars` in

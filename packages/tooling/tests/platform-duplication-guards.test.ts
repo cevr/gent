@@ -700,7 +700,9 @@ describe("platform duplication guards", () => {
         message: "Legacy auth domain module is deleted; use domain/auth",
       },
     ])
-    expect(findPlatformDuplicationViolations("packages/core/src/domain/auth.ts", "")).toEqual([])
+    expect(findPlatformDuplicationViolations("packages/core/src/runtime/provider.ts", "")).toEqual(
+      [],
+    )
     expect(findPlatformDuplicationViolations("packages/sdk/src/server-registry.ts", "")).toEqual([
       {
         file: "packages/sdk/src/server-registry.ts",

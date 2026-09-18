@@ -47,12 +47,11 @@ import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { windowMarkerMessage } from "../../../src/runtime/model-context-window"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { ApprovalService } from "../../../src/runtime/extension-host"
-import { ModelResolver } from "../../../src/providers/model-resolver"
 import {
   makeAgentLoopService,
   makeExtRegistry,

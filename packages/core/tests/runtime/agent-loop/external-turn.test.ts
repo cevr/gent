@@ -25,7 +25,7 @@ import {
 } from "../../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
-import { ModelResolver } from "../../../src/providers/model-resolver"
+import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
 import {
   assistantMessageIdForTurn,
@@ -73,7 +73,6 @@ import {
   SessionId,
   ToolCallId,
 } from "../../../src/domain/ids"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { ensureStorageParents } from "../../../src/test-utils"

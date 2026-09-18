@@ -20,13 +20,12 @@ import {
   textDeltaPart,
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
-import { ModelResolver } from "../../../src/providers/model-resolver"
+import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { EventPublisherLive } from "../../../src/domain/event"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
 import { ActorCommandId, BranchId, ExtensionId, SessionId } from "../../../src/domain/ids"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../../src/storage/storage"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"

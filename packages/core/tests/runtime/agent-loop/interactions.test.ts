@@ -51,12 +51,11 @@ import {
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopError } from "../../../src/domain/agent-loop"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
 import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
-import { ModelResolver } from "../../../src/providers/model-resolver"
 import { ToolResultReplayError } from "../../../src/runtime/agent/turn-persistence"
 import {
   makeAgentLoopService,

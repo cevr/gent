@@ -68,8 +68,7 @@ import {
 import type { ConfigService } from "../config.js"
 import type { PromptSection } from "../../domain/capability.js"
 import type { StorageError } from "../../domain/errors.js"
-import { ModelResolver } from "../../providers/model-resolver.js"
-import type { ModelRegistry } from "../model-registry.js"
+import { type ModelRegistry, ModelResolver } from "../provider.js"
 import type { GentPlatform } from "../gent-platform.js"
 import {
   buildIdleState,

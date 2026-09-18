@@ -9,7 +9,7 @@ export {
   type RunSpec,
   RunSpecSchema,
 } from "./domain/agent.js"
-export { AuthAuthorization, AuthMethod, AuthProviderInfo } from "./domain/auth.js"
+export { AuthAuthorization, AuthMethod, AuthProviderInfo } from "./runtime/provider.js"
 export {
   type ActiveInteraction,
   AgentEvent,

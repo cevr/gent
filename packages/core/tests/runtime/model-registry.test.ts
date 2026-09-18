@@ -14,12 +14,10 @@ import {
   Schema,
 } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { Auth, AuthError } from "../../src/domain/auth.js"
-import type { AuthInfo } from "../../src/domain/auth.js"
+import { Auth, AuthError, type AuthInfo, ModelRegistry } from "../../src/runtime/provider.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
 import { Model, ModelId, ProviderId } from "../../src/domain/agent.js"
 import { DriverRegistry } from "../../src/runtime/extension-host.js"
-import { ModelRegistry } from "../../src/runtime/model-registry.js"
 import { RuntimeEnvironment } from "../../src/runtime/config.js"
 import { waitFor } from "../../src/test-utils/fixtures.js"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"

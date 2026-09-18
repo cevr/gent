@@ -11,7 +11,7 @@ import {
   ModelCompactionError,
   ModelContextCompactor,
 } from "../../src/runtime/model-context-compactor"
-import { ModelRegistry } from "../../src/runtime/model-registry"
+import { ModelRegistry } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { getSessionSnapshot } from "../../src/server/rpc-handlers"
 import {

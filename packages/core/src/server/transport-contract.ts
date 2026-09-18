@@ -13,7 +13,7 @@ import {
   AuthMethod,
   AuthProviderInfo,
   ListAuthProvidersPayload,
-} from "../domain/auth.js"
+} from "../runtime/provider.js"
 import { EventEnvelope } from "../domain/event.js"
 import {
   BranchId,

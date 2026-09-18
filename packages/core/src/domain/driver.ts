@@ -29,7 +29,7 @@ import { Context, Schema, type Effect, type Layer, type Option, type Stream } fr
 import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import type { AgentDefinition, Model } from "./agent.js"
-import type { AuthAuthorizationMethod, AuthMethod } from "./auth.js"
+import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
 import type { ToolCapability } from "./capability.js"
 import type { ExtensionHostContext } from "./extension.js"
 import type { BranchId, SessionId } from "./ids.js"

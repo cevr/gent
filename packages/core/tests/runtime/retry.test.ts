@@ -9,7 +9,7 @@ import { TestClock } from "effect/testing"
 import * as AiError from "effect/unstable/ai/AiError"
 import { DEFAULT_RETRY_POLICY, ProviderAuthError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/errors"
-import { retryProviderCall } from "../../src/runtime/retry"
+import { retryProviderCall } from "../../src/runtime/provider"
 
 /** The wire shapes the shipped Anthropic and OpenAI drivers name as transient. */
 const transientStreamEvent = Schema.Union([

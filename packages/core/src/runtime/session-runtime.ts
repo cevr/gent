@@ -56,8 +56,7 @@ import {
   type ExtensionRegistry,
   resolveExistingSessionBranch,
 } from "./extension-host.js"
-import type { ModelRegistry } from "./model-registry.js"
-import type { ModelResolver } from "../providers/model-resolver.js"
+import type { ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./agent/tools.js"
 import type { ConfigService } from "./config.js"

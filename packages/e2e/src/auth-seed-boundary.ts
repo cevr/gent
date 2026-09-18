@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun"
-import { Auth, AuthApi } from "@gent/core-internal/domain/auth"
+import { Auth, AuthApi } from "@gent/core-internal/runtime/provider"
 import { Effect, Layer, ManagedRuntime } from "effect"
 
 /**

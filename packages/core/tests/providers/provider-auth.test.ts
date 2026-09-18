@@ -2,10 +2,16 @@ import { describe, it, expect } from "effect-bun-test"
 import { Predicate, Effect, Layer, Option } from "effect"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { SessionId, ExtensionId } from "../../src/domain/ids"
-import { Auth, AuthError, AuthMethod, type AuthInfo, type AuthService } from "../../src/domain/auth"
+import {
+  Auth,
+  AuthError,
+  type AuthInfo,
+  AuthMethod,
+  type AuthService,
+  ProviderAuth,
+} from "../../src/runtime/provider"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "../../src/domain/driver"
-import { ProviderAuth } from "../../src/providers/provider-auth"
 import {
   DriverRegistry,
   ExtensionRegistry,

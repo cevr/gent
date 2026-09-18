@@ -21,7 +21,7 @@ import {
   AgentLoopTestActor,
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import {
   ApprovalService,
@@ -36,7 +36,6 @@ import {
   LanguageModelLayers,
   type LanguageModelStreamPart,
 } from "../../../src/test-utils/language-model"
-import { ModelResolver } from "../../../src/providers/model-resolver"
 import { dateFromMillis, Message, type QueueSnapshot } from "../../../src/domain/message"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"

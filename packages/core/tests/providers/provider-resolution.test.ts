@@ -9,9 +9,14 @@ import {
   ExtensionRegistry,
   resolveExtensions,
 } from "../../src/runtime/extension-host"
-import { Auth, AuthError, type AuthInfo, type AuthService } from "../../src/domain/auth"
+import {
+  Auth,
+  AuthError,
+  type AuthInfo,
+  type AuthService,
+  ModelResolver,
+} from "../../src/runtime/provider"
 import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
-import { ModelResolver } from "../../src/providers/model-resolver"
 import { convertTools } from "../../src/runtime/agent/tools"
 import { ProviderAuthError } from "../../src/domain/driver"
 import { toPrompt } from "../../src/providers/ai-transcript"

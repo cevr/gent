@@ -29,7 +29,7 @@ import {
   toolCallPart,
   type LanguageModelStreamPart,
 } from "../../src/test-utils/language-model"
-import { ModelResolver } from "../../src/providers/model-resolver"
+import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
 import { waitFor } from "../../src/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
@@ -52,7 +52,6 @@ import {
 } from "../../src/domain/ids"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import { noBranchTools, ToolRunner } from "../../src/runtime/agent/tools"
-import { ModelRegistry } from "../../src/runtime/model-registry"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionMutationsLive } from "../../src/server/session-mutations-live"
 import {

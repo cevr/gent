@@ -6,7 +6,7 @@ import * as Response from "effect/unstable/ai/Response"
 import * as AiError from "effect/unstable/ai/AiError"
 import { AgentLoopTestActor } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { ModelRegistry } from "../../../src/runtime/model-registry"
+import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/agent/tools"
@@ -16,7 +16,6 @@ import {
   LanguageModelLayers,
   textDeltaPart,
 } from "../../../src/test-utils/language-model"
-import { ModelResolver } from "../../../src/providers/model-resolver"
 import { textStep } from "../../../src/test-utils/sequence-steps"
 import {
   AgentEvent,

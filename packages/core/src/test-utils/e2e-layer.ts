@@ -12,7 +12,7 @@ import { Predicate, Effect, Layer, Option } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition, AgentRunner, AgentRunnerService } from "../domain/agent.js"
-import { Auth } from "../domain/auth.js"
+import { Auth, ModelRegistry } from "../runtime/provider.js"
 import {
   defineResource,
   type ExtensionContributions,
@@ -33,7 +33,6 @@ import { testHostFacts } from "./index.js"
 import { buildServerRoot } from "../server/server-root.js"
 import { StateLocation } from "../server/dependencies.js"
 import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/agent/tools.js"
-import { ModelRegistry } from "../runtime/model-registry.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,

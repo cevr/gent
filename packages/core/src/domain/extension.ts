@@ -524,10 +524,6 @@ export interface TurnProjection {
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
 
-// `ProviderAuthInfo` is declared in driver.ts and reaches the model registry
-// through this module, beside the extension surface that uses it.
-export type { ProviderAuthInfo } from "./driver.js"
-
 // Extension — the core primitive
 
 export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostProcessError>()(

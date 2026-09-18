@@ -10,7 +10,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { Auth, AuthInfo } from "../../src/domain/auth.js"
+import { Auth, AuthInfo } from "../../src/runtime/provider.js"
 
 describe("Auth", () => {
   describe("Auth.Test", () => {

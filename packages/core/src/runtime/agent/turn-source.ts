@@ -17,7 +17,13 @@ import {
 } from "../../storage/storage.js"
 import type { Message } from "../../domain/message.js"
 import { calculateCost, type ModelId } from "../../domain/agent.js"
-import { ModelRegistry } from "../model-registry.js"
+import {
+  driverRetryPolicy,
+  ModelRegistry,
+  ModelResolver,
+  type ResolveModelRequest,
+  retryProviderCall,
+} from "../provider.js"
 import {
   CurrentExtensionHostContext,
   DriverRegistry,
@@ -37,7 +43,6 @@ import * as AiError from "effect/unstable/ai/AiError"
 import type * as Response from "effect/unstable/ai/Response"
 import { ProviderError, type StorageError } from "../../domain/errors.js"
 import { toPrompt } from "../../providers/ai-transcript.js"
-import { ModelResolver, type ResolveModelRequest } from "../../providers/model-resolver.js"
 import { SqlClient } from "effect/unstable/sql"
 import {
   estimateTextTokens,
@@ -51,7 +56,6 @@ import {
 } from "../model-context.js"
 import { ModelContextLedger } from "../model-context-ledger.js"
 import { currentHandoffId, messagesInCurrentWindow } from "../model-context-window.js"
-import { driverRetryPolicy, retryProviderCall } from "../retry.js"
 import { causeMessage } from "../../domain/guards.js"
 import { projectContextWindow } from "./turn-window.js"
 

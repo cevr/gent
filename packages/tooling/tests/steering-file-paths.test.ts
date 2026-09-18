@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { findSteeringFilePaths, isSteeringFile } from "../src/steering-file-paths"
 
 const TRACKED = [
-  "packages/core/src/runtime/retry.ts",
+  "packages/core/src/runtime/provider.ts",
   "packages/core/src/domain/tool.ts",
   "packages/core-internal/src",
   "apps/tui/tests/render-harness-boundary.tsx",
@@ -29,7 +29,7 @@ describe("steering file paths", () => {
   })
 
   test("allows a tracked file", () => {
-    expect(messagesOf("see `packages/core/src/runtime/retry.ts`")).toEqual([])
+    expect(messagesOf("see `packages/core/src/runtime/provider.ts`")).toEqual([])
   })
 
   test("allows a directory that holds a tracked file", () => {
