@@ -109,3 +109,45 @@ its own, split the longest describe back out (rule 9).
 `tests/debug/`, `tests/drivers/`, `tests/providers/`, `tests/runtime/agent/`,
 `tests/runtime/agent-loop/`, `tests/server/session-mutations/`,
 `tests/extensions/memory/`.
+
+## Result
+
+128 test files → 32, plus 4 helper modules. 923 tests before and after.
+`cd packages/core && bun run test`: 9.83 s before; 7.31 s / 7.43 s / 8.49 s
+after. No folded file runs longer than 6 s on its own, so rule 9 splits
+nothing: `agent-loop.test.ts` 5.87 s, `server.test.ts` 3.63 s,
+`rpc.test.ts` 2.81 s, `session.test.ts` 2.27 s, `extension-host.test.ts`
+0.63 s, `storage.test.ts` 0.44 s.
+
+### Renames (rule 3)
+
+| File                                | Old name                                                                                                                                      | New name                                                          |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `storage/storage.test.ts`           | `makeFixture`                                                                                                                                 | `makeFixtureTurnRecord`                                           |
+| `test-utils/language-model.test.ts` | `callProvider`                                                                                                                                | `callSignalProvider`                                              |
+| `server/server.test.ts`             | `makeClient` (debug)                                                                                                                          | `makeDebugClient`                                                 |
+| `server/server.test.ts`             | `collectRuntime`                                                                                                                              | `collectRuntimeQueueWatch`                                        |
+| `runtime/extension-host.test.ts`    | `makeExt`                                                                                                                                     | `makeExtExtensionHooks`, `makeExtRegistry`, `makeExtTurnExecutor` |
+| `runtime/extension-host.test.ts`    | `ext`                                                                                                                                         | `extRuntimeHooks`, `extScopePrecedence`                           |
+| `runtime/extension-host.test.ts`    | `request` (a fixture shadowing the imported factory)                                                                                          | `approvalRequest`                                                 |
+| `runtime/model-context.test.ts`     | `sessionId`, `branchId`                                                                                                                       | `…ModelContextDegrade`, `…ModelContextWindow`                     |
+| `runtime/model-context.test.ts`     | `message`, `modelId`                                                                                                                          | `messageModelContextWindow`, `modelIdTurnWindow`                  |
+| `runtime/provider.test.ts`          | `testResolved`                                                                                                                                | `testResolvedProviderAuth`                                        |
+| `runtime/session.test.ts`           | `createSessionBranch`                                                                                                                         | `createSessionBranchSessionMetrics`                               |
+| `runtime/turn.test.ts`              | `sessionId`, `branchId`                                                                                                                       | `…TurnPersistence`                                                |
+| `runtime/agent-loop.test.ts`        | `promptText`                                                                                                                                  | `promptTextModelContext`                                          |
+| `runtime/agent-loop.test.ts`        | `sessionId`, `branchId`                                                                                                                       | `…ExternalTurn`                                                   |
+| `runtime/agent-loop.test.ts`        | `makeMessage`, `makeAgentLoopService`, `runAgentLoop`, `makeExtRegistry`, `makeLayerWithEvents` (local copies shadowing `agent-loop-helpers`) | `…ExternalTurn`                                                   |
+| `runtime/agent-loop.test.ts`        | `TurnOutcome` (a local interface shadowing the imported union)                                                                                | `HookTurnOutcome`                                                 |
+| `runtime/agent-loop.test.ts`        | `waitFor` from `agent-loop-helpers`                                                                                                           | imported as `waitForOption`                                       |
+
+Hoisted (one copy kept, the copies were byte identical): `FIXED_NOW`,
+`FIXED_NOW_MILLIS`, `WORKSPACE_B`, `tableExists`, `absentModel`,
+`childProcessSpawnerLive`, `fsLayer`, `encodeJson`, `stubHostCtx`,
+`stubCtx`, `BoomError`, `createdAt`, `stubModel`, `emptyPersistedQueue`.
+
+### Fixture paths repointed (rule 8)
+
+- `packages/tooling/tests/core-retired-reconciler.test.ts` → `runtime/extension-host.test.ts`
+- `packages/tooling/tests/export-consumers.test.ts` → `runtime/provider.test.ts`, `runtime/session.test.ts`
+- `packages/tooling/tests/core-process-runner.test.ts` → `runtime/session.test.ts`
