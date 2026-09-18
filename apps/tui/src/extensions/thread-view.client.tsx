@@ -1,4 +1,35 @@
 /** @jsxImportSource @opentui/solid */
+import { DateTime, Effect, Option, Schema } from "effect"
+import { createSignal, Show } from "solid-js"
+import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
+import {
+  ChromePanel,
+  decoration,
+  PickerFrame,
+  pickerHeight,
+  pickerLines,
+  selectable,
+  SelectList,
+  type SelectListRow,
+  usePickerGeometry,
+} from "../ui"
+import { formatAge, plural, truncate } from "../utils"
+import { useTerminalDimensions } from "../terminal"
+import { useTheme } from "../theme"
+import {
+  clientCommandContribution,
+  clientContributions,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
+  defineClientExtension,
+  makeClientSessionQuery,
+  type OverlayProps,
+  widgetContribution,
+} from "./client-facets"
+
+// ── builtins/thread-view.client ─────────────────────────────────────────────
+
 /**
  * Thread view — one docked pane over the chain of sessions and the context
  * windows inside each.
@@ -13,35 +44,6 @@
  *
  * @module
  */
-
-import { DateTime, Effect, Option, Schema } from "effect"
-import { createSignal, Show } from "solid-js"
-import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
-import {
-  ChromePanel,
-  decoration,
-  PickerFrame,
-  pickerHeight,
-  pickerLines,
-  selectable,
-  SelectList,
-  type SelectListRow,
-  usePickerGeometry,
-} from "../../ui"
-import { formatAge, plural, truncate } from "../../utils"
-import { useTerminalDimensions } from "../../terminal"
-import { useTheme } from "../../theme"
-import {
-  clientCommandContribution,
-  clientContributions,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
-  defineClientExtension,
-  makeClientSessionQuery,
-  type OverlayProps,
-  widgetContribution,
-} from "../client-facets"
 
 const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
 

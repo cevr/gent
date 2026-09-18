@@ -10,7 +10,7 @@ import { Deferred, Effect, Option } from "effect"
 import { createRoot } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
+import { makeAgentsController } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 
 const row = (id: string, live = true): AgentRowEntry => ({

@@ -9,7 +9,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Option, Schema } from "effect"
 import { AgentName, BranchId, ModelDriverRef, SessionId } from "@gent/core/protocol"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
-import builtinDriver from "../src/extensions/builtins/driver.client"
+import { builtinDriver } from "../src/extensions/builtins"
 import { ClientTransport, makeClientTransportLayer } from "../src/extensions/client-facets"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 import {

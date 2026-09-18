@@ -159,21 +159,28 @@ Special prefixes at input start trigger different modes:
 
 ## Extensions
 
-Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
+Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
+builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| File                                 | Extension ID                              | What                                  |
-| ------------------------------------ | ----------------------------------------- | ------------------------------------- |
-| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/interaction-tools` | Tool renderers, interaction renderers |
-| `builtins/connection.client.ts`      | `@gent/connection`                        | Connection status widget              |
-| `builtins/handoff.client.ts`         | `@gent/handoff`                           | Handoff interaction renderer          |
-| `builtins/skills.client.ts`          | `@gent/skills-ui`                         | `$` autocomplete: skills popup        |
-| `builtins/files.client.ts`           | `@gent/files-ui`                          | `@` autocomplete: file search popup   |
-| `builtins/driver.client.ts`          | `@gent/driver-ui`                         | `/driver` slash command               |
+| Extension ID                              | Where                    | What                                  |
+| ----------------------------------------- | ------------------------ | ------------------------------------- |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers |
+| `@gent/connection`                        | `builtins.tsx`           | Connection status widget              |
+| `@gent/handoff`                           | `builtins.tsx`           | Handoff interaction renderer          |
+| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup        |
+| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup   |
+| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command               |
+| `@gent/goal`                              | `builtins.tsx`           | Goal widget                           |
+| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter               |
+| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane and tray                  |
+| `@gent/btw`                               | `btw.client.tsx`         | Side-question overlay                 |
+| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                        |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray                       |
 
-Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader-boundary.ts` → `resolve.ts`
+Extension pipeline: `context.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 
 - Builtins are statically imported in `context.tsx` for Bun compiled binary compatibility
-- User/project extensions discovered via filesystem scan (`discovery.ts`, Effect-typed)
+- User/project extensions discovered via filesystem scan (`loader-boundary.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientLifecycle`
 - **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `goal.client.ts` and `tool-renderers.client.tsx` are the canonical examples.

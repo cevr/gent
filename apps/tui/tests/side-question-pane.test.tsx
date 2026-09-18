@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { makeSideQuestionPane, SideQuestionPane } from "../src/extensions/builtins/btw.client"
+import { makeSideQuestionPane, SideQuestionPane } from "../src/extensions/btw.client"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 

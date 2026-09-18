@@ -19,7 +19,7 @@ class ExtensionIntegrationTestError extends Schema.TaggedError<ExtensionIntegrat
   { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
 ) {}
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
-import { builtinClientModules } from "../src/extensions/builtins/index"
+import { builtinClientModules } from "../src/extensions/builtins"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
 const absent = Option.getOrUndefined(Option.none())

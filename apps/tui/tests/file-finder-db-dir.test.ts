@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem } from "effect"
-import { searchFiles } from "../src/utils/file-finder"
+import { searchFiles } from "../src/extensions/builtins"
 
 /**
  * The finder keeps its frecency and history databases where the caller says.

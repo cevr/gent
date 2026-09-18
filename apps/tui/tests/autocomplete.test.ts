@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { getFileTag } from "../src/components/file-tag"
+import { getFileTag } from "../src/extensions/builtins"
 
 describe("getFileTag", () => {
   test("returns [ts] for TypeScript files", () => {

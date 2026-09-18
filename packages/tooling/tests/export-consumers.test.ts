@@ -644,7 +644,7 @@ const x: Api.ToolCapability = Api.tool({})`,
         text: `import { WakeEntry } from "@gent/extensions/client"`,
       },
       {
-        file: "apps/tui/src/extensions/builtins/wake.client.tsx",
+        file: "apps/tui/src/extensions/wake.client.tsx",
         text: `import { WakeRpc } from "@gent/extensions/client.js"`,
       },
     ])

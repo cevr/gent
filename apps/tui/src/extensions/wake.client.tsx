@@ -1,24 +1,16 @@
 /** @jsxImportSource @opentui/solid */
-/**
- * The wake tray under the status line.
- *
- * One dim line per alarm or monitor still pending on the current branch,
- * from `WakeRpc.List`; hidden while nothing is pending. Reads again when a
- * tool call starts or a message lands, and on a slow clock while it shows
- * anything, so the countdowns move.
- */
 import { DateTime, Effect, Match, Option, Schedule } from "effect"
 import { For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import {
   WAKE_EXTENSION_ID,
-  WakeRpc,
   type WakeEntryType,
   type WakePendingType,
+  WakeRpc,
 } from "@gent/extensions/client.js"
-import { useTheme } from "../../theme"
-import { useTerminalDimensions } from "../../terminal"
-import { useSpinnerClock } from "../../ui"
+import { useTheme } from "../theme"
+import { useTerminalDimensions } from "../terminal"
+import { useSpinnerClock } from "../ui"
 import {
   clientContributions,
   ClientLifecycle,
@@ -27,8 +19,19 @@ import {
   defineClientExtension,
   makeClientSessionResource,
   widgetContribution,
-} from "../client-facets.js"
-import { truncate } from "../../utils"
+} from "./client-facets.js"
+import { truncate } from "../utils"
+
+// ── builtins/wake.client ────────────────────────────────────────────────────
+
+/**
+ * The wake tray under the status line.
+ *
+ * One dim line per alarm or monitor still pending on the current branch,
+ * from `WakeRpc.List`; hidden while nothing is pending. Reads again when a
+ * tool call starts or a message lands, and on a slow clock while it shows
+ * anything, so the countdowns move.
+ */
 
 const TRAY_MAX_ROWS = 3
 

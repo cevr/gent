@@ -1711,7 +1711,7 @@ the draft unchanged. The temporary size control and test server were stopped.
 The normal isolated debug preview was restored. Long third-party extension
 failure lists remain an unverified edge case, not a claim of universal fit.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/connection-widget.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/e2e/tests/server-lifecycle.test.ts`
 - `/tmp/gent-fx-ui-connection-before.ansi`: old bordered reconnect panel.
 - `/tmp/gent-fx-ui-connection-after.ansi`: plain notice at 44×12.
@@ -1849,7 +1849,7 @@ notices now use a plain layout. Long extension/job lists remain unverified.
 Third-party widget height behavior cannot be proved from the shipped widgets.
 Do not treat arbitrary extension layouts as verified.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins/index.ts`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins/tool-renderers.client.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/connection-widget.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`

@@ -10,11 +10,7 @@ import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import {
-  SubagentTray,
-  subtreeCounts,
-  trayLines,
-} from "../../src/extensions/builtins/agents-tray.client"
+import { SubagentTray, subtreeCounts, trayLines } from "../../src/extensions/agents.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

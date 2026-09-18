@@ -7,7 +7,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import type { WakePendingType } from "@gent/extensions/client"
-import { formatRemaining, WakeTray, wakeTrayLines } from "../../src/extensions/builtins/wake.client"
+import { formatRemaining, WakeTray, wakeTrayLines } from "../../src/extensions/wake.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

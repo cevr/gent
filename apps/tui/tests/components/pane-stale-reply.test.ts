@@ -16,8 +16,8 @@ import { Deferred, Effect, Option } from "effect"
 import { createRoot } from "solid-js"
 import { BranchId, SessionId, dateFromMillis, Session } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
-import { makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
-import { makeThreadController } from "../../src/extensions/builtins/thread-view.client"
+import { makeAgentsController } from "../../src/extensions/agents.client"
+import { makeThreadController } from "../../src/extensions/thread-view.client"
 
 const key = (id: string) => ({
   sessionId: SessionId.make(id),

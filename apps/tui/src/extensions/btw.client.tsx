@@ -1,13 +1,4 @@
 /** @jsxImportSource @opentui/solid */
-/**
- * `/btw` side-question pane.
- *
- * `/btw <question>` (alias `/side`) opens a pane above the composer and starts
- * the server's `BtwRpc.Ask` with the exchange so far. The ask returns at once;
- * streamed text and the final answer arrive through `BtwRpc.Progress` on each
- * state pulse from the btw extension. Follow-ups type into the pane's input;
- * `esc` closes and forgets the exchange.
- */
 import { Effect, Option } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
@@ -26,10 +17,22 @@ import {
   defineClientExtension,
   overlayContribution,
   type OverlayProps,
-} from "../client-facets.js"
-import { ChromePanel } from "../../ui"
-import { useTheme } from "../../theme"
-import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
+} from "./client-facets.js"
+import { ChromePanel } from "../ui"
+import { useTheme } from "../theme"
+import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
+
+// ── builtins/btw.client ─────────────────────────────────────────────────────
+
+/**
+ * `/btw` side-question pane.
+ *
+ * `/btw <question>` (alias `/side`) opens a pane above the composer and starts
+ * the server's `BtwRpc.Ask` with the exchange so far. The ask returns at once;
+ * streamed text and the final answer arrive through `BtwRpc.Progress` on each
+ * state pulse from the btw extension. Follow-ups type into the pane's input;
+ * `esc` closes and forgets the exchange.
+ */
 
 const BTW_OVERLAY_ID = "btw"
 

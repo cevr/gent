@@ -23,7 +23,7 @@ import {
 import { Effect, Option, Scope } from "effect"
 import { useRequiredContext } from "../utils"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
-import { builtinClientModules } from "./builtins/index"
+import { builtinClientModules } from "./builtins"
 import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
