@@ -13,8 +13,8 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   makeAcpResponsePartMapper,
   mapAcpUpdateToResponsePart,
-} from "../../src/acp-agents/executor.js"
-import { SessionNotification } from "../../src/acp-agents/schema.js"
+  SessionNotification,
+} from "../../src/acp-agents.js"
 
 /**
  * `SessionNotification.update` is deliberately `Schema.Unknown` — the ACP

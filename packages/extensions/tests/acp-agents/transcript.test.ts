@@ -13,7 +13,7 @@ import {
   composePromptWithTranscript,
   findLastUserMessage,
   renderLiveUserPrompt,
-} from "../../src/acp-agents/transcript.js"
+} from "../../src/acp-agents.js"
 
 /**
  * The transcript renderer reads a structural `MessageLike`: every part
