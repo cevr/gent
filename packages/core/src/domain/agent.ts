@@ -193,6 +193,12 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   contextLength: Schema.optional(Schema.Natural),
   /** Model steps one turn may take. Lowers the loop's own ceiling; it cannot raise it. */
   maxSteps: Schema.optional(Schema.Natural),
+  /**
+   * Durable model resolutions one turn may make, counted across restarts.
+   * A turn that keeps being recovered and re-resolved stops here instead of
+   * spending forever; unset, the turn has no such ceiling.
+   */
+  maxModelAttempts: Schema.optional(Schema.Natural),
   driver: Schema.optional(DriverRef),
 }) {}
 
@@ -308,6 +314,7 @@ export const AgentRunOverridesSchema = Schema.Struct({
   reasoningEffort: Schema.optional(ReasoningEffort),
   contextLength: Schema.optional(Schema.Natural),
   maxSteps: Schema.optional(Schema.Natural),
+  maxModelAttempts: Schema.optional(Schema.Natural),
   systemPromptAddendum: Schema.optional(Schema.String),
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
@@ -358,8 +365,6 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
 ) {}
 /** Maximum unfinished durable start receipts owned by one parent branch. */
 export const DEFAULT_MAX_PENDING_AGENT_STARTS = 4
-/** Durable native-model resolution attempts per admitted child session. */
-export const DEFAULT_MAX_CHILD_MODEL_ATTEMPTS = 32
 
 // Agent runner types
 

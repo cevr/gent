@@ -14,6 +14,7 @@ import {
   Scope,
   type Scope as ScopeType,
   Semaphore,
+  Stream,
 } from "effect"
 import {
   type AnyExtensionHook,
@@ -32,7 +33,7 @@ import {
   type ExtensionProcessService,
   type ExtensionScope,
   extensionServiceError,
-  type ExtensionServiceError,
+  ExtensionServiceError,
   ExtensionServiceError as ExtensionServiceErrorClass,
   type ExtensionSetupServices,
   type ExtensionStateFacet,
@@ -104,6 +105,7 @@ import {
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   EventPublisher,
+  EventStore,
   EventStoreError,
   ExtensionStatePublisher,
   InteractionPresented,
@@ -132,7 +134,9 @@ import {
   AgentLoop as AgentLoopActor,
   entityIdOf,
   listWorkspaceLoops,
+  type SendUserMessagePayload,
   type SessionRuntimeState,
+  type SteerCommandType,
 } from "../domain/agent-loop.js"
 import { StorageError } from "../domain/errors.js"
 import type { AgentLoopTurnProfile } from "./turn.js"
@@ -2161,6 +2165,9 @@ interface ExtensionSessionControlService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
   }) => Effect.Effect<boolean, Error>
+  /** One user message on another branch's loop. */
+  readonly send: (input: SendUserMessagePayload) => Effect.Effect<void, Error>
+  readonly steer: (command: SteerCommandType) => Effect.Effect<void, Error>
 }
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
@@ -2243,6 +2250,7 @@ export const makeExtensionHostContextProvider = (
     const relationships = yield* facet(RelationshipStorage, "RelationshipStorage")
     const agents = yield* facet(AgentRunnerService, "AgentRunnerService")
     const mutations = yield* facet(SessionMutations, "SessionMutations")
+    const eventStore = yield* facet(EventStore, "EventStore")
     // Enumerating a workspace's loops needs only the actor state registry,
     // which exists only where an actor layer is in scope.
     const registry = yield* facet(ActorStateRegistry, "ActorStateRegistry")
@@ -2461,11 +2469,58 @@ export const makeExtensionHostContextProvider = (
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
+        create: (params) =>
+          mutations((service) =>
+            service.createSession({
+              name: params.name,
+              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              historyBranchId: params.historyBranchId,
+              requestId: params.requestId,
+            }),
+          ).pipe(
+            Effect.map(({ sessionId, branchId }) => ({ sessionId, branchId })),
+            Effect.mapError(sessionError("create")),
+            inWorkspace,
+          ),
+        delete: (sessionId) =>
+          mutations((service) => service.deleteSession(sessionId)).pipe(
+            Effect.mapError(sessionError("delete")),
+            inWorkspace,
+          ),
+        send: (params) =>
+          Effect.gen(function* () {
+            if (params.sessionId === runInfo.sessionId && params.branchId === runInfo.branchId) {
+              return yield* new ExtensionServiceError({
+                service: "ExtensionSession",
+                operation: "send",
+                message: "send targets another branch; queue a follow-up on this one",
+              })
+            }
+            yield* control((loop) => loop.send(params)).pipe(Effect.mapError(sessionError("send")))
+          }).pipe(inWorkspace),
+        steer: (command) =>
+          control((loop) => loop.steer(command)).pipe(
+            Effect.mapError(sessionError("steer")),
+            inWorkspace,
+          ),
+        events: (target) =>
+          Stream.unwrap(
+            eventStore((store) =>
+              Effect.succeed(
+                store.subscribe({ ...target, synchronize: true }).pipe(
+                  Stream.map((envelope) => envelope.event),
+                  Stream.mapError(sessionError("events")),
+                ),
+              ),
+            ).pipe(inWorkspace),
+          ),
         queueFollowUp: (params) =>
           control((loop) =>
             loop.queueFollowUp({
               sourceId: params.sourceId,
-              sessionId: runInfo.sessionId,
+              sessionId: params.sessionId ?? runInfo.sessionId,
               branchId: params.branchId ?? runInfo.branchId,
               content: params.content,
               metadata: params.metadata,

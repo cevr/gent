@@ -9133,92 +9133,45 @@ describe("AgentRunner", () => {
   )
 
   it.scopedLive(
-    "child model attempts share a durable limit across concurrent calls and branches",
+    "model attempts for one turn share a durable limit across concurrent calls and restarts",
     () =>
       Effect.gen(function* () {
-        const runner = yield* AgentRunnerService
         const operations = yield* SessionOperationStorage
         const branches = yield* BranchStorage
-        const parentSessionId = SessionId.make("model-limit-parent")
-        const parentBranchId = BranchId.make("model-limit-parent-branch")
+        const sessionId = SessionId.make("model-limit-session")
+        const branchId = BranchId.make("model-limit-branch")
         const now = dateFromMillis(1_767_225_600_000)
         yield* (yield* SessionStorage).createSession(
-          new Session({ id: parentSessionId, createdAt: now, updatedAt: now }),
+          new Session({ id: sessionId, createdAt: now, updatedAt: now }),
         )
-        yield* branches.createBranch(
-          new Branch({ id: parentBranchId, sessionId: parentSessionId, createdAt: now }),
-        )
-        expect(
-          yield* operations.reserveChildModelAttempt({
-            sessionId: parentSessionId,
-            branchId: parentBranchId,
-          }),
-        ).toEqual(Option.none())
-        const toolCallId = ToolCallId.make("model-limit-tool")
-        const input = {
-          agent: { name: DEFAULT_AGENT_NAME },
-          prompt: "Bound model calls",
-          cwd: "/tmp",
-          parentSessionId,
-          parentBranchId,
-          toolCallId,
-          admission: {
-            requestId: RequestId.make("model-limit-start"),
-            runSpec: makeRunSpec({ parentToolCallId: toolCallId }),
-          },
-        }
-        const child = yield* admitChildSession(input)
+        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+        const turn = { sessionId, branchId, messageId: MessageId.make("model-limit-turn"), max: 32 }
         const transaction = yield* makeStorageTransaction
-        const held = yield* transaction(operations.reserveChildModelAttempt(child)).pipe(
-          Effect.flip,
-        )
+        const held = yield* transaction(operations.reserveModelAttempt(turn)).pipe(Effect.flip)
         expect(held._tag).toBe("StorageError")
         const wrong = yield* operations
-          .reserveChildModelAttempt({
-            sessionId: parentSessionId,
-            branchId: child.branchId,
-          })
+          .reserveModelAttempt({ ...turn, sessionId: SessionId.make("other-session") })
           .pipe(Effect.flip)
         expect(wrong._tag).toBe("StorageError")
         const results = yield* Effect.forEach(
           Array.from({ length: 33 }, (_, index) => index),
-          () => operations.reserveChildModelAttempt(child),
+          () => operations.reserveModelAttempt(turn),
           { concurrency: 8 },
         )
-        expect(results.filter((value) => Option.isSome(value) && value.value)).toHaveLength(32)
-        expect(results.filter((value) => Option.isSome(value) && !value.value)).toHaveLength(1)
-        const branchId = BranchId.make("model-limit-second-branch")
-        yield* branches.createBranch(
-          new Branch({ id: branchId, sessionId: child.sessionId, createdAt: now }),
-        )
+        expect(results.filter((value) => value)).toHaveLength(32)
+        expect(results.filter((value) => !value)).toHaveLength(1)
+        // Another turn on the same branch has its own count.
         expect(
-          yield* operations.reserveChildModelAttempt({ sessionId: child.sessionId, branchId }),
-        ).toEqual(Option.some(false))
-        const fresh = yield* Layer.build(Layer.fresh(SessionOperationStorage.Live))
-        expect(
-          yield* Context.get(fresh, SessionOperationStorage).reserveChildModelAttempt(child),
-        ).toEqual(Option.some(false))
-        yield* runner.start({
-          ...input,
-          agent: builtinAgent,
-          requestId: input.admission.requestId,
-          runSpec: input.admission.runSpec,
-        })
-        const completed = yield* waitForCompletion(runner, {
-          parentSessionId,
-          parentBranchId,
-          requestId: input.admission.requestId,
-        })
-        const receipt = yield* Effect.fromOption(completed.completion)
-        expect(receipt.streamFailed).toBe(true)
-        const events = yield* (yield* EventStorage).listEvents(child)
-        expect(
-          events.some(
-            ({ event }) =>
-              event._tag === "ErrorOccurred" &&
-              event.error.includes("Child model-attempt budget exhausted"),
-          ),
+          yield* operations.reserveModelAttempt({
+            ...turn,
+            messageId: MessageId.make("model-limit-other-turn"),
+          }),
         ).toBe(true)
+        // The count is durable: a fresh storage layer sees it spent.
+        const fresh = yield* Layer.build(Layer.fresh(SessionOperationStorage.Live))
+        expect(yield* Context.get(fresh, SessionOperationStorage).reserveModelAttempt(turn)).toBe(
+          false,
+        )
       }).pipe(
         Effect.timeout("4 seconds"),
         Effect.provide(makeLiveAgentRunnerLayer(LanguageModelLayers.debug())),
@@ -9254,6 +9207,7 @@ describe("AgentRunner", () => {
           parentBranchId,
           requestId,
           toolCallId: ToolCallId.make("running-limit-tool"),
+          runSpec: makeRunSpec({ overrides: { maxModelAttempts: 32 } }),
         })
         const completed = yield* waitForCompletion(
           runner,
@@ -9270,7 +9224,7 @@ describe("AgentRunner", () => {
           events.some(
             ({ event }) =>
               event._tag === "ErrorOccurred" &&
-              event.error.includes("Child model-attempt budget exhausted"),
+              event.error.includes("Model-attempt budget exhausted"),
           ),
         ).toBe(true)
       }).pipe(Effect.provideContext(context))

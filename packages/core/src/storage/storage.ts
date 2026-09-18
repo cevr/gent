@@ -71,7 +71,7 @@ import {
   getEventSessionId,
 } from "../domain/event.js"
 import { InteractionRequestRecord, InteractionRequestStatus } from "../domain/interaction.js"
-import { AgentName, DEFAULT_MAX_CHILD_MODEL_ATTEMPTS, RunSpecSchema } from "../domain/agent.js"
+import { AgentName, RunSpecSchema } from "../domain/agent.js"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
@@ -1277,7 +1277,7 @@ export class AgentLoopQueueStorage extends Context.Service<
 
 const START_AGENT_OPERATION = "agent.start"
 const CANCEL_TURN_OPERATION = "turn.cancel"
-const CHILD_MODEL_BUDGET_OPERATION = "agent.model-budget"
+const MODEL_ATTEMPT_OPERATION = "turn.model-attempt"
 
 const TurnCancellationAddress = Schema.Struct({
   sessionId: SessionId,
@@ -1358,11 +1358,13 @@ interface OperationSubject {
 }
 
 interface SessionOperationStorageService {
-  /** None: no admitted child. Some(false): exhausted. A successful reservation is never refunded. */
-  readonly reserveChildModelAttempt: (address: {
+  /** False: the turn spent its `max`. A successful reservation is never refunded. */
+  readonly reserveModelAttempt: (address: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
-  }) => Effect.Effect<Option.Option<boolean>, StorageError>
+    readonly messageId: MessageId
+    readonly max: number
+  }) => Effect.Effect<boolean, StorageError>
   readonly countPendingAgentStarts: (parent: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -1478,7 +1480,7 @@ export class SessionOperationStorage extends Context.Service<
       })
 
       return {
-        reserveChildModelAttempt: Effect.fn("SessionOperationStorage.reserveChildModelAttempt")(
+        reserveModelAttempt: Effect.fn("SessionOperationStorage.reserveModelAttempt")(
           function* (address) {
             if (Option.isSome(yield* Effect.serviceOption(sql.transactionService))) {
               return yield* new StorageError({
@@ -1489,33 +1491,22 @@ export class SessionOperationStorage extends Context.Service<
             if (sessionId !== address.sessionId)
               return yield* new StorageError({ message: "Model branch does not belong to session" })
             const workspaceId = yield* CurrentWorkspaceId
-            const starts = yield* sql<{
-              request_id: string
-              subject_session_id: string
-              subject_branch_id: string
-            }>`
-              SELECT request_id, subject_session_id, subject_branch_id FROM durable_operations
-              WHERE workspace_id = ${workspaceId} AND operation = ${START_AGENT_OPERATION}
-                AND json_extract(result_json, '$.sessionId') = ${address.sessionId}
-              LIMIT 1`
-            const start = starts[0]
-            if (Predicate.isUndefined(start)) return Option.none<boolean>()
             const createdAt = (yield* DateTime.nowAsDate).getTime()
             const reserved = yield* sql`
               INSERT INTO durable_operations (
                 workspace_id, operation, request_id, result_json,
                 subject_session_id, subject_branch_id, created_at
               ) VALUES (
-                ${workspaceId}, ${CHILD_MODEL_BUDGET_OPERATION}, ${start.request_id}, '{"attempts":1}',
-                ${start.subject_session_id}, ${start.subject_branch_id}, ${createdAt}
+                ${workspaceId}, ${MODEL_ATTEMPT_OPERATION}, ${address.messageId}, '{"attempts":1}',
+                ${address.sessionId}, ${address.branchId}, ${createdAt}
               ) ON CONFLICT(workspace_id, operation, request_id) DO UPDATE SET
                 result_json = json_set(durable_operations.result_json, '$.attempts',
                   json_extract(durable_operations.result_json, '$.attempts') + 1)
-              WHERE json_extract(durable_operations.result_json, '$.attempts') < ${DEFAULT_MAX_CHILD_MODEL_ATTEMPTS}
+              WHERE json_extract(durable_operations.result_json, '$.attempts') < ${address.max}
               RETURNING request_id`
-            return Option.some(reserved.length === 1)
+            return reserved.length === 1
           },
-          Effect.mapError(storageError("Failed to reserve child model attempt")),
+          Effect.mapError(storageError("Failed to reserve model attempt")),
         ),
         countPendingAgentStarts: Effect.fn("SessionOperationStorage.countPendingAgentStarts")(
           function* (parent) {

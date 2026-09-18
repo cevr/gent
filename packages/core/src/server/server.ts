@@ -105,7 +105,6 @@ import {
   admitChildSessionDepth,
   EventStoreLive,
   makeRequestDeduper,
-  type SendUserMessagePayload,
   SessionRuntime,
   type SessionRuntimeError,
 } from "../runtime/session.js"
@@ -129,7 +128,7 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { foldSessionMetrics } from "../domain/agent-loop.js"
+import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import {
@@ -607,6 +606,27 @@ const makeSessionMutationsService: Effect.Effect<
 
         yield* sessionStorage.createSession(session)
         yield* branchStorage.createBranch(branch)
+        // An inheriting session starts from what the source's model sees now:
+        // hidden rows stay out, as they do in that branch's own turn.
+        if (!Predicate.isUndefined(input.historyBranchId)) {
+          const source = yield* branchStorage.getBranch(input.historyBranchId)
+          if (Predicate.isUndefined(source)) {
+            return yield* new NotFoundError({
+              message: `History branch not found: ${input.historyBranchId}`,
+            })
+          }
+          const history = yield* messageStorage.listMessages(input.historyBranchId)
+          for (const message of history) {
+            if (message.metadata?.hidden === true) continue
+            yield* messageStorage.createMessage(
+              copyMessageToBranch(message, {
+                id: MessageId.make(yield* platform.randomId),
+                sessionId,
+                branchId,
+              }),
+            )
+          }
+        }
         const envelope = yield* eventPublisher.append(SessionStarted.make({ sessionId, branchId }))
         const result: StoredCreateSessionResult = {
           sessionId,

@@ -1148,6 +1148,7 @@ export const applyAgentOverrides = (
       reasoningEffort: value?.reasoningEffort,
       contextLength: value?.contextLength,
       maxSteps: value?.maxSteps,
+      maxModelAttempts: value?.maxModelAttempts,
       systemPromptAddendum: Option.getOrUndefined(systemPromptAddendum),
     }),
   })
@@ -1414,23 +1415,34 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     })
   const { resolved } = params
   const operations = yield* SessionOperationStorage
-  const reserveAttempt = operations
-    .reserveChildModelAttempt({ sessionId: params.sessionId, branchId: params.branchId })
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderError({
-            message: "Cannot reserve child model attempt",
-            model: resolved.modelId,
-            cause,
-          }),
-      ),
-    )
+  // None: the agent sets no ceiling. Some(false): the turn spent it.
+  const reserveAttempt = Option.match(Option.fromUndefinedOr(resolved.agent.maxModelAttempts), {
+    onNone: () => Effect.succeedNone,
+    onSome: (max) =>
+      operations
+        .reserveModelAttempt({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          messageId: params.messageId,
+          max,
+        })
+        .pipe(
+          Effect.asSome,
+          Effect.mapError(
+            (cause) =>
+              new ProviderError({
+                message: "Cannot reserve model attempt",
+                model: resolved.modelId,
+                cause,
+              }),
+          ),
+        ),
+  })
   const resolvedDriver = resolved.driver
   if (Predicate.isNotUndefined(resolvedDriver) && resolvedDriver._tag === "External") {
-    if (Option.isSome(yield* reserveAttempt)) {
+    if (Predicate.isNotUndefined(resolved.agent.maxModelAttempts)) {
       return yield* new ProviderError({
-        message: "Admitted child model budgets do not support external drivers",
+        message: "A model-attempt budget does not support external drivers",
         model: resolved.modelId,
       })
     }
@@ -1537,7 +1549,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     const admission = yield* reserveAttempt
     if (Option.isSome(admission) && !admission.value) {
       return yield* new ProviderError({
-        message: "Child model-attempt budget exhausted",
+        message: "Model-attempt budget exhausted",
         model: resolved.modelId,
       })
     }
@@ -2501,6 +2513,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         agentName: params.turnAgent,
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
+        unanswered: params.unanswered,
         usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
       })
       yield* Effect.logDebug("finalize.turn-after.done")

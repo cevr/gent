@@ -60,6 +60,7 @@ import {
 } from "../storage/storage.js"
 import {
   AgentLoop,
+  type AgentLoopClientServices,
   AgentLoopError,
   asAgentLoopError,
   type BranchCommandInput,
@@ -71,6 +72,7 @@ import {
   type MessageType,
   parseEntityId,
   type QueueFollowUpInput,
+  queueFollowUpOn,
   type RemoveFollowUpInput,
   type RequestExtensionInput,
   type RespondInteractionInput,
@@ -79,6 +81,8 @@ import {
   SessionRuntimeStateSchema,
   type SteerCommandType,
   type SteerInput,
+  steerLoop,
+  submitUserMessage,
   toWaitingForInteractionState,
   type TurnSubmissionInput,
   type WaitingForInteractionState,
@@ -1368,13 +1372,37 @@ const makeAgentLoopBehavior = (
     const publishEvent = (event: AgentEvent) =>
       eventPublisher.publish(event).pipe(asAgentLoopError(`Failed to publish ${event._tag}`))
 
+    // Reaching another branch goes through its actor. The client tags exist
+    // where an actor client layer is in scope; a bare test actor has none,
+    // and a facade call from there dies naming the absence.
+    const platform = yield* GentPlatform
+    const loopClient = yield* Effect.serviceOption(AgentLoop.Context)
+    const provideLoopClient = <A, E>(
+      effect: Effect.Effect<A, E, AgentLoopClientServices>,
+    ): Effect.Effect<A, E> =>
+      Option.match(loopClient, {
+        onNone: () => Effect.die("AgentLoop client not available"),
+        onSome: (client) =>
+          effect.pipe(
+            Effect.provideService(AgentLoop.Context, client),
+            Effect.provideService(GentPlatform, platform),
+          ),
+      })
+    const isOwnBranch = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+      target.sessionId === sessionId && target.branchId === branchId
+
     const hostProvider = yield* makeExtensionHostContextProvider({
       extensionRegistry,
       host,
       sessionControl: {
-        queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> =>
-          followUp.enqueue(input),
+        queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> => {
+          // The loop's own queue is re-entrant; another branch's is its actor's.
+          if (isOwnBranch(input)) return followUp.enqueue(input)
+          return queueFollowUpOn(input).pipe(provideLoopClient)
+        },
         dequeueFollowUp: (input): Effect.Effect<boolean, AgentLoopError> => followUp.dequeue(input),
+        send: (input) => submitUserMessage(input).pipe(provideLoopClient),
+        steer: (command) => steerLoop(command).pipe(provideLoopClient),
       },
     })
 

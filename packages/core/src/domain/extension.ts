@@ -8,6 +8,7 @@ import {
   Path,
   Predicate,
   Schema,
+  type Stream,
   TxRef,
   TxSemaphore,
 } from "effect"
@@ -20,6 +21,7 @@ import {
   DEFAULT_AGENT_NAME,
   type RunSpec,
   type SessionDepthLimitError,
+  type SteerCommand,
 } from "./agent.js"
 import {
   getToolId,
@@ -38,6 +40,7 @@ import type {
   RunProcessOptions,
 } from "../runtime/gent-platform.js"
 import {
+  type ActorCommandId,
   type BranchId,
   ExtensionId,
   type RequestId,
@@ -440,6 +443,8 @@ export interface TurnAfterInput {
    * output. This is true only once both are exhausted.
    */
   readonly streamFailed: boolean
+  /** The turn spent its continuations and never answered. */
+  readonly unanswered: boolean
   /** Provider-reported tokens summed over every model call of the turn. */
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
 }
@@ -785,10 +790,56 @@ export interface ExtensionSessionService {
   readonly renameCurrent: (
     name: string,
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
+  /**
+   * A new session, under a parent when one is named. The parent chain is
+   * depth-limited. `historyBranchId` copies that branch's visible messages in
+   * before the first turn. A `requestId` makes the call durable-once.
+   */
+  readonly create: (params: {
+    readonly name?: string
+    readonly cwd?: string
+    readonly parentSessionId?: SessionId
+    readonly parentBranchId?: BranchId
+    readonly historyBranchId?: BranchId
+    readonly requestId?: RequestId
+  }) => Effect.Effect<
+    { readonly sessionId: SessionId; readonly branchId: BranchId },
+    ExtensionServiceError
+  >
+  /** Delete a session and every descendant; running loops stop first. */
+  readonly delete: (sessionId: SessionId) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * One user message on another branch. `completion: "admission"` returns
+   * once that loop holds the turn; a `commandId` waits for the turn to end.
+   * The current branch takes `queueFollowUp`, never `send`: a turn that
+   * waits on its own loop never returns.
+   */
+  readonly send: (params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly content: string
+    readonly commandId?: ActorCommandId
+    readonly agentOverride?: AgentName
+    readonly interactive?: boolean
+    readonly runSpec?: RunSpec
+    readonly completion?: "admission"
+  }) => Effect.Effect<void, ExtensionServiceError>
+  /** Cancel, interrupt, or interject into any branch's loop. */
+  readonly steer: (command: SteerCommand) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * A branch's events: the durable history first, one `StreamSynchronized`
+   * marker, then live delivery. Take until the marker for a bounded read.
+   */
+  readonly events: (target: {
+    readonly sessionId: SessionId
+    readonly branchId?: BranchId
+  }) => Stream.Stream<AgentEvent, ExtensionServiceError>
+  /** Queue a follow-up; the current branch when no target is named. */
   readonly queueFollowUp: (params: {
     readonly sourceId: string
     readonly content: string
     readonly metadata?: MessageMetadata
+    readonly sessionId?: SessionId
     readonly branchId?: BranchId
     readonly wake?: boolean
   }) => Effect.Effect<void, ExtensionServiceError>

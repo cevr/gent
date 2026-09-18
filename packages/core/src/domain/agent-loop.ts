@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema } from "effect"
+import { type Context, DateTime, Effect, Option, Predicate, Schema } from "effect"
 import type { ToolCapability } from "./capability.js"
 import {
   type AgentDefinition as AgentDefinitionType,
@@ -12,7 +12,7 @@ import {
   SteerCommand,
 } from "./agent.js"
 import type { AgentEvent } from "./event.js"
-import { Message, QueueSnapshot } from "./message.js"
+import { Message, MessageMetadata, QueueSnapshot } from "./message.js"
 import {
   ActorCommandId,
   BranchId,
@@ -20,9 +20,12 @@ import {
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
   MessageId,
+  RequestId,
   SessionId,
 } from "./ids.js"
-import { WorkspaceId } from "../server/workspace-rpc.js"
+import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
+import { GentPlatform } from "../runtime/gent-platform.js"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 
 // ── agent-loop.state ────────────────────────────────────────────────────────
@@ -360,6 +363,53 @@ export const followUpMessageIdForSource = (input: {
     `follow-up:${input.workspaceId}:${input.sessionId}:${input.branchId}:${input.sourceId}`,
   )
 
+// Client payloads: what a caller outside the actor hands the loop. The
+// runtime turns each into an actor operation below.
+
+/**
+ * Client-generated request ID for end-to-end correlation + transport-retry
+ * dedup. Bounded so a malicious/buggy client cannot bloat per-server
+ * dedup caches keyed on it. Callers in this repo use `crypto.randomUUID()`.
+ */
+const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
+
+export const SendUserMessagePayload = Schema.Struct({
+  /**
+   * `"admission"` returns once the turn is durably enqueued, without waiting
+   * for it to run. Omitted, the call waits for the turn when the caller gave a
+   * `requestId`/`commandId` to correlate on, and is fire-and-forget otherwise.
+   */
+  completion: Schema.optional(Schema.Literals(["admission"])),
+  commandId: Schema.optional(ActorCommandId),
+  sessionId: SessionId,
+  branchId: BranchId,
+  content: Schema.String,
+  agentOverride: Schema.optional(AgentName),
+  interactive: Schema.optional(Schema.Boolean),
+  runSpec: Schema.optional(RunSpecSchema),
+  /** Client-generated correlation id for end-to-end observability. */
+  requestId: Schema.optional(RequestId),
+})
+export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
+
+export const QueueFollowUpPayload = Schema.Struct({
+  sourceId: FollowUpSourceIdSchema,
+  sessionId: SessionId,
+  branchId: BranchId,
+  content: Schema.String,
+  metadata: Schema.optional(MessageMetadata),
+  /** Start a turn for the item even on a branch with no prior history. */
+  wake: Schema.optional(Schema.Boolean),
+})
+export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
+
+export const DequeueFollowUpPayload = Schema.Struct({
+  sourceId: FollowUpSourceIdSchema,
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+export type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
+
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
 }
@@ -539,3 +589,127 @@ export const AgentLoop = Actor.fromEntity(
     },
   },
 )
+
+// ── agent-loop.client ───────────────────────────────────────────────────────
+//
+// The verbs a caller outside a loop uses to reach any branch's loop: the
+// session runtime for RPC callers, and the extension facade for a run that
+// addresses another branch. Each resolves the target's actor ref by entity
+// id; nothing here knows which loop is calling.
+
+const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
+const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
+
+const loopRefFor = Effect.fn("AgentLoop.client.refFor")(function* (
+  sessionId: SessionId,
+  branchId: BranchId,
+) {
+  const clientFor = yield* AgentLoop.Context
+  const workspaceId = yield* CurrentWorkspaceId
+  return yield* clientFor(entityIdOf(workspaceId, sessionId, branchId))
+})
+
+/**
+ * One user message on a branch. `completion: "admission"` returns once the
+ * loop holds the turn; a `commandId` or `requestId` waits for the turn to
+ * end; neither is fire-and-forget.
+ */
+export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")(function* (
+  input: SendUserMessagePayload,
+) {
+  const platform = yield* GentPlatform
+  let commandId: ActorCommandId
+  if (Predicate.isNotUndefined(input.commandId)) {
+    commandId = input.commandId
+  } else if (Predicate.isNotUndefined(input.requestId)) {
+    commandId = commandIdForRequestId(input.requestId)
+  } else {
+    commandId = ActorCommandId.make(yield* platform.randomId)
+  }
+  const shouldHoldCompletion =
+    !Predicate.isUndefined(input.requestId) || !Predicate.isUndefined(input.commandId)
+  const message = Message.cases.regular.make({
+    id: userMessageIdForCommand(commandId),
+    sessionId: input.sessionId,
+    branchId: input.branchId,
+    role: "user",
+    parts: [Prompt.textPart({ text: input.content })],
+    createdAt: yield* DateTime.nowAsDate,
+  })
+  const payload = {
+    workspaceId: yield* CurrentWorkspaceId,
+    message,
+    // Actor operation payloads require optional fields explicitly.
+    // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+    agentOverride: input.agentOverride,
+    // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+    interactive: input.interactive,
+    // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
+    runSpec: input.runSpec,
+  }
+  const ref = yield* loopRefFor(input.sessionId, input.branchId)
+  if (input.completion === "admission") {
+    yield* ref.execute(AgentLoop.SubmitDurable.make(payload))
+  } else if (shouldHoldCompletion) {
+    yield* ref.execute(AgentLoop.SubmitAndWait.make(payload))
+  } else {
+    yield* ref.execute(AgentLoop.Submit.make(payload))
+  }
+  yield* Effect.logInfo("session-runtime.message.submitted").pipe(
+    Effect.annotateLogs({ sessionId: input.sessionId, branchId: input.branchId }),
+  )
+})
+
+/**
+ * `ref.send` is fire-forget at the handler level — INTENTIONAL.
+ * `Steer.Interject` semantics: caller needs to know the steering item
+ * is registered (handler enqueue complete), not that the interjected
+ * turn ran. Switching to `ref.execute` (or `send + waitFor`) deadlocks
+ * because `applySteer` itself yields `ensureStarted` while the gated
+ * in-flight turn holds the actor; the persisted reply can't drain.
+ * Empirically validated twice: W35-C7.3 (commit `a8b084bc`),
+ * re-derived W37-S4-C10 (2026-05-11) — both produced 4s timeout on
+ * `tests/runtime/session-runtime.test.ts` ("steer interject interrupts
+ * the active turn ahead of queued follow-ups"). Note: `ref.send` does
+ * NOT silently drop runtime delivery errors — the discardCall Effect
+ * propagates; only statically typed `never`. `Steer.persisted: true`
+ * is the durability guarantee (Steer survives crash + redeliver) and
+ * is NOT what's being relaxed here.
+ */
+export const steerLoop = Effect.fn("AgentLoop.client.steer")(function* (command: SteerCommandType) {
+  const payload = {
+    workspaceId: yield* CurrentWorkspaceId,
+    commandId: ActorCommandId.make(command.requestId),
+    command,
+  }
+  const ref = yield* loopRefFor(command.sessionId, command.branchId)
+  yield* ref.send(AgentLoop.Steer.make(payload))
+})
+
+/**
+ * What the client verbs need beyond the per-request workspace: a holder
+ * captures these once and provides them at each call.
+ */
+export type AgentLoopClientServices =
+  | Context.Service.Identifier<typeof AgentLoop.Context>
+  | GentPlatform
+
+/** Queue a follow-up on a branch. Idempotent by source: the message id derives from it. */
+export const queueFollowUpOn = Effect.fn("AgentLoop.client.queueFollowUp")(function* (
+  input: QueueFollowUpPayload,
+) {
+  const workspaceId = yield* CurrentWorkspaceId
+  const message = Message.cases.regular.make({
+    id: followUpMessageIdForSource({ workspaceId, ...input }),
+    sessionId: input.sessionId,
+    branchId: input.branchId,
+    role: "user",
+    parts: [Prompt.textPart({ text: input.content })],
+    createdAt: yield* DateTime.nowAsDate,
+    metadata: input.metadata,
+  })
+  const ref = yield* loopRefFor(input.sessionId, input.branchId)
+  yield* ref
+    .execute(AgentLoop.QueueFollowUp.make({ workspaceId, message, wake: input.wake }))
+    .pipe(asAgentLoopError(`Failed to queue follow-up ${message.id}`))
+})

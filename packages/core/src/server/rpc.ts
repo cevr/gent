@@ -89,6 +89,8 @@ export const CreateSessionInput = Schema.Struct({
   cwd: Schema.optional(Schema.String),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
+  /** Copy this branch's visible messages into the new session before its first turn. */
+  historyBranchId: Schema.optional(BranchId),
   /** If provided, sends this message immediately after creation */
   initialPrompt: Schema.optional(Schema.String),
   requestId: Schema.optional(RequestId),
