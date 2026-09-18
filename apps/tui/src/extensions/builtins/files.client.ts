@@ -12,7 +12,7 @@
 
 import { Effect, FileSystem, Option } from "effect"
 import { defineClientExtension, autocompleteContribution } from "../client-facets.js"
-import { truncatePath } from "../../components/message-list-utils"
+import { truncatePath } from "../../utils"
 import { getFileTag } from "../../components/file-tag"
 import { searchFiles, trackSelection } from "../../utils/file-finder"
 import { ClientWorkspace } from "../client-services"

@@ -9,9 +9,7 @@ import { Option, Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
-import { truncatePath } from "../message-list-utils"
-import { fileUrl, isAbsPath } from "../../utils/file-refs"
-import { decodeToolOutput } from "../../utils/parse-tool-output"
+import { decodeToolOutput, fileUrl, isAbsPath, truncatePath } from "../../utils"
 import type { ToolRendererProps } from "./types"
 
 const WriteOutputSchema = Schema.Struct({

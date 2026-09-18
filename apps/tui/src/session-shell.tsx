@@ -24,7 +24,7 @@
 import { createContext, type ParentProps } from "solid-js"
 import { Option } from "effect"
 import type { SessionId } from "@gent/core/protocol"
-import { useRequiredContext } from "./utils/solid-context"
+import { useRequiredContext } from "./utils"
 
 /** One startup prompt, held by one send at a time. */
 export interface StartupPrompt {

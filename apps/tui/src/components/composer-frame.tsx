@@ -3,7 +3,7 @@ import type { BorderLabelItem } from "../utils/session-labels"
 import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { textWidth } from "../platform/text-width-adapter"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils"
 
 interface ComposerFrameProps {
   labels: readonly BorderLabelItem[]

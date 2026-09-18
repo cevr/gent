@@ -19,7 +19,7 @@ import {
   type HeadlessToolRendererRegistry,
   type HeadlessToolCall,
 } from "./headless-tool-renderers"
-import { randomId } from "./utils/random-id"
+import { randomId } from "./utils"
 
 /**
  * The turn finished without the model ever answering. Distinct from a

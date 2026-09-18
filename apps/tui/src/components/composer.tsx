@@ -10,7 +10,7 @@ import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { useComposerController } from "./use-composer-controller"
 import { useSessionController } from "../routes/session-controller"
 import { useExtensionUI } from "../extensions/context"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 import { useTerminalDimensions } from "../terminal-dimensions"
 
 interface ComposerContextValue {

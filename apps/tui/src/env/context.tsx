@@ -6,7 +6,7 @@
 import { createContext } from "solid-js"
 import type { JSX } from "solid-js"
 import type * as Option from "effect/Option"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 
 interface EnvContextValue {
   /** $VISUAL editor */

@@ -13,7 +13,7 @@ import { createMemo, createSignal, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { ChromePanel } from "./chrome-panel"
 import { useTheme } from "../theme"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 import {
   filterPromptEntries,

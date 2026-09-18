@@ -3,7 +3,7 @@
 import { createContext, Show, useContext, createEffect, createSignal, type JSX } from "solid-js"
 import { Option } from "effect"
 import { useTheme } from "../theme"
-import { formatDuration } from "../utils/format-duration"
+import { formatDuration } from "../utils"
 
 const ToolCallIdentityContext = createContext<Option.Option<string>>(Option.none())
 

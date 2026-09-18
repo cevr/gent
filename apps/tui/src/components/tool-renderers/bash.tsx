@@ -10,8 +10,7 @@ import { Show, createMemo } from "solid-js"
 import { formatHeadTail } from "@gent/core-internal/domain/head-tail.js"
 import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
-import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
-import type { ToolInput } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString, type ToolInput } from "../../utils"
 import type { ToolRendererProps } from "./types"
 
 interface BashOutput {

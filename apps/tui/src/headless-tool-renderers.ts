@@ -1,8 +1,6 @@
 import { Option, Schema } from "effect"
 import { formatHeadTail } from "@gent/core-internal/domain/head-tail.js"
-import { toolArgSummary } from "./utils/format-tool.js"
-import { formatGenericToolText } from "./components/tool-renderers/generic-format.js"
-import type { ToolInput } from "./utils/parse-tool-output.js"
+import { formatGenericToolText, toolArgSummary, type ToolInput } from "./utils.js"
 
 export interface HeadlessToolCall {
   readonly toolName: string

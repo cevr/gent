@@ -1,6 +1,6 @@
 import { Option } from "effect"
 import type { RGBA } from "@opentui/core"
-import { formatTokens } from "./format-tool"
+import { formatTokens } from "../utils"
 import type { ModelContextMetrics } from "@gent/core/protocol"
 import type { SessionMetrics } from "../client/context"
 

@@ -1,7 +1,7 @@
 import { AgentTree } from "./agent-tree"
 import type { ToolRendererProps } from "./types"
 import { Option, Schema } from "effect"
-import type { ToolInput } from "../../utils/parse-tool-output"
+import type { ToolInput } from "../../utils"
 
 const decodeDelegateInput = Schema.decodeUnknownOption(
   Schema.Struct({

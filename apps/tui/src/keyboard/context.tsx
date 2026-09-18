@@ -1,6 +1,6 @@
 import { createContext, onCleanup, onMount, type ParentProps } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 
 type KeyInput = Parameters<Parameters<typeof useKeyboard>[0]>[0]
 type ScopedKeyHandler = (event: KeyInput) => boolean | void

@@ -22,7 +22,7 @@ import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import { clientContributions, defineClientExtension, widgetContribution } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
 import { ClientLifecycle, ClientShell, makeClientSessionResource } from "../client-services"
-import { truncate } from "../../utils/truncate"
+import { truncate } from "../../utils"
 
 const TRAY_MAX_ROWS = 3
 

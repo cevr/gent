@@ -11,8 +11,7 @@ import { formatHeadTail } from "@gent/core-internal/domain/head-tail.js"
 import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
-import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
-import { describeCellCode } from "../message-list-utils"
+import { decodeToolOutputOption, describeCellCode, getString } from "../../utils"
 import type { ToolRendererProps } from "./types"
 
 const OperationReceipt = Schema.Struct({

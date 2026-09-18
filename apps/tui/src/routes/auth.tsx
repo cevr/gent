@@ -37,7 +37,7 @@ import { useRuntime } from "../hooks/use-runtime"
 import { useClient } from "../client/index"
 import { ChromePanel } from "../components/chrome-panel"
 import { SelectList, selectable, type SelectListRow } from "../components/select-list"
-import { ClientError, formatError, type UiError } from "../utils/format-error"
+import { ClientError, formatError, type UiError } from "../utils"
 import {
   AuthEvent,
   AuthState,

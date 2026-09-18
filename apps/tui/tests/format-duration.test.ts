@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatDuration } from "../src/utils/format-duration"
+import { formatDuration } from "../src/utils"
 
 describe("formatDuration", () => {
   describe("compact", () => {

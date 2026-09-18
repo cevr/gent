@@ -17,7 +17,7 @@ import { MessageList } from "../components/message-list"
 import { NativeTranscript } from "../components/native-transcript"
 import { Composer } from "../components/composer"
 import { ComposerFrame } from "../components/composer-frame"
-import { truncate } from "../utils/truncate"
+import { formatDuration, truncate } from "../utils"
 import { CommandPalette } from "../components/command-palette"
 import { useCommand } from "../command/context"
 import { useTheme, buildSyntaxStyle } from "../theme"
@@ -38,7 +38,6 @@ import {
   formatCwdGit,
   type BorderLabelItem,
 } from "../utils/session-labels"
-import { formatDuration } from "../utils/format-duration"
 import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"

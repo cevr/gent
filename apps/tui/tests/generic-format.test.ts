@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatGenericToolText } from "../src/components/tool-renderers/generic-format"
+import { formatGenericToolText } from "../src/utils"
 import { Schema } from "effect"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))

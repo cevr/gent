@@ -3,7 +3,7 @@ import { useRenderer } from "@opentui/solid"
 import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
 import { useEnv } from "../env/context"
 import { shutdownLog } from "../utils/client-logger"
-import { useRequiredContext } from "../utils/solid-context"
+import { formatError, useRequiredContext } from "../utils"
 import type {
   ActiveInteraction,
   Branch,
@@ -34,7 +34,6 @@ import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useAutocompleteFrecency } from "../hooks/use-autocomplete-frecency"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../keyboard/context"
 import { useSessionShell } from "../session-shell"
-import { formatError } from "../utils/format-error"
 import { useExtensionUI } from "../extensions/context"
 import { useChildSessions } from "../hooks/use-child-sessions"
 import { useSessionFeed } from "../hooks/use-session-feed"

@@ -11,10 +11,14 @@ import { headTail } from "@gent/core-internal/domain/head-tail.js"
 import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
-import { truncatePath } from "../message-list-utils"
-import { fileUrl, isAbsPath } from "../../utils/file-refs"
-import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
-import type { ToolInput } from "../../utils/parse-tool-output"
+import {
+  decodeToolOutputOption,
+  fileUrl,
+  getString,
+  isAbsPath,
+  type ToolInput,
+  truncatePath,
+} from "../../utils"
 import type { ToolRendererProps } from "./types"
 
 type WindowedLine =

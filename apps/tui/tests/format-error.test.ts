@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { formatError, ClientError } from "../src/utils/format-error"
+import { formatError, ClientError } from "../src/utils"
 import { StorageError } from "@gent/core-internal/domain/storage-error"
 import { EventStoreError } from "@gent/core-internal/domain/event"
 import { ProviderError } from "@gent/core-internal/domain/provider-error"

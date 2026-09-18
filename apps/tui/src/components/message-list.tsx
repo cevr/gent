@@ -14,21 +14,22 @@ import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "../hooks/use-child-sessions"
 import { replaceMermaidBlocks } from "../utils/mermaid"
 import { reasoningMarkdown } from "./reasoning-text"
-import { decodeToolOutputOption, getString } from "../utils/parse-tool-output"
-import { toolArgSummary } from "../utils/format-tool"
-import { formatDuration } from "../utils/format-duration"
 import {
   type ActivityCall,
   type ActivityOperation,
+  decodeToolOutputOption,
   formatActivityHeader,
   formatCellRowLabel,
-  plural,
+  formatDuration,
+  formatGenericToolText,
   formatPreviewFooter,
   formatRowCounts,
-  workingIconFrame,
+  getString,
+  plural,
   previewOutput,
-} from "./message-list-utils"
-import { formatGenericToolText } from "./tool-renderers/generic-format"
+  toolArgSummary,
+  workingIconFrame,
+} from "../utils"
 import type { DisclosureLevel } from "../routes/session-ui-state"
 import { WakeDetails } from "@gent/extensions/client.js"
 export type { ToolCall }

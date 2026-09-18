@@ -195,5 +195,5 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 | `src/components/use-composer-controller.ts` | composer interaction wiring       |
 | `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup |
 | `src/utils/shell.ts`                        | Shell execution + truncation      |
-| `src/utils/file-refs.ts`                    | @file#line expansion              |
+| `src/utils.ts`                              | @file#line expansion              |
 | `src/commands/slash-commands.ts`            | Slash command handlers            |

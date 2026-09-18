@@ -7,7 +7,7 @@
  * rows overflow; the receipt for that is the `.length` line in each test.
  */
 import { describe, expect, test } from "bun:test"
-import { truncate, truncateStart } from "../src/utils/truncate"
+import { truncate, truncateStart } from "../src/utils"
 
 describe("truncate", () => {
   test("a CJK name whose length fits but whose width does not is cut to the column budget", () => {

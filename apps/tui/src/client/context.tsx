@@ -29,9 +29,13 @@ import {
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import { omitUndefined } from "@gent/core-internal/domain/guards.js"
 import type { ClientLog } from "../utils/client-logger"
-import { formatConnectionIssue, formatError, type UiError } from "../utils/format-error"
-import { useRequiredContext } from "../utils/solid-context"
-import { randomId } from "../utils/random-id"
+import {
+  formatConnectionIssue,
+  formatError,
+  randomId,
+  type UiError,
+  useRequiredContext,
+} from "../utils"
 import { useWorkspace } from "../workspace/context"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { createClientEventHub } from "./event-hub"

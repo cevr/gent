@@ -1,5 +1,5 @@
 import { createContext, onMount, onCleanup, createSignal } from "solid-js"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 import type { JSX } from "solid-js"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Effect, Fiber, FileSystem, Context, Option, Stream } from "effect"

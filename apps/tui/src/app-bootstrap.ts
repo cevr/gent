@@ -7,7 +7,7 @@ import type {
   Session as DomainSession,
 } from "@gent/sdk"
 import type { Session as ClientSession } from "./client/index"
-import { randomId } from "./utils/random-id"
+import { randomId } from "./utils"
 
 /**
  * Surfaces a corrupt session record (session row exists but has no

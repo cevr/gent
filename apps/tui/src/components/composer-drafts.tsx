@@ -2,7 +2,7 @@ import { createContext, type ParentProps } from "solid-js"
 import { Option } from "effect"
 import type { BranchId } from "@gent/core/protocol"
 import type { ComposerInteractionState } from "./composer-interaction-state"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 
 export type ComposerDraft = Pick<ComposerInteractionState, "draft" | "mode">
 

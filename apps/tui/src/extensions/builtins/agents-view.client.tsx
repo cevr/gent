@@ -33,9 +33,7 @@ import {
 import { useScopedKeyboard } from "../../keyboard/context"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
-import { truncate } from "../../utils/truncate"
-import { formatAge, workingIconFrame } from "../../components/message-list-utils"
-import { formatDuration } from "../../utils/format-duration"
+import { formatAge, formatDuration, truncate, workingIconFrame } from "../../utils"
 import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import {
   clientCommandContribution,

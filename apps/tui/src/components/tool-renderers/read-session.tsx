@@ -2,8 +2,7 @@ import { Option, Schema } from "effect"
 import { Show } from "solid-js"
 import { useTheme } from "../../theme"
 import { ToolFrame } from "../tool-frame"
-import { decodeToolOutputOption, getString } from "../../utils/parse-tool-output"
-import type { ToolInput } from "../../utils/parse-tool-output"
+import { decodeToolOutputOption, getString, type ToolInput } from "../../utils"
 import type { ToolRendererProps } from "./types"
 
 const ReadSessionOutputSchema = Schema.Struct({

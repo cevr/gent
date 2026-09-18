@@ -21,7 +21,7 @@ import {
   type JSX,
 } from "solid-js"
 import { Effect, Option, Scope } from "effect"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
 import type { ToolRenderer } from "../components/tool-renderers/types"

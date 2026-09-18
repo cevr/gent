@@ -1,12 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import os from "node:os"
-import {
-  formatTokens,
-  formatUsageStats,
-  shortenPath,
-  toolArgSummary,
-} from "../src/utils/format-tool.js"
+import { formatTokens, formatUsageStats, shortenPath, toolArgSummary } from "../src/utils.js"
 
 const HOME = os.homedir()
 const absent = Option.getOrUndefined(Option.none())

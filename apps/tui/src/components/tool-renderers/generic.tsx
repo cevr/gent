@@ -1,12 +1,12 @@
 import { Show } from "solid-js"
 import { useTheme } from "../../theme"
-import { formatToolInput } from "../message-list-utils"
-import { ToolFrame } from "../tool-frame"
 import {
   formatGenericToolDetail,
   formatGenericToolInput,
   formatGenericToolText,
-} from "./generic-format"
+  formatToolInput,
+} from "../../utils"
+import { ToolFrame } from "../tool-frame"
 import type { ToolRendererProps } from "./types"
 
 export function GenericToolRenderer(props: ToolRendererProps) {

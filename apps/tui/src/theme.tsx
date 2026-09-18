@@ -3,7 +3,7 @@ import { Config, Effect, Option, Predicate, Record } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { createContext, createMemo, type JSX, onCleanup, onMount, untrack } from "solid-js"
-import { useRequiredContext } from "./utils/solid-context"
+import { useRequiredContext } from "./utils"
 import { createStore } from "solid-js/store"
 import { useRenderer } from "@opentui/solid"
 import catppuccin from "./themes/catppuccin.json" with { type: "json" }

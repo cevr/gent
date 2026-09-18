@@ -217,14 +217,14 @@ void Orphan
 })
 
 describe("the TUI app surface", () => {
-  const TUI_FILE = "apps/tui/src/utils/format-tool.ts"
+  const TUI_FILE = "apps/tui/src/utils.ts"
   const TUI_CONSUMER = "apps/tui/src/routes/session.tsx"
 
   test("a TUI export another TUI file imports is live", () => {
     expect(
       findingsFor([
         { file: TUI_FILE, text: `export const formatTokens = 1\n` },
-        { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils/format-tool"\n` },
+        { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
       ]),
     ).toEqual([])
   })
@@ -232,7 +232,7 @@ describe("the TUI app surface", () => {
   test("a TUI export nothing reaches is reported and fails the guard", () => {
     const findings = findingsFor([
       { file: TUI_FILE, text: `export const formatTokens = 1\nexport const orphan = 2\n` },
-      { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils/format-tool"\n` },
+      { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
     expect(findings[0]?.enforced).toBe(true)
@@ -254,8 +254,8 @@ describe("the TUI app surface", () => {
       findingsFor([
         { file: TUI_FILE, text: `export const orphan = 1\n` },
         {
-          file: "apps/tui/tests/format-tool.test.ts",
-          text: `import { orphan } from "../src/utils/format-tool"\nvoid orphan\n`,
+          file: "apps/tui/tests/utils.test.ts",
+          text: `import { orphan } from "../src/utils"\nvoid orphan\n`,
         },
       ]),
     ).toEqual([])

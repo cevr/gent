@@ -4,7 +4,7 @@ import { useTheme } from "../theme"
 import { ChromePanel } from "./chrome-panel"
 import { MessageId, type Message } from "@gent/core/protocol"
 import { extractImages, extractText } from "@gent/sdk"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 
 interface PickerItem {

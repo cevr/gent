@@ -24,7 +24,7 @@ import {
   pickerLines,
   usePickerGeometry,
 } from "../../components/picker-frame"
-import { formatAge, plural } from "../../components/message-list-utils"
+import { formatAge, plural, truncate } from "../../utils"
 import {
   SelectList,
   decoration,
@@ -33,7 +33,6 @@ import {
 } from "../../components/select-list"
 import { useTerminalDimensions } from "../../terminal-dimensions"
 import { useTheme } from "../../theme"
-import { truncate } from "../../utils/truncate"
 import {
   clientCommandContribution,
   clientContributions,

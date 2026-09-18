@@ -17,7 +17,7 @@ import {
 import { ChromePanel } from "./chrome-panel"
 import { PickerFrame, pickerHeight } from "./picker-frame"
 import { SelectList, selectable, type SelectListApi, type SelectListRow } from "./select-list"
-import { truncate, truncateStart } from "../utils/truncate"
+import { truncate, truncateStart } from "../utils"
 import { textWidth } from "../platform/text-width-adapter"
 import { useTheme } from "../theme"
 

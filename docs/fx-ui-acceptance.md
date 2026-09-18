@@ -1587,7 +1587,7 @@ normal tool summaries and full inspection. No appearance-only test was added.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/generic.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/generic-format.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/utils.ts`
 - `/tmp/gent-fx-ui-generic-detail-herdr.ansi`: full prompt arguments and result.
 - `/tmp/gent-fx-ui-generic-detail-normal.ansi`: restored compact summary.
 - `/tmp/gent-fx-ui-generic-detail-gate.log`: full gate passes with exit 0.

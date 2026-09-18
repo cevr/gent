@@ -1,6 +1,6 @@
 import { createContext, createSignal, type Accessor, type JSX } from "solid-js"
 import { Option } from "effect"
-import { useRequiredContext } from "../utils/solid-context"
+import { useRequiredContext } from "../utils"
 import type { Command } from "./types"
 import { parseKeybind, matchKeybind } from "./types"
 

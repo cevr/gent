@@ -4,7 +4,7 @@ import { ReasoningEffort, type Model } from "@gent/core/protocol"
 import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal-dimensions"
 import { PickerFrame, pickerHeight, usePickerGeometry } from "./picker-frame"
-import { truncate } from "../utils/truncate"
+import { truncate } from "../utils"
 import { SelectList, selectable, type SelectListRow } from "./select-list"
 
 /** One selectable row: the id goes back to the caller, name and detail render. */
