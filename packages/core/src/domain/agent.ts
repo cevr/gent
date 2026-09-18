@@ -32,7 +32,7 @@ export class Model extends Schema.Class<Model>("Model")({
   provider: ProviderId,
   contextLength: Schema.optional(Schema.Finite),
   pricing: Schema.optional(ModelPricing),
-  /** models.dev `release_date`, an ISO-8601 prefix: `2026-02-17` or `2025-04`. */
+  /** When the driver released the model; an ISO-8601 prefix: `2026-02-17` or `2025-04`. */
   releaseDate: Schema.optional(Schema.String),
 }) {}
 

@@ -256,6 +256,9 @@ export const findUnadmittedChildSessionWriters = (
  * composition root that names a concrete one -- `apps/server`, the SDK, the
  * test harnesses -- lives outside core.
  *
+ * The same rule holds for a feature's data. A model catalog host belongs to
+ * the driver that lists those models, so core must not name one.
+ *
  * @module
  */
 
@@ -278,6 +281,16 @@ export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
  * back into a feature it should not know about.
  */
 export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
+
+/**
+ * Network hosts owned by a catalog feature, not by the kernel.
+ *
+ * Core resolves a model through the driver seam. The catalog behind a driver
+ * -- where its model list comes from, how it is cached, when it refreshes --
+ * belongs to the driver's extension. A core source file that names one of
+ * these hosts is core fetching a feature's data itself.
+ */
+export const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
 /**
  * Files allowed to import a feature. Empty, and meant to stay so: a core file
@@ -336,6 +349,16 @@ export const findCoreFeatureIndependenceFindings = (
       file,
       line: index + 1,
       message: `core must not name a "${table.value}" table; the feature that owns it contributes its own migrations through the storage assembler's feature-migrations seam`,
+    })
+  }
+
+  for (const [index, line] of text.split("\n").entries()) {
+    const host = Option.fromNullishOr(FEATURE_HOSTS.find((candidate) => line.includes(candidate)))
+    if (Option.isNone(host)) continue
+    findings.push({
+      file,
+      line: index + 1,
+      message: `core must not name the catalog host "${host.value}"; the driver that owns that catalog fetches and caches it in its own extension, and core only concatenates every driver's listModels`,
     })
   }
   return findings
@@ -2303,6 +2326,11 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
     text: "strictEffectProvide:off",
+  },
+  {
+    file: "packages/extensions/src/models-dev.ts",
+    scope: "next-line",
+    text: "strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.",
   },
 ]
 
