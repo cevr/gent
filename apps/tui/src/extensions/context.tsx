@@ -27,7 +27,12 @@ import { builtinClientModules } from "./builtins/index"
 import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
-import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
+import {
+  loadExtensionUi,
+  type ResolvedBorderLabel,
+  type ResolvedTuiExtensions,
+  type ResolvedWidget,
+} from "./loader-boundary"
 import type {
   AutocompleteContribution,
   ClientActivitySnapshot,
@@ -35,7 +40,6 @@ import type {
   InteractionRendererComponent,
   OverlayComponent,
 } from "./client-facets.js"
-import { loadExtensionUi } from "../services/extension-context-boundary"
 import { makeClientRuntime } from "./client-runtime"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace"

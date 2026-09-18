@@ -15,7 +15,7 @@ import {
   type OverlayProps,
   type WidgetComponent,
 } from "../src/extensions/client-facets.js"
-import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
+import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/loader-boundary"
 import type { ToolRenderer, ToolRendererProps } from "../src/tool-renderers"
 import type { HeadlessToolRenderer } from "../src/headless"
 

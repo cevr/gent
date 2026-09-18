@@ -20,7 +20,7 @@ import {
   type ClientTransportDefinition,
   NoActiveSessionError,
 } from "../src/extensions/client-facets.js"
-import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
+import { runAutocompleteContributions } from "../src/extensions/loader-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   makeClientExtensionRuntime,

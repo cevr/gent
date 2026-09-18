@@ -16,7 +16,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { slashAutocompleteItems } from "../src/routes/session-command-registry"
 import { builtinClientModules } from "../src/extensions/builtins/index"
-import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
+import { runAutocompleteContributions } from "../src/extensions/loader-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { Command } from "../src/commands"
 import type {

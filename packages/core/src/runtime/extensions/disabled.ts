@@ -3,7 +3,7 @@
  * Effect-based — requires FileSystem and Path from the platform.
  *
  * The TUI's extension context boundary
- * (`apps/tui/src/services/extension-context-boundary.ts`) reads the set this
+ * (`apps/tui/src/extensions/loader-boundary.ts`) reads the set this
  * way because it runs before any server is reachable. On the server path
  * `ConfigService` is the reader and `SessionProfileCache` passes the merged
  * set down, so the two config files are opened once.
