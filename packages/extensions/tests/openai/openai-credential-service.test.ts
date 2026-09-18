@@ -17,7 +17,7 @@ import {
   OpenAICredentialService,
   type OpenAICredentialIO,
   type OpenAICredentials,
-} from "../../src/openai/credential-service.js"
+} from "../../src/openai.js"
 import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/providers.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 // ── Helpers ──

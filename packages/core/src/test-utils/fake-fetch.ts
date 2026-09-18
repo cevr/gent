@@ -16,7 +16,7 @@
  *
  * See `tests/extensions/anthropic-extension-driver.test.ts` for the
  * reference consumer. The pattern matches the precedent at
- * `packages/extensions/src/openai/index.ts:111` (`Layer.succeed(FetchHttpClient.Fetch, ...)`).
+ * `packages/extensions/src/openai.ts` (`makeOauthOpenAILayer`).
  */
 import { Predicate, Effect, Layer, Option } from "effect"
 import { LanguageModel } from "effect/unstable/ai"

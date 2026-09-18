@@ -8,9 +8,12 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Fiber, Layer, Option, SynchronizedRef } from "effect"
 import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/unstable/http"
-import { authorizeOpenAIDevice, type OAuthError } from "../../src/openai/oauth.js"
-import { buildOpenAIModelDriver } from "../../src/openai/index.js"
-import type { OpenAICredentials } from "../../src/openai/credential-service.js"
+import {
+  authorizeOpenAIDevice,
+  buildOpenAIModelDriver,
+  type OAuthError,
+  type OpenAICredentials,
+} from "../../src/openai.js"
 import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/providers.js"
 
 interface Recorded {
