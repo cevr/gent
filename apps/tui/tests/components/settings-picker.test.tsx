@@ -9,12 +9,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import { Model, ModelId, ProviderId } from "@gent/core/protocol"
-import {
-  DEFAULT_ROW_ID,
-  modelRows,
-  reasoningRows,
-  SettingsPicker,
-} from "../../src/components/settings-picker"
+import { DEFAULT_ROW_ID, modelRows, reasoningRows, SettingsPicker } from "../../src/pickers"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

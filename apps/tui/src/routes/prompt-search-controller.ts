@@ -1,4 +1,4 @@
-import { PromptSearchEvent, type PromptSearchState } from "../components/prompt-search-state"
+import { PromptSearchEvent, type PromptSearchState } from "../pickers"
 
 export interface PromptSearchController {
   readonly state: () => PromptSearchState

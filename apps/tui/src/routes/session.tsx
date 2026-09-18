@@ -20,14 +20,15 @@ import { ComposerFrame } from "../components/composer-frame"
 import { formatDuration, truncate } from "../utils"
 import { CommandPalette, useCommand } from "../commands"
 import { useTheme, buildSyntaxStyle } from "../theme"
-import { BranchPicker } from "../components/branch-picker"
-import { MessagePicker } from "../components/message-picker"
 import {
+  BranchPicker,
   DEFAULT_ROW_ID,
+  MessagePicker,
   modelRows,
+  PromptSearchPalette,
   reasoningRows,
   SettingsPicker,
-} from "../components/settings-picker"
+} from "../pickers"
 import { collectDiagrams, MermaidViewer } from "../mermaid"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace"
@@ -37,7 +38,6 @@ import {
   formatCwdGit,
   type BorderLabelItem,
 } from "../utils/session-labels"
-import { PromptSearchPalette } from "../components/prompt-search-palette"
 import { createSessionController, SessionControllerContext } from "./session-controller"
 import { useExtensionUI } from "../extensions/context"
 import { useClient } from "../client"

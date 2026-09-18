@@ -1,11 +1,11 @@
 import { Match, Option, Schema } from "effect"
 import { Branch, Message } from "@gent/core/protocol"
-import type { PromptSearchState } from "../components/prompt-search-state"
 import {
   PromptSearchEvent as PromptSearchEventSchema,
+  type PromptSearchState,
   PromptSearchState as PromptSearchStateFactory,
   transitionPromptSearch,
-} from "../components/prompt-search-state"
+} from "../pickers"
 
 /** The palette owns its own state; the overlay carries it rather than copying its fields. */
 interface PromptSearchOverlayState {

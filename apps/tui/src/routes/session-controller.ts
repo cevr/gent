@@ -43,7 +43,7 @@ import {
   createPromptSearchController,
   type PromptSearchController,
 } from "./prompt-search-controller"
-import { PromptSearchState } from "../components/prompt-search-state"
+import { PromptSearchState } from "../pickers"
 import {
   beginAuthCheck,
   clearQueue,

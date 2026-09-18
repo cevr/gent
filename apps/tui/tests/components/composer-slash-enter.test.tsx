@@ -38,7 +38,7 @@ import {
   type SessionController,
 } from "../../src/routes/session-controller"
 import { SessionUiState } from "../../src/routes/session-ui-state"
-import { PromptSearchState } from "../../src/components/prompt-search-state"
+import { PromptSearchState } from "../../src/pickers"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 
