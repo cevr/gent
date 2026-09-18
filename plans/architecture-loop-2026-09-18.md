@@ -90,5 +90,29 @@ store, the compaction seam, the extension host.
 
 ## Test folds
 
-Mirror the source layout, one test file per concern; see
-`plans/test-fold-<package>.md` for each map. Rows added when merged.
+Mirror the source layout, one test file per concern. Four agents ran in
+parallel rifts from the rule sheet (session scratchpad `test-fold-rules.md`);
+each map is committed as `plans/test-fold-<package>.md`. Every fold kept its
+test count; a junit name diff on the TUI fold caught a 17-test loss before
+commit (fold tool gap: a target that is not also a source loses its body).
+
+| Package    | Test files before → after | Tests | Merge              |
+| ---------- | ------------------------- | ----- | ------------------ |
+| core       | 128 → 32 (+4 helpers)     | 923   | `04b651b1`         |
+| extensions | 83 → 23 (+5 helpers)      | 551   | `04242aa9`         |
+| tui        | 88 → 26 (+5 helpers)      | 695   | `507c29d7`         |
+| tooling    | 17 → 2                    | 261   | with sdk           |
+| sdk        | 8 → 4                     | 58    | `fold-tests-small` |
+
+Found on the way: two `tsconfig.locks.json` includes named tests deleted
+long ago; a guard now fails on a lock include that names no tracked file
+(`d8183ba8`). Gamut after the merge (`opus-sonnet`): one parent on opus,
+one child on sonnet, `12 pass, 3 fail`.
+
+Fold tool gaps the agents hit (all repaired by hand, all worth a fix before
+the tool runs again): an `import` inside a template literal is hoisted; a
+declaration that shadows an import is not a reported collision; `"x"` and
+`"x.js"` are two specifiers; runtime path strings (`new URL(...)`,
+`import.meta.dir`) are not repointed; `packages/tooling/tests/` mentions are
+not repointed; a `@effect-diagnostics-next-line` comment is separated from
+its import.
