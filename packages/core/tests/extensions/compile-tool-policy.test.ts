@@ -13,9 +13,12 @@ import {
 } from "@gent/core/extensions/api"
 import { compileToolPolicy } from "../../src/runtime/tools"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
-import { waitFor } from "../../src/test-utils/fixtures"
+import {
+  LanguageModelLayers,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "../../src/test-utils/language-model"
 import { messageSingleText } from "../../src/domain/message"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 

@@ -10,9 +10,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { extractText, Gent } from "@gent/sdk"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  waitFor,
+} from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
-import { makeTempDirectoryScoped, waitFor } from "../../src/test-utils/fixtures"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 // The debug model answers every turn, so a test may send more than one

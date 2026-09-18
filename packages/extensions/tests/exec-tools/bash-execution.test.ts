@@ -14,8 +14,12 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { shippedPreset } from "../helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -29,7 +33,6 @@ import {
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import {
   testToolContext,
   type TestToolContext,

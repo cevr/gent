@@ -14,8 +14,8 @@ import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
+  textStep,
 } from "../../../src/test-utils/language-model"
-import { textStep } from "../../../src/test-utils/sequence-steps"
 import {
   AgentEvent,
   EventEnvelope,

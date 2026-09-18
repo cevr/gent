@@ -13,8 +13,11 @@ import { messageSingleText } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps.js"
+import {
+  LanguageModelLayers,
+  textStep,
+  toolCallStep,
+} from "@gent/core-internal/test-utils/language-model.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
 
 describe("cell approvals", () => {

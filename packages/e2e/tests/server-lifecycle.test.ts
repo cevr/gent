@@ -5,7 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
-import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
 import { toTestFailure } from "./test-failure-boundary"
 import { killProcess, spawnServer, waitUntil } from "../src/server-process-fixture"
 import { waitForProcessExit } from "../src/wait-for-process-exit"

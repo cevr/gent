@@ -19,7 +19,7 @@ import type { ModelDriverContribution, ProviderResolution } from "../../src/doma
 import { Model, ModelId, ProviderId } from "../../src/domain/agent.js"
 import { DriverRegistry } from "../../src/runtime/extension-host.js"
 import { RuntimeEnvironment } from "../../src/runtime/config.js"
-import { waitFor } from "../../src/test-utils/fixtures.js"
+import { waitFor } from "../../src/test-utils/language-model.js"
 import { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import { failingLanguageModel } from "../helpers/failing-language-model.js"
 

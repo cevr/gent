@@ -10,10 +10,11 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   textDeltaPart,
+  waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import {
   testLeafContext,
   testToolContext,

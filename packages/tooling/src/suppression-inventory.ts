@@ -112,12 +112,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off",
   },
   {
-    file: "packages/core/src/test-utils/fixtures.ts",
+    file: "packages/core/src/test-utils/language-model.ts",
     scope: "file",
     text: "nodeBuiltinImport:off — test fixture lifecycle comes from bun:test",
   },
   {
-    file: "packages/core/src/test-utils/fake-fetch.ts",
+    file: "packages/core/src/test-utils/language-model.ts",
     scope: "next-line",
     text: "strictEffectProvide:off test entry point",
   },

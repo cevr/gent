@@ -7,8 +7,7 @@ import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME, ModelId } from "../../.
 import { ExtensionId } from "../../../src/domain/ids"
 import type { CallRecord } from "../../../src/test-utils"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
-import { LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { textStep } from "../../../src/test-utils/sequence-steps"
+import { LanguageModelLayers, textStep, waitFor } from "../../../src/test-utils/language-model"
 import { AgentEvent, EventPublisherLive } from "../../../src/domain/event"
 import { type ExtensionContributions, SessionMutations } from "../../../src/domain/extension"
 import { SessionMutationsLive } from "../../../src/server/server"
@@ -26,7 +25,6 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { SessionRuntime } from "../../../src/runtime/session"
 import { MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { RecordingEventStore, SequenceRecorder } from "../../../src/test-utils"
-import { waitFor } from "../../../src/test-utils/fixtures"
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
     name: DEFAULT_AGENT_NAME,

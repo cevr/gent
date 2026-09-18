@@ -9,9 +9,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Ref, Schema, Stream } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
-import { LanguageModelLayers, textDeltaPart } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  textDeltaPart,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../helpers/test-preset"
 import { GOAL_CONTEXT_MESSAGE_TYPE, GOAL_EXTENSION_ID, GoalSnapshot } from "../../src/goal.js"
 

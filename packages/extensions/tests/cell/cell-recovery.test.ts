@@ -5,7 +5,11 @@ import {
   makeCellToolHost,
 } from "../../src/cell.js"
 import { expect, it } from "effect-bun-test"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
+import {
+  LanguageModelLayers,
+  textStep,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model.js"
 import { Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { Gent } from "@gent/sdk"
 import {
@@ -53,8 +57,6 @@ import {
 import { captureCurrentToolBinding, CurrentToolCall } from "@gent/core-internal/runtime/tools.js"
 import { toolResultMessageIdForTurn } from "@gent/core-internal/runtime/turn.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import { textStep } from "@gent/core-internal/test-utils/sequence-steps.js"
 import { testHostFacts } from "@gent/core-internal/test-utils"
 
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (

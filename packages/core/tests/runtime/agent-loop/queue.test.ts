@@ -18,10 +18,11 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
   LanguageModelLayers,
-  textDeltaPart,
   type LanguageModelStreamPart,
+  textDeltaPart,
+  textStep,
+  toolCallStep,
 } from "../../../src/test-utils/language-model"
-import { textStep, toolCallStep } from "../../../src/test-utils/sequence-steps"
 import { tool } from "@gent/core/extensions/api"
 import {
   dateFromMillis,

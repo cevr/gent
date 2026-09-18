@@ -10,13 +10,13 @@ import { messageSingleText } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
-import { textStep } from "@gent/core-internal/test-utils/sequence-steps.js"
 import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
+  textStep,
+  waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
 import { shippedPreset } from "../helpers/test-preset.js"
 

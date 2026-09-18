@@ -17,7 +17,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { dateFromMillis, Session } from "../../src/domain/message"
 import { SessionId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
-import { makeTempDirectoryScoped } from "../../src/test-utils/fixtures"
+import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
 
 const WORKSPACE = "a".repeat(64)
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)

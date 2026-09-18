@@ -16,9 +16,14 @@ import { Gent } from "@gent/sdk"
 import { LoadedArtifactIdentity, type LoadedExtension } from "../../../src/domain/extension.js"
 import { ExtensionId } from "../../../src/domain/ids"
 import { createE2ELayer } from "../../../src/test-utils/e2e-layer"
-import { makeTempDirectoryScoped, waitFor } from "../../../src/test-utils/fixtures"
-import { LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { multiToolCallStep, textStep, toolCallStep } from "../../../src/test-utils/sequence-steps"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  multiToolCallStep,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "../../../src/test-utils/language-model"
 import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"
 
 const TurnRecordRow = Schema.Struct({

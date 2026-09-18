@@ -3,9 +3,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "../../src/test-utils/sequence-steps"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { waitFor } from "../../src/test-utils/fixtures"
+import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import { Gent, extractText } from "@gent/sdk"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"

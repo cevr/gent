@@ -1,12 +1,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Fiber, Option, Schema, Stream } from "effect"
 import {
-  textStep,
-  toolCallStep,
-  textThenToolCallStep,
+  LanguageModelLayers,
   multiToolCallStep,
-} from "../../src/test-utils/sequence-steps"
-import { LanguageModelLayers, type SequenceStep } from "../../src/test-utils/language-model"
+  type SequenceStep,
+  textStep,
+  textThenToolCallStep,
+  toolCallStep,
+} from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
 import { LanguageModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"

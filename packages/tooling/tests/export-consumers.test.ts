@@ -166,7 +166,9 @@ void Orphan
   })
 
   test("test-utils declares its own names: the directory is a surface, not an exemption", () => {
-    expect(declaredNames("packages/core/src/test-utils/fixtures.ts", `export const tool = 1\n`)) //
+    expect(
+      declaredNames("packages/core/src/test-utils/language-model.ts", `export const tool = 1\n`),
+    ) //
       .toEqual(["tool"])
   })
 

@@ -9,10 +9,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Predicate } from "effect"
 import type * as Prompt from "effect/unstable/ai/Prompt"
-import { multiToolCallStep, textStep } from "@gent/core-internal/test-utils/sequence-steps"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  multiToolCallStep,
+  textStep,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../helpers/test-preset"
 
 const backgroundCall = (todo: string) => ({

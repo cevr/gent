@@ -22,15 +22,13 @@ import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-b
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
 import {
   LanguageModelLayers,
-  type SequenceStep,
-} from "@gent/core-internal/test-utils/language-model.js"
-import {
   multiToolCallStep,
+  type SequenceStep,
   textStep,
   toolCallStep,
-} from "@gent/core-internal/test-utils/sequence-steps.js"
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model.js"
 import { buildCellExecutable } from "./cell-worker-fixture.js"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)

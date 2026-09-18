@@ -10,7 +10,7 @@ import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { testExtensionFiles } from "@gent/core-internal/test-utils/extension-host-context"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
 import { goalContinuationSource, GoalSnapshot, GoalTool } from "../../src/goal.js"
 
 describe("goal store", () => {

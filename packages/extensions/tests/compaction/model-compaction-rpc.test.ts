@@ -7,9 +7,9 @@ import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
+  waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import { e2ePreset } from "../helpers/test-preset.js"
 
 const promptText = (prompt: Prompt.Prompt): string =>

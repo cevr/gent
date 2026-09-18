@@ -28,7 +28,7 @@ import {
   oneGenerate,
   type CapturedRequest,
   type FakeFetchState,
-} from "@gent/core-internal/test-utils/fake-fetch"
+} from "@gent/core-internal/test-utils/language-model"
 import { SessionId } from "@gent/core-internal/domain/ids"
 // Far-future expiry so cache hits the warm branch and `getFresh` skips
 // the refresh round-trip (avoids hitting auth.openai.com from tests).

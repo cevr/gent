@@ -7,7 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Schema, Scope } from "effect"
 import { extractText, Gent } from "../src/client"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/language-model"
 
 const ServerIdentity = Schema.Struct({
   serverId: Schema.String,

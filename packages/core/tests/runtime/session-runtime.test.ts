@@ -18,19 +18,19 @@ import { narrowR } from "../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import { Branch, dateFromMillis, type QueueSnapshot, Session } from "../../src/domain/message"
-import { textStep } from "../../src/test-utils/sequence-steps"
-import { AgentEvent, EventPublisherLive } from "../../src/domain/event"
-import { type CallRecord } from "../../src/test-utils"
-import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
 import {
   finishPart,
   LanguageModelLayers,
-  textDeltaPart,
-  toolCallPart,
   type LanguageModelStreamPart,
+  textDeltaPart,
+  textStep,
+  toolCallPart,
+  waitFor,
 } from "../../src/test-utils/language-model"
+import { AgentEvent, EventPublisherLive } from "../../src/domain/event"
+import { type CallRecord } from "../../src/test-utils"
+import { ExtensionContext, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
-import { waitFor } from "../../src/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import {

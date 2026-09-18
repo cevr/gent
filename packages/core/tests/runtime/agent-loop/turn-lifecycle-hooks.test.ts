@@ -16,14 +16,14 @@ import * as AiError from "effect/unstable/ai/AiError"
 import { ExtensionHost, defineExtension, type TurnAfterInput } from "@gent/core/extensions/api"
 import type { SteerCommand } from "../../../src/domain/agent"
 import { createRpcHarness } from "../../../src/test-utils/rpc-harness"
-import { waitFor } from "../../../src/test-utils/fixtures"
-import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"
 import {
   finishPart,
   LanguageModelLayers,
-  textDeltaPart,
   type LanguageModelStreamPart,
+  textDeltaPart,
+  waitFor,
 } from "../../../src/test-utils/language-model"
+import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"
 
 interface TurnOutcome {
   readonly interrupted: boolean

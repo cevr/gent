@@ -22,9 +22,7 @@ import {
   type LoadedExtension,
   registerContributions,
 } from "../../src/domain/extension.js"
-import { textStep } from "../../src/test-utils/sequence-steps"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
-import { waitFor } from "../../src/test-utils/fixtures"
+import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import { type Message, messageSingleText } from "../../src/domain/message"
 import {
   ApprovalService,

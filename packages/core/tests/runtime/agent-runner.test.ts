@@ -16,9 +16,13 @@ import {
   SubscriptionRef,
 } from "effect"
 import { SingleRunner } from "effect/unstable/cluster"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "../../src/test-utils/language-model"
 import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
-import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
 import {
   ApprovalService,
   DriverRegistry,
@@ -38,7 +42,6 @@ import {
   SessionRuntimeError,
   type SessionRuntimeService,
 } from "../../src/runtime/session"
-import { waitFor } from "../../src/test-utils/fixtures"
 import {
   Branch,
   dateFromMillis,

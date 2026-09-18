@@ -1,4 +1,4 @@
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/language-model"
 import { Terminal } from "@xterm/headless"
 import { Clock, Effect, Predicate, Schema } from "effect"
 import { spawn, type IPty } from "zigpty"

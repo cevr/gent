@@ -3,8 +3,7 @@ import { Effect, Fiber, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "../../../src/domain/agent"
 import { createRpcHarness } from "../../../src/test-utils/rpc-harness"
-import { LanguageModelLayers } from "../../../src/test-utils/language-model"
-import { textStep } from "../../../src/test-utils/sequence-steps"
+import { LanguageModelLayers, textStep } from "../../../src/test-utils/language-model"
 
 describe("turn lifetime", () => {
   it.scopedLive(

@@ -9,7 +9,7 @@ import { BunFileSystem } from "@effect/platform-bun"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { runToolWithCtx, testLeafContext } from "@gent/core-internal/test-utils"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
-import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
+import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
 import {
   ExtensionContext,
   type ExtensionContextService,

@@ -11,9 +11,10 @@ import { Model, ModelId, ProviderId } from "../../../src/domain/agent"
 import {
   finishPart,
   LanguageModelLayers,
+  multiToolCallStep,
   textDeltaPart,
+  textStep,
 } from "../../../src/test-utils/language-model"
-import { multiToolCallStep, textStep } from "../../../src/test-utils/sequence-steps"
 import { tool } from "@gent/core/extensions/api"
 import { MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"

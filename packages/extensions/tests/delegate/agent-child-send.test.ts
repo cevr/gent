@@ -12,9 +12,9 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   toolCallPart,
+  waitFor,
 } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../helpers/test-preset"
 
 const childTask = "CHILD-TASK: summarize the ledger"

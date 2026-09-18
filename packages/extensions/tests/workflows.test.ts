@@ -5,9 +5,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
-import type { SequenceStep } from "@gent/core-internal/test-utils/language-model"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  type SequenceStep,
+  textStep,
+  toolCallStep,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { WORKFLOWS_EXTENSION_ID } from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"

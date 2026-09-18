@@ -26,7 +26,7 @@ import {
 import { ConfigService, RuntimeEnvironment } from "../../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import { ModelRegistry, ModelResolver } from "../../../src/runtime/provider"
-import { finishPart, LanguageModelLayers } from "../../../src/test-utils/language-model"
+import { finishPart, LanguageModelLayers, waitFor } from "../../../src/test-utils/language-model"
 import {
   assistantMessageIdForTurn,
   dateFromMillis,
@@ -76,7 +76,6 @@ import {
 import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { AllBuiltinAgents } from "../../../../extensions/tests/helpers/builtin-agents.js"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { waitFor } from "../../../src/test-utils/fixtures"
 import { ExtensionContext, getToolId, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { DefaultWorkspaceId } from "../../../src/server/workspace-rpc"
 // ── Helpers ──

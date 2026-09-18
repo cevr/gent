@@ -1,16 +1,26 @@
+// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
 import {
-  Predicate,
+  Cause,
+  Clock,
   Deferred,
   Duration,
   Effect,
   Layer,
   Option,
+  Predicate,
   Queue,
+  Record,
   Ref,
-  Stream,
   Schema,
+  Stream,
 } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
+import { FetchHttpClient } from "effect/unstable/http"
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
+import * as fs from "node:fs"
+import * as os from "node:os"
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter builds worker paths before the child runtime starts.
+import * as path from "node:path"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as AiTool from "effect/unstable/ai/Tool"
@@ -20,6 +30,226 @@ import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import { CurrentResolveModelAssertion } from "../runtime/provider.js"
+
+// ── fake-fetch ──────────────────────────────────────────────────────────────
+
+/**
+ * Shared fake-`FetchHttpClient.Fetch` capture pattern for provider-extension
+ * tests. Counsel called this out as the missing piece behind the
+ * "coverage theater" bug: provider-extension tests stopped at the seam
+ * (sibling `layerFromRef` probes / structural layer inspection) instead
+ * of driving one real request through the resolved layer and asserting
+ * on the captured outbound shape.
+ *
+ * Use this helper to:
+ *   1. Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
+ *      that captures every outbound request into a shared array.
+ *   2. Run one `LanguageModel.generateText({prompt})` through any provider
+ *      layer that requires `LanguageModel.LanguageModel`.
+ *   3. Inspect captured request URL / method / headers / body to assert
+ *      on the production wiring (auth headers, system blocks, betas, etc).
+ *
+ * See `tests/extensions/anthropic-extension-driver.test.ts` for the
+ * reference consumer. The pattern matches the precedent at
+ * `packages/extensions/src/openai.ts` (`makeOauthOpenAILayer`).
+ */
+
+export interface CapturedRequest {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body?: string
+}
+
+export interface FakeFetchState {
+  captured: Array<CapturedRequest>
+}
+
+/** Build a fresh capture state. */
+export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
+
+/**
+ * Builds a fake `typeof globalThis.fetch` that captures each call into
+ * `state.captured` and responds with the provided `responder` body.
+ *
+ * `responder` receives the captured request (same shape stored in
+ * `state.captured`) so per-call response shaping is possible — e.g. 401
+ * on first call, 200 on retry.
+ */
+type FakeFetchFn = (
+  input: globalThis.RequestInfo | globalThis.URL,
+  init?: globalThis.RequestInit,
+) => Promise<Response>
+
+const makeFakeFetch =
+  (
+    state: FakeFetchState,
+    responder: (req: CapturedRequest) => {
+      status: number
+      headers?: Record<string, string>
+      body: string
+    },
+  ): FakeFetchFn =>
+  (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
+    let url: string
+    if (Predicate.isString(input)) url = input
+    else if (input instanceof URL) url = input.href
+    else url = input.url
+
+    const headers: Record<string, string> = {}
+    const headerInit = init?.headers
+    if (headerInit instanceof Headers) {
+      headerInit.forEach((value, key) => {
+        headers[key.toLowerCase()] = value
+      })
+    } else if (Array.isArray(headerInit)) {
+      for (const [k, v] of headerInit) {
+        headers[k.toLowerCase()] = v
+      }
+    } else if (!Predicate.isUndefined(headerInit) && !Predicate.isNull(headerInit)) {
+      for (const [k, v] of Object.entries(headerInit)) {
+        if (Predicate.isString(v)) headers[k.toLowerCase()] = v
+      }
+    }
+
+    let bodyText = Option.none<string>()
+    if (Predicate.isString(init?.body)) bodyText = Option.some(init.body)
+    else if (init?.body instanceof Uint8Array)
+      bodyText = Option.some(new TextDecoder().decode(init.body))
+
+    const captured: CapturedRequest = {
+      url,
+      method: init?.method ?? "GET",
+      headers,
+      body: Option.getOrUndefined(bodyText),
+    }
+    state.captured.push(captured)
+
+    const response = responder(captured)
+    // oxlint-disable-next-line gent/no-runpromise-outside-boundary -- This adapter implements the Promise-based Fetch interface.
+    return Effect.runPromise(
+      Effect.succeed(
+        new globalThis.Response(response.body, {
+          status: response.status,
+          headers: response.headers ?? { "content-type": "application/json" },
+        }),
+      ),
+    )
+  }
+
+/**
+ * Build a `Layer` that overrides `FetchHttpClient.Fetch` with a fake
+ * that captures into `state` and replies via `responder`.
+ */
+export const fakeFetchLayer = (
+  state: FakeFetchState,
+  responder: (req: CapturedRequest) => {
+    status: number
+    headers?: Record<string, string>
+    body: string
+  },
+): Layer.Layer<never, never, never> =>
+  Layer.succeed(
+    FetchHttpClient.Fetch,
+    Object.assign(makeFakeFetch(state, responder), { preconnect: () => {} }),
+  )
+
+/**
+ * Build the Effect that drives one `LanguageModel.generateText({prompt})`
+ * through `layer` with `FetchHttpClient.Fetch` overridden to capture into
+ * `state` and reply via `responder`. The returned Effect is scoped — run
+ * it via `Effect.runPromise(program)` (or your test runner's equivalent).
+ *
+ * Kept as an Effect (not Promise) so callers can compose with
+ * `Effect.either`, `TestClock`, or any other Effect-native test plumbing.
+ */
+export const oneGenerate = (
+  layer: Layer.Layer<LanguageModel.LanguageModel>,
+  state: FakeFetchState,
+  responder: (req: CapturedRequest) => {
+    status: number
+    headers?: Record<string, string>
+    body: string
+  },
+  prompt: string = "hi",
+): Effect.Effect<void> =>
+  LanguageModel.generateText({ prompt }).pipe(
+    Effect.asVoid,
+    // @effect-diagnostics-next-line strictEffectProvide:off test entry point
+    Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, responder))),
+    Effect.scoped,
+    Effect.catchCause((cause) => Effect.die(cause)),
+  )
+
+// ── fixtures ────────────────────────────────────────────────────────────────
+
+/**
+ * Shared test fixtures for integration tests across packages.
+ * Import from @gent/core-internal/test-utils/fixtures
+ */
+
+// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter builds worker paths before the child runtime starts.
+
+/** Create a temp directory that is removed when the test scope closes. */
+export const makeTempDirectoryScoped = (prefix: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), prefix))),
+    (dir) => Effect.sync(() => fs.rmSync(dir, { recursive: true, force: true })),
+  )
+
+/** Create a worker environment with data dir, auth files, and provider mode */
+export const createWorkerEnv = (root: string, providerMode?: string): Record<string, string> => {
+  const dataDir = path.join(root, "data")
+  fs.mkdirSync(dataDir, { recursive: true })
+
+  const env = Record.empty<string, string>()
+  env["GENT_DATA_DIR"] = dataDir
+  if (!Predicate.isUndefined(providerMode)) env["GENT_PROVIDER_MODE"] = providerMode
+  env["GENT_AUTH_DIRECTORY"] = path.join(root, "auth")
+  return env
+}
+
+class WaitForError extends Schema.TaggedError<WaitForError>()(
+  "@gent/core-internal/test-utils/fixtures/WaitForError",
+  { message: Schema.String },
+) {}
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Cause.squash exposes an unknown defect at this test failure boundary.
+const toWaitForError = (error: unknown) => {
+  if (error instanceof Error) return new WaitForError({ message: error.message })
+  return new WaitForError({ message: String(error) })
+}
+
+/** Poll an effect until predicate passes or timeout */
+export const waitFor = <A, R = never>(
+  effect: Effect.Effect<A, unknown, R>,
+  predicate: (value: A) => boolean,
+  timeoutMs = 5_000,
+  label = "condition",
+): Effect.Effect<A, WaitForError, R> =>
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    const loop: Effect.Effect<A, WaitForError, R> = Effect.gen(function* () {
+      const attempt = yield* effect.pipe(Effect.exit)
+      if (attempt._tag === "Success" && predicate(attempt.value)) {
+        return attempt.value
+      }
+      if ((yield* Clock.currentTimeMillis) >= deadline) {
+        let errorMessage = `timed out waiting for ${label}`
+        if (attempt._tag === "Failure") {
+          errorMessage += `: ${toWaitForError(Cause.squash(attempt.cause)).message}`
+        }
+        return yield* new WaitForError({ message: errorMessage })
+      }
+      yield* Effect.sleep("5 millis")
+      return yield* loop
+    })
+    return yield* loop
+  })
+
+// ── language-model ──────────────────────────────────────────────────────────
 
 type LanguageModelToolMap = Record<string, AiTool.Any>
 export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = LanguageModelToolMap> =
@@ -455,3 +685,75 @@ export const LanguageModelLayers = {
   sequence,
   signal,
 }
+
+// ── sequence-steps ──────────────────────────────────────────────────────────
+
+/**
+ * Test step builders for scripted language-model sequences.
+ *
+ * `language-model` owns the low-level Effect AI stream-part helpers and
+ * language-model layers. This module composes those parts into single
+ * `SequenceStep`s.
+ *
+ * @module
+ */
+
+let _stepCallIdCounter = 0
+const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
+type DebugValue = Schema.Schema.Type<typeof Schema.Unknown>
+
+export const textStep = (text: string): SequenceStep => ({
+  parts: [
+    textDeltaPart(text),
+    finishPart({
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
+    }),
+  ],
+})
+
+export const toolCallStep = (
+  toolName: string,
+  input: DebugValue,
+  options?: { toolCallId?: ToolCallId },
+): SequenceStep => ({
+  parts: [
+    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? makeStepToolCallId() }),
+    finishPart({
+      finishReason: "tool-calls",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    }),
+  ],
+})
+
+export const textThenToolCallStep = (
+  text: string,
+  toolName: string,
+  input: DebugValue,
+  options?: { toolCallId?: ToolCallId },
+): SequenceStep => ({
+  parts: [
+    textDeltaPart(text),
+    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? makeStepToolCallId() }),
+    finishPart({
+      finishReason: "tool-calls",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
+    }),
+  ],
+})
+
+export const multiToolCallStep = (
+  ...calls: ReadonlyArray<{ toolName: string; input: DebugValue; toolCallId?: ToolCallId }>
+): SequenceStep => ({
+  parts: [
+    ...calls.map((call) =>
+      toolCallPart(call.toolName, call.input, {
+        toolCallId: call.toolCallId ?? makeStepToolCallId(),
+      }),
+    ),
+    finishPart({
+      finishReason: "tool-calls",
+      usage: { inputTokens: 10, outputTokens: 20 * calls.length },
+    }),
+  ],
+})

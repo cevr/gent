@@ -13,9 +13,8 @@ import type { Scope } from "effect"
 import { Deferred, Effect, Option, Ref, Stream } from "effect"
 import { Gent } from "@gent/sdk"
 import type { EventEnvelope } from "../../src/domain/event"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
-import { waitFor } from "../../src/test-utils/fixtures"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 // `retries: false` turns off the debug model's synthetic 429s, which fire on

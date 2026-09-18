@@ -7,9 +7,13 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, FileSystem, Option, Schema } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/fixtures"
-import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { e2ePreset } from "../helpers/test-preset"
 import {

@@ -4,10 +4,12 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
-import { textStep } from "@gent/core-internal/test-utils/sequence-steps"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  textStep,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { BranchId } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
 import {

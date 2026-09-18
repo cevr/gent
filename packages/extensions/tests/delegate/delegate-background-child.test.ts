@@ -5,10 +5,13 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep, toolCallStep } from "@gent/core-internal/test-utils/sequence-steps"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../helpers/test-preset"
 
 describe("background delegation with a real child", () => {

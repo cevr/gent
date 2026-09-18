@@ -3,11 +3,15 @@ import { Cause, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { LoadedArtifactIdentity, type LoadedExtension } from "../../src/domain/extension.js"
 import { ExtensionId, InteractionRequestId } from "../../src/domain/ids"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
-import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "../../src/test-utils/language-model"
 import { ApprovalService } from "../../src/runtime/extension-host"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
-import { makeTempDirectoryScoped, waitFor } from "../../src/test-utils/fixtures"
 import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { Gent } from "@gent/sdk"

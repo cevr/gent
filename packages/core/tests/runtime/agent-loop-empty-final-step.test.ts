@@ -11,8 +11,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { LanguageModelLayers, finishPart, textDeltaPart } from "../../src/test-utils/language-model"
-import { textStep, toolCallStep } from "../../src/test-utils/sequence-steps"
+import {
+  finishPart,
+  LanguageModelLayers,
+  textDeltaPart,
+  textStep,
+  toolCallStep,
+} from "../../src/test-utils/language-model"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
 import { MessageStorage } from "../../src/storage/storage"

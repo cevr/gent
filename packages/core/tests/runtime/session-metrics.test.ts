@@ -5,8 +5,12 @@ import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName, Model, ModelId, ProviderId } from "../../src/domain/agent"
 import { ActorCommandId, BranchId, SessionId } from "../../src/domain/ids"
 import { dateFromMillis, Branch, Session } from "../../src/domain/message"
-import { textStep } from "../../src/test-utils/sequence-steps"
-import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
+import {
+  finishPart,
+  LanguageModelLayers,
+  textDeltaPart,
+  textStep,
+} from "../../src/test-utils/language-model"
 import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"

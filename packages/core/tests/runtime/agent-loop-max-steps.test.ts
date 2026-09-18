@@ -15,7 +15,12 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { LanguageModelLayers, finishPart, toolCallPart } from "../../src/test-utils/language-model"
+import {
+  finishPart,
+  LanguageModelLayers,
+  textStep,
+  toolCallPart,
+} from "../../src/test-utils/language-model"
 import { dateFromMillis, Message } from "../../src/domain/message"
 import { tool } from "@gent/core/extensions/api"
 import { AgentName, makeRunSpec } from "../../src/domain/agent"
@@ -27,7 +32,6 @@ import {
   runAgentLoop,
   steerAgentLoop,
 } from "./agent-loop/helpers"
-import { textStep } from "../../src/test-utils/sequence-steps"
 
 describe("max turn steps", () => {
   const sessionId = SessionId.make("max-steps-session")
