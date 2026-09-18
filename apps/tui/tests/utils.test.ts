@@ -779,7 +779,7 @@ describe("formatActivityHeader", () => {
     )
     expect(
       formatActivityHeader([
-        cell([op("delegate", "compute"), op("delegate", "verify")]),
+        cell([op("delegate.start", "compute"), op("delegate.start", "verify")]),
         cell([op("write", "b.ts", "failed")]),
         cell([], "error"),
       ]),

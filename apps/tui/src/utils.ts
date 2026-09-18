@@ -611,7 +611,7 @@ export const plural = (count: number, singular: string, pluralForm = `${singular
   return `${count} ${pluralForm}`
 }
 
-const isChildOperation = (operation: ActivityOperation) => operation.tool === "delegate"
+const isChildOperation = (operation: ActivityOperation) => operation.tool === "delegate.start"
 
 /** Header for a group of calls. Cell-only turns count cells, ops, children, and failures. */
 export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string {

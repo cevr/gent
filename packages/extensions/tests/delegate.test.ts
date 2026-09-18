@@ -13,9 +13,8 @@ import {
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { ConfigService, RuntimeEnvironment, UserConfig } from "@gent/core-internal/runtime/config"
-import { DELEGATE_AGENT_NAME, DelegateEntry, DelegateTool } from "../src/delegate.js"
+import { DELEGATE_AGENT_NAME, DelegateEntry, StartChild } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME } from "@gent/core/extensions/api"
-import { AllBuiltinAgents } from "./helpers/builtin-agents.js"
 import {
   createRpcHarness,
   runToolWithCtx,
@@ -29,7 +28,6 @@ import {
   textDeltaPart,
   textStep,
   toolCallPart,
-  toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
 import { type BranchId, RequestId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -97,15 +95,17 @@ const childOf = (harness: Harness) =>
   ).pipe(
     Effect.flatMap((sessions) => {
       const child = sessions.find((session) => session.parentSessionId === harness.sessionId)
-      if (Predicate.isUndefined(child)) return Effect.die("no child session")
+      if (Predicate.isUndefined(child) || Predicate.isUndefined(child.activeBranchId)) {
+        return Effect.die("no child session with an active branch")
+      }
       return Effect.succeed({ sessionId: child.id, branchId: child.activeBranchId })
     }),
   )
 
-/** The first `delegate` tool result on the parent branch. */
-const delegateResult = (harness: Harness) =>
+/** The first result of one delegate tool on the parent branch. */
+const toolResult = (harness: Harness, toolName: string) =>
   harness.client.session.events({ sessionId: harness.sessionId, branchId: harness.branchId }).pipe(
-    Stream.filter(isToolResultFor("delegate")),
+    Stream.filter(isToolResultFor(toolName)),
     Stream.take(1),
     Stream.runCollect,
     Effect.map((events) => Array.from(events)[0]?.event),
@@ -115,7 +115,7 @@ const delegateResult = (harness: Harness) =>
 const reply = (text: string) =>
   Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
 
-const toolStep = (name: string, input: Record<string, string | boolean>, id: string) =>
+const toolStep = (name: string, input: Record<string, unknown>, id: string) =>
   Stream.fromIterable([
     toolCallPart(name, input, { toolCallId: ToolCallId.make(id) }),
     finishPart({ finishReason: "tool-calls" }),
@@ -131,6 +131,35 @@ const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
     })
   })
 
+const promptToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
+  prompt.content.flatMap((message) => {
+    if (message.role !== "assistant") return []
+    return message.content.flatMap((part) => {
+      if (part.type !== "tool-call") return []
+      return [part.id]
+    })
+  })
+
+const messageTexts = (messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Prompt.Part> }>) =>
+  messages.flatMap((message) =>
+    message.parts.flatMap((part) => {
+      if (part.type !== "text") return []
+      return [part.text]
+    }),
+  )
+
+const resultsOf = (
+  toolName: string,
+  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Prompt.Part> }>,
+) =>
+  messages
+    .flatMap((message) => message.parts)
+    .filter((part) => part.type === "tool-result" && part.name === toolName)
+
+const completionMessages = (
+  messages: ReadonlyArray<{ readonly metadata?: { readonly customType?: string } }>,
+) => messages.filter((message) => message.metadata?.customType === "child-completion")
+
 const sendPrompt = (harness: Harness, content: string) =>
   harness.client.message.send({
     sessionId: harness.sessionId,
@@ -138,50 +167,103 @@ const sendPrompt = (harness: Harness, content: string) =>
     content,
   })
 
+const childTask = "CHILD-TASK: reply with the single word pong"
+
+/** The first row on the parent branch once a live wait holds it. */
+const waitHoldsRow = (harness: Harness) =>
+  waitFor(
+    harness.registryOf(harness.branchId).pipe(Effect.orElseSucceed(() => [])),
+    (entries) => Predicate.isNotUndefined(entries[0]?.waiter),
+    5_000,
+    "the wait claimed the row",
+  ).pipe(Effect.asVoid)
+
+/**
+ * A parent that starts one child and waits for it. The child reads the task
+ * as its own user message; the parent only carries it inside the start
+ * call's params, so the two are told apart by their first text.
+ */
+const startThenWait = (
+  childReply: string,
+  script: { readonly afterWait?: string; readonly childGate?: Effect.Effect<void> } = {},
+) => {
+  const afterWait = script.afterWait ?? "child said pong"
+  let parentCalls = 0
+  return LanguageModelLayers.testStream((options) => {
+    const texts = promptTexts(options.prompt)
+    if (texts[0] === childTask) {
+      return (script.childGate ?? Effect.void).pipe(Effect.as(reply(childReply)))
+    }
+    parentCalls += 1
+    if (parentCalls === 1) {
+      return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+    }
+    if (parentCalls === 2) {
+      return Effect.succeed(toolStep("delegate.wait", { requestId: "start-1" }, "wait-1"))
+    }
+    return Effect.succeed(reply(afterWait))
+  })
+}
+
 // ── delegate/foreground ─────────────────────────────────────────────────────
 
 /**
- * Foreground delegation runs a real child session and awaits it. The child's
- * loop state lands in the child's own storage (a write against the parent's
- * rows surfaced live as "Failed to persist loop queue"), and the parent's
- * registry lists the child under the tool call that owns it.
+ * A start followed by a wait is foreground delegation: the wait returns the
+ * child's output as a tool result, and because the wait took the completion,
+ * no completion message follows on the parent branch.
  */
 
-describe("foreground delegation with a real child", () => {
+describe("start then wait", () => {
   it.live(
-    "returns the child's text, runs as the delegate agent, and is listed under its tool call",
+    "the wait returns the child's text as the delegate agent; the row is settled and no message follows",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("delegate", { todo: "Reply with the single word pong" }),
-            textStep("pong"),
-            textStep("child said pong"),
-          ])
-          const harness = yield* harnessWithHome(providerLayer)
-          const resultFiber = yield* delegateResult(harness)
+          // The child answers only once the wait holds its row, so the wait
+          // and not the hook owns the completion.
+          const waitClaimed = yield* Deferred.make<void>()
+          const harness = yield* harnessWithHome(
+            startThenWait("pong", { childGate: Deferred.await(waitClaimed) }),
+          )
+          const { client, sessionId, branchId } = harness
+          const waited = yield* toolResult(harness, "delegate.wait")
           yield* sendPrompt(harness, "delegate this task")
-          const succeeded = yield* Fiber.join(resultFiber)
+          yield* waitHoldsRow(harness)
+          yield* Deferred.succeed(waitClaimed, void 0)
+          const succeeded = yield* Fiber.join(waited)
           expect(succeeded?._tag).toBe("ToolCallSucceeded")
           if (succeeded?._tag !== "ToolCallSucceeded") return
           expect(succeeded.output).not.toContain("Failed to persist")
           expect(parseJson(succeeded.output)).toMatchObject({
             _tag: "Completed",
+            requestId: "start-1",
             output: expect.stringContaining("pong"),
             metadata: { agentName: DELEGATE_AGENT_NAME },
           })
 
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent turn ended",
+          )
+          expect(completionMessages(settled.messages)).toHaveLength(0)
+
           const child = yield* childOf(harness)
-          const [entry] = yield* harness.registryOf(harness.branchId)
+          const [entry] = yield* harness.registryOf(branchId)
           expect(entry).toMatchObject({
+            requestId: "start-1",
             sessionId: child.sessionId,
             branchId: child.branchId,
             agentName: DELEGATE_AGENT_NAME,
-            toolCallId: succeeded.toolCallId,
-            background: false,
+            toolCallId: "start-1",
+            private: false,
+            submitted: true,
+            delivered: true,
             completed: { streamFailed: false },
             preview: "pong",
           })
+          expect(entry?.waiter).toBeUndefined()
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -192,78 +274,64 @@ describe("foreground delegation with a real child", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            {
-              ...toolCallStep("delegate", { todo: "Reply with the single word pong" }),
-              assertRequest: (request) => {
-                expect(request.model).toBe("test/parent-model")
-              },
-            },
-            {
-              ...textStep("pong"),
-              assertRequest: (request) => {
-                expect(request.model).toBe("test/child-model")
-                expect(request.reasoning).toBe("low")
-              },
-            },
-            textStep("child said pong"),
-          ])
-          const harness = yield* harnessWithHome(providerLayer, {
+          const harness = yield* harnessWithHome(startThenWait("pong"), {
             config: new UserConfig({
               agents: {
                 [DEFAULT_AGENT_NAME]: { modelId: ModelId.make("test/parent-model") },
-                [DELEGATE_AGENT_NAME]: {
-                  modelId: ModelId.make("test/child-model"),
-                  reasoningEffort: "low",
-                },
+                [DELEGATE_AGENT_NAME]: { modelId: ModelId.make("test/child-model") },
               },
             }),
           })
-          const resultFiber = yield* delegateResult(harness)
+          const { client, sessionId, branchId } = harness
+          const waited = yield* toolResult(harness, "delegate.wait")
           yield* sendPrompt(harness, "delegate this task")
-          const succeeded = yield* Fiber.join(resultFiber)
+          const succeeded = yield* Fiber.join(waited)
           expect(succeeded?._tag).toBe("ToolCallSucceeded")
           if (succeeded?._tag !== "ToolCallSucceeded") return
-          // A child on the wrong model fails its request, which the parent reads as an Error result.
-          expect(parseJson(succeeded.output)).toMatchObject({
-            _tag: "Completed",
-            output: expect.stringContaining("pong"),
-          })
+          expect(parseJson(succeeded.output)).toMatchObject({ _tag: "Completed" })
+
+          const modelsOf = (target: { sessionId: typeof sessionId; branchId: BranchId }) =>
+            client.session.events(target).pipe(
+              Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+              Stream.flatMap((envelope) => {
+                if (envelope.event._tag !== "StreamEnded") return Stream.empty
+                return Stream.make(envelope.event.model)
+              }),
+              Stream.runCollect,
+              Effect.map((models) => Array.from(models)),
+            )
+          const child = yield* childOf(harness)
+          expect(yield* modelsOf(child)).toEqual([ModelId.make("test/child-model")])
+          expect(yield* modelsOf({ sessionId, branchId })).toContain(
+            ModelId.make("test/parent-model"),
+          )
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
   )
 
-  it.live("a foreground child cannot delegate further", () =>
+  it.live("a child cannot delegate further", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const childTools = yield* Deferred.make<ReadonlyArray<string>>()
-        let calls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromIterable([
-                toolCallPart("delegate", { todo: "Try to delegate" }),
-                finishPart({ finishReason: "tool-calls" }),
-              ]),
-            )
-          }
-          if (calls === 2) {
+          const texts = promptTexts(options.prompt)
+          if (texts[0] === childTask) {
             return Deferred.succeed(
               childTools,
               options.tools.map((tool) => tool.name),
             ).pipe(Effect.as(reply("could not delegate")))
           }
-          return Effect.succeed(reply("child finished"))
+          if (!promptToolCallIds(options.prompt).includes("start-1")) {
+            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+          }
+          return Effect.succeed(reply("done"))
         })
         const harness = yield* harnessWithHome(providerLayer)
         yield* sendPrompt(harness, "delegate this task")
         const tools = yield* Deferred.await(childTools)
         expect(tools).toContain("bash")
-        expect(tools).not.toContain("delegate")
-        expect(tools).not.toContain("agent-child")
-        expect(tools).not.toContain("agent-children")
+        expect(tools.filter((name) => name.startsWith("delegate."))).toEqual([])
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
@@ -274,158 +342,189 @@ describe("foreground delegation with a real child", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const longReply = "p".repeat(300)
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("delegate", { todo: "Reply with three hundred characters" }),
-            textStep(longReply),
-            textStep(longReply),
-          ])
-          const harness = yield* harnessWithHome(providerLayer)
-          const resultFiber = yield* delegateResult(harness)
+          const harness = yield* harnessWithHome(startThenWait(longReply, { afterWait: longReply }))
+          const waited = yield* toolResult(harness, "delegate.wait")
           yield* sendPrompt(harness, "delegate this task")
-          yield* Fiber.join(resultFiber)
+          yield* Fiber.join(waited)
           const [entry] = yield* harness.registryOf(harness.branchId)
           expect(entry?.preview).toBe("p".repeat(200) + "…")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
   )
+
+  it.live(
+    "a wait on a child the hook already reported returns its output at once",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0] === childTask) return Effect.succeed(reply("pong"))
+            parentCalls += 1
+            // Start, end the turn; the completion message wakes the parent, which then waits.
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            if (parentCalls === 3) {
+              return Effect.succeed(toolStep("delegate.wait", { requestId: "start-1" }, "wait-1"))
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              resultsOf("delegate.wait", current.messages).length === 1 &&
+              current.runtime._tag === "Idle",
+            8_000,
+            "the wait after the completion message returned",
+          )
+          expect(completionMessages(snapshot.messages)).toHaveLength(1)
+          expect(resultsOf("delegate.wait", snapshot.messages)[0]).toMatchObject({
+            isFailure: false,
+            result: { _tag: "Completed", output: expect.stringContaining("pong") },
+          })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
-// ── delegate/foreground-interrupt ───────────────────────────────────────────
+// ── delegate/wait-interrupt ─────────────────────────────────────────────────
 
 /**
- * A foreground delegation is owned by its tool call. When the parent turn is
- * interrupted the child must stop too: a child that keeps running has no
- * owner, and the parent's next turn can neither await nor cancel it. The
- * gamut testbed showed six such children editing files after an Escape.
+ * A wait is owned by its tool call. When the parent turn is interrupted the
+ * child must stop too: a child that keeps running has no owner, and the
+ * parent's next turn can neither await nor cancel it. The gamut testbed showed
+ * six such children editing files after an Escape. The interrupted wait
+ * settles its row, so no completion message follows either.
  */
 
-describe("foreground delegation under a parent interrupt", () => {
-  it.live("interrupting the parent turn ends the child's turn as interrupted", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const childStreaming = yield* Deferred.make<void>()
-        let calls = 0
-        const providerLayer = LanguageModelLayers.testStream(() => {
-          calls += 1
-          if (calls === 1) {
-            return Effect.succeed(
-              Stream.fromIterable([
-                toolCallPart("delegate", { todo: "work that never finishes" }),
-                finishPart({ finishReason: "tool-calls" }),
-              ]),
-            )
-          }
-          if (calls === 2) {
-            // The child's stream opens and stalls: it is mid-turn when the
-            // parent is interrupted.
-            return Effect.succeed(
-              Stream.make(textDeltaPart("working")).pipe(
-                Stream.concat(
-                  Stream.fromEffect(Deferred.succeed(childStreaming, void 0)).pipe(Stream.drain),
-                ),
-                Stream.concat(Stream.never),
-              ),
-            )
-          }
-          return Effect.succeed(
-            Stream.fromIterable([textDeltaPart("ack"), finishPart({ finishReason: "stop" })]),
+describe("a wait under a parent interrupt", () => {
+  it.live(
+    "ends the child's turn as interrupted and settles the row without a message",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0] === childTask) {
+              // The child's stream opens and stalls: it is mid-turn when the
+              // parent is interrupted.
+              return Effect.succeed(
+                Stream.make(textDeltaPart("working")).pipe(Stream.concat(Stream.never)),
+              )
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) {
+              return Effect.succeed(toolStep("delegate.wait", { requestId: "start-1" }, "wait-1"))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate one task")
+          // The interrupt lands while the wait holds the row: a start with no
+          // wait is background work and outlives the parent's turn.
+          yield* waitHoldsRow(harness)
+          const child = yield* childOf(harness)
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Interrupt",
+              sessionId,
+              branchId,
+              requestId: RequestId.make("interrupt-parent-of-waited-child"),
+            }),
+          })
+          const childEnd = yield* client.session.events(child).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+            Stream.take(1),
+            Stream.runHead,
           )
-        })
-        const harness = yield* harnessWithHome(providerLayer)
-        const { client, sessionId, branchId } = harness
-        yield* sendPrompt(harness, "delegate one task")
-        yield* Deferred.await(childStreaming)
-        const child = yield* childOf(harness)
-        yield* client.steer.command({
-          command: SteerCommand.make({
-            _tag: "Interrupt",
-            sessionId,
-            branchId,
-            requestId: RequestId.make("interrupt-parent-of-foreground-child"),
-          }),
-        })
-        const childEnd = yield* client.session.events(child).pipe(
-          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
-          Stream.take(1),
-          Stream.runHead,
-        )
-        expect(Option.map(childEnd, (envelope) => envelope.event)).toMatchObject(
-          Option.some({ _tag: "TurnCompleted", interrupted: true }),
-        )
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
+          expect(Option.map(childEnd, (envelope) => envelope.event)).toMatchObject(
+            Option.some({ _tag: "TurnCompleted", interrupted: true }),
+          )
+          const [entry] = yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => entries[0]?.delivered === true,
+            3_000,
+            "the interrupted wait settled its row",
+          )
+          expect(entry).toMatchObject({ delivered: true, completed: { interrupted: true } })
+          expect(entry?.waiter).toBeUndefined()
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            3_000,
+            "the parent is idle",
+          )
+          expect(completionMessages(settled.messages)).toHaveLength(0)
+        }).pipe(Effect.timeout("6 seconds")),
+      ),
+    8_000,
   )
 })
 
 // ── delegate/background ─────────────────────────────────────────────────────
 
 /**
- * Background delegation admits a durable child and returns at once. The
- * child's completion must come back as a message on the parent branch,
- * which wakes the parent for another turn. Nothing else carries the result.
+ * A start nobody waits for is background delegation. The child's completion
+ * must come back as a message on the parent branch, which wakes the parent
+ * for another turn. Nothing else carries the result.
  */
 
-describe("background delegation with a real child", () => {
+describe("a start nobody waits for", () => {
   it.live(
     "returns the handle under the tool call id; the completion lands on the parent branch and wakes it",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          // The parent's turns and the child draw from one queue in scheduling
-          // order, so route by prompt: the child alone answers its own task.
+          let parentCalls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
-            if (texts.includes("Reply with the single word pong")) {
-              return Effect.succeed(reply("pong"))
+            if (texts[0] === childTask) return Effect.succeed(reply("pong"))
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
             }
-            if (texts.some((text) => text.startsWith("delegate this"))) {
-              return Effect.succeed(
-                toolStep(
-                  "delegate",
-                  { todo: "Reply with the single word pong", background: true },
-                  "bg-child",
-                ),
-              )
-            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
             return Effect.succeed(reply("parent read pong"))
           })
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
-          const resultFiber = yield* delegateResult(harness)
+          const started = yield* toolResult(harness, "delegate.start")
           yield* sendPrompt(harness, "delegate this task")
-          const running = yield* Fiber.join(resultFiber)
+          const running = yield* Fiber.join(started)
           expect(running?._tag).toBe("ToolCallSucceeded")
           if (running?._tag !== "ToolCallSucceeded") return
           // The handle is keyed by the tool call, so a replayed call finds its child.
-          expect(parseJson(running.output)).toMatchObject({
-            _tag: "Running",
-            requestId: "bg-child",
-          })
+          expect(parseJson(running.output)).toMatchObject({ requestId: "bg-child" })
 
           const snapshot = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
-              current.messages.some(
-                (message) =>
-                  message.role === "user" && message.metadata?.customType === "child-completion",
-              ) && current.runtime._tag === "Idle",
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
             8_000,
             "child completion delivered to the parent",
           )
-          const completion = snapshot.messages.find(
-            (message) => message.metadata?.customType === "child-completion",
-          )
-          expect(completion).toBeDefined()
           // The completion woke the parent for a fresh turn.
-          expect(snapshot.messages.some((message) => message.role === "assistant")).toBe(true)
+          expect(messageTexts(snapshot.messages)).toContain("parent read pong")
 
           const child = yield* childOf(harness)
           const [entry] = yield* harness.registryOf(branchId)
           expect(entry).toMatchObject({
             requestId: "bg-child",
             ...child,
-            background: true,
+            private: false,
             submitted: true,
             delivered: true,
             completed: { interrupted: false, streamFailed: false, unanswered: false },
@@ -436,20 +535,17 @@ describe("background delegation with a real child", () => {
     12_000,
   )
 
-  it.live("refuses background delegation without a host-owned tool call", () =>
+  it.live("refuses a start without a host-owned tool call", () =>
     Effect.gen(function* () {
-      const ctx = Struct.omit(
-        testToolContext({ Agent: { listAgents: Effect.succeed(AllBuiltinAgents) } }),
-        ["toolCallId"],
-      )
+      const ctx = Struct.omit(testToolContext(), ["toolCallId"])
       const error = yield* runToolWithCtx(
-        DelegateTool,
-        { todo: "analyze the codebase", background: true, overrides: { deniedTools: ["bash"] } },
+        StartChild,
+        { todo: "analyze the codebase", overrides: { deniedTools: ["bash"] } },
         ctx,
       ).pipe(Effect.flip)
       expect(error).toMatchObject({
         _tag: "DelegateError",
-        message: "Background delegation requires a host-owned tool call",
+        message: "delegate.start requires a host-owned tool call",
       })
     }),
   )
@@ -479,10 +575,10 @@ describe("background delegation with a real child", () => {
               requestId: RequestId.make("crashed-start"),
               sessionId: child.sessionId,
               branchId: child.branchId,
-              agentName: DEFAULT_AGENT_NAME,
-              prompt: "Reply with the single word pong",
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: childTask,
               toolCallId: ToolCallId.make("crashed-tool"),
-              background: true,
+              private: false,
               submitted: false,
               delivered: false,
             },
@@ -491,15 +587,11 @@ describe("background delegation with a real child", () => {
           const snapshot = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
-              current.messages.some(
-                (message) => message.metadata?.customType === "child-completion",
-              ) && current.runtime._tag === "Idle",
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
             8_000,
             "the recovered child delivered its completion",
           )
-          expect(
-            snapshot.messages.filter((m) => m.metadata?.customType === "child-completion"),
-          ).toHaveLength(1)
+          expect(completionMessages(snapshot.messages)).toHaveLength(1)
           const [entry] = yield* harness.registryOf(branchId)
           expect(entry).toMatchObject({
             requestId: "crashed-start",
@@ -512,40 +604,76 @@ describe("background delegation with a real child", () => {
       ),
     12_000,
   )
+
+  it.live(
+    "a private child whose waiter died with its process is removed with its session",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ack")])
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          yield* harness.writeRegistry(branchId, [
+            {
+              requestId: RequestId.make(`run:${child.sessionId}`),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: "a side question",
+              private: true,
+              submitted: true,
+              delivered: false,
+              waiter: "waiter:a-process-that-is-gone",
+            },
+          ])
+          yield* sendPrompt(harness, "hello again")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent turn ended",
+          )
+          expect(yield* harness.registryOf(branchId)).toEqual([])
+          const sessions = yield* client.session.list()
+          expect(sessions.some((session) => session.id === child.sessionId)).toBe(false)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
 })
 
 // ── delegate/pending-cap ────────────────────────────────────────────────────
 
 /**
- * The parent branch admits at most four unfinished background children. A
- * fifth and sixth delegation in the same step must fail as ordinary tool
- * results, not as a turn failure: the model reads the rejection and keeps
- * going. This is the shape that broke in the gamut testbed — six `delegate`
- * calls in one `Promise.all`, two over the cap — so the cap must reject the
- * extra children while the four admitted ones still run and deliver.
+ * The parent branch admits at most four unfinished children. A fifth and
+ * sixth start in the same step must fail as ordinary tool results, not as a
+ * turn failure: the model reads the rejection and keeps going. This is the
+ * shape that broke in the gamut testbed — six starts in one `Promise.all`,
+ * two over the cap — so the cap must reject the extra children while the four
+ * admitted ones still run and deliver.
  */
 
-const backgroundCall = (todo: string) => ({
-  toolName: "delegate",
-  input: { todo, background: true },
-})
+const startCall = (todo: string) => ({ toolName: "delegate.start", input: { todo } })
 
 /**
- * The failed `delegate` results on the parent branch that name the cap. A
- * failed tool result carries its message in `result`, so the cap rejection is
+ * The failed start results on the parent branch that name the cap. A failed
+ * tool result carries its message in `result`, so the cap rejection is
  * readable model input rather than a dead turn.
  */
 const cappedResults = (messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Prompt.Part> }>) =>
-  messages
-    .flatMap((message) => message.parts)
-    .filter((part) => {
-      if (part.type !== "tool-result" || part.name !== "delegate" || !part.isFailure) return false
-      const result = part.result
-      if (!Predicate.isReadonlyObject(result)) return false
-      return String(result["error"]).includes("unfinished child starts")
-    })
+  resultsOf("delegate.start", messages).filter((part) => {
+    if (part.type !== "tool-result" || !part.isFailure) return false
+    const result = part.result
+    if (!Predicate.isReadonlyObject(result)) return false
+    return String(result["error"]).includes("unfinished children")
+  })
 
-describe("background delegation over the pending-start cap", () => {
+describe("starts over the pending cap", () => {
   it.live(
     "rejects the children past the cap as tool results and still runs the admitted four",
     () =>
@@ -553,90 +681,59 @@ describe("background delegation over the pending-start cap", () => {
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             multiToolCallStep(
-              backgroundCall("Reply with the single word one"),
-              backgroundCall("Reply with the single word two"),
-              backgroundCall("Reply with the single word three"),
-              backgroundCall("Reply with the single word four"),
-              backgroundCall("Reply with the single word five"),
-              backgroundCall("Reply with the single word six"),
+              startCall("Reply with the single word one"),
+              startCall("Reply with the single word two"),
+              startCall("Reply with the single word three"),
+              startCall("Reply with the single word four"),
+              startCall("Reply with the single word five"),
+              startCall("Reply with the single word six"),
             ),
             // The parent's follow-up turn and the four admitted children all
             // draw from this one queue, in whatever order they reach the model.
-            ...Array.from({ length: 8 }, () => textStep("ack")),
+            ...Array.from({ length: 16 }, () => textStep("ack")),
           ])
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
           yield* sendPrompt(harness, "delegate six tasks")
 
-          // The two over-cap delegations come back as ordinary tool results on
-          // the parent branch. A turn that died on the rejection would never
+          // The two over-cap starts come back as ordinary tool results on the
+          // parent branch. A turn that died on the rejection would never
           // persist them.
           const afterAdmission = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) => cappedResults(current.messages).length >= 2,
             10_000,
-            "the capped delegations returned as tool results",
+            "the capped starts returned as tool results",
           )
-          const rejected = cappedResults(afterAdmission.messages)
-          // Two of the six are over the cap of four.
-          expect(rejected).toHaveLength(2)
+          expect(cappedResults(afterAdmission.messages)).toHaveLength(2)
 
           // The four admitted children still deliver; the cap rejected the
           // extras without disturbing them.
           const settled = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
-              current.messages.filter(
-                (message) => message.metadata?.customType === "child-completion",
-              ).length >= 4 && current.runtime._tag === "Idle",
+              completionMessages(current.messages).length >= 4 && current.runtime._tag === "Idle",
             20_000,
             "the four admitted children delivered their completions",
           )
-          expect(
-            settled.messages.filter(
-              (message) => message.metadata?.customType === "child-completion",
-            ),
-          ).toHaveLength(4)
+          expect(completionMessages(settled.messages)).toHaveLength(4)
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
   )
 })
 
-// ── delegate/agent-child-send ───────────────────────────────────────────────
+// ── delegate/send ───────────────────────────────────────────────────────────
 
 /**
- * The orchestrator can correct a child that is still working: `agent-child`
- * with `send` puts a message into the child's running turn, and the child's
- * next model step reads it. A finished child takes no more messages.
+ * The orchestrator can correct a child that is still working: `delegate.send`
+ * puts a message into the child's running turn, and the child's next model
+ * step reads it. A finished child takes no more messages.
  */
 
-const childTask = "CHILD-TASK: summarize the ledger"
 const correction = "CORRECTION: only look at src/store"
 
-const promptToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
-  prompt.content.flatMap((message) => {
-    if (message.role !== "assistant") return []
-    return message.content.flatMap((part) => {
-      if (part.type !== "tool-call") return []
-      return [part.id]
-    })
-  })
-
-const messageTexts = (messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Prompt.Part> }>) =>
-  messages.flatMap((message) =>
-    message.parts.flatMap((part) => {
-      if (part.type !== "text") return []
-      return [part.text]
-    }),
-  )
-
-const sendResults = (messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Prompt.Part> }>) =>
-  messages
-    .flatMap((message) => message.parts)
-    .filter((part) => part.type === "tool-result" && part.name === "agent-child")
-
-describe("agent-child send", () => {
+describe("delegate.send", () => {
   it.live("a message sent to a running child reaches the child's next model step", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -646,8 +743,6 @@ describe("agent-child send", () => {
         let parentCalls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
-          // The child reads the task as its own user message; the parent only
-          // carries it inside the delegate call's params.
           if (texts[0] === childTask) {
             if (texts.includes(correction)) {
               return Deferred.succeed(childSawCorrection, void 0).pipe(
@@ -662,18 +757,12 @@ describe("agent-child send", () => {
           }
           parentCalls += 1
           if (parentCalls === 1) {
-            return Effect.succeed(
-              toolStep("delegate", { todo: childTask, background: true }, "bg-child"),
-            )
+            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
           }
           if (parentCalls === 2) {
             return Deferred.await(childStarted).pipe(
               Effect.as(
-                toolStep(
-                  "agent-child",
-                  { action: "send", requestId: "bg-child", message: correction },
-                  "send-1",
-                ),
+                toolStep("delegate.send", { requestId: "bg-child", message: correction }, "send-1"),
               ),
             )
           }
@@ -692,7 +781,7 @@ describe("agent-child send", () => {
           3_000,
           "the child's completion carried its corrected answer",
         )
-        expect(sendResults(snapshot.messages)[0]).toMatchObject({
+        expect(resultsOf("delegate.send", snapshot.messages)[0]).toMatchObject({
           isFailure: false,
           result: { _tag: "Pending" },
         })
@@ -708,9 +797,7 @@ describe("agent-child send", () => {
           if (texts[0] === childTask) return Effect.succeed(reply("done"))
           parentCalls += 1
           if (parentCalls === 1) {
-            return Effect.succeed(
-              toolStep("delegate", { todo: childTask, background: true }, "bg-done"),
-            )
+            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-done"))
           }
           // The completion message has arrived once the parent is asked again.
           if (
@@ -718,11 +805,7 @@ describe("agent-child send", () => {
             !promptToolCallIds(options.prompt).includes("send-late")
           ) {
             return Effect.succeed(
-              toolStep(
-                "agent-child",
-                { action: "send", requestId: "bg-done", message: correction },
-                "send-late",
-              ),
+              toolStep("delegate.send", { requestId: "bg-done", message: correction }, "send-late"),
             )
           }
           return Effect.succeed(reply("ack"))
@@ -732,11 +815,11 @@ describe("agent-child send", () => {
         yield* sendPrompt(harness, "split the work")
         const snapshot = yield* waitFor(
           client.session.getSnapshot({ sessionId, branchId }),
-          (current) => sendResults(current.messages).length === 1,
+          (current) => resultsOf("delegate.send", current.messages).length === 1,
           3_000,
           "the late send returned a result",
         )
-        expect(sendResults(snapshot.messages)[0]).toMatchObject({
+        expect(resultsOf("delegate.send", snapshot.messages)[0]).toMatchObject({
           isFailure: true,
           result: { error: expect.stringContaining("already finished") },
         })

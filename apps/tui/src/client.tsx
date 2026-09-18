@@ -571,7 +571,7 @@ export const makeChildSessionTracker = (
       })
 
     // Reconcile one delegate registry row into the entries. A row with no
-    // tool call is a bare background delegation the tool view never renders,
+    // tool call has no delegate call the tool view could render it under,
     // so it is skipped. A new row opens a subscription; a row that has turned
     // terminal drains the child's saved history once, then closes it.
     const reconcileChild = (child: DelegateChild) =>

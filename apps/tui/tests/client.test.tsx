@@ -282,7 +282,6 @@ const runningChild = (over: {
     branchId: over.branchId,
     agentName: AgentName.make(over.agentName),
     toolCallId: over.toolCallId,
-    background: false,
     status: "running",
   })
 
@@ -531,7 +530,6 @@ const childRow = DelegateChild.make({
   branchId: BranchId.make("branch-child"),
   agentName: AgentName.make("cowork"),
   toolCallId,
-  background: false,
   status: "running",
 })
 

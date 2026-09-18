@@ -1,16 +1,27 @@
 /**
  * Child agents, built on the public extension facade alone.
  *
- * A child is a session under the caller's branch. The registry is one JSON
- * file per parent branch under `~/.gent/delegates/`; every entry names the
- * child, the tool call that owns it, and whether the parent has read its
- * completion. Foreground runs (`delegate`, `btw`, `read_session`) await the
- * child's turn here. Background starts return a handle; the child's own
- * `turnAfter` hook queues the completion on the parent branch, and the
- * parent's next turn or an `agent-children` call reconciles anything a crash
- * left behind.
+ * A child is a session under the caller's branch, run as the `delegate`
+ * agent. The registry is one JSON file per parent branch under
+ * `~/.gent/delegates/`; every entry names the child, the tool call that owns
+ * it, and whether the parent has its completion. `delegate.start` admits a
+ * child and returns its handle at once; `delegate.wait` awaits the child's
+ * turn here and returns its output. A child nobody waits for reports through
+ * the delegate's own `turnAfter` hook, as a message on the parent branch. The
+ * parent's next turn and every `delegate.list` reconcile what a crash left.
  */
-import { Cause, Effect, Fiber, Option, Predicate, Record, Schema, Stream } from "effect"
+import {
+  Cause,
+  Effect,
+  Fiber,
+  Option,
+  Predicate,
+  Record,
+  Ref,
+  Schema,
+  Stream,
+  Struct,
+} from "effect"
 import {
   ActorCommandId,
   AgentDefinition,
@@ -46,7 +57,13 @@ import { makeBranchStateStore } from "./branch-state-store.js"
  * prompt that addresses "the orchestrator" reaches children too, so without
  * this a worker reads that prompt and spawns its own workers.
  */
-const CHILD_DENIED_TOOLS: ReadonlyArray<string> = ["delegate", "agent-child", "agent-children"]
+const CHILD_DENIED_TOOLS: ReadonlyArray<string> = [
+  "delegate.start",
+  "delegate.wait",
+  "delegate.send",
+  "delegate.cancel",
+  "delegate.list",
+]
 
 export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
 
@@ -89,30 +106,22 @@ export const DelegateEntry = Schema.Struct({
   agentName: AgentName,
   prompt: Schema.String,
   toolCallId: Schema.optionalKey(ToolCallId),
-  /** A background child owes the parent one completion message. */
-  background: Schema.Boolean,
+  /** A private child leaves no message: its caller reads the answer and deletes the session. */
+  private: Schema.Boolean,
   /** The child's prompt reached its loop; a start that crashed before this is re-sent. */
   submitted: Schema.Boolean,
   completed: Schema.optionalKey(ChildOutcome),
-  /** The completion message is on the parent branch. */
+  /** The parent has the completion: a `wait` returned it, or the message is on the parent branch. */
   delivered: Schema.Boolean,
+  /** The process whose `wait` holds this child. A claim by another process is a crash leftover. */
+  waiter: Schema.optionalKey(Schema.String),
   /** Bounded copy of the child's answer, for the parent's view. */
   preview: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(ChildUsage),
 })
 export type DelegateEntry = typeof DelegateEntry.Type
 
-/** What `agent-children` lists. */
-const ChildAgentRegistryEntry = Schema.Struct({
-  requestId: RequestId,
-  sessionId: SessionId,
-  branchId: BranchId,
-  agentName: AgentName,
-  completed: Schema.Boolean,
-})
-type ChildAgentRegistryEntry = typeof ChildAgentRegistryEntry.Type
-
-/** Maximum unfinished background children owned by one parent branch. */
+/** Maximum unfinished children owned by one parent branch. */
 const MAX_PENDING_CHILDREN = 4
 
 /** A child that loops on a broken model stops here instead of spending the parent's budget. */
@@ -127,11 +136,38 @@ const registry = makeBranchStateStore({
     new DelegateError({ message: `Delegate registry is unreadable: ${file}`, cause }),
 })
 
+/**
+ * A `wait` in flight claims its row under this name. The hook and the
+ * reconcile leave a claimed row to the waiter; a claim that names another
+ * process belongs to a wait that died with it, so the row is treated as
+ * unclaimed.
+ */
+const processWaiterCell = Ref.makeUnsafe(Option.none<string>())
+
+/** The name this process claims rows under, minted once from the host's id source. */
+const processWaiter = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const minted = `waiter:${yield* ctx.Process.randomId}`
+  return yield* Ref.modify(
+    processWaiterCell,
+    (current): readonly [string, Option.Option<string>] => {
+      const waiter = Option.getOrElse(current, () => minted)
+      return [waiter, Option.some(waiter)]
+    },
+  )
+})
+
+const isHeldHere = (entry: DelegateEntry) =>
+  processWaiter.pipe(Effect.map((waiter) => entry.waiter === waiter))
+
 const replaceEntry = (entries: ReadonlyArray<DelegateEntry>, entry: DelegateEntry) =>
   entries.map((current) => {
     if (current.requestId === entry.requestId) return entry
     return current
   })
+
+const withoutEntry = (entries: ReadonlyArray<DelegateEntry>, requestId: RequestId) =>
+  entries.filter((current) => current.requestId !== requestId)
 
 /** Every fault behind the facade is one caller-facing error. */
 const asDelegateError = (message: string) =>
@@ -143,19 +179,20 @@ const asDelegateError = (message: string) =>
 // ── child turns ─────────────────────────────────────────────────────────────
 
 const startMessageId = (requestId: RequestId) => MessageId.make(`delegate-start:${requestId}`)
-const runMessageId = (sessionId: SessionId) => MessageId.make(`delegate-run:${sessionId}`)
 
 type TurnCompleted = Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>
 const isTurnCompleted = (event: AgentEvent): event is TurnCompleted =>
   event._tag === "TurnCompleted"
 const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized"
 
-/** The receipt of one turn, read from the child's durable history. */
-const turnReceipt = (target: {
+interface TurnTarget {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly messageId: MessageId
-}) =>
+}
+
+/** The receipt of one turn, read from the child's durable history alone. */
+const turnReceipt = (target: TurnTarget) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     return yield* ctx.Session.events(target).pipe(
@@ -163,6 +200,17 @@ const turnReceipt = (target: {
       Stream.filter(isTurnCompleted),
       Stream.filter((event) => event.messageId === target.messageId),
       Stream.runLast,
+    )
+  })
+
+/** The receipt of one turn, from history or from the live stream when it arrives. */
+const awaitReceipt = (target: TurnTarget) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    return yield* ctx.Session.events(target).pipe(
+      Stream.filter(isTurnCompleted),
+      Stream.filter((event) => event.messageId === target.messageId),
+      Stream.runHead,
     )
   })
 
@@ -271,18 +319,32 @@ export const describeChildCompletion = (params: {
   ].join("\n")
 }
 
-/**
- * Queue the completion on the parent branch and return the marked entry.
- * Runs under the parent registry's lock; `delivered` is the idempotency key,
- * and the follow-up's source-derived id makes a repeat a queue replacement,
- * never a second message.
- */
 /** An Option usage becomes a `usage` field, or nothing. */
 const usageField = (
   usage: Option.Option<typeof ChildUsage.Type>,
 ): { readonly usage?: typeof ChildUsage.Type } =>
   Option.match(usage, { onNone: () => ({}), onSome: (value) => ({ usage: value }) })
 
+/** The row once its completion is in the parent's hands, however it got there. */
+const settled = (
+  entry: DelegateEntry,
+  outcome: ChildOutcome,
+  usage: Option.Option<typeof ChildUsage.Type>,
+  text: string,
+): DelegateEntry => ({
+  ...Struct.omit(entry, ["waiter"]),
+  completed: outcome,
+  delivered: true,
+  preview: clipPreview(text),
+  ...usageField(usage),
+})
+
+/**
+ * Queue the completion on the parent branch and return the marked entry.
+ * Runs under the parent registry's lock; `delivered` is the idempotency key,
+ * and the follow-up's source-derived id makes a repeat a queue replacement,
+ * never a second message.
+ */
 const deliverCompletion = (
   parent: { readonly sessionId: SessionId; readonly branchId: BranchId },
   entry: DelegateEntry,
@@ -314,13 +376,7 @@ const deliverCompletion = (
         },
       },
     })
-    return {
-      ...entry,
-      completed: outcome,
-      delivered: true,
-      preview: clipPreview(text),
-      ...usageField(usage),
-    }
+    return settled(entry, outcome, usage, text)
   })
 
 /** The child's prompt as its one durable turn. A repeat with the same id is a no-op at the loop. */
@@ -341,9 +397,11 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
 
 /**
  * Bring the current branch's registry up to date without a hook: a start
- * whose prompt never reached the child is re-sent, and a finished child whose
+ * whose prompt never reached the child is re-sent, a finished child whose
  * completion never landed (the process died between the receipt and the
- * hook) is delivered now. Called from the parent's turn and its listing tools.
+ * hook) is delivered now, and a private child whose waiter died is removed
+ * with its session. A row a live `wait` holds is left to it. Called from the
+ * parent's turn and its listing tools.
  */
 const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   const ctx = yield* ExtensionContext
@@ -352,7 +410,13 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
     Effect.gen(function* () {
       let next = entries
       for (const entry of entries) {
-        if (!entry.background || entry.delivered) continue
+        if (yield* isHeldHere(entry)) continue
+        if (entry.private) {
+          yield* ctx.Session.delete(entry.sessionId).pipe(Effect.ignore)
+          next = withoutEntry(next, entry.requestId)
+          continue
+        }
+        if (entry.delivered) continue
         if (!entry.submitted) {
           yield* submitStart(entry, Option.none())
           next = replaceEntry(next, { ...entry, submitted: true })
@@ -376,7 +440,105 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   )
 })
 
-// ── foreground runs ─────────────────────────────────────────────────────────
+// ── admission ───────────────────────────────────────────────────────────────
+
+interface AdmitParams {
+  readonly prompt: string
+  /** The tool call that owns the child. The same id admits the same child once. */
+  readonly requestId?: RequestId
+  readonly toolCallId?: ToolCallId
+  /** `history`, `visibility`, `overrides`, `parentToolCallId`. */
+  readonly runSpec?: RunSpec
+  /** Sees the child's events from its first step. Best effort: the answer can return before trailing events are observed. */
+  readonly observe?: (event: AgentEvent) => Effect.Effect<void>
+}
+
+/**
+ * Admit one child under the current branch and send its prompt. A private
+ * child is listed for the wait that owns it and removed once the answer is
+ * read; any other child counts against the branch's cap and is listed for the
+ * parent's view.
+ */
+const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
+  const ctx = yield* ExtensionContext
+  const isPrivate = params.runSpec?.visibility === "private"
+  const inherit = params.runSpec?.history === "inherit"
+  const admitted = yield* registry
+    .modify((entries) =>
+      Effect.gen(function* () {
+        const requested = Option.fromUndefinedOr(params.requestId)
+        const existing = Option.flatMap(requested, (id) =>
+          Option.fromUndefinedOr(entries.find((entry) => entry.requestId === id)),
+        )
+        if (Option.isSome(existing)) {
+          if (existing.value.prompt !== params.prompt) {
+            return yield* new DelegateError({ message: "Child start request input changed" })
+          }
+          const child = yield* ctx.Session.getSession(existing.value.sessionId)
+          if (Predicate.isUndefined(child)) {
+            return yield* new DelegateError({ message: "Child session no longer exists" })
+          }
+          return { next: entries, result: { entry: existing.value, observer: Option.none() } }
+        }
+        const pending = entries.filter(
+          (entry) => !entry.private && Predicate.isUndefined(entry.completed),
+        )
+        if (!isPrivate && pending.length >= MAX_PENDING_CHILDREN) {
+          return yield* new DelegateError({
+            message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
+          })
+        }
+        const child = yield* ctx.Session.create({
+          name: childName(params.prompt),
+          parentSessionId: ctx.sessionId,
+          parentBranchId: ctx.branchId,
+          // An inheriting child forks the parent branch's history; otherwise it starts clean.
+          ...historyBranch(inherit, ctx.branchId),
+          ...Record.filter({ requestId: params.requestId }, Predicate.isNotUndefined),
+        })
+        const requestId = Option.getOrElse(requested, () =>
+          RequestId.make(`run:${child.sessionId}`),
+        )
+        // The observer opens before the prompt goes in, so the child's first step is seen.
+        const observer = yield* Option.match(Option.fromUndefinedOr(params.observe), {
+          onNone: () => Effect.succeedNone,
+          onSome: (notify) =>
+            ctx.Session.events(child).pipe(
+              Stream.runForEach((event) => notify(event).pipe(Effect.ignore)),
+              Effect.ignore,
+              Effect.forkChild,
+              Effect.asSome,
+            ),
+        })
+        const entry: DelegateEntry = {
+          requestId,
+          ...child,
+          agentName: DELEGATE_AGENT_NAME,
+          prompt: params.prompt,
+          ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          private: isPrivate,
+          submitted: false,
+          delivered: false,
+        }
+        yield* submitStart(
+          entry,
+          Option.some(
+            makeRunSpec({
+              ...params.runSpec,
+              ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
+            }),
+          ),
+        )
+        const started = { ...entry, submitted: true }
+        return { next: [...entries, started], result: { entry: started, observer } }
+      }),
+    )
+    .pipe(asDelegateError("Child start failed"))
+  yield* ctx.State.changed().pipe(Effect.ignore)
+  return admitted
+})
+
+// ── waiting ─────────────────────────────────────────────────────────────────
 
 const ChildRunUsage = Schema.Struct({
   input: Schema.Finite,
@@ -384,7 +546,7 @@ const ChildRunUsage = Schema.Struct({
   cost: Schema.optional(Schema.Finite),
 })
 
-/** What a foreground child hands back. `Error` names a turn that ended badly, with any partial text. */
+/** What a waited child hands back. `Error` names a turn that ended badly, with any partial text. */
 const ChildRunResult = Schema.TaggedUnion({
   Success: {
     text: Schema.String,
@@ -401,234 +563,162 @@ const ChildRunResult = Schema.TaggedUnion({
 })
 type ChildRunResult = typeof ChildRunResult.Type
 
+/** The row as the wait claims it, or as it already stands when its completion is in hand. */
+const claimWait = (requestId: RequestId) =>
+  registry.modify((entries) =>
+    Effect.gen(function* () {
+      const entry = entries.find((row) => row.requestId === requestId)
+      if (Predicate.isUndefined(entry)) {
+        return yield* new DelegateError({ message: "No such child on this branch" })
+      }
+      if (entry.delivered) return { next: entries, result: entry }
+      const claimed = { ...entry, waiter: yield* processWaiter }
+      return { next: replaceEntry(entries, claimed), result: claimed }
+    }),
+  )
+
+/** The interrupted wait settles its row so no message follows, then stops the child. */
+const abandonWait = (entry: DelegateEntry) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    yield* registry
+      .update((entries) => {
+        const current = entries.find((row) => row.requestId === entry.requestId)
+        if (Predicate.isUndefined(current) || current.delivered) return entries
+        return replaceEntry(entries, settled(current, { interrupted: true }, Option.none(), ""))
+      })
+      .pipe(Effect.ignore)
+    // A child left running after its waiter is interrupted has no owner to
+    // await or cancel it.
+    yield* ctx.Session.steer({
+      _tag: "Interrupt",
+      sessionId: entry.sessionId,
+      branchId: entry.branchId,
+      requestId: RequestId.make(`delegate-interrupt:${entry.sessionId}`),
+    }).pipe(Effect.ignore)
+  })
+
+const resultOf = (
+  entry: DelegateEntry,
+  text: string,
+  toolCalls: ReadonlyArray<typeof AgentRunToolCallSchema.Type>,
+): ChildRunResult => {
+  const failures = failureNames(entry.completed ?? {})
+  if (failures.length > 0) {
+    let error = `The child turn ended (${failures.join(", ")}).`
+    if (text.length > 0) error = `${error} Partial output:\n${text}`
+    return ChildRunResult.cases.Error.make({
+      error,
+      sessionId: entry.sessionId,
+      agentName: entry.agentName,
+    })
+  }
+  return ChildRunResult.cases.Success.make({
+    text,
+    sessionId: entry.sessionId,
+    agentName: entry.agentName,
+    ...usageField(Option.fromUndefinedOr(entry.usage)),
+    ...nonEmptyToolCalls(toolCalls),
+  })
+}
+
+/**
+ * Await one child's turn and return its output. The wait holds the row while
+ * it runs, so the hook leaves the completion to it; an interrupted wait stops
+ * the child. A private child is deleted once its answer is read.
+ */
+const awaitChild = Effect.fn("Delegate.wait")(function* (requestId: RequestId) {
+  const ctx = yield* ExtensionContext
+  const claimed = yield* claimWait(requestId).pipe(asDelegateError("Child wait failed"))
+  let entry = claimed
+  if (!claimed.delivered) {
+    const receipt = yield* awaitReceipt({
+      ...claimed,
+      messageId: startMessageId(requestId),
+    }).pipe(
+      Effect.catchCause(() => Effect.succeedNone),
+      Effect.onInterrupt(() => abandonWait(claimed)),
+    )
+    const outcome = Option.match(receipt, { onNone: (): ChildOutcome => ({}), onSome: outcomeOf })
+    const usage = Option.flatMap(receipt, (event) => usageOf(Option.fromUndefinedOr(event.usage)))
+    const text = latestAssistantText(
+      yield* childMessages(claimed).pipe(Effect.orElseSucceed(() => [])),
+    )
+    entry = yield* registry
+      .modify((entries) =>
+        Effect.gen(function* () {
+          const current = entries.find((row) => row.requestId === requestId)
+          if (Predicate.isUndefined(current)) {
+            return yield* new DelegateError({ message: "No such child on this branch" })
+          }
+          if (current.delivered) return { next: entries, result: current }
+          const done = settled(current, outcome, usage, text)
+          return { next: replaceEntry(entries, done), result: done }
+        }),
+      )
+      .pipe(asDelegateError("Child wait failed"))
+    yield* ctx.State.changed().pipe(Effect.ignore)
+  }
+  const messages = yield* childMessages(entry).pipe(Effect.orElseSucceed(() => []))
+  const result = resultOf(entry, latestAssistantText(messages), messagesToolCalls(messages))
+  if (entry.private) {
+    // A private child is gone once its answer is read. Best effort; a leftover row is not a failed run.
+    yield* ctx.Session.delete(entry.sessionId).pipe(Effect.ignore)
+    yield* registry.update((entries) => withoutEntry(entries, requestId)).pipe(Effect.ignore)
+  }
+  return result
+})
+
+// ── runs for extension authors ──────────────────────────────────────────────
+
 interface RunChildParams {
   readonly prompt: string
   /** `history`, `visibility`, `overrides`, `parentToolCallId`. */
   readonly runSpec?: RunSpec
-  /** Sees the child's events as they happen. Best effort: the result can return before trailing events are observed. */
   readonly observe?: (event: AgentEvent) => Effect.Effect<void>
 }
 
 /**
- * One child session under the current branch, awaited here. A private run
- * leaves no trace: no registry entry, and its session is deleted once the
- * answer is read. Any other run is listed on the parent branch for its view.
+ * One child under the current branch, admitted and awaited here. What a
+ * `delegate.start` + `delegate.wait` pair is for the model, this is for
+ * `btw` and `read_session`: a private run leaves no trace.
  */
 export const runChild = Effect.fn("Delegate.runChild")(function* (params: RunChildParams) {
-  const ctx = yield* ExtensionContext
-  const runSpec = params.runSpec
-  const isPrivate = runSpec?.visibility === "private"
-  const agentName = DELEGATE_AGENT_NAME
-  const toolCallId = runSpec?.parentToolCallId
-  const inherit = runSpec?.history === "inherit"
-
-  const created = yield* ctx.Session.create({
-    name: childName(params.prompt),
-    parentSessionId: ctx.sessionId,
-    parentBranchId: ctx.branchId,
-    // An inheriting child forks the parent branch's history; otherwise it starts clean.
-    ...historyBranch(inherit, ctx.branchId),
-  }).pipe(asDelegateError("Child admission failed"), Effect.exit)
-  if (created._tag === "Failure") {
-    if (Cause.hasInterruptsOnly(created.cause)) return yield* Effect.interrupt
-    return ChildRunResult.cases.Error.make({ error: Cause.pretty(created.cause), agentName })
-  }
-  const child = created.value
-  const requestId = RequestId.make(`run:${child.sessionId}`)
-  const pulse = ctx.State.changed().pipe(Effect.ignore)
-
-  if (!isPrivate) {
-    yield* registry.update((entries) => [
-      ...entries,
-      {
-        requestId,
-        ...child,
-        agentName,
-        prompt: params.prompt,
-        ...Record.filter({ toolCallId }, Predicate.isNotUndefined),
-        background: false,
-        submitted: true,
-        delivered: true,
-      },
-    ])
-    yield* pulse
-  }
-
-  const messageId = runMessageId(child.sessionId)
   const run = Effect.gen(function* () {
-    // The observer sees the child's events as they happen; its failures never fail the run.
-    const observer = yield* Option.match(Option.fromUndefinedOr(params.observe), {
-      onNone: () => Effect.succeedNone,
-      onSome: (notify) =>
-        ctx.Session.events(child).pipe(
-          Stream.runForEach((event) => notify(event).pipe(Effect.ignore)),
-          Effect.ignore,
-          Effect.forkChild,
-          Effect.asSome,
-        ),
-    })
-    yield* ctx.Session.send({
-      ...child,
-      content: params.prompt,
-      commandId: ActorCommandId.make(messageId),
-      agentOverride: agentName,
-      interactive: false,
-      runSpec: childRunSpec(Option.fromUndefinedOr(runSpec)),
-    }).pipe(
-      asDelegateError("Child prompt was not admitted"),
-      // A foreground child belongs to this call. Left running after the
-      // caller is interrupted, it has no owner to await or cancel it.
-      Effect.onInterrupt(() =>
-        ctx.Session.steer({
-          _tag: "Interrupt",
-          ...child,
-          requestId: RequestId.make(`delegate-interrupt:${child.sessionId}`),
-        }).pipe(Effect.ignore),
+    const { entry, observer } = yield* admitChild({
+      prompt: params.prompt,
+      ...Record.filter(
+        {
+          toolCallId: params.runSpec?.parentToolCallId,
+          runSpec: params.runSpec,
+          observe: params.observe,
+        },
+        Predicate.isNotUndefined,
       ),
+    })
+    return yield* awaitChild(entry.requestId).pipe(
       Effect.ensuring(
         Option.match(observer, { onNone: () => Effect.void, onSome: Fiber.interrupt }),
       ),
     )
-
-    const receipt = yield* turnReceipt({ ...child, messageId }).pipe(
-      Effect.catchCause(() => Effect.succeedNone),
-    )
-    const messages = yield* childMessages(child)
-    const outcome = Option.match(receipt, { onNone: (): ChildOutcome => ({}), onSome: outcomeOf })
-    const usage = Option.flatMap(receipt, (event) => usageOf(Option.fromUndefinedOr(event.usage)))
-    const text = latestAssistantText(messages)
-    const failures = failureNames(outcome)
-    if (!isPrivate) {
-      yield* registry.update((entries) =>
-        entries.map((entry) => {
-          if (entry.requestId !== requestId) return entry
-          return {
-            ...entry,
-            completed: outcome,
-            preview: clipPreview(text),
-            ...usageField(usage),
-          }
-        }),
-      )
-      yield* pulse
-    }
-    if (failures.length > 0) {
-      let error = `The child turn ended (${failures.join(", ")}).`
-      if (text.length > 0) error = `${error} Partial output:\n${text}`
-      return ChildRunResult.cases.Error.make({ error, sessionId: child.sessionId, agentName })
-    }
-    const toolCalls = messagesToolCalls(messages)
-    return ChildRunResult.cases.Success.make({
-      text,
-      sessionId: child.sessionId,
-      agentName,
-      ...usageField(usage),
-      ...nonEmptyToolCalls(toolCalls),
-    })
-  }).pipe(
+  })
+  return yield* run.pipe(
     Effect.catchCause((cause) => {
       if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
       return Effect.succeed(
         ChildRunResult.cases.Error.make({
           error: Cause.pretty(cause),
-          sessionId: child.sessionId,
-          agentName,
+          agentName: DELEGATE_AGENT_NAME,
         }),
       )
     }),
   )
-  if (!isPrivate) return yield* run
-  // A private child is gone once its answer is read. Best effort; a leftover row is not a failed run.
-  return yield* run.pipe(Effect.ensuring(ctx.Session.delete(child.sessionId).pipe(Effect.ignore)))
-})
-
-// ── background starts ───────────────────────────────────────────────────────
-
-/**
- * Admit one durable child under the current tool call and return its handle.
- * The same request returns the same child; the completion arrives later as a
- * message on this branch.
- */
-const startChild = Effect.fn("Delegate.startChild")(function* (params: {
-  readonly prompt: string
-  readonly requestId: RequestId
-  readonly toolCallId: ToolCallId
-  readonly runSpec?: RunSpec
-}) {
-  const ctx = yield* ExtensionContext
-  const handle = yield* registry
-    .modify((entries) =>
-      Effect.gen(function* () {
-        const existing = entries.find((entry) => entry.requestId === params.requestId)
-        if (Predicate.isNotUndefined(existing)) {
-          if (existing.prompt !== params.prompt) {
-            return yield* new DelegateError({ message: "Agent-start request input changed" })
-          }
-          const child = yield* ctx.Session.getSession(existing.sessionId)
-          if (Predicate.isUndefined(child)) {
-            return yield* new DelegateError({ message: "Agent-start child no longer exists" })
-          }
-          return {
-            next: entries,
-            result: { sessionId: existing.sessionId, branchId: existing.branchId },
-          }
-        }
-        const pending = entries.filter(
-          (entry) => entry.background && Predicate.isUndefined(entry.completed),
-        )
-        if (pending.length >= MAX_PENDING_CHILDREN) {
-          return yield* new DelegateError({
-            message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished child starts`,
-          })
-        }
-        const child = yield* ctx.Session.create({
-          name: childName(params.prompt),
-          parentSessionId: ctx.sessionId,
-          parentBranchId: ctx.branchId,
-          requestId: params.requestId,
-        })
-        const entry: DelegateEntry = {
-          requestId: params.requestId,
-          ...child,
-          agentName: DELEGATE_AGENT_NAME,
-          prompt: params.prompt,
-          toolCallId: params.toolCallId,
-          background: true,
-          submitted: false,
-          delivered: false,
-        }
-        yield* submitStart(
-          entry,
-          Option.some(makeRunSpec({ ...params.runSpec, parentToolCallId: params.toolCallId })),
-        )
-        return { next: [...entries, { ...entry, submitted: true }], result: child }
-      }),
-    )
-    .pipe(asDelegateError("Child start failed"))
-  yield* ctx.State.changed().pipe(Effect.ignore)
-  return handle
-})
-
-/** The registry row for a request on this branch, with its live completion. */
-const inspectChild = Effect.fn("Delegate.inspect")(function* (requestId: RequestId) {
-  const ctx = yield* ExtensionContext
-  yield* reconcile()
-  const entry = (yield* registry.read()).find((row) => row.requestId === requestId)
-  if (Predicate.isUndefined(entry) || !entry.background) {
-    return yield* new DelegateError({ message: "Agent-start receipt not owned by parent" })
-  }
-  const child = yield* ctx.Session.getSession(entry.sessionId).pipe(
-    asDelegateError("Child lookup failed"),
-  )
-  if (child?.parentSessionId !== ctx.sessionId || child.parentBranchId !== ctx.branchId) {
-    return yield* new DelegateError({ message: "Agent-start child no longer exists" })
-  }
-  return entry
 })
 
 /**
  * The child's own turn receipt, seen from its branch. The registry lives with
- * the parent, so the hook looks the parent up and writes there.
+ * the parent, so the hook looks the parent up and writes there. A row a live
+ * wait holds, and a private row, are left to their waiter.
  */
 const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   readonly sessionId: SessionId
@@ -647,10 +737,12 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   const parent = { sessionId: parentSessionId, branchId: parentBranchId }
   const delivered = yield* registry.at(parentBranchId).modify((entries) =>
     Effect.gen(function* () {
+      const waiter = yield* processWaiter
       const entry = entries.find(
         (row) =>
-          row.background &&
+          !row.private &&
           !row.delivered &&
+          row.waiter !== waiter &&
           row.sessionId === input.sessionId &&
           startMessageId(row.requestId) === input.messageId,
       )
@@ -667,7 +759,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   if (delivered) yield* ctx.State.changed().pipe(Effect.ignore)
 })
 
-// ── child agent tools ───────────────────────────────────────────────────────
+// ── tools ───────────────────────────────────────────────────────────────────
 
 export const ChildAgentHandle = Schema.Struct({
   requestId: RequestId,
@@ -675,81 +767,207 @@ export const ChildAgentHandle = Schema.Struct({
   branchId: BranchId,
 })
 
+/** What `delegate.list` reports per child; the outcome flags are the turn receipt. */
+const ChildAgentRegistryEntry = Schema.Struct({
+  ...ChildAgentHandle.fields,
+  agentName: AgentName,
+  completed: Schema.Boolean,
+  ...ChildOutcome.fields,
+})
+type ChildAgentRegistryEntry = typeof ChildAgentRegistryEntry.Type
+
 const ChildObservation = Schema.TaggedUnion({
   Pending: ChildAgentHandle.fields,
-  Completed: {
-    ...ChildAgentHandle.fields,
-    interrupted: Schema.optionalKey(Schema.Boolean),
-    streamFailed: Schema.optionalKey(Schema.Boolean),
-    /** The child spent its continuations and never answered. */
-    unanswered: Schema.optionalKey(Schema.Boolean),
-  },
+  Completed: { ...ChildAgentHandle.fields, ...ChildOutcome.fields },
 })
 
-export const ControlChildAgent = tool({
-  id: "agent-child",
+const observationOf = (entry: DelegateEntry) => {
+  const handle = {
+    requestId: entry.requestId,
+    sessionId: entry.sessionId,
+    branchId: entry.branchId,
+  }
+  if (Predicate.isUndefined(entry.completed)) return ChildObservation.cases.Pending.make(handle)
+  return ChildObservation.cases.Completed.make({ ...handle, ...entry.completed })
+}
+
+/** The registry row for a request on this branch, reconciled first. */
+const ownedChild = Effect.fn("Delegate.ownedChild")(function* (requestId: RequestId) {
+  const ctx = yield* ExtensionContext
+  yield* reconcile()
+  const entry = (yield* registry.read()).find((row) => row.requestId === requestId)
+  if (Predicate.isUndefined(entry) || entry.private) {
+    return yield* new DelegateError({ message: "No such child on this branch" })
+  }
+  const child = yield* ctx.Session.getSession(entry.sessionId).pipe(
+    asDelegateError("Child lookup failed"),
+  )
+  if (child?.parentSessionId !== ctx.sessionId || child.parentBranchId !== ctx.branchId) {
+    return yield* new DelegateError({ message: "Child session no longer exists" })
+  }
+  return entry
+})
+
+/** A call's `deniedTools` replaces the definition's, so the delegation tools are denied again here. */
+const childOverrides = (overrides: (typeof StartParams.Type)["overrides"]) => ({
+  ...overrides,
+  deniedTools: [...CHILD_DENIED_TOOLS, ...(overrides?.deniedTools ?? [])],
+})
+
+const StartParams = Schema.Struct({
+  todo: Schema.String.annotate({
+    description: "The whole task. The child has no conversation history.",
+  }),
+  overrides: RunSpecSchema.fields.overrides,
+})
+
+export const StartChild = tool({
+  id: "delegate.start",
   description:
-    "Inspect, message, or cancel a child started with delegate background: true. Pending is not proof that work is running; completed is a turn receipt, not task success.",
+    "Start one child on a self-contained task and return its handle now. The child runs as the delegate subagent with its own configured model and cannot delegate further. delegate.wait returns its output; a child nobody waits for reports as a message on this branch when it ends.",
+  promptSnippet: "Start a child agent on a task",
   promptGuidelines: [
-    "Completion arrives as a message on this branch; inspect is for a point-in-time check, not a wait.",
-    "After completion, use read_session with the returned sessionId and branchId to read the child output. Omit goal to avoid another model call.",
-    "Read the output before treating completion as task success. Interrupted or failed turns can have partial output.",
-    "send puts a message into the child's running turn: a correction, a new fact, a narrower scope. The child reads it at its next step. A finished child takes no messages; delegate a new task instead.",
+    "Use for independent work that benefits from a fresh context or parallelism. Do NOT delegate simple reads, searches, or single-file edits — do those directly.",
+    "Each todo must be self-contained — children have no conversation history.",
+    "Foreground: const h = await tools.call('delegate.start', { todo }); const r = await tools.call('delegate.wait', h). Parallel: start several, then wait on each. Chain dependent work by passing earlier output into the next todo.",
+    "Background: start and do not wait. The result arrives later as a message on this branch and starts a turn by itself, so end your turn; do not poll, set an alarm, or set a monitor for it.",
+    "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and delegate.wait on a finished child returns its output.",
+    "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions.",
+    "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role.",
   ],
+  params: StartParams,
+  output: ChildAgentHandle,
+  execute: Effect.fn("StartChild.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
+    if (Predicate.isUndefined(ctx.toolCallId)) {
+      return yield* new DelegateError({ message: "delegate.start requires a host-owned tool call" })
+    }
+    const { entry } = yield* admitChild({
+      prompt: params.todo,
+      requestId: RequestId.make(ctx.toolCallId),
+      toolCallId: ctx.toolCallId,
+      runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
+    })
+    return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
+  }),
+})
+
+const WaitMetadata = Schema.Struct({
+  sessionId: Schema.optionalKey(Schema.String),
+  agentName: Schema.optionalKey(AgentName),
+  usage: Schema.optionalKey(ChildRunUsage),
+  toolCalls: Schema.optionalKey(Schema.Array(AgentRunToolCallSchema)),
+})
+
+/** `completed` is the child's output; `error` names a turn that ended badly, with partial output. */
+const WaitResult = Schema.TaggedUnion({
+  Completed: { requestId: RequestId, output: Schema.String, metadata: WaitMetadata },
+  Error: { requestId: RequestId, error: Schema.String },
+})
+
+const WaitForChild = tool({
+  id: "delegate.wait",
+  description:
+    "Wait for a child started on this branch and return its output. Returns at once for a finished child. Interrupting this turn stops the child.",
+  promptGuidelines: [
+    "Completion is a turn receipt, not task success. Read the output before relying on it; an error result carries any partial output.",
+    "The full child transcript is at session://<sessionId>; read_session reads it.",
+  ],
+  params: Schema.Struct({ requestId: RequestId }),
+  output: WaitResult,
+  execute: Effect.fn("WaitForChild.execute")(function* (params) {
+    const entry = yield* ownedChild(params.requestId)
+    const result = yield* awaitChild(entry.requestId)
+    const withSessionRef = (text: string, sessionId?: string) => {
+      if (Predicate.isUndefined(sessionId)) return text
+      return `${text}\n\nFull session: session://${sessionId}`
+    }
+    if (result._tag === "Error") {
+      return WaitResult.cases.Error.make({
+        requestId: params.requestId,
+        error: withSessionRef(result.error, result.sessionId),
+      })
+    }
+    return WaitResult.cases.Completed.make({
+      requestId: params.requestId,
+      output: withSessionRef(result.text, result.sessionId),
+      metadata: Record.filter(
+        {
+          sessionId: result.sessionId,
+          agentName: result.agentName,
+          usage: result.usage,
+          toolCalls: result.toolCalls,
+        },
+        Predicate.isNotUndefined,
+      ),
+    })
+  }),
+})
+
+const SendToChild = tool({
+  id: "delegate.send",
+  description:
+    "Put a message into a running child's turn: a correction, a new fact, a narrower scope. The child reads it at its next step. A finished child takes no messages.",
   params: Schema.Struct({
-    action: Schema.Literals(["inspect", "send", "cancel"]),
     requestId: RequestId,
-    message: Schema.optionalKey(
-      Schema.String.annotate({ description: "The text the child reads. Required for send." }),
-    ),
+    message: Schema.String.annotate({ description: "The text the child reads." }),
   }),
   output: ChildObservation,
-  execute: Effect.fn("ControlChildAgent.execute")(function* (params) {
+  execute: Effect.fn("SendToChild.execute")(function* (params) {
     const ctx = yield* ExtensionContext
-    const entry = yield* inspectChild(params.requestId)
-    const child = { sessionId: entry.sessionId, branchId: entry.branchId }
-    if (params.action === "cancel" && Predicate.isUndefined(entry.completed)) {
+    const entry = yield* ownedChild(params.requestId)
+    if (params.message.trim().length === 0 || Predicate.isUndefined(ctx.toolCallId)) {
+      return yield* new DelegateError({
+        message: "delegate.send needs a message and a host-owned tool call",
+      })
+    }
+    if (Predicate.isNotUndefined(entry.completed)) {
+      return yield* new DelegateError({
+        message:
+          "The child already finished and takes no more messages. Read its output, or start a new child.",
+      })
+    }
+    yield* ctx.Session.steer({
+      _tag: "Interject",
+      sessionId: entry.sessionId,
+      branchId: entry.branchId,
+      requestId: RequestId.make(`delegate-send:${ctx.toolCallId}`),
+      message: params.message,
+      // The child can finish between the check above and the actor taking
+      // this command. An idle branch only queues steering, so without the
+      // wake the message would sit unread forever.
+      wake: true,
+    }).pipe(asDelegateError("Cannot message the child"))
+    return observationOf(entry)
+  }),
+})
+
+export const CancelChild = tool({
+  id: "delegate.cancel",
+  description:
+    "Cancel a running child on this branch. Its turn ends as interrupted; a finished child is left as it is.",
+  params: Schema.Struct({ requestId: RequestId }),
+  output: ChildObservation,
+  execute: Effect.fn("CancelChild.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
+    const entry = yield* ownedChild(params.requestId)
+    if (Predicate.isUndefined(entry.completed)) {
       yield* ctx.Session.steer({
         _tag: "Cancel",
-        ...child,
-        requestId: RequestId.make(`agent-cancel:${params.requestId}`),
+        sessionId: entry.sessionId,
+        branchId: entry.branchId,
+        requestId: RequestId.make(`delegate-cancel:${params.requestId}`),
         messageId: startMessageId(params.requestId),
       }).pipe(asDelegateError("Cannot submit child cancellation"))
     }
-    if (params.action === "send") {
-      const message = params.message ?? ""
-      if (message.trim().length === 0 || Predicate.isUndefined(ctx.toolCallId)) {
-        return yield* new DelegateError({
-          message: "send needs a message and a host-owned tool call",
-        })
-      }
-      if (Predicate.isNotUndefined(entry.completed)) {
-        return yield* new DelegateError({
-          message:
-            "The child already finished and takes no more messages. Read its output, or delegate a new task.",
-        })
-      }
-      yield* ctx.Session.steer({
-        _tag: "Interject",
-        ...child,
-        requestId: RequestId.make(`agent-send:${ctx.toolCallId}`),
-        message,
-        // The child can finish between the check above and the actor taking
-        // this command. An idle branch only queues steering, so without the
-        // wake the message would sit unread forever.
-        wake: true,
-      }).pipe(asDelegateError("Cannot message the child"))
-    }
-    const handle = { requestId: params.requestId, ...child }
-    if (Predicate.isUndefined(entry.completed)) return ChildObservation.cases.Pending.make(handle)
-    return ChildObservation.cases.Completed.make({ ...handle, ...entry.completed })
+    return observationOf(entry)
   }),
 })
 
-const ListChildAgents = tool({
-  id: "agent-children",
+export const ListChildren = tool({
+  id: "delegate.list",
   description:
-    "List every background delegation owned by this branch from the registry. The registry survives restarts.",
+    "List every child this branch owns, from the registry. The registry survives restarts; completed is a turn receipt, not task success.",
   promptGuidelines: [
     "Use this after a restart or compaction to recover child handles you no longer hold.",
   ],
@@ -761,16 +979,17 @@ const ListChildAgents = tool({
     ),
   }),
   output: Schema.Array(ChildAgentRegistryEntry),
-  execute: Effect.fn("ListChildAgents.execute")(function* (params) {
+  execute: Effect.fn("ListChildren.execute")(function* (params) {
     yield* reconcile()
     const children = (yield* registry.read())
-      .filter((entry) => entry.background)
+      .filter((entry) => !entry.private)
       .map((entry): ChildAgentRegistryEntry => ({
         requestId: entry.requestId,
         sessionId: entry.sessionId,
         branchId: entry.branchId,
         agentName: entry.agentName,
         completed: Predicate.isNotUndefined(entry.completed),
+        ...entry.completed,
       }))
     const wanted = Option.fromUndefinedOr(params.completed)
     if (Option.isNone(wanted)) return children
@@ -789,7 +1008,6 @@ export const DelegateChild = Schema.Struct({
   branchId: BranchId,
   agentName: AgentName,
   toolCallId: Schema.optionalKey(ToolCallId),
-  background: Schema.Boolean,
   status: Schema.Literals(["running", "completed", "error"]),
   preview: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(ChildUsage),
@@ -809,7 +1027,6 @@ const toDelegateChild = (entry: DelegateEntry): DelegateChild => ({
   branchId: entry.branchId,
   agentName: entry.agentName,
   ...Record.filter({ toolCallId: entry.toolCallId }, Predicate.isNotUndefined),
-  background: entry.background,
   status: childStatus(entry),
   ...Record.filter({ preview: entry.preview, usage: entry.usage }, Predicate.isNotUndefined),
 })
@@ -823,131 +1040,20 @@ export const DelegateRpc = defineRequests(DELEGATE_EXTENSION_ID, {
     output: Schema.Array(DelegateChild),
     execute: Effect.fn("DelegateRpc.Children")(function* () {
       yield* reconcile()
-      return (yield* registry.read()).map(toDelegateChild)
+      return (yield* registry.read()).filter((entry) => !entry.private).map(toDelegateChild)
     }),
   }),
 })
 
-// ── delegate tool and extension ─────────────────────────────────────────────
+// ── extension ───────────────────────────────────────────────────────────────
 
-/** A call's `deniedTools` replaces the definition's, so the delegation tools are denied again here. */
-const childOverrides = (overrides: (typeof DelegateParams.Type)["overrides"]) => ({
-  ...overrides,
-  deniedTools: [...CHILD_DENIED_TOOLS, ...(overrides?.deniedTools ?? [])],
-})
-
-/** One self-contained task for a child that inherits this agent. Cells compose parallel and chained delegations. */
-const DelegateParams = Schema.Struct({
-  todo: Schema.String,
-  description: Schema.optionalKey(Schema.String),
-  background: Schema.optionalKey(
-    Schema.Boolean.annotate({
-      description:
-        "Start a durable child and return its handle now. The result arrives later as a message on this branch.",
-    }),
-  ),
-  overrides: RunSpecSchema.fields.overrides,
-})
-
-const DelegateMetadata = Schema.Struct({
-  sessionId: Schema.optionalKey(Schema.String),
-  agentName: Schema.optionalKey(AgentName),
-  usage: Schema.optionalKey(ChildRunUsage),
-  toolCalls: Schema.optionalKey(Schema.Array(AgentRunToolCallSchema)),
-})
-
-/**
- * One admission call, two shapes: `running` is the handle of a background
- * child (its result arrives later as a message), `completed` is a foreground
- * child's output. `agent-child` and `agent-children` inspect the running ones.
- */
-const DelegateResult = Schema.TaggedUnion({
-  Running: ChildAgentHandle.fields,
-  Completed: { output: Schema.String, metadata: DelegateMetadata },
-  Error: { error: Schema.String },
-})
-
-export const DelegateTool = tool({
-  id: "delegate",
-  description:
-    "Delegate one self-contained task to the delegate subagent, which runs its own configured model and cannot delegate further. Foreground returns the child's output. background: true returns a handle now; the result arrives later as a message on this branch and starts a turn by itself, so end your turn to wait and do not set an alarm or a monitor for it.",
-  promptSnippet: "Delegate work to child agents",
-  promptGuidelines: [
-    "Use for independent work that benefits from a fresh context or parallelism",
-    "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
-    "Each todo prompt must be self-contained — children have no conversation history",
-    "Run independent delegations concurrently from one cell with Promise.all; chain dependent ones with sequential awaits and pass earlier output in the next prompt",
-    "Background delegations never return output here. Do not poll; a message on this branch reports the result. agent-child inspects, messages, or cancels one by requestId; agent-children lists them.",
-    "A new call starts new work. Do not repeat a delegation to recover an unknown outcome; inspect it with agent-child using its toolCallId as the requestId.",
-    "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions",
-    "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role",
-  ],
-  params: DelegateParams,
-  output: DelegateResult,
-  execute: Effect.fn("DelegateTool.execute")(function* (params: typeof DelegateParams.Type) {
-    const ctx = yield* ExtensionContext
-
-    // Both outcomes point the parent at the child's session when there is one.
-    const withSessionRef = (text: string, sessionId?: string) => {
-      if (Predicate.isUndefined(sessionId)) return text
-      return `${text}\n\nFull session: session://${sessionId}`
-    }
-
-    // Background mode: durable child admission; the child's hook delivers completion as a message.
-    if (params.background === true) {
-      if (Predicate.isUndefined(ctx.toolCallId)) {
-        return yield* new DelegateError({
-          message: "Background delegation requires a host-owned tool call",
-        })
-      }
-      const requestId = RequestId.make(ctx.toolCallId)
-      const child = yield* startChild({
-        prompt: params.todo,
-        requestId,
-        toolCallId: ctx.toolCallId,
-        runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
-      })
-      return DelegateResult.cases.Running.make({ requestId, ...child })
-    }
-
-    // Foreground mode: a child session in this runtime, awaited here.
-    const result = yield* runChild({
-      prompt: params.todo,
-      runSpec: makeRunSpec({
-        parentToolCallId: ctx.toolCallId,
-        overrides: childOverrides(params.overrides),
-      }),
-    })
-
-    if (result._tag === "Error") {
-      return DelegateResult.cases.Error.make({
-        error: withSessionRef(result.error, result.sessionId),
-      })
-    }
-
-    const sessionId = result.sessionId
-    return DelegateResult.cases.Completed.make({
-      output: withSessionRef(result.text, sessionId),
-      metadata: Record.filter(
-        {
-          sessionId,
-          agentName: result.agentName,
-          usage: result.usage,
-          toolCalls: result.toolCalls,
-        },
-        Predicate.isNotUndefined,
-      ),
-    })
-  }),
-})
-
-/** Child admission and control: one admission call plus inspect, send, cancel, and list. */
+/** Child admission and control: start, wait, send, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
-    yield* host.register("tool", DelegateTool, ControlChildAgent, ListChildAgents)
+    yield* host.register("tool", StartChild, WaitForChild, SendToChild, CancelChild, ListChildren)
     yield* host.register("request", DelegateRpc.Children)
     yield* host.on("turnAfter", (input) =>
       onChildTurnAfter(input).pipe(

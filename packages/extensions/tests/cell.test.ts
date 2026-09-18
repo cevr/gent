@@ -145,10 +145,11 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver.js"
 import {
   ChildAgentHandle,
-  ControlChildAgent,
+  CancelChild,
   DelegateEntry,
   DelegateExtension,
-  DelegateTool,
+  ListChildren,
+  StartChild,
 } from "../src/delegate.js"
 import { ReadSessionTool } from "../src/session-tools.js"
 import { Gent } from "@gent/sdk"
@@ -1552,7 +1553,7 @@ it.effect(
       })
       const result = Prompt.toolResultPart({
         id: toolCallId,
-        name: "delegate",
+        name: "delegate.wait",
         isFailure: false,
         providerExecuted: false,
         result: { output: "pong", metadata },
@@ -2523,7 +2524,7 @@ describe("foreground child cell", () => {
         // turn admitted from inside the parent's cell operation.
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", {
-            code: "const r = await tools.call('delegate', { todo: 'compute' }); r._tag === 'Completed' && r.output.includes('child says 2') && r.metadata.toolCalls.length === 1 && r.metadata.toolCalls[0].toolName === 'cell' && r.metadata.toolCalls[0].isError === false",
+            code: "const h = await tools.call('delegate.start', { todo: 'compute' }); const r = await tools.call('delegate.wait', h); r._tag === 'Completed' && r.output.includes('child says 2') && r.metadata.toolCalls.length === 1 && r.metadata.toolCalls[0].toolName === 'cell' && r.metadata.toolCalls[0].isError === false",
           }),
           toolCallStep("cell", { code: "1 + 1" }),
           textStep("child says 2"),
@@ -2627,33 +2628,33 @@ describe("branch cell lifetime", () => {
         }> = [
           {
             send: true,
-            code: "const child = await tools.call('delegate', {todo: 'Wait for cancellation', background: true}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
+            code: "const child = await tools.call('delegate.start', {todo: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
           },
           {
             send: true,
-            code: "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'Pending'",
+            code: "(await tools.call('delegate.list', {})).find((kid) => kid.requestId === child.requestId).completed === false",
           },
           {
             send: true,
             reset: true,
-            code: "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'Pending'",
+            code: "const saved = await tools.call('child-handle', {_tag: 'get'}); typeof child === 'undefined' && (await tools.call('delegate.list', {})).find((kid) => kid.requestId === saved.requestId).completed === false",
           },
           {
             send: true,
-            code: "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('agent-child', {action: 'cancel', requestId: id}); true",
+            code: "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('delegate.cancel', {requestId: id}); true",
           },
           // The cancelled child's completion arrives as a message; no cell ever waited for it.
           {
             send: false,
-            code: "(await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId})).interrupted === true",
+            code: "const cancelled = await tools.call('child-handle', {_tag: 'get'}); (await tools.call('delegate.list', {})).find((kid) => kid.requestId === cancelled.requestId).interrupted === true",
           },
           {
             send: true,
-            code: "const finished = await tools.call('delegate', {todo: 'Return the result', background: true, overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
+            code: "const finished = await tools.call('delegate.start', {todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
           },
           {
             send: false,
-            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('agent-children', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
+            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
           },
         ]
         const steps = turns.flatMap<SequenceStep>((turn, index) => [
@@ -2971,7 +2972,7 @@ const seedDelegateRegistry = Effect.fn("test.seedDelegateRegistry")(function* (
 })
 
 /**
- * The leaf view `agent-child` sees when the parent branch runs it. The real
+ * The leaf view `delegate.cancel` sees when the parent branch runs it. The real
  * host context carries the session facade the tool steers through, so the
  * cancellation reaches the child's loop exactly as it does in production.
  */
@@ -2996,7 +2997,7 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
   return {
     ...provider.forRun({ ...parent, sessionCwd: "/tmp" }),
     extensionId: ExtensionId.make("cell-recovery"),
-    toolCallId: ToolCallId.make("agent-child-call"),
+    toolCallId: ToolCallId.make("delegate-cancel-call"),
   }
 })
 
@@ -3010,7 +3011,7 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
     Schema.Struct({
       operations: Schema.Array(
         Schema.TaggedStruct("Unknown", {
-          toolName: Schema.Literal("delegate"),
+          toolName: Schema.Literal("delegate.start"),
           toolCallId: ToolCallId,
         }),
       ),
@@ -3020,18 +3021,18 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   if (Predicate.isUndefined(operation)) return yield* Effect.die("Missing unknown child operation")
   const requestId = RequestId.make(operation.toolCallId)
   const ctx = yield* delegateToolContext(parent)
-  const observe = (action: "inspect" | "cancel") =>
-    runToolWithCtx(ControlChildAgent, { action, requestId }, ctx)
-  expect((yield* observe("inspect"))._tag).toBe("Pending")
-  yield* observe("cancel")
+  const observe = runToolWithCtx(ListChildren, {}, ctx).pipe(
+    Effect.map((children) => children.find((child) => child.requestId === requestId)),
+  )
+  expect((yield* observe)?.completed).toBe(false)
+  yield* runToolWithCtx(CancelChild, { requestId }, ctx)
   const cancelled = yield* waitFor(
-    observe("inspect"),
-    (observed) => observed._tag === "Completed",
+    observe,
+    (observed) => observed?.completed === true,
     2000,
     "cancelled child completion",
   )
-  if (cancelled._tag !== "Completed") return yield* Effect.die("child never completed")
-  expect(cancelled.interrupted).toBe(true)
+  expect(cancelled?.interrupted).toBe(true)
 })
 
 it.scopedLive(
@@ -3060,8 +3061,8 @@ it.scopedLive(
             artifactIdentity: LoadedArtifactIdentity.make("cell-recovery-source"),
             contributions: {
               tools: [
-                DelegateTool,
-                ControlChildAgent,
+                StartChild,
+                CancelChild,
                 tool({
                   id: "approve",
                   description: "Approve inner operation",
@@ -3184,7 +3185,7 @@ it.scopedLive(
           if (state === "completed") yield* cells.complete(cell, savedResult)
           const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
           if (state === "unknown-child") {
-            const selected = yield* captureCurrentToolBinding("delegate")
+            const selected = yield* captureCurrentToolBinding("delegate.start")
             const identity = Option.flatMap(selected, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
@@ -3210,7 +3211,7 @@ it.scopedLive(
                 agentName: DEFAULT_AGENT_NAME,
                 prompt,
                 toolCallId,
-                background: true,
+                private: false,
                 submitted: false,
                 delivered: false,
               },
@@ -3372,10 +3373,10 @@ it.scopedLive(
         if (state === "unadmitted") {
           expect(yield* Ref.get(cellCalls)).toBe(1)
           expect(yield* Ref.get(selectedNames)).toEqual([
-            "agent-child",
             "approve",
             "cell",
-            "delegate",
+            "delegate.cancel",
+            "delegate.start",
             "sibling",
           ])
         } else expect(yield* Ref.get(cellCalls)).toBe(0)
