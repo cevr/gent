@@ -281,8 +281,8 @@ Source evidence:
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: native commits, snapshot ownership, footer allocation, and transcript viewport.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/terminal.tsx`: terminal geometry independent of the footer.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: live transcript integration and overlay allocation.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: transcript view state.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-controller.ts`: transcript, return, and tool-detail keys.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: transcript view state.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: transcript, return, and tool-detail keys.
 
 ## Visible-tail correction
 
@@ -352,10 +352,10 @@ The validation log is `/tmp/gent-fx-ui-clear-display-gate.log`.
 Evidence:
 
 - `/tmp/gent-fx-ui-herdr-clear-display.ansi`: cleared view with preserved draft after transcript inspection.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: non-negative display boundary and clear transition.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-controller.ts`: Ctrl+L dispatch without a session or model command.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: non-negative display boundary and clear transition.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: Ctrl+L dispatch without a session or model command.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: display boundary separate from full transcript items.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`: feed projection retained across display clear.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: feed projection retained across display clear.
 
 ## Ctrl+C ownership
 
@@ -374,7 +374,7 @@ need live checks. Validation logs:
 Source evidence:
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/main.tsx`: disables renderer-owned automatic exit.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-controller.ts`: draft, transcript, run, and idle interrupt policy.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: draft, transcript, run, and idle interrupt policy.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/app.tsx`: unhandled-key exit fallback.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/render-harness-boundary.tsx`: matching renderer configuration at the existing test boundary.
 
@@ -442,7 +442,7 @@ Source evidence:
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: immutable clear capture and post-clear content projection.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: display revision, visible projection, and minimum measurement row.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: repeated clear revision instead of item count.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: repeated clear revision instead of item count.
 
 ## Herdr active-clear follow-up
 
@@ -1088,11 +1088,11 @@ check: “Browse Branch Tree” opens a session tree, text shows through its pan
 and the live view stopped responding to keys. The captured screen records
 the symptom, not its cause. Only the isolated debug process was restarted.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-drafts.tsx`: app-owned draft map.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: app-owned draft map.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/main.tsx`: provider lifetime.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-controller.ts`: route restoration and captured branch key.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: route restoration and captured branch key.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/use-composer-controller.ts`: paste expansion before cleanup.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-command-registry.ts`: tree command label and handler.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: tree command label and handler.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/session-tree.tsx`: session tree view and key handlers.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: panel background.
 - `/tmp/gent-fx-ui-navigation-draft-before.ansi`: lost typed draft before the change.
@@ -1123,7 +1123,7 @@ The full gate passed. These checks do not prove final FX menu parity.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/session-tree.tsx`: bounded effect dependencies.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: menu background.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-command-registry.ts`: corrected command label.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: corrected command label.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/components/session-tree.test.tsx`: child selection and Escape behavior.
 - `/tmp/gent/logs/6707ae38-20260906202644-client.log`: live stack overflow.
 - `/tmp/gent-fx-ui-tree-red.log`: failing keyboard check before the repair.
@@ -1398,7 +1398,7 @@ now reserves a detail column only when its filtered rows have descriptions
 or shortcuts. Rows without that column use the available title width.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: debug-only workspace label.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/utils/session-labels.ts`: model context and debug labels.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`: model context and debug labels.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins/artifacts.client.ts`: shipped bottom-right artifact count.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/README.md`: workspace status default.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: session navigation and conditional detail column.
@@ -1557,7 +1557,7 @@ event IDs for one tool call. Before the fix, it found two entries. After the
 fix, it finds one completed call and one completed tool segment. The live
 Herdr review workflow also shows one completed call after saving in vi.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/agent/tool-runner.ts`
 - `/tmp/gent-fx-ui-resumed-tool-red.log`: duplicate entry before repair.
@@ -1638,7 +1638,7 @@ Neither draft was submitted. Feed behavior tests cover identity changes and old
 navigation events. No appearance-only test was added. Full gate and E2E pass.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/session.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/dependencies.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/session-queries.ts`

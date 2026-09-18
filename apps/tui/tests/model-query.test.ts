@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Model, ModelId, ProviderId } from "@gent/core/protocol"
-import { filterModels, resolveModelQuery } from "../src/client/model-query"
+import { filterModels, resolveModelQuery } from "../src/session"
 
 const model = (id: string, name: string): Model =>
   new Model({ id: ModelId.make(id), name, provider: ProviderId.make(id.split("/")[0] ?? "") })

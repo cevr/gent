@@ -45,7 +45,7 @@ import { useExtensionUI } from "./extensions/host"
 import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
-import type { DisclosureLevel } from "./routes/session-ui-state"
+import type { DisclosureLevel } from "./session"
 import { WakeDetails } from "@gent/extensions/client.js"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Option } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { readEntries, writeEntries } from "../src/hooks/use-prompt-history"
+import { readEntries, writeEntries } from "../src/session"
 
 /**
  * The cache path follows the workspace home the shell mounted with. A build

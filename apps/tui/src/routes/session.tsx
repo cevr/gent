@@ -32,12 +32,13 @@ import { collectDiagrams, MermaidViewer } from "../mermaid"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace"
 import {
+  type BorderLabelItem,
   buildContextLabels,
   buildTopRightLabels,
+  createSessionController,
   formatCwdGit,
-  type BorderLabelItem,
-} from "../utils/session-labels"
-import { createSessionController, SessionControllerContext } from "./session-controller"
+  SessionControllerContext,
+} from "../session"
 import { useExtensionUI } from "../extensions/host"
 import { useClient } from "../client"
 import { Auth } from "../auth"

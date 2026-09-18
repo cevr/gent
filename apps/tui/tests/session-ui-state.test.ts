@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
-import { nextDisclosure, SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
+import { nextDisclosure, SessionUiState, transitionSessionUi } from "../src/session"
 
 describe("transcript disclosure", () => {
   test("a fresh session starts collapsed", () => {

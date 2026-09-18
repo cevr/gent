@@ -22,7 +22,7 @@ import { EventId } from "@gent/core-internal/domain/event"
 import { ExtensionId, InteractionRequestId } from "@gent/core-internal/domain/ids"
 import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
 import { emptyQueueSnapshot, type SessionSnapshot } from "@gent/sdk"
-import { useSessionFeed } from "../src/hooks/use-session-feed"
+import { useSessionFeed } from "../src/session"
 import type { Session } from "../src/client"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 

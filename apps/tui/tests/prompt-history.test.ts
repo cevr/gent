@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
-import { canNavigateAtCursor } from "../src/hooks/use-prompt-history"
+import { canNavigateAtCursor } from "../src/session"
 
 describe("canNavigateAtCursor", () => {
   test("up at cursor 0 → true", () => {

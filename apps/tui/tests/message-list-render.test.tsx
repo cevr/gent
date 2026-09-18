@@ -3,7 +3,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import { Show, createSignal, onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import type { DisclosureLevel } from "../src/routes/session-ui-state"
+import type { DisclosureLevel } from "../src/session"
 import {
   type Message,
   MessageList,

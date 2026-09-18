@@ -6,14 +6,17 @@ import { useTheme } from "../theme"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "../commands"
 import { useClient, useRuntime } from "../client"
 import { useEnv, useWorkspace } from "../workspace"
-import { usePromptHistory } from "../hooks/use-prompt-history"
+import {
+  type AutocompleteState,
+  ComposerEvent,
+  ComposerInteractionEvent,
+  usePromptHistory,
+  useSessionController,
+} from "../session"
 import { useScopedKeyboard } from "../terminal"
-import { useSessionController } from "../routes/session-controller"
 import { openExternalEditor, resolveEditor } from "../os"
 import { expandFileRefs } from "../utils"
 import { executeShell } from "../utils/shell"
-import { ComposerInteractionEvent, type AutocompleteState } from "./composer-interaction-state"
-import { ComposerEvent } from "./composer-state"
 import type { ApprovalResult } from "@gent/core/protocol"
 import { useExtensionUI } from "../extensions/host"
 

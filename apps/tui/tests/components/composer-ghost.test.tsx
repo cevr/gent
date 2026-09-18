@@ -19,16 +19,14 @@ import { Effect, Option } from "effect"
 import { Composer } from "../../src/components/composer"
 import {
   ComposerInteractionState,
+  ComposerState,
+  type SessionController,
+  SessionControllerContext,
+  SessionUiState,
   transitionComposerInteraction,
-} from "../../src/components/composer-interaction-state"
-import { ComposerState } from "../../src/components/composer-state"
+} from "../../src/session"
 import { useCommand } from "../../src/commands"
 import { useExtensionUI } from "../../src/extensions/host"
-import {
-  SessionControllerContext,
-  type SessionController,
-} from "../../src/routes/session-controller"
-import { SessionUiState } from "../../src/routes/session-ui-state"
 import { PromptSearchState } from "../../src/pickers"
 import { rankAutocompleteItems } from "../../src/autocomplete"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"

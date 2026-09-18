@@ -14,7 +14,7 @@
  */
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { slashAutocompleteItems } from "../src/routes/session-command-registry"
+import { slashAutocompleteItems } from "../src/session"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { runAutocompleteContributions } from "../src/extensions/loader-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"

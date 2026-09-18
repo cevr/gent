@@ -886,7 +886,7 @@ Production shape:
 Main boundaries:
 
 - `apps/tui/src/client.tsx` for client/session/event state
-- `apps/tui/src/routes/session-controller.ts` for session-screen orchestration
+- `apps/tui/src/session.tsx` for session-screen orchestration
 - `apps/tui/src/extensions/client-facets.ts` for TUI-owned extension facets
 - route state machines for modal/session surfaces
 - components like `composer.tsx`, `message-list.tsx`, `queue-widget.tsx` as presentation + local interaction

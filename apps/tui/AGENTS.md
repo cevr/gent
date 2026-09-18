@@ -88,7 +88,7 @@ State ownership rules:
 Views (only 1):
 
 - `src/routes/session.tsx` — provides `SessionControllerContext`
-- `src/routes/session-controller.ts` — `createSessionController()` + context
+- `src/session.tsx` — `createSessionController()` + context
 
 The branch picker is a docked pane (`pickers.tsx`), not a
 view. It draws `PickerFrame` like every other docked pane. The boot flow opens it over the mounted session when the resumed session
@@ -196,7 +196,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 
 | File                                        | Purpose                           |
 | ------------------------------------------- | --------------------------------- |
-| `src/routes/session-controller.ts`          | session-screen orchestration      |
+| `src/session.tsx`                           | session-screen orchestration      |
 | `src/routes/session.tsx`                    | session presentation + route keys |
 | `src/components/composer.tsx`               | composer render surface           |
 | `src/components/use-composer-controller.ts` | composer interaction wiring       |

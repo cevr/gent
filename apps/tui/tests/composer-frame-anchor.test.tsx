@@ -12,7 +12,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { RGBA } from "@opentui/core"
 import { ComposerFrame } from "../src/components/composer-frame"
-import type { BorderLabelItem } from "../src/utils/session-labels"
+import type { BorderLabelItem } from "../src/session"
 import { renderWithProviders } from "./render-harness-boundary"
 
 const muted = RGBA.fromHex("#888888")
