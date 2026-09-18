@@ -54,7 +54,7 @@ updates this list in the same commit.
    `StepOutcome`; persistence and the continue/stop/run-tools policy are
    exhaustive matches on it, and the tag travels on `StreamEnded.outcome`.
    Receipts: `classifyStep` in
-   `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`,
+   `packages/core/src/runtime/turn.ts`,
    `packages/core/src/domain/event.ts`.
 9. **Retry policy belongs to the driver.** The loop re-runs a step; the
    driver says which failures are transient and how long to wait. Receipts:
@@ -71,8 +71,8 @@ updates this list in the same commit.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
     Receipts: `buildTurnPromptSections` in
-    `packages/core/src/runtime/agent/agent-loop.utils.ts`,
-    `packages/core/src/runtime/agent/turn-resolve.ts`.
+    `packages/core/src/runtime/turn.ts`,
+    `packages/core/src/runtime/turn.ts`.
 13. **The cell runs in full Bun.** No sandbox, no interpreter; network reads,
     HTML parsing, and past-session queries happen in the cell. Receipt:
     `packages/extensions/src/cell.ts`.
@@ -95,7 +95,7 @@ updates this list in the same commit.
     at a step boundary and keeps the newest steps that fit half the budget.
     A summary that cannot be produced degrades to truncation with a visible
     notice. Receipts: `packages/core/src/runtime/model-context.ts`,
-    `packages/core/src/runtime/agent/turn-source.ts`,
+    `packages/core/src/runtime/turn.ts`,
     `packages/extensions/src/compaction.ts`.
 
 ### Known gaps
@@ -265,10 +265,10 @@ Core orchestration lives in:
 - `packages/core/src/runtime/agent/agent-loop.actor.ts`
 - `packages/core/src/runtime/agent/agent-loop.behavior.ts`
 - `packages/core/src/domain/agent-loop.ts`
-- `packages/core/src/runtime/agent/agent-loop.turn-execution.ts`
-- `packages/core/src/runtime/agent/turn-source.ts`
+- `packages/core/src/runtime/turn.ts`
+- `packages/core/src/runtime/turn.ts`
 - `packages/core/src/runtime/model-context.ts`
-- `packages/core/src/runtime/agent/turn-response.ts`
+- `packages/core/src/runtime/turn.ts`
 
 Shape:
 

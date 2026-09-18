@@ -17,7 +17,7 @@ import {
 import { makeRequestDeduper } from "../runtime/request-dedup.js"
 import { SessionRuntime, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { foldSessionMetrics } from "../domain/agent-loop.js"
-import { applyAgentOverrides, resolveSessionSettings } from "../runtime/agent/turn-resolve.js"
+import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import {
   BranchStorage,

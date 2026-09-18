@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type * as Response from "effect/unstable/ai/Response"
 import { finishPart, textDeltaPart, toolCallPart } from "../../../src/test-utils/language-model"
-import { classifyStep } from "../../../src/runtime/agent/agent-loop.turn-execution"
-import type { CollectedTurnResponse } from "../../../src/runtime/agent/turn-response"
+import { classifyStep, type CollectedTurnResponse } from "../../../src/runtime/turn"
 
 const collected = (
   responseParts: ReadonlyArray<Response.AnyPart>,

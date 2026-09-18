@@ -38,7 +38,7 @@ import {
   findPersistedToolResults,
   persistAssistantPartsWithBindings,
   ToolResultReplayError,
-} from "../../../src/runtime/agent/turn-persistence"
+} from "../../../src/runtime/turn"
 import {
   captureCurrentToolBinding,
   innerOperationBindingIdentity,

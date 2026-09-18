@@ -71,7 +71,7 @@ export {
   CurrentAgentLoopTurnProfile,
   type AgentLoopTurnProfile,
   runAgentLoopTurnProfile,
-} from "../runtime/agent/agent-loop.turn-profile.js"
+} from "../runtime/turn.js"
 export { neverInterrupted, type TurnInterruptionStatus } from "../runtime/tools.js"
 export { AgentLoopError } from "../domain/agent-loop.js"
 

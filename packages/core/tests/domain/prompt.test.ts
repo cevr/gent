@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { compileSystemPrompt, environmentSection } from "../../src/domain/capability"
-import { buildTurnPromptSections } from "../../src/runtime/agent/agent-loop.utils"
+import { buildTurnPromptSections } from "../../src/runtime/turn"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
 

@@ -74,7 +74,7 @@ import { WideEvent, WideEventBoundary, withWideEvent } from "./wide-event-bounda
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"
-import type { CurrentAgentLoopTurnProfile } from "./agent/agent-loop.turn-profile.js"
+import type { CurrentAgentLoopTurnProfile } from "./turn.js"
 
 // ── turn-interruption ───────────────────────────────────────────────────────
 

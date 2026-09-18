@@ -135,7 +135,7 @@ import {
   type SessionRuntimeState,
 } from "../domain/agent-loop.js"
 import { StorageError } from "../domain/errors.js"
-import type { AgentLoopTurnProfile } from "./agent/agent-loop.turn-profile.js"
+import type { AgentLoopTurnProfile } from "./turn.js"
 
 // ── current-extension-host-context ──────────────────────────────────────────
 

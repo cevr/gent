@@ -8,7 +8,7 @@ import { tool } from "@gent/core/extensions/api"
 import { TurnCompleted, type AgentEvent } from "../../src/domain/event"
 import { MessageStorage } from "../../src/storage/storage"
 import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
-import { toolResultMessageIdForTurn } from "../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../src/runtime/turn"
 import {
   makeAgentLoopService,
   makeLayer,

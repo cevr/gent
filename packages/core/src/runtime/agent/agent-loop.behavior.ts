@@ -84,11 +84,13 @@ import {
   type AgentLoopState,
   type LoopInbox,
 } from "./loop-inbox.js"
-import type { ActiveStreamHandle } from "./turn-response.js"
-import { makeTurnLedger } from "./turn-ledger.js"
-import { makeAgentLoopTurnExecution } from "./agent-loop.turn-execution.js"
+import {
+  type ActiveStreamHandle,
+  type AgentLoopTurnProfile,
+  makeAgentLoopTurnExecution,
+  makeTurnLedger,
+} from "../turn.js"
 import { emptyAdmissionGate, makeAgentLoopWorker } from "./agent-loop.worker.js"
-import type { AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 
 type AgentLoopRuntimeServices =
   | SessionStorage

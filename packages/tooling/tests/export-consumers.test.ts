@@ -194,7 +194,7 @@ void Orphan
         text: `export { projectModelContext } from "../runtime/model-context.js"\n`,
       },
       {
-        file: "packages/core/src/runtime/agent/turn-source.ts",
+        file: "packages/core/src/runtime/turn.ts",
         text: `import { projectModelContext } from "../model-context.js"`,
       },
     ])

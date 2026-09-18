@@ -11,7 +11,7 @@ import { BranchId, MessageId, SessionId } from "../../../src/domain/ids"
 import { dateFromMillis, Message } from "../../../src/domain/message"
 import { MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
-import { persistMessageReceived } from "../../../src/runtime/agent/turn-persistence"
+import { persistMessageReceived } from "../../../src/runtime/turn"
 
 const sessionId = SessionId.make("durable-persist-session")
 const branchId = BranchId.make("durable-persist-branch")

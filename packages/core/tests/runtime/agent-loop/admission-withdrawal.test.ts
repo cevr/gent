@@ -10,7 +10,7 @@ import {
   TxQueue,
   TxSubscriptionRef,
 } from "effect"
-import type { ActiveStreamHandle } from "../../../src/runtime/agent/turn-response"
+import { type ActiveStreamHandle, TurnOutcome } from "../../../src/runtime/turn"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   dateFromMillis,
@@ -37,7 +37,6 @@ import {
   emptyAdmissionGate,
   makeAgentLoopWorker,
 } from "../../../src/runtime/agent/agent-loop.worker"
-import { TurnOutcome } from "../../../src/runtime/agent/agent-loop.turn-execution"
 import { makeTurnInterruption } from "../../../src/runtime/tools.js"
 
 const sessionId = SessionId.make("withdrawal-session")

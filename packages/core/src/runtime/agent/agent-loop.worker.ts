@@ -13,8 +13,7 @@ import {
 } from "../../domain/agent-loop.js"
 import type { LoopInbox } from "./loop-inbox.js"
 import type { QueuedTurnItem } from "../../domain/message.js"
-import { signalActiveStreamInterrupt, type ActiveStreamHandle } from "./turn-response.js"
-import type { TurnOutcome } from "./agent-loop.turn-execution.js"
+import { type ActiveStreamHandle, signalActiveStreamInterrupt, type TurnOutcome } from "../turn.js"
 import type { TurnInterruption } from "../tools.js"
 import { turnBoundary, withWideEvent } from "../wide-event-boundary.js"
 

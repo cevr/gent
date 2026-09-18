@@ -16,7 +16,7 @@ import {
   AgentLoopTestActor,
 } from "../../../src/runtime/agent/agent-loop.actor"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent/agent-loop.session-governance"
-import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../../src/runtime/turn"
 import {
   ApprovalService,
   DriverRegistry,

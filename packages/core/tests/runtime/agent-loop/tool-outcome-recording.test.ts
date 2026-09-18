@@ -7,8 +7,7 @@ import { assistantMessageIdForTurn, dateFromMillis, Message } from "../../../src
 import { EventStorage, MessageStorage, SqliteStorage } from "../../../src/storage/storage"
 import { EventStoreLive } from "../../../src/runtime/event-store-live"
 import { noBranchTools } from "../../../src/runtime/tools"
-import { recordToolOutcome } from "../../../src/runtime/agent/turn-persistence"
-import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
+import { recordToolOutcome, toolResultMessageIdForTurn } from "../../../src/runtime/turn"
 import { ensureStorageParents } from "../../../src/test-utils"
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)

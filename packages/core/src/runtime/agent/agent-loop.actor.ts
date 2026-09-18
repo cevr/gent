@@ -79,7 +79,11 @@ import type {
   PromptSection,
 } from "../../domain/capability.js"
 import { type CurrentExtensionHostContext, SessionProfileCache } from "../extension-host.js"
-import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
+import {
+  type AgentLoopTurnProfile,
+  interjectionMessageIdForCommand,
+  runAgentLoopTurnProfile,
+} from "../turn.js"
 import {
   AgentLoop,
   AgentLoopError,
@@ -111,7 +115,6 @@ import {
 } from "../../storage/storage.js"
 import { ProcessLocalToolReplay } from "../tools.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
-import { runAgentLoopTurnProfile, type AgentLoopTurnProfile } from "./agent-loop.turn-profile.js"
 
 /**
  * When a turn is finished, told from the outside.

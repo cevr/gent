@@ -9,7 +9,7 @@ import { ToolCallStarted, type AgentEvent } from "../../../src/domain/event"
 import { EventStorage, MessageStorage } from "../../../src/storage/storage"
 import { ensureStorageParents } from "../../../src/test-utils"
 import { BranchId, SessionId, ToolCallId } from "../../../src/domain/ids"
-import { toolResultMessageIdForTurn } from "../../../src/runtime/agent/agent-loop.utils"
+import { toolResultMessageIdForTurn } from "../../../src/runtime/turn"
 import { makeAgentLoopService, makeLayerWithEvents, makeMessage, runAgentLoop } from "./helpers"
 
 describe("tool projection reconciliation", () => {
