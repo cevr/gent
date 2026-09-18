@@ -9,7 +9,7 @@
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
 - **Message part types** - Import shared message, event, and RPC types from `@gent/core/protocol` when a UI projection needs them. Never redeclare.
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
-- **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
+- **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
 - **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Solid underscores** - Multi-word components use underscores: `scroll_box`, `tab_select`.
@@ -36,7 +36,7 @@ Ported from opencode. Key patterns:
 
 - `renderer.getPalette({ size: 16 })` queries terminal's ANSI palette via OSC
 - System theme generated from terminal colors; fallback to the `fx` theme
-- JSON themes in `src/theme/themes/*.json` with `defs` + dark/light variants
+- JSON themes in `src/themes/*.json` with `defs` + dark/light variants
 - `resolveTheme(themeJson, mode)` resolves refs to RGBA values
 - The palette's "Theme" level enumerates `all()`; "Mode" is the separate Dark/Light toggle. A ported theme may omit `selectedListItemText`/`backgroundMenu`; `resolveTheme` supplies both.
 
@@ -80,17 +80,18 @@ State ownership rules:
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
 - Render-local view unions in `src/` may be plain `_tag` unions. The root `CLAUDE.md` rule requiring `Schema.TaggedUnion` covers wire and domain data; a union built inline by one projection and matched in the same file decodes nothing, so a schema would add a runtime decode to a path with no untrusted input.
-- Auth is a view (`routes/auth.tsx`); it mounts as an overlay above the session view when the session controller's auth gate detects missing required providers.
+- Auth is a view (`auth.tsx`); it mounts as an overlay above the session view when the session controller's auth gate detects missing required providers.
 - There is no router. `client.session()` says which session shows, `switchSession` is its one writer, and `App` keys the session mount on it.
 - `useRuntime()` is zero-arg — reads `useClient()` internally.
 - Composer reads from `SessionControllerContext`, not props.
 
 Views (only 1):
 
-- `src/routes/session.tsx` — provides `SessionControllerContext`
-- `src/routes/session-controller.ts` — `createSessionController()` + context
+- `src/app.tsx` — the boot flow and the session view; provides
+  `SessionControllerContext`
+- `src/session.tsx` — `createSessionController()` + context
 
-The branch picker is a docked pane (`components/branch-picker.tsx`), not a
+The branch picker is a docked pane (`pickers.tsx`), not a
 view. It draws `PickerFrame` like every other docked pane. The boot flow opens it over the mounted session when the resumed session
 has more than one branch; escape quits, because no branch was chosen yet. The
 command palette's "Branches" level switches branches after that.
@@ -159,21 +160,28 @@ Special prefixes at input start trigger different modes:
 
 ## Extensions
 
-Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
+Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
+builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| File                                 | Extension ID                              | What                                  |
-| ------------------------------------ | ----------------------------------------- | ------------------------------------- |
-| `builtins/tool-renderers.client.tsx` | `@gent/tools` / `@gent/interaction-tools` | Tool renderers, interaction renderers |
-| `builtins/connection.client.ts`      | `@gent/connection`                        | Connection status widget              |
-| `builtins/handoff.client.ts`         | `@gent/handoff`                           | Handoff interaction renderer          |
-| `builtins/skills.client.ts`          | `@gent/skills-ui`                         | `$` autocomplete: skills popup        |
-| `builtins/files.client.ts`           | `@gent/files-ui`                          | `@` autocomplete: file search popup   |
-| `builtins/driver.client.ts`          | `@gent/driver-ui`                         | `/driver` slash command               |
+| Extension ID                              | Where                    | What                                  |
+| ----------------------------------------- | ------------------------ | ------------------------------------- |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers |
+| `@gent/connection`                        | `builtins.tsx`           | Connection status widget              |
+| `@gent/handoff`                           | `builtins.tsx`           | Handoff interaction renderer          |
+| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup        |
+| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup   |
+| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command               |
+| `@gent/goal`                              | `builtins.tsx`           | Goal widget                           |
+| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter               |
+| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane and tray                  |
+| `@gent/btw`                               | `btw.client.tsx`         | Side-question overlay                 |
+| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                        |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray                       |
 
-Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader-boundary.ts` → `resolve.ts`
+Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 
-- Builtins are statically imported in `context.tsx` for Bun compiled binary compatibility
-- User/project extensions discovered via filesystem scan (`discovery.ts`, Effect-typed)
+- Builtins are statically imported in `host.tsx` for Bun compiled binary compatibility
+- User/project extensions discovered via filesystem scan (`loader-boundary.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientLifecycle`
 - **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `goal.client.ts` and `tool-renderers.client.tsx` are the canonical examples.
@@ -187,13 +195,10 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 
 ## Key Files (Composer + Session)
 
-| File                                        | Purpose                           |
-| ------------------------------------------- | --------------------------------- |
-| `src/routes/session-controller.ts`          | session-screen orchestration      |
-| `src/routes/session.tsx`                    | session presentation + route keys |
-| `src/components/composer.tsx`               | composer render surface           |
-| `src/components/use-composer-controller.ts` | composer interaction wiring       |
-| `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup |
-| `src/utils/shell.ts`                        | Shell execution + truncation      |
-| `src/utils/file-refs.ts`                    | @file#line expansion              |
-| `src/commands/slash-commands.ts`            | Slash command handlers            |
+| File               | Purpose                                          |
+| ------------------ | ------------------------------------------------ |
+| `src/session.tsx`  | session-screen orchestration                     |
+| `src/app.tsx`      | boot flow, session view, queue widget            |
+| `src/composer.tsx` | composer render + wiring, popup, shell execution |
+| `src/utils.ts`     | @file#line expansion                             |
+| `src/commands.tsx` | Slash command handlers                           |

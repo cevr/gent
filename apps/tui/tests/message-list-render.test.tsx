@@ -3,20 +3,19 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import { Show, createSignal, onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import type { DisclosureLevel } from "../src/routes/session-ui-state"
-import { NativeTranscript } from "../src/components/native-transcript"
+import type { DisclosureLevel } from "../src/session"
 import {
-  MessageList,
   type Message,
+  MessageList,
+  NativeTranscript,
   type SessionItem,
   type ToolCall,
-} from "../src/components/message-list"
-import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
-import { ReadToolRenderer } from "../src/components/tool-renderers/read"
-import { EditToolRenderer } from "../src/components/tool-renderers/edit"
+} from "../src/message-list"
+import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
+import { EditToolRenderer, ReadToolRenderer } from "../src/tool-renderers"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
-import { useExtensionUI } from "../src/extensions/context"
+import { useExtensionUI } from "../src/extensions/host"
 import { SyntaxStyle, type CliRendererExternalOutputEvent } from "@opentui/core"
 
 const absent = Option.getOrUndefined(Option.none())

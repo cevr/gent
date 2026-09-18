@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import { MessageId, type ModelContextMetrics } from "@gent/core/protocol"
 import { RGBA } from "@opentui/core"
-import { buildContextLabels, buildTopRightLabels, formatCwdGit } from "../src/utils/session-labels"
+import { buildContextLabels, buildTopRightLabels, formatCwdGit } from "../src/session"
 
 const absent = Option.getOrUndefined(Option.none())
 

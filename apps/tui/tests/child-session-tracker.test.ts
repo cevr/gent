@@ -21,10 +21,10 @@ import {
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
 import { baseLocalLayer } from "@gent/core-internal/test-utils/in-process-layer"
 import {
-  make as makeChildSessionTracker,
+  makeChildSessionTracker,
   type ChildSessionEntry,
   type ChildSessionTrackerService,
-} from "../src/services/child-session-tracker"
+} from "../src/client"
 
 const entryChanges = (tracker: ChildSessionTrackerService, childSessionId: string) =>
   tracker.changes.pipe(

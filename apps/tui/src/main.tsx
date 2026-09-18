@@ -16,9 +16,14 @@ import {
   Schema,
   Scope,
 } from "effect"
-import { clientTraceLogger } from "./utils/client-trace-logger"
-import { LinkOpener } from "./services/link-opener"
-import { OsService } from "./services/os-service"
+import {
+  clearClientLog,
+  ClientProvider,
+  clientTraceLogger,
+  createClientLog,
+  shutdownLog,
+} from "./client"
+import { LinkOpener, OsService } from "./os"
 import {
   RunSpecSchema,
   AgentName as AgentNameSchema,
@@ -29,29 +34,23 @@ import {
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
-import { App } from "./app"
-import { TerminalDimensionsProvider } from "./terminal-dimensions"
-import { ComposerDraftsProvider } from "./components/composer-drafts"
-import { detectColorScheme } from "./theme/index"
-import { ClientProvider } from "./client/index"
-import { SessionShellProvider } from "./session-shell"
-import { WorkspaceProvider } from "./workspace/context"
-import { EnvProvider } from "./env/context"
-import { ExtensionUIProvider } from "./extensions/context"
-import { clearClientLog, createClientLog, shutdownLog } from "./utils/client-logger"
 import {
+  App,
   AppBootstrapError,
-  resolveInteractiveBootstrap,
-  resolveInitialState,
-  resolveStartupAuthState,
   type InitialState,
-} from "./app-bootstrap"
-import { runHeadless } from "./headless-runner"
-import { DEFAULT_HEADLESS_TOOL_RENDERERS } from "./headless-tool-renderers"
+  resolveInitialState,
+  resolveInteractiveBootstrap,
+  resolveStartupAuthState,
+} from "./app"
+import { TerminalDimensionsProvider } from "./terminal"
+import { ComposerDraftsProvider, SessionShellProvider } from "./session"
+import { detectColorScheme } from "./theme"
+import { EnvProvider, WorkspaceProvider } from "./workspace"
+import { ExtensionUIProvider, makeClientRuntime } from "./extensions/host"
+import { DEFAULT_HEADLESS_TOOL_RENDERERS, runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
-import { builtinClientModules } from "./extensions/builtins/index"
-import { loadExtensionUi } from "./services/extension-context-boundary"
-import { makeClientRuntime } from "./extensions/client-runtime"
+import { builtinClientModules } from "./extensions/builtins"
+import { loadExtensionUi } from "./extensions/loader-boundary"
 import type { ClientRuntime } from "./extensions/client-facets.js"
 import {
   CliStartupError,
@@ -61,7 +60,7 @@ import {
   server,
   sessions,
   storage,
-} from "./ops/commands"
+} from "./ops"
 
 // Clear client log on startup
 clearClientLog()

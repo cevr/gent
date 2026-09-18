@@ -13,7 +13,7 @@ import {
   inspectStorage,
   makeDoctorReport,
   resetStorage,
-} from "../src/ops/local-health"
+} from "../src/ops"
 
 const absentServerEntry = Option.none<ServerLockEntry>()
 

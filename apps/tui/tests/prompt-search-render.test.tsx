@@ -1,8 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { PromptSearchPalette } from "../src/components/prompt-search-palette"
-import { PromptSearchState, type PromptSearchEvent } from "../src/components/prompt-search-state"
+import { type PromptSearchEvent, PromptSearchPalette, PromptSearchState } from "../src/pickers"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 

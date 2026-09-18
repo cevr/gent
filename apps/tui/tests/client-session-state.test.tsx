@@ -6,9 +6,7 @@ import { Effect, Option, Schema } from "effect"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { createMockClient, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
-import { useClient } from "../src/client"
-import type { ClientContextValue } from "../src/client/context"
-import type { SessionState } from "../src/client/session-state"
+import { type ClientContextValue, type SessionState, useClient } from "../src/client"
 class ClientSessionStateTestError extends Schema.TaggedError<ClientSessionStateTestError>()(
   "ClientSessionStateTestError",
   { message: Schema.String },

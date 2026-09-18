@@ -6,12 +6,11 @@ import { ProviderAuthError } from "@gent/core-internal/domain/driver"
 import { AgentName, BranchId, SessionId, dateFromMillis } from "@gent/core/protocol"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { App } from "../src/app"
-import { useClient } from "../src/client"
-import type { ClientContextValue } from "../src/client/context"
+import { type ClientContextValue, useClient } from "../src/client"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
 import { renderFrame, waitForRenderedFrame } from "./helpers-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
-import { useTerminalDimensions } from "../src/terminal-dimensions"
+import { useTerminalDimensions } from "../src/terminal"
 
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 

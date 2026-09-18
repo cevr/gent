@@ -13,7 +13,7 @@ import {
   workingIconFrame,
   previewOutput,
   type ActivityCall,
-} from "../src/components/message-list-utils.js"
+} from "../src/utils.js"
 
 const absent = Option.getOrUndefined(Option.none())
 const nullValue = Option.getOrNull(Option.none())

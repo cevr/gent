@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { Session } from "../src/routes/session"
+import { Session } from "../src/app"
 import type { GentRuntime } from "@gent/sdk"
 import {
   createMockClient,

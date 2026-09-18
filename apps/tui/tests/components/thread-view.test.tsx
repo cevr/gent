@@ -28,7 +28,7 @@ import {
   windowLabel,
   windowsOf,
   type ThreadWindow,
-} from "../../src/extensions/builtins/thread-view.client"
+} from "../../src/extensions/thread-view.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

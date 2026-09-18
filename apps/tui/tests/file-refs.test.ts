@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { parseFileRefs, expandFileRefs, fileUrl, isAbsPath } from "../src/utils/file-refs"
+import { parseFileRefs, expandFileRefs, fileUrl, isAbsPath } from "../src/utils"
 import { Effect, FileSystem } from "effect"
 import { BunServices } from "@effect/platform-bun"
 

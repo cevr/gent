@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { extractMermaidBlocks } from "../src/utils/mermaid"
+import { extractMermaidBlocks } from "../src/mermaid"
 
 describe("extractMermaidBlocks", () => {
   test("extracts single block with correct source/startIndex/endIndex", () => {

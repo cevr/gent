@@ -12,14 +12,15 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
-import type { AutocompleteContribution, AutocompleteItem } from "../src/extensions/client-facets.js"
 import {
-  ClientTransport,
+  type AutocompleteContribution,
+  type AutocompleteItem,
   type ClientShellTransportDefinition,
+  ClientTransport,
   type ClientTransportDefinition,
   NoActiveSessionError,
-} from "../src/extensions/client-transport"
-import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
+} from "../src/extensions/client-facets.js"
+import { runAutocompleteContributions } from "../src/extensions/loader-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   makeClientExtensionRuntime,

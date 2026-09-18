@@ -52,12 +52,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "globalTimersInEffect:off -- process lifetime handle: OpenTUI render resolves after mount and suspended Effect fibers do not keep Bun alive",
   },
   {
-    file: "apps/tui/src/workspace/context.tsx",
+    file: "apps/tui/src/workspace.tsx",
     scope: "next-line",
     text: "strictEffectProvide:off solid mount edge — isolated FS effect",
   },
   {
-    file: "apps/tui/src/utils/client-logger.ts",
+    file: "apps/tui/src/client.tsx",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
   },

@@ -17,8 +17,7 @@ import { BranchId, SessionId } from "@gent/core/protocol"
 import { onMount } from "solid-js"
 import { Effect, Option, Schema } from "effect"
 import { renderWithProviders } from "./render-harness-boundary"
-import { useClient } from "../src/client"
-import type { ClientContextValue } from "../src/client/context"
+import { type ClientContextValue, useClient } from "../src/client"
 
 class ClientProviderContractError extends Schema.TaggedError<ClientProviderContractError>()(
   "ClientProviderContractError",

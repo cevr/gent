@@ -11,11 +11,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
-import {
-  ghostCompletion,
-  rankAutocompleteItems,
-  scoreSubsequence,
-} from "../src/components/autocomplete-ranking"
+import { ghostCompletion, rankAutocompleteItems, scoreSubsequence } from "../src/autocomplete"
 import type { AutocompleteItem } from "../src/extensions/client-facets.js"
 
 /** The live slash corpus: core registry commands plus extension contributions. */

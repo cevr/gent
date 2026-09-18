@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { createMemo, createRoot, createSignal } from "solid-js"
 import { Context, Effect, Option, Schema } from "effect"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import { makeClientSessionResource } from "../src/extensions/client-services"
+import { makeClientSessionResource } from "../src/extensions/client-facets"
 
 type SessionIdentity = { readonly sessionId: SessionId; readonly branchId: BranchId }
 

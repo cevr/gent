@@ -18,18 +18,18 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { DateTime, Effect, FileSystem, Option, Schedule } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { slashAutocompleteItems } from "../src/routes/session-command-registry"
-import { builtinClientModules } from "../src/extensions/builtins/index"
-import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
+import { slashAutocompleteItems } from "../src/session"
+import { builtinClientModules } from "../src/extensions/builtins"
+import { runAutocompleteContributions } from "../src/extensions/loader-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   emptyFrecencyStore,
   frecencyLookup,
-  recordPick,
   type FrecencyStoreValue,
-} from "../src/components/autocomplete-frecency"
-import { readFrecencyStore } from "../src/components/autocomplete-frecency-store"
-import type { Command } from "../src/command/types"
+  readFrecencyStore,
+  recordPick,
+} from "../src/autocomplete"
+import type { Command } from "../src/commands"
 import type {
   AnyExtensionClientModule,
   AutocompleteContribution,

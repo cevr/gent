@@ -4,13 +4,13 @@ import type { QueueEntryInfo } from "@gent/sdk"
 import {
   beginAuthCheck,
   clearQueue,
-  closeAuthGate,
+  closeAuthGateState,
   completeAuthCheck,
   failAuthCheck,
   initialSessionControllerState,
   queuedDraftText,
   setQueue,
-} from "../src/routes/session-controller-state"
+} from "../src/session"
 
 const queueEntry = (tag: QueueEntryInfo["_tag"], id: string, content: string): QueueEntryInfo => ({
   _tag: tag,
@@ -39,7 +39,7 @@ describe("session controller state", () => {
 
   test("manual auth close invalidates pending checks and stores the current agent", () => {
     const checking = beginAuthCheck(initialSessionControllerState({ agent: "fast" }))
-    const closed = closeAuthGate(checking, "deep")
+    const closed = closeAuthGateState(checking, "deep")
     const staleResult = completeAuthCheck(closed, {
       version: checking.authCheckVersion,
       agent: "fast",

@@ -3,13 +3,12 @@ import { BunServices } from "@effect/platform-bun"
 import { ConfigProvider, Effect, Exit, Layer, Scope } from "effect"
 import { createSignal } from "solid-js"
 import { SessionId } from "@gent/core/extensions/api"
-import herdr from "../src/extensions/builtins/herdr.client"
+import { builtinHerdr, makeHerdrReporter } from "../src/extensions/builtins"
 import {
-  makeClientActivityLayer,
   type ClientActivitySnapshot,
-} from "../src/extensions/client-activity"
-import { makeClientLifecycleLayer } from "../src/extensions/client-services"
-import { makeHerdrReporter } from "../src/extensions/herdr/reporter"
+  makeClientActivityLayer,
+  makeClientLifecycleLayer,
+} from "../src/extensions/client-facets"
 import { makeHerdrTestServer } from "./herdr-test-server-boundary"
 
 const config = (socketPath: string) =>
@@ -38,7 +37,7 @@ describe("Herdr integration", () => {
         ),
         scope,
       )
-      yield* herdr.setup.pipe(
+      yield* builtinHerdr.setup.pipe(
         Effect.provideContext(context),
         Effect.provideService(ConfigProvider.ConfigProvider, config(server.target.socketPath)),
       )
@@ -129,7 +128,7 @@ describe("Herdr integration", () => {
         { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/unused", HERDR_PANE_ID: "test:p1" },
         { HERDR_ENV: "0", HERDR_SOCKET_PATH: "/unused", HERDR_PANE_ID: "test:p1" },
       ]) {
-        const result = yield* herdr.setup.pipe(
+        const result = yield* builtinHerdr.setup.pipe(
           Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)),
         )
         expect(result).toBeDefined()

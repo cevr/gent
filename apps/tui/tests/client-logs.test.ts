@@ -15,8 +15,8 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Logger, Option, Random, Schema } from "effect"
 import { MinimumLogLevel } from "effect/References"
 import { classifyLogFile, makeJsonFileLogger } from "@gent/sdk"
-import { makeClientTraceLogger } from "../src/utils/client-trace-logger"
-import { inspectLogs } from "../src/ops/local-health"
+import { makeClientTraceLogger } from "../src/client"
+import { inspectLogs } from "../src/ops"
 
 /** The line shape `gent doctor` reads from both the server and the client log. */
 const LogEntry = Schema.fromJsonString(

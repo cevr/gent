@@ -4,7 +4,7 @@ import {
   emptyTurnSteps,
   getSessionEventLabel,
   type SessionEvent,
-} from "../src/components/session-event-label.js"
+} from "../src/message-list.js"
 
 describe("session event labels", () => {
   test("formats retrying progress", () => {

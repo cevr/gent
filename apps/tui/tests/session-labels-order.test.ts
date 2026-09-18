@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
 import { RGBA } from "@opentui/core"
-import { buildContextLabels, buildTopRightLabels } from "../src/utils/session-labels"
+import { buildContextLabels, buildTopRightLabels } from "../src/session"
 import type { ModelContextMetrics } from "@gent/core/protocol"
 
 const theme = {

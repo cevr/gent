@@ -27,8 +27,7 @@ import {
 import { EventId } from "@gent/core-internal/domain/event"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { createMockClient, renderWithProviders } from "./render-harness-boundary"
-import { useClient } from "../src/client"
-import type { ClientContextValue } from "../src/client/context"
+import { type ClientContextValue, useClient } from "../src/client"
 
 class ClientMetricsTestError extends Schema.TaggedError<ClientMetricsTestError>()(
   "ClientMetricsTestError",

@@ -6,7 +6,7 @@ import {
   SessionStateEvent,
   sessionSettings,
   transitionSessionState,
-} from "../src/client/session-state"
+} from "../src/client"
 
 const absent = Option.getOrUndefined(Option.none())
 

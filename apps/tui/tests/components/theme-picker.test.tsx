@@ -9,11 +9,8 @@
 import { describe, expect, it } from "effect-bun-test"
 import { createEffect } from "solid-js"
 import { Effect } from "effect"
-import { CommandPalette } from "../../src/components/command-palette"
-import { useCommand } from "../../src/command/context"
-import { DEFAULT_THEMES } from "../../src/theme/default-themes"
-import { resolveTheme } from "../../src/theme/resolve"
-import type { Theme } from "../../src/theme/types"
+import { CommandPalette, useCommand } from "../../src/commands"
+import { DEFAULT_THEMES, resolveTheme, type Theme } from "../../src/theme"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

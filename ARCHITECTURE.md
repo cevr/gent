@@ -79,9 +79,10 @@ updates this list in the same commit.
 14. **A child's completion arrives as a user message, never a tool result.**
     Receipt: `packages/core/src/runtime/agent/child-completion.ts`.
 15. **Platform edges stay explicit.** File, process, lock, and network access
-    go through `GentPlatform` facets; TUI routes own screen state, components
-    render and dispatch; app-specific UI facets live at the app edge.
-    Receipts: `packages/core/src/runtime/gent-platform.ts`, `apps/tui/src/routes/`.
+    go through `GentPlatform` facets; the TUI session controller owns screen
+    state, views render and dispatch; app-specific UI facets live at the app
+    edge. Receipts: `packages/core/src/runtime/gent-platform.ts`,
+    `apps/tui/src/session.tsx`, `apps/tui/src/app.tsx`.
 16. **RPC is the application transport.** No parallel REST surface. Receipt:
     `apps/server/src/`.
 
@@ -885,8 +886,8 @@ Production shape:
 
 Main boundaries:
 
-- `apps/tui/src/client/context.tsx` for client/session/event state
-- `apps/tui/src/routes/session-controller.ts` for session-screen orchestration
+- `apps/tui/src/client.tsx` for client/session/event state
+- `apps/tui/src/session.tsx` for session-screen orchestration
 - `apps/tui/src/extensions/client-facets.ts` for TUI-owned extension facets
 - route state machines for modal/session surfaces
 - components like `composer.tsx`, `message-list.tsx`, `queue-widget.tsx` as presentation + local interaction
@@ -1025,11 +1026,11 @@ Other notes:
 
 ### TUI Extensions
 
-- Builtins are individual `.client.{ts,tsx}` files in `apps/tui/src/extensions/builtins/`
+- Builtins live in `apps/tui/src/extensions/builtins.tsx`; a builtin with its own view keeps its own `apps/tui/src/extensions/*.client.tsx` file
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
 - One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules. Shared server/client artifacts use `defineExtension({ client })`; TUI-only artifacts use `.client.{ts,tsx}` modules.
-- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/goal.client.ts` for the canonical pattern.
+- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins.tsx` for the canonical pattern.
 - `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `ClientLifecycle.scoped` allocates Effect resources in the client-provider lifetime. The main TUI scope awaits provider disposal before process exit.
 - `ClientActivity` exposes a reactive view of the active UI session and its working, blocked, idle, or unavailable state. Headless clients do not provide an activity accessor.

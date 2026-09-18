@@ -16,10 +16,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import {
-  splitFooterHeight,
-  SPLIT_FOOTER_RESERVED_OUTPUT_ROWS,
-} from "../src/components/split-footer-height"
+import { splitFooterHeight, SPLIT_FOOTER_RESERVED_OUTPUT_ROWS } from "../src/message-list"
 
 describe("split footer height", () => {
   it.effect("a live view taller than the screen still leaves rows to scroll", () =>

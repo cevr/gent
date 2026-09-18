@@ -2,16 +2,17 @@
 import { describe, it, expect } from "effect-bun-test"
 import { createSignal, type JSX } from "solid-js"
 import { Effect } from "effect"
-import { Composer } from "../src/components/composer"
+import { Composer } from "../src/composer"
 import {
   ComposerInteractionState,
+  ComposerState,
+  type SessionController,
+  SessionControllerContext,
+  SessionUiState,
   transitionComposerInteraction,
-} from "../src/components/composer-interaction-state"
-import { ComposerState } from "../src/components/composer-state"
-import { SessionControllerContext, type SessionController } from "../src/routes/session-controller"
-import { SessionUiState } from "../src/routes/session-ui-state"
-import { PromptSearchState } from "../src/components/prompt-search-state"
-import { useExtensionUI } from "../src/extensions/context"
+} from "../src/session"
+import { PromptSearchState } from "../src/pickers"
+import { useExtensionUI } from "../src/extensions/host"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 

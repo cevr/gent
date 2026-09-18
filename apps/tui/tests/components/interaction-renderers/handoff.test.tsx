@@ -9,7 +9,7 @@ import {
   type CreateSessionInput,
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core-internal/domain/ids"
-import { HandoffRenderer } from "../../../src/components/interaction-renderers/handoff"
+import { HandoffRenderer } from "../../../src/interaction-renderers"
 import {
   createMockClient,
   destroyRenderSetup,

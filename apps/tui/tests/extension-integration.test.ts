@@ -12,14 +12,14 @@ import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // esli
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { Cause, Effect, Option, Schema } from "effect"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
-import { makeClientRuntime } from "../src/extensions/client-runtime"
+import { makeClientRuntime } from "../src/extensions/host"
 import { BranchId, SessionId } from "@gent/core/protocol"
 class ExtensionIntegrationTestError extends Schema.TaggedError<ExtensionIntegrationTestError>()(
   "ExtensionIntegrationTestError",
   { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
 ) {}
-import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
-import { builtinClientModules } from "../src/extensions/builtins/index"
+import { SessionUiState, transitionSessionUi } from "../src/session"
+import { builtinClientModules } from "../src/extensions/builtins"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
 const absent = Option.getOrUndefined(Option.none())

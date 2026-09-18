@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot, createSignal } from "solid-js"
-import { createThemeView } from "../src/theme/context"
-import { DEFAULT_THEMES } from "../src/theme/default-themes"
-import { resolveTheme } from "../src/theme/resolve"
-import type { Theme } from "../src/theme/types"
+import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme } from "../src/theme"
 
 const dark = resolveTheme(DEFAULT_THEMES.fx, "dark")
 const light = resolveTheme(DEFAULT_THEMES.fx, "light")

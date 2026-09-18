@@ -11,9 +11,9 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { AutocompletePopup } from "../../src/components/autocomplete-popup"
-import { useExtensionUI } from "../../src/extensions/context"
-import { useScopedKeyboard } from "../../src/keyboard/context"
+import { AutocompletePopup } from "../../src/composer"
+import { useExtensionUI } from "../../src/extensions/host"
+import { useScopedKeyboard } from "../../src/terminal"
 import type { AutocompleteItem } from "../../src/extensions/client-facets.js"
 import { renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"

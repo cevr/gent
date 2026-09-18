@@ -12,10 +12,10 @@ import { BunServices } from "@effect/platform-bun"
 import {
   autocompleteContribution,
   type ClientContributions,
+  type ClientEffect,
+  ClientSetupError,
   type ExtensionClientModule,
 } from "../src/extensions/client-facets.js"
-import type { ClientEffect } from "../src/extensions/client-effect.js"
-import { ClientSetupError } from "../src/extensions/client-effect.js"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 import { makeClientExtensionRuntime } from "./extension-test-harness-boundary"
 

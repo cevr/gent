@@ -8,7 +8,7 @@ import {
   type ApprovalResult,
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core-internal/domain/ids"
-import { AskUserRenderer } from "../../../src/components/interaction-renderers/ask-user"
+import { AskUserRenderer } from "../../../src/interaction-renderers"
 import { destroyRenderSetup, renderWithProviders } from "../../render-harness-boundary"
 import { waitForRenderedFrame } from "../../helpers-boundary"
 

@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, FileSystem, Option } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
-import { resolveEditor, parseEditorCommand } from "../src/utils/external-editor"
+import { resolveEditor, parseEditorCommand } from "../src/os"
 
 // ── Editor resolution ─────────────────────────────────────────────────
 

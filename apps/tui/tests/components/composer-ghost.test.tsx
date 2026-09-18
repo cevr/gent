@@ -16,21 +16,19 @@
 import { describe, expect, it } from "effect-bun-test"
 import { createSignal, onMount, type JSX } from "solid-js"
 import { Effect, Option } from "effect"
-import { Composer } from "../../src/components/composer"
+import { Composer } from "../../src/composer"
 import {
   ComposerInteractionState,
-  transitionComposerInteraction,
-} from "../../src/components/composer-interaction-state"
-import { ComposerState } from "../../src/components/composer-state"
-import { useCommand } from "../../src/command/context"
-import { useExtensionUI } from "../../src/extensions/context"
-import {
-  SessionControllerContext,
+  ComposerState,
   type SessionController,
-} from "../../src/routes/session-controller"
-import { SessionUiState } from "../../src/routes/session-ui-state"
-import { PromptSearchState } from "../../src/components/prompt-search-state"
-import { rankAutocompleteItems } from "../../src/components/autocomplete-ranking"
+  SessionControllerContext,
+  SessionUiState,
+  transitionComposerInteraction,
+} from "../../src/session"
+import { useCommand } from "../../src/commands"
+import { useExtensionUI } from "../../src/extensions/host"
+import { PromptSearchState } from "../../src/pickers"
+import { rankAutocompleteItems } from "../../src/autocomplete"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

@@ -1,9 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import {
-  countLines,
-  createPasteManager,
-  isLargePaste,
-} from "../src/components/use-composer-controller"
+import { countLines, createPasteManager, isLargePaste } from "../src/composer"
 
 // The paste manager is per-controller: each composer owns its id counter and
 // store, so every test makes its own rather than resetting shared state.

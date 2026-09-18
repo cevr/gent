@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
-import { formatTokens } from "../src/utils/format-tool"
+import { formatTokens } from "../src/utils"
 
 // ── Context window % computation (extracted logic) ───────────────────
 

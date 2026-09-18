@@ -9,15 +9,13 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Option } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
-  readFrecencyStore,
-  writeFrecencyStore,
-} from "../src/components/autocomplete-frecency-store"
-import {
   emptyFrecencyStore,
   frecencyLookup,
-  recordPick,
   type FrecencyStoreValue,
-} from "../src/components/autocomplete-frecency"
+  readFrecencyStore,
+  recordPick,
+  writeFrecencyStore,
+} from "../src/autocomplete"
 
 const storeTest = it.scopedLive.layer(BunServices.layer)
 const NOW = 1_800_000_000_000

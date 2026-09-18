@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Option } from "effect"
-import {
-  ComposerInteractionState,
-  transitionComposerInteraction,
-} from "../src/components/composer-interaction-state"
+import { ComposerInteractionState, transitionComposerInteraction } from "../src/session"
 import type { AutocompleteContribution } from "../src/extensions/client-facets.js"
 
 const testContributions: AutocompleteContribution[] = [
