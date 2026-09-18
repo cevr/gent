@@ -1,20 +1,20 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { RpcClient, RpcTest } from "effect/unstable/rpc"
 import { ExtensionContext, hook } from "@gent/core/extensions/api"
-import { LanguageModelLayers, textStep } from "../../../src/test-utils/language-model"
-import { ExtensionRegistry } from "../../../src/runtime/extension-host.js"
-import type { BranchId, SessionId } from "../../../src/domain/ids"
-import { ExtensionId } from "../../../src/domain/ids"
-import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../../src/domain/message"
-import { AgentName } from "../../../src/domain/agent"
-import { EventPublisher, EventStore, EventStoreError } from "../../../src/domain/event"
-import { ModelResolver } from "../../../src/runtime/provider"
-import { GentPlatform } from "../../../src/runtime/gent-platform"
-import { SessionRuntime, type SessionRuntimeService } from "../../../src/runtime/session"
-import { AgentLoopSessionGovernance } from "../../../src/runtime/agent-loop"
-import { GentRpcs } from "../../../src/server/rpc"
-import { RpcHandlersLive, SessionMutationsLive } from "../../../src/server/server"
-import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../../src/server/workspace-rpc"
+import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
+import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
+import type { BranchId, SessionId } from "../../src/domain/ids"
+import { ExtensionId } from "../../src/domain/ids"
+import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../src/domain/message"
+import { AgentName } from "../../src/domain/agent"
+import { EventPublisher, EventStore, EventStoreError } from "../../src/domain/event"
+import { ModelResolver } from "../../src/runtime/provider"
+import { GentPlatform } from "../../src/runtime/gent-platform"
+import { SessionRuntime, type SessionRuntimeService } from "../../src/runtime/session"
+import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { GentRpcs } from "../../src/server/rpc"
+import { RpcHandlersLive, SessionMutationsLive } from "../../src/server/server"
+import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../src/server/workspace-rpc"
 import {
   BranchStorage,
   type BranchStorageService,
@@ -22,11 +22,11 @@ import {
   type SessionStorageService,
   SqliteStorage,
   StorageError,
-} from "../../../src/storage/storage"
-import { createE2ELayer } from "../../../src/test-utils/index"
+} from "../../src/storage/storage"
+import { createE2ELayer } from "../../src/test-utils/index"
 import { Gent } from "@gent/sdk"
-import { e2ePreset } from "../../../../extensions/tests/helpers/test-preset"
-import type { LoadedExtension } from "../../../src/domain/extension"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import type { LoadedExtension } from "../../src/domain/extension"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 export const datePlusMillis = (date: Date, millis: number): Date =>

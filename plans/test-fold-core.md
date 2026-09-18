@@ -17,8 +17,17 @@ Rule 4 (bun file-global effects): no core test file uses `mock.module`, a
 top-level `beforeAll`/`afterAll`/`afterEach`, a `process.env` write, or
 `setSystemTime`. No exception.
 
-Rule 5: no core test file is named in a package.json script, in
-`tsconfig.locks.json`, or in `.oxlintignore`.
+Rule 5: no core test file is named in a package.json script or in
+`.oxlintignore`. `packages/core/tsconfig.locks.json` names three existing
+files, so each keeps its own name and folds nothing in:
+
+- `tests/runtime/runtime-profile.test.ts`
+- `tests/extensions/extension-surface-locks.test.ts`
+- `tests/extensions/extension-turn-projections.test.ts`
+
+`tsconfig.locks.json` also names `tests/domain/actor.test.ts` and
+`tests/runtime/scope-brands.test.ts`. Neither file exists; the entries are
+already stale and this fold does not touch them.
 
 ## `tests/domain/`
 
@@ -39,13 +48,16 @@ Rule 5: no core test file is named in a package.json script, in
 
 ## `tests/extensions/`
 
-| Target                            | Sources                                                                                                                       |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `extensions/api.test.ts`          | `extensions/extension-surface-locks.test.ts`, `extensions/authoring-reference.test.ts`, `extensions/define-extension.test.ts` |
-| `extensions/branch-tools.test.ts` | `runtime/branch-tool-feature.test.ts`                                                                                         |
+| Target                            | Sources                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------- |
+| `extensions/api.test.ts`          | `extensions/authoring-reference.test.ts`, `extensions/define-extension.test.ts` |
+| `extensions/branch-tools.test.ts` | `runtime/branch-tool-feature.test.ts`                                           |
+
+`extensions/extension-surface-locks.test.ts` and
+`extensions/extension-turn-projections.test.ts` keep their names under rule 5.
 
 The rest of `tests/extensions/` exercises `src/runtime/extension-host.ts`
-(activation, capability-host, extension-hooks, extension-turn-projections,
+(activation, capability-host, extension-hooks,
 host-facet-survivors, loader, prompt-slots, registry, resource-host,
 runtime-hooks, scope-precedence, memory/agent-override, turn-executor) or
 `src/runtime/tools.ts` (compile-tool-policy) or `src/server/server.ts`
@@ -58,7 +70,7 @@ runtime-hooks, scope-precedence, memory/agent-override, turn-executor) or
 | `runtime/agent-loop.test.ts`          | `agent-loop-concurrency`, `agent-loop-continuation`, `agent-loop-empty-final-step`, `agent-loop-max-steps`, `agent-loop-turn-stream`, `agent-runner`, `agent-loop/actor-command`, `agent-loop/admission-withdrawal`, `agent-loop/external-turn`, `agent-loop/interactions`, `agent-loop/model-compaction`, `agent-loop/model-context`, `agent-loop/primary-key-dedup`, `agent-loop/queue`, `agent-loop/recovery-race`, `agent-loop/streaming`, `agent-loop/tool-binding-replay`, `agent-loop/tool-projection-reconciliation`, `agent-loop/turn-lifecycle-hooks`, `agent-loop/turn-lifetime`, `agent-loop/turn-resume`, `agent/agent-loop.session-governance` |
 | `runtime/child-agents.test.ts`        | `child-completion-describe.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `runtime/config.test.ts`              | `config-service.test.ts`, `driver-override-routing.test.ts`, `execution-overrides.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `runtime/extension-host.test.ts`      | `ambient-host-context`, `runtime-profile`, `session-profile`, `session-runtime-context`, `drivers/driver-registry`, and the `tests/extensions/` files listed above                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `runtime/extension-host.test.ts`      | `ambient-host-context`, `session-profile`, `session-runtime-context`, `drivers/driver-registry`, and the `tests/extensions/` files listed above (`runtime-profile.test.ts` keeps its name under rule 5)                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `runtime/gent-platform.test.ts`       | `gent-platform.test.ts`, `run-process.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `runtime/model-context.test.ts`       | `model-context`, `model-context-degrade`, `model-context-ledger`, `model-context-window`, `token-estimation`, `agent/turn-window`, `providers/ai-transcript`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `runtime/provider.test.ts`            | `retry`, `model-registry`, `domain/auth`, `domain/auth-guard`, `providers/provider-auth`, `providers/provider-resolution`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |

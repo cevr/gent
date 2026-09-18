@@ -1,29 +1,81 @@
-import { describe, expect, it } from "effect-bun-test"
-import { BunServices } from "@effect/platform-bun"
+import { test } from "bun:test"
 import {
-  Predicate,
   Cause,
   Context,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   MutableRef,
+  Option,
+  Path,
+  Predicate,
   Schema,
   Scope,
   Stream,
 } from "effect"
-import { MinimumLogLevel } from "effect/References"
-import { narrowR } from "../helpers/effect"
+import {
+  DriverListResult,
+  ExtensionProtocolError,
+  GentRpcs,
+  SessionRpcs,
+  SlashCommandInfo,
+} from "../../src/server/rpc"
+import {
+  WorkspaceRpcMiddleware,
+  CurrentWorkspaceId,
+  workspaceIdForCwd,
+} from "../../src/server/workspace-rpc"
+import { describe, expect, it } from "effect-bun-test"
+import {
+  finishPart,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  textDeltaPart,
+  textStep,
+  toolCallStep,
+  waitFor,
+} from "../../src/test-utils/language-model"
+import {
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
+  ExternalDriverRef,
+  ModelDriverRef,
+} from "../../src/domain/agent"
+import { Gent } from "@gent/sdk"
+import { createE2ELayer, createRpcHarness, createToolTestLayer } from "../../src/test-utils/index"
+import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
+import {
+  BranchId,
+  ExtensionId,
+  InteractionRequestId,
+  ProcessGenerationId,
+  RequestId,
+  SessionId,
+} from "../../src/domain/ids"
+import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
+import { BunServices } from "@effect/platform-bun"
+import { Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
+import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import {
   defineResource,
   ExtensionLoadError,
   type GentExtension,
+  LoadedArtifactIdentity,
   type LoadedExtension,
   registerContributions,
 } from "../../src/domain/extension.js"
-import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
-import { type Message, messageSingleText } from "../../src/domain/message"
+import { failingLanguageModel } from "../helpers/failing-language-model"
+import * as ExtensionApi from "@gent/core/extensions/api"
+import {
+  CapabilityError,
+  ExtensionContext,
+  ExtensionHost,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
 import {
   ApprovalService,
   buildResourceLayer,
@@ -33,28 +85,959 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { SqliteStorage } from "../../src/storage/storage"
-import { createRpcHarness, createToolTestLayer } from "../../src/test-utils/index"
+import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { ExtensionProtocolError, SlashCommandInfo } from "../../src/server/rpc"
-import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
-import {
-  CapabilityError,
-  ExtensionContext,
-  ExtensionHost,
-  request,
-  tool,
-} from "@gent/core/extensions/api"
-import * as ExtensionApi from "@gent/core/extensions/api"
-import { BranchId, ExtensionId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
-import { ConfigService } from "../../src/runtime/config"
-import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
+import { encodeInteractionDecision } from "../../src/domain/interaction.js"
+import { MinimumLogLevel } from "effect/References"
+import { narrowR } from "../helpers/effect"
+import { type Message, messageSingleText } from "../../src/domain/message"
+import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
+import { type LogEvent, WideEventLogger } from "../../src/runtime/wide-event-boundary"
+
+// ── rpc-contract.test ───────────────────────────────────────────────────────
+
+const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
+  const group = SessionRpcs
+  const rpc = group.requests.get(key)
+  if (Predicate.isUndefined(rpc)) return Effect.runSync(Effect.die(new Error(`Missing RPC ${key}`)))
+  return Schema.decodeUnknownSync(rpc.successSchema)(value)
+}
+
+describe("RPC contract schemas", () => {
+  test("decode inlined session success payloads", () => {
+    expect(
+      decodeSuccess("session.create", {
+        sessionId: "session-1",
+        branchId: "branch-1",
+        name: "Session",
+      }),
+    ).toEqual({
+      sessionId: "session-1",
+      branchId: "branch-1",
+      name: "Session",
+    })
+
+    expect(
+      decodeSuccess("session.updateSettings", {
+        modelId: "anthropic/claude-sonnet-5",
+        reasoningLevel: "medium",
+      }),
+    ).toEqual({ modelId: "anthropic/claude-sonnet-5", reasoningLevel: "medium" })
+  })
+
+  test("decode inlined branch success payloads", () => {
+    expect(decodeSuccess("branch.create", { branchId: "branch-1" })).toEqual({
+      branchId: "branch-1",
+    })
+    expect(decodeSuccess("branch.fork", { branchId: "branch-2" })).toEqual({
+      branchId: "branch-2",
+    })
+  })
+
+  test("all RPCs require workspace header middleware", () => {
+    for (const rpc of GentRpcs.requests.values()) {
+      expect(rpc.middlewares.has(WorkspaceRpcMiddleware)).toBe(true)
+    }
+  })
+})
+
+// ── driver-rpc.test ─────────────────────────────────────────────────────────
+
+/**
+ * Driver routing RPCs — `driver.list` / `driver.set` / `driver.clear`
+ * acceptance tests.
+ *
+ * Drives the full transport boundary (Gent.test → RpcServer → handler →
+ * ConfigService + DriverRegistry) so the tests catch wiring bugs the
+ * unit tests on `ConfigService.setDriverOverride` don't cover.
+ */
+
+describe("ExtensionRpcs", () => {
+  it.live("driver.list returns registered drivers and current overrides", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const before = yield* client.driver.list()
+        expect(before).toBeInstanceOf(DriverListResult)
+        expect(before.drivers[0]?._tag).toBeDefined()
+        // Built-in agents extension contributes the "anthropic" model driver
+        // (and friends); the registered list should be non-empty even when no
+        // overrides are set.
+        expect(before.drivers.length).toBeGreaterThan(0)
+        expect(before.agents.map((agent) => agent.name)).toContain(DEFAULT_AGENT_NAME)
+        expect(before.overrides).toEqual({})
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("driver.set persists an override; driver.list reflects it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const drivers = (yield* client.driver.list()).drivers
+        const someModel = drivers.find((d) => d._tag === "Model")
+        if (Predicate.isUndefined(someModel)) {
+          return yield* Effect.die(new Error("no model driver registered in test layer"))
+        }
+        yield* client.driver.set({
+          agentName: DEFAULT_AGENT_NAME,
+          driver: ModelDriverRef.make({ id: someModel.id }),
+        })
+        const after = yield* client.driver.list()
+        expect(after.overrides[DEFAULT_AGENT_NAME]?._tag).toBe("Model")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("driver.set rejects unknown driver id with NotFoundError", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const result = yield* client.driver
+          .set({
+            agentName: DEFAULT_AGENT_NAME,
+            driver: ExternalDriverRef.make({ id: "definitely-not-registered" }),
+          })
+          .pipe(Effect.flip)
+        expect(result._tag).toBe("NotFoundError")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("driver.clear removes an existing override", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const drivers = (yield* client.driver.list()).drivers
+        const someModel = drivers.find((d) => d._tag === "Model")
+        if (Predicate.isUndefined(someModel)) {
+          return yield* Effect.die(new Error("no model driver registered in test layer"))
+        }
+        yield* client.driver.set({
+          agentName: DEFAULT_AGENT_NAME,
+          driver: ModelDriverRef.make({ id: someModel.id }),
+        })
+        yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
+        const after = yield* client.driver.list()
+        expect(after.overrides).toEqual({})
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("driver.clear is a no-op for an unknown agent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        yield* client.driver.clear({ agentName: AgentName.make("does-not-exist") })
+        const after = yield* client.driver.list()
+        expect(after.overrides).toEqual({})
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+
+// ── model-context.test ──────────────────────────────────────────────────────
+
+describe("model context RPC boundary", () => {
+  it.scopedLive(
+    "settles an oversized turn as a visible failure before provider dispatch",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let providerCalls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            providerCalls += 1
+            return Effect.succeed(
+              Stream.fromIterable([
+                textDeltaPart("recovered"),
+                finishPart({ finishReason: "stop" }),
+              ]),
+            )
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          const errorEventFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "ErrorOccurred"),
+            Stream.runHead,
+            Effect.forkScoped,
+          )
+          const requestId = RequestId.make("model-context-rpc")
+          const marker = "rpc-oversized-context-marker"
+          const result = yield* Effect.exit(
+            client.message.send({
+              sessionId,
+              branchId,
+              content: `${marker} ${"x".repeat(520_000)}`,
+              requestId,
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(providerCalls).toBe(0)
+          const errorEvent = yield* Fiber.join(errorEventFiber)
+          expect(Option.isSome(errorEvent)).toBe(true)
+          if (Option.isNone(errorEvent)) return yield* Effect.die("turn error event missing")
+          if (errorEvent.value.event._tag !== "ErrorOccurred") {
+            return yield* Effect.die("unexpected event in error stream")
+          }
+          expect(errorEvent.value.event.error).toContain("ModelContextProjectionError")
+          // The transcript prints this text; stack frames belong in the log.
+          expect(errorEvent.value.event.error).not.toContain("\n    at ")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "runtime idle after model context failure",
+          )
+          expect(
+            snapshot.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text.includes(marker)),
+            ),
+          ).toBe(true)
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "recover after context failure",
+            requestId: RequestId.make("model-context-rpc-recovery"),
+          })
+          const recovered = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "runtime idle after recovery turn",
+          )
+          // The oversized message is clipped in the summary input, so the
+          // handoff summarizes it (one model call) before the recovery turn.
+          expect(providerCalls).toBe(2)
+          expect(
+            recovered.messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "recovered"),
+            ),
+          ).toBe(true)
+          expect(
+            recovered.messages.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text.includes("Summary:\nrecovered"),
+              ),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    12_000,
+  )
+})
+
+// ── auth-rpc.test ───────────────────────────────────────────────────────────
+
+/**
+ * `auth.listProviders` RPC acceptance tests.
+ *
+ * The handler resolves project config from the session's cwd, not the
+ * launch cwd. A bug here (regression to `configService.get()`) would
+ * silently re-block external-routed sessions on launch-cwd model auth.
+ * The unit-level AuthGuard tests at `auth-guard.test.ts:181` prove the
+ * `driverOverrides` short-circuit works; this test proves the *RPC
+ * handler* threads `sessionId` → `session.cwd` →
+ * `configService.get(cwd)` → `driverOverrides`.
+ */
+
+const failingAuthStoreLayer = Layer.succeed(
+  Auth,
+  Auth.of({
+    get: () => Effect.as(Effect.void, void 0),
+    set: () => Effect.fail(new AuthError({ message: "write failed" })),
+    remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
+  }),
+)
+const failingReadAuthStoreLayer = Layer.succeed(
+  Auth,
+  Auth.of({
+    get: () => Effect.fail(new AuthError({ message: "read failed" })),
+    set: () => Effect.void,
+    remove: () => Effect.void,
+  }),
+)
+const stubModel = AiModel.make(
+  "test",
+  "model",
+  Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
+)
+const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
+  const pendingCallbacks = new Map<string, (code?: string) => string>()
+  const oauthProvider: ModelDriverContribution = {
+    id: "persisting-oauth",
+    name: "Persisting OAuth",
+    resolveModel: () => Effect.succeed(stubModel),
+    auth: {
+      methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+      authorize: (ctx) =>
+        Effect.sync(() => {
+          pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
+          return Option.some({
+            url: "http://example.com/auth",
+            method: "code",
+          })
+        }),
+      callback: (ctx) =>
+        Effect.gen(function* () {
+          const code = pendingCallbacks.get(ctx.authorizationId)?.(ctx.code) ?? ""
+          yield* ctx.persist({ type: "api", key: code })
+        }),
+    },
+  }
+  const authorizePersistProvider: ModelDriverContribution = {
+    id: "persisting-authorize",
+    name: "Persisting Authorize",
+    resolveModel: () => Effect.succeed(stubModel),
+    auth: {
+      methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
+      authorize: (ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.persist({ type: "api", key: "sk-authorize" })
+          return Option.some({
+            url: "",
+            method: "done",
+          })
+        }),
+    },
+  }
+  return [
+    {
+      manifest: { id: ExtensionId.make("test-auth-providers") },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: { modelDrivers: [oauthProvider, authorizePersistProvider] },
+    },
+  ]
+}
+describe("auth.listProviders", () => {
+  it.live("returns launch-cwd providers without sessionId", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const providers = yield* client.auth.listProviders({})
+        expect(providers.length).toBeGreaterThan(0)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live(
+    "driver override written at session cwd is honored by auth.listProviders(sessionId) through ConfigService.Live",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          // Three distinct dirs so we can prove the handler resolves config
+          // from the *session's* cwd, not the server's launch cwd. Writing
+          // the override into the session cwd's project config (and NOT
+          // into the launch cwd or user config) means a launch-cwd-only
+          // regression would return required=true here.
+          const launch = yield* fs.makeTempDirectoryScoped()
+          const sessionCwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
+          // Seed the session cwd's project config with a driver override
+          // for `main`. Any external driver id marks the agent as
+          // externally routed, so no model provider is required.
+          yield* fs.makeDirectory(path.join(sessionCwd, ".gent"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(sessionCwd, ".gent", "config.json"),
+            '{"driverOverrides":{"main":{"_tag":"External","id":"acp-claude-code"}}}',
+          )
+          const runtimeEnvironmentLive = RuntimeEnvironment.Live({
+            cwd: launch,
+            home,
+            platform: "darwin",
+          })
+          const configServiceLive = ConfigService.Live.pipe(
+            Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              configServiceLayer: configServiceLive,
+            }),
+          )
+          // The provider required by `main` follows DEFAULT_MODEL_ID, so this
+          // test states the override invariant rather than a shipped model.
+          const defaultProvider = DEFAULT_MODEL_ID.slice(0, DEFAULT_MODEL_ID.indexOf("/"))
+          // Launch cwd has no override -> main requires its model's
+          // provider. Proves the override is NOT in user config.
+          const launchSession = yield* client.session.create({ cwd: launch })
+          const launchList = yield* client.auth.listProviders({
+            agentName: DEFAULT_AGENT_NAME,
+            sessionId: launchSession.sessionId,
+          })
+          expect(launchList.find((p) => p.provider === defaultProvider)?.required).toBe(true)
+          // Session cwd has the project override -> that provider is NOT
+          // required because the agent is externally routed.
+          const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
+          const overriddenList = yield* client.auth.listProviders({
+            agentName: DEFAULT_AGENT_NAME,
+            sessionId: overriddenSession.sessionId,
+          })
+          expect(overriddenList.find((p) => p.provider === defaultProvider)?.required).toBe(false)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+      ),
+  )
+  it.live("driver.set followed by no-sessionId listProviders honors launch-cwd override", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const drivers = (yield* client.driver.list()).drivers
+        const externalDriver = drivers.find((d) => d._tag === "External")
+        if (Predicate.isUndefined(externalDriver)) return
+        yield* client.driver.set({
+          agentName: DEFAULT_AGENT_NAME,
+          driver: ExternalDriverRef.make({ id: externalDriver.id }),
+        })
+        // No sessionId → launch cwd path. Under ConfigService.Test this
+        // still works because driver.set writes to the in-memory user
+        // ref that `get(undefined)` also reads.
+        const list = yield* client.auth.listProviders({ agentName: DEFAULT_AGENT_NAME })
+        expect(list.find((p) => p.provider === "openai")?.required).toBe(false)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("rejects auth provider listing for a deleted session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const session = yield* client.session.create({})
+        yield* client.session.delete({ sessionId: session.sessionId })
+        const exit = yield* Effect.exit(
+          client.auth.listProviders({
+            agentName: DEFAULT_AGENT_NAME,
+            sessionId: session.sessionId,
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Session not found")
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+describe("auth persistence RPC failures", () => {
+  it.live("auth.listProviders surfaces auth read failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authLayer: failingReadAuthStoreLayer,
+          }),
+        )
+        const exit = yield* Effect.exit(client.auth.listProviders({}))
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("read failed")
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("auth.setKey surfaces write failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authLayer: failingAuthStoreLayer,
+          }),
+        )
+        const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to set auth")
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("auth.deleteKey surfaces delete failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authLayer: failingAuthStoreLayer,
+          }),
+        )
+        const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to delete auth")
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("auth.authorize surfaces credentials persisted during authorize", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: makePersistingExtensions(),
+            authLayer: failingAuthStoreLayer,
+          }),
+        )
+        const exit = yield* Effect.exit(
+          client.auth.authorize({
+            sessionId: SessionId.make("auth-rpc-session"),
+            provider: "persisting-authorize",
+            method: 0,
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to persist auth")
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("auth.callback surfaces callback credential persistence failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: makePersistingExtensions(),
+            authLayer: failingAuthStoreLayer,
+          }),
+        )
+        const authorization = yield* client.auth.authorize({
+          sessionId: SessionId.make("auth-rpc-session"),
+          provider: "persisting-oauth",
+          method: 0,
+        })
+        if (Predicate.isNull(authorization)) return yield* Effect.die("auth setup failed")
+        const exit = yield* Effect.exit(
+          client.auth.callback({
+            sessionId: SessionId.make("auth-rpc-session"),
+            provider: "persisting-oauth",
+            method: 0,
+            authorizationId: authorization.authorizationId,
+            code: "sk-callback",
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.toString()).toContain("Failed to persist auth")
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+})
+
+// ── interaction-commands.test ───────────────────────────────────────────────
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+const InteractionProbeExtension: LoadedExtension = {
+  manifest: { id: ExtensionId.make("@test/interaction-probe") },
+  scope: "builtin",
+  sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/interaction-probe@artifact-1"),
+  contributions: {
+    tools: [
+      tool({
+        id: "approval_probe",
+        description: "Request approval and report the result",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({
+          approved: Schema.Boolean,
+          notes: Schema.String,
+        }),
+        execute: Effect.fn("approval_probe")(function* (params) {
+          const ctx = yield* ExtensionContext
+          const decision = yield* ctx.Interaction.approve({ text: params.text })
+          return {
+            approved: decision.approved,
+            notes: decision.notes ?? "",
+          }
+        }),
+      }),
+    ],
+  },
+}
+
+// The same derivation the server and its clients use; a third copy here
+// would be a third thing to keep in step.
+const currentTestWorkspaceId = () => workspaceIdForCwd(process.cwd())
+
+describe("interaction.respondInteraction", () => {
+  it.scopedLive(
+    "rehydrates one pending interaction after restart and accepts response before explicit actor wake",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent.db`
+        const finalReply = "approval resumed after restart"
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("approval_probe", { text: "approve deploy?" }),
+        ])
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [InteractionProbeExtension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+            yield* client.message.send({
+              sessionId,
+              branchId,
+              content: "run approval probe",
+            })
+
+            const interactions = Array.from(yield* Fiber.join(interactionFiber))
+            const presented = interactions[0]
+            expect(presented?.event._tag).toBe("InteractionPresented")
+            if (presented?.event._tag !== "InteractionPresented") {
+              return yield* Effect.die(new Error("interaction was not presented"))
+            }
+
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) => current.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "waiting interaction runtime state before restart",
+            )
+            const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+            return {
+              sessionId,
+              branchId,
+              requestId: presented.event.requestId,
+              lastEventId: snapshot.lastEventId ?? 0,
+            }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [InteractionProbeExtension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const rehydrated = Array.from(
+              yield* client.session
+                .events({
+                  sessionId: first.sessionId,
+                  branchId: first.branchId,
+                  after: first.lastEventId,
+                })
+                .pipe(
+                  Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+                  Stream.take(1),
+                  Stream.runCollect,
+                ),
+            )
+            expect(rehydrated.length).toBe(1)
+            expect(rehydrated[0]?.event._tag).toBe("InteractionPresented")
+            if (rehydrated[0]?.event._tag === "InteractionPresented") {
+              expect(rehydrated[0].event.requestId).toBe(first.requestId)
+            }
+            yield* client.interaction.respondInteraction({
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              requestId: first.requestId,
+              approved: true,
+              notes: "after restart",
+            })
+
+            const snapshot = yield* waitFor(
+              client.session.getSnapshot({
+                sessionId: first.sessionId,
+                branchId: first.branchId,
+              }),
+              (current) =>
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some((part) => part.type === "text" && part.text === finalReply),
+                ),
+              5_000,
+              "assistant reply after restarted interaction response",
+            )
+
+            expect(
+              snapshot.messages.some(
+                (message) =>
+                  message.role === "tool" &&
+                  message.parts.some(
+                    (part) =>
+                      part.type === "tool-result" &&
+                      encodeJson(part.result).includes("after restart"),
+                  ),
+              ),
+            ).toBe(true)
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+      }),
+    12_000,
+  )
+
+  it.scopedLive(
+    "recovers a stored decision after restart before actor wake",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent-decision.db`
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+          Layer.provide(BunPlatformLive),
+        )
+        const finalReply = "approval resumed from stored decision"
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("approval_probe", { text: "approve deploy?" }),
+        ])
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [InteractionProbeExtension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+            yield* client.message.send({
+              sessionId,
+              branchId,
+              content: "run approval probe",
+            })
+
+            const interactions = Array.from(yield* Fiber.join(interactionFiber))
+            const presented = interactions[0]?.event
+            expect(presented?._tag).toBe("InteractionPresented")
+            if (presented?._tag !== "InteractionPresented") {
+              return yield* Effect.die(new Error("interaction was not presented"))
+            }
+
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) => current.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "waiting interaction runtime state before stored decision",
+            )
+            return {
+              sessionId,
+              branchId,
+              requestId: presented.requestId,
+            }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        yield* Effect.gen(function* () {
+          const storage = yield* InteractionStorage
+          const decisionJson = yield* encodeInteractionDecision({
+            approved: true,
+            notes: "stored before wake",
+          })
+          yield* storage.decide(first.requestId, decisionJson)
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(storageLayer),
+          Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+        )
+
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [InteractionProbeExtension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+
+            const snapshot = yield* waitFor(
+              client.session.getSnapshot({
+                sessionId: first.sessionId,
+                branchId: first.branchId,
+              }),
+              (current) =>
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some((part) => part.type === "text" && part.text === finalReply),
+                ),
+              5_000,
+              "assistant reply after stored interaction decision recovery",
+            )
+
+            expect(
+              snapshot.messages.some(
+                (message) =>
+                  message.role === "tool" &&
+                  message.parts.some(
+                    (part) =>
+                      part.type === "tool-result" &&
+                      encodeJson(part.result).includes("stored before wake"),
+                  ),
+              ),
+            ).toBe(true)
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+      }),
+    12_000,
+  )
+
+  it.live(
+    "rejects stale request ids without consuming the pending interaction",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const finalReply = "approval resumed after stale response"
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "approve deploy?" }),
+            textStep(finalReply),
+          ])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "run approval probe",
+          })
+
+          const interactions = Array.from(yield* Fiber.join(interactionFiber))
+          const presented = interactions[0]?.event
+          expect(presented?._tag).toBe("InteractionPresented")
+          if (presented?._tag !== "InteractionPresented") return
+
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            "waiting interaction runtime state before stale response",
+          )
+
+          const staleExit = yield* Effect.exit(
+            client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: InteractionRequestId.make("req-stale-rpc-1"),
+              approved: false,
+              notes: "wrong dialog",
+            }),
+          )
+          expect(staleExit._tag).toBe("Failure")
+          if (staleExit._tag === "Failure") {
+            expect(Cause.pretty(staleExit.cause)).toContain("InteractionRequestMismatchError")
+          }
+
+          const parked = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(parked.runtime._tag).toBe("WaitingForInteraction")
+
+          yield* client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: presented.requestId,
+            approved: true,
+            notes: "real approval",
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === finalReply),
+              ),
+            5_000,
+            "assistant reply after correct interaction response",
+          )
+
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "tool" &&
+                message.parts.some(
+                  (part) =>
+                    part.type === "tool-result" &&
+                    encodeJson(part.result).includes("real approval"),
+                ),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+})
+
+// ── extension-commands-rpc.test ─────────────────────────────────────────────
+
 class ProfileToken extends Context.Service<
   ProfileToken,
   {
     readonly read: Effect.Effect<string, never, never>
   }
->()("@gent/core/tests/server/extension-commands-rpc.test/ProfileToken") {}
+>()("@gent/core/tests/server/rpc.test/ProfileToken") {}
 const expectExtensionProtocolFailure = (cause: Cause.Cause<unknown>, message?: string) => {
   const error = Cause.squash(cause)
   expect(Schema.is(ExtensionProtocolError)(error)).toBe(true)
