@@ -1,14 +1,16 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import type { ModelDriverContribution, ProviderAuthInfo } from "@gent/core/extensions/api"
-import { collectTestContributions } from "@gent/core-internal/test-utils"
+import { collectTestContributions } from "@gent/core-internal/test-utils/index"
 import {
+  type FakeFetchState,
   makeFakeFetchState,
   oneGenerate,
-  type FakeFetchState,
 } from "@gent/core-internal/test-utils/language-model"
 import { GoogleExtension, MistralExtension } from "../src/providers.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
+
+// ── openai-compatible-providers.test ────────────────────────────────────────
 
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   type: "api",
