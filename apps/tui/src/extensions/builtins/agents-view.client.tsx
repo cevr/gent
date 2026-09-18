@@ -48,7 +48,7 @@ import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-
 import { ClientTransport, type ExtensionAgentDetail } from "../client-transport"
 import { SubagentTray, subtreeCounts } from "./agents-tray.client"
 
-export const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
+const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
 
 /**
  * Rows plus the load state, held in the setup closure.

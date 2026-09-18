@@ -8,7 +8,7 @@ export {
   type SideQuestionRun as SideQuestionRunType,
   type SideTurn as SideTurnType,
 } from "./btw.js"
-export { AgentsViewRpc, type AgentRowEntry } from "./agents-view/protocol.js"
+export { AgentsViewRpc, type AgentRowEntry } from "./agents-view.js"
 export {
   WAKE_EXTENSION_ID,
   WakeDetails,

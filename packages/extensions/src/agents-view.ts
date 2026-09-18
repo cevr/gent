@@ -1,3 +1,17 @@
+import { Effect, Option, Schema } from "effect"
+import {
+  BranchId,
+  defineExtension,
+  defineRequests,
+  ExtensionContext,
+  ExtensionHost,
+  ExtensionId,
+  request,
+  SessionId,
+} from "@gent/core/extensions/api"
+
+// ── projection ──────────────────────────────────────────────────────────────
+
 /**
  * Pure projection for the agents view.
  *
@@ -19,9 +33,6 @@
  *
  * @module
  */
-
-import { Option } from "effect"
-import type { BranchId, SessionId } from "@gent/core/extensions/api"
 
 /** Section an agent row is grouped under, in display order. */
 type AgentSection = "running" | "idle" | "inactive"
@@ -251,3 +262,150 @@ export const projectAgentRows = (params: {
   const tree = buildRowTree(propagated)
   return filterRows(tree, params.query ?? "")
 }
+
+// ── protocol ────────────────────────────────────────────────────────────────
+
+/**
+ * Agents view — the wire contract between the two halves.
+ *
+ * Split from `index.ts` so the client half can import the row schema and the
+ * capability ref without pulling in the server's projection code, and so
+ * `defineRequests` binds the extension id before either half runs.
+ *
+ * @module
+ */
+
+const AGENTS_VIEW_EXTENSION_ID = ExtensionId.make("@gent/agents-view")
+
+/**
+ * Wire shape for one row.
+ *
+ * `Option` fields flatten to optional keys: the projection's `Option` is an
+ * in-process representation, not a transport one.
+ */
+export const AgentRowEntry = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  section: Schema.Literals(["running", "idle", "inactive"]),
+  agent: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.Finite),
+  live: Schema.Boolean,
+  depth: Schema.Finite,
+  /** The session this loop was delegated from; absent at a tree root. */
+  parentSessionId: Schema.optional(SessionId),
+})
+export type AgentRowEntry = typeof AgentRowEntry.Type
+
+const ListAgentsInput = Schema.Struct({
+  /** Case-insensitive substring filter over name, agent, cwd, and ids. */
+  query: Schema.optional(Schema.String),
+})
+
+const ListAgentsOutput = Schema.Struct({
+  rows: Schema.Array(AgentRowEntry),
+})
+
+/**
+ * Join the live loop enumeration against durable session storage.
+ *
+ * Neither catalog is sufficient alone: the live one is empty after a restart,
+ * and the durable one cannot say what is running. See `./projection.js`.
+ */
+const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string) {
+  const ctx = yield* ExtensionContext
+
+  // A catalog read that fails is a host defect, not something the caller can
+  // recover from, so it dies rather than widening the capability's error type.
+  const activeLoops = yield* ctx.Session.listActiveLoops.pipe(Effect.orDie)
+  const sessions = yield* ctx.Session.listSessions.pipe(Effect.orDie)
+
+  // The live half. Status comes with the enumeration; metrics need a heavier
+  // per-loop read (the client transport's `agentDetail`), which it makes for one
+  // selected row at a time.
+  const live: ReadonlyArray<LiveAgentRow> = activeLoops.map((loop) => ({
+    sessionId: loop.sessionId,
+    branchId: loop.branchId,
+    agent: "main",
+    status: loop.status,
+  }))
+
+  // The durable half. One row per session, keyed to its active branch — a
+  // session with no active branch has never run and has no loop to show.
+  const durable: ReadonlyArray<DurableAgentRow> = sessions.flatMap((session) => {
+    const branchId = Option.fromUndefinedOr(session.activeBranchId)
+    if (Option.isNone(branchId)) return []
+    const parent = Option.all([
+      Option.fromUndefinedOr(session.parentSessionId),
+      Option.fromUndefinedOr(session.parentBranchId),
+    ]).pipe(Option.map(([sessionId, parentBranchId]) => ({ sessionId, branchId: parentBranchId })))
+    return [
+      {
+        sessionId: session.id,
+        branchId: branchId.value,
+        name: Option.fromUndefinedOr(session.name),
+        cwd: Option.fromUndefinedOr(session.cwd),
+        parent,
+        updatedAt: session.updatedAt.getTime(),
+      },
+    ]
+  })
+
+  return projectAgentRows({ live, durable, query })
+})
+
+export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
+  ListAgents: request({
+    id: "list-agents",
+    description: "List agent loops, live and stored, as display rows",
+    // The tray and pane read this while the session's own turn is running.
+    readonly: true,
+    input: ListAgentsInput,
+    output: ListAgentsOutput,
+    execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
+      const rows = yield* collectRows(input.query ?? "")
+      return {
+        rows: rows.map((row) => ({
+          sessionId: row.sessionId,
+          branchId: row.branchId,
+          section: row.section,
+          agent: Option.getOrUndefined(row.agent),
+          status: Option.getOrUndefined(row.status),
+          name: Option.getOrUndefined(row.name),
+          cwd: Option.getOrUndefined(row.cwd),
+          updatedAt: Option.getOrUndefined(row.updatedAt),
+          live: row.live,
+          depth: row.depth,
+          parentSessionId: Option.getOrUndefined(
+            Option.map(row.parent, (parent) => parent.sessionId),
+          ),
+        })),
+      }
+    }),
+  }),
+})
+
+// ── extension ───────────────────────────────────────────────────────────────
+
+/**
+ * Agents view — the server half.
+ *
+ * Per the third rule, the view is an extension of the loop, not core code and
+ * not app code. This half contributes one `request` capability returning the
+ * reconciled agent rows; the client half renders them.
+ *
+ * The wire contract lives in `./protocol.js` and the reconciliation in
+ * `./projection.js`, so the correctness is tested without a terminal.
+ *
+ * @module
+ */
+
+export const AgentsViewExtension = defineExtension({
+  id: AGENTS_VIEW_EXTENSION_ID,
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", AgentsViewRpc.ListAgents)
+  }),
+})
