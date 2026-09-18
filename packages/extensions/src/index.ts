@@ -8,7 +8,7 @@ import {
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CellExtension } from "./cell/cell-extension.js"
-import { CompactionExtension, ModelContextCompactorResource } from "./compaction/index.js"
+import { CompactionExtension, ModelContextCompactorResource } from "./compaction.js"
 import { CellBranchTools } from "./cell/cell-storage.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { DelegateExtension } from "./delegate.js"

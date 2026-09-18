@@ -95,7 +95,7 @@ updates this list in the same commit.
     A summary that cannot be produced degrades to truncation with a visible
     notice. Receipts: `packages/core/src/runtime/model-context-window.ts`,
     `packages/core/src/runtime/agent/turn-source.ts`,
-    `packages/extensions/src/compaction/model-compaction.ts`.
+    `packages/extensions/src/compaction.ts`.
 
 ### Known gaps
 

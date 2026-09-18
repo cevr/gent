@@ -9,7 +9,7 @@ import { RequestId } from "@gent/core-internal/domain/ids.js"
 import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import type { Message } from "@gent/core-internal/domain/message.js"
 import { CellTool } from "../../src/cell/cell-tool.js"
-import { CompactionExtension } from "../../src/compaction/index.js"
+import { CompactionExtension } from "../../src/compaction.js"
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   windowDetails,

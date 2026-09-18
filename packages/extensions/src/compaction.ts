@@ -1,21 +1,24 @@
-/**
- * Context handoff: summarise the history that leaves the window.
- *
- * Installed through `ModelContextCompactor`. The loop decides when a window
- * hands off and persists the marker; this module owns the summary prompt,
- * the input bound, and the notice text. The notice names the session, the
- * branch, and the message-id range it replaced, so the model can page any of
- * it back through the cell's `context.history` and `context.read`.
- *
- * @module
- */
-
-import { DateTime, Effect, Layer, Option, Predicate, Schema, Stream, type Scope } from "effect"
-import type { LanguageModel } from "effect/unstable/ai"
-import * as AiError from "effect/unstable/ai/AiError"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import type * as Response from "effect/unstable/ai/Response"
-import { BranchId, MessageId, type ModelId, SessionId } from "@gent/core/extensions/api"
+import {
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  type Scope,
+  Stream,
+} from "effect"
+import {
+  BranchId,
+  defineExtension,
+  defineResource,
+  ExtensionHost,
+  ExtensionId,
+  MessageId,
+  type ModelId,
+  SessionId,
+} from "@gent/core/extensions/api"
 import {
   type CompactionRequest,
   CompactionSummary,
@@ -28,10 +31,51 @@ import {
   type ProviderAuthError,
   type ProviderError,
   responseUsage,
+  type StorageError,
   toPrompt,
   type Usage,
 } from "@gent/core/extensions/branch-tools"
-import { RetainedBindings } from "./tool-contracts.js"
+import type { LanguageModel } from "effect/unstable/ai"
+import * as AiError from "effect/unstable/ai/AiError"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import type * as Response from "effect/unstable/ai/Response"
+
+// ── tool contracts ──────────────────────────────────────────────────────────
+
+/**
+ * What compaction asks of the tools on a branch.
+ *
+ * A tool that holds state between calls carries names the model expects to
+ * still be bound on the next turn; a handoff records what they hold so it
+ * does not strand them. Which tool holds state, and how it stores the answer,
+ * is that tool's business: it provides this Tag from its branch layer. No
+ * implementation means nothing is retained.
+ */
+
+interface RetainedBindingsApi {
+  readonly list: (params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<ReadonlyArray<string>, StorageError>
+}
+
+export class RetainedBindings extends Context.Service<RetainedBindings, RetainedBindingsApi>()(
+  "@gent/extensions/src/compaction/RetainedBindings",
+) {}
+
+// ── model compaction ────────────────────────────────────────────────────────
+
+/**
+ * Context handoff: summarise the history that leaves the window.
+ *
+ * Installed through `ModelContextCompactor`. The loop decides when a window
+ * hands off and persists the marker; this module owns the summary prompt,
+ * the input bound, and the notice text. The notice names the session, the
+ * branch, and the message-id range it replaced, so the model can page any of
+ * it back through the cell's `context.history` and `context.read`.
+ *
+ * @module
+ */
 
 /** Maximum estimated input tokens for one summary request. */
 const MODEL_COMPACTION_INPUT_TOKENS = 32_768
@@ -284,3 +328,23 @@ export const ModelContextCompactorLive = Layer.succeed(
     }),
   }),
 )
+
+// ── extension ───────────────────────────────────────────────────────────────
+
+const COMPACTION_EXTENSION_ID = ExtensionId.make("@gent/compaction")
+
+/** Summarises older history when the model window overflows or the model asks. */
+export const ModelContextCompactorResource = defineResource({
+  id: "@gent/compaction/model-context-compactor",
+  scope: "process",
+  tag: ModelContextCompactor,
+  layer: ModelContextCompactorLive,
+})
+
+export const CompactionExtension = defineExtension({
+  id: COMPACTION_EXTENSION_ID,
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("resource", ModelContextCompactorResource)
+  }),
+})

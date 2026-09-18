@@ -16,7 +16,7 @@ import {
   type ToolCallRecoveryService,
   eraseResourceLayer,
 } from "@gent/core/extensions/branch-tools"
-import { RetainedBindings } from "../compaction/tool-contracts.js"
+import { RetainedBindings } from "../compaction.js"
 import { Effect, Layer, Option } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { CellExecution } from "./cell-execution.js"
