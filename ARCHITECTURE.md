@@ -104,12 +104,12 @@ Kept here so the next pass starts from them, not from a fresh survey. Each
 names the decision that left it open.
 
 - **Typed fan-in for children (ledger A3) is rejected, not open.** The
-  cell already fans in: `Promise.all` over foreground `delegate` calls
-  returns typed `DelegateResult`s (gamut run 34: six in one cell), and
-  `background: true` returns a handle whose completion arrives as a user
-  message with `agent-child`/`agent-children` for inspection. A `collect`
-  would re-await what the cell awaits. Reopen only if a run shows a child
-  result needed inside a later cell before its message lands.
+  cell already fans in: `Promise.all` over `delegate.wait` calls returns
+  typed results (gamut run 34: six in one cell), and a `delegate.start`
+  nobody waits for returns a handle whose completion arrives as a user
+  message, with `delegate.list` for inspection. A `collect` would re-await
+  what the cell awaits. Reopen only if a run shows a child result needed
+  inside a later cell before its message lands.
 - **The agents view keeps a server half.** The live catalog
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
@@ -285,23 +285,28 @@ Shape:
   concurrency or token budget.
 - The `@gent/delegate` extension admits a child by creating a session through the
   `Session` facade with `parentSessionId`/`parentBranchId`, then `send`ing the
-  child's first message. It never blocks on the child. A `background: true` child
-  returns its handle at once; a foreground child is read back through the child's
-  own turn receipt. The delegate reserves at most four unfinished children per
-  parent branch, counted from its own on-disk registry, not live actors.
+  child's first message. `delegate.start` returns the handle at once, keyed by
+  the host tool call id so a replayed call finds its child; `delegate.wait`
+  awaits the child's own turn receipt. The delegate reserves at most four
+  unfinished children per parent branch, counted from its own on-disk registry,
+  not live actors.
 - The delegate keeps one child registry per parent branch as a JSON file under
-  `~/.gent/delegates/<branchId>.json`. `agent-children` reads it; the delegate
+  `~/.gent/delegates/<branchId>.json`. `delegate.list` reads it; the delegate
   reconciles it lazily on the parent's next turn and on every read, so a caller
   that died between the child's receipt and delivery leaves a child the registry
   still resolves, never a running one nobody delivers.
-- Completion delivery is the delegate's own `turnAfter` hook on the child branch.
-  It turns each child's terminal receipt into one idempotent follow-up message on
-  the parent branch (metadata `customType: "child-completion"`). The follow-up
-  carries `wake`, so a parent branch with no prior turn still starts a turn to
-  read it. The follow-up message id is the idempotency key.
-- `agent-child` with `cancel` deletes the child session through the facade; a
-  finished child is a no-op. `agent-child` with `send` steers a running child on
-  its branch, read at its next step; a finished child refuses the message.
+- One writer settles a child's completion. A live `delegate.wait` claims the
+  row under a per-process nonce and returns the output as its tool result; the
+  delegate's `turnAfter` hook on the child branch delivers every unclaimed
+  receipt as one idempotent follow-up message on the parent branch (metadata
+  `customType: "child-completion"`, `wake` set so a parent with no prior turn
+  still starts one). A claim naming another process is a crash leftover and
+  reads as unclaimed. An interrupted wait settles its row and interrupts the
+  child, so a parent Escape cascades through the wait; a start nobody waits
+  for outlives the parent's turn.
+- `delegate.cancel` interrupts the child's turn through the facade; a finished
+  child is a no-op. `delegate.send` steers a running child on its branch, read
+  at its next step; a finished child refuses the message.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
@@ -408,31 +413,24 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   session created through the addressed `Session` facade verbs (`create` with
   `parentSessionId`/`parentBranchId`, `send`, `steer`, `events`, `delete`). The
   delegate keeps its own child registry as one JSON file per parent branch under
-  `~/.gent/delegates/<branchId>.json`, so a `agent-children` list survives
-  restarts without any `durable_operations` row.
-- Completion delivery is the delegate's own `turnAfter` hook on the child
-  branch. It reads the child's turn receipt and queues one ordinary user message
-  on the parent branch (metadata `customType: "child-completion"`) with the
-  outcome and a bounded preview. Lazy reconcile covers the crash window between
-  the receipt and the hook: the delegate reconciles its registry on the parent's
-  next turn and on every `agent-children` read, so a caller that died mid-op
-  leaves a child the registry still resolves, never a running one nobody
-  delivers. No cell or tool waits for a child; the model reads completion on a
-  later turn.
-- The delegate ships `delegate` as one admission call plus `agent-child` and
-  `agent-children` as ordinary tools; `requireCurrentAgent` (a public-API
-  helper) reads the current agent through the `Agent` facet's `listAgents`.
-  `delegate` returns a tagged result: `completed` with the foreground child's
-  output, or `running` with the handle of a `background: true` child. It accepts
+  `~/.gent/delegates/<branchId>.json`, so a `delegate.list` survives restarts
+  without any `durable_operations` row.
+- Completion has one writer. A live `delegate.wait` holds the row and returns
+  the child's output as its tool result; the delegate's `turnAfter` hook on the
+  child branch delivers every unheld receipt as one ordinary user message on the
+  parent branch (metadata `customType: "child-completion"`) with the outcome and
+  a bounded preview. Lazy reconcile covers the crash window between the receipt
+  and the hook: the delegate reconciles its registry on the parent's next turn
+  and on every `delegate.list`, so a caller that died mid-op leaves a child the
+  registry still resolves, never a running one nobody delivers.
+- The delegate ships five ordinary tools: `delegate.start`, `delegate.wait`,
+  `delegate.send`, `delegate.cancel`, `delegate.list`. `delegate.start` accepts
   RunSpec overrides for model, reasoning, tool selection, and added
   instructions, and always denies the child the delegation tools: fan-out is the
   caller's decision, and a project prompt that addresses "the orchestrator"
-  reaches children too. The parent can message a running child (`agent-child`
-  with `send`): the text is steering on the child's branch, read at its next
-  step. A finished child refuses the message. Parents read child output through
-  `read_session` on the returned session/branch IDs. The session is the only
-  copy of a child's output; a result carries text, usage, tool calls, and the
-  session id.
+  reaches children too. Parents read child output through `read_session` on the
+  returned session/branch IDs. The session is the only copy of a child's output;
+  a wait result carries text, usage, tool calls, and the session id.
 - The TUI child view reads the delegate's registry via `DelegateRpc.Children`,
   scoped to the parent branch. It repaints on the delegate's
   `ExtensionStateChanged` pulses and hydrates each child's tool calls and stream
@@ -441,7 +439,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn.
-- One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as `read_session` goal extraction pass `visibility: "private"`. A run may pass `history: "inherit"` to seed its branch with a copy of the parent branch's visible messages; `/btw` uses this for tool-less side questions that never write back to the parent.
+- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared. Helper runs such as `read_session` goal extraction pass `visibility: "private"`. A run may pass `history: "inherit"` to seed its branch with a copy of the parent branch's visible messages; `/btw` uses this for tool-less side questions that never write back to the parent.
 - Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time; `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note }`; `fired` is an alarm, `matched`/`timed-out` a monitor) with `wake: true`; firing removes the entry. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from `wake.list`. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
 - Foreground runs persist a child session/branch and can be revisited with `read_session`. Private runs leave no session behind; they return text/usage/tool-call metadata only.
@@ -547,8 +545,9 @@ exposes catalog text without the private execution metadata. Projection hooks se
 the resolved driver, including config overrides. `.gent/config.json` `agents`
 reshapes an agent per name (`modelId`, `reasoningEffort`, `contextLength`, tool lists, prompt
 addendum); project entries shadow user entries and a run's `RunSpec.overrides`
-shadows both, so a workspace can pin its orchestrator model while a `delegate`
-call still picks a different model and effort for each child. The loop has no `cell` name rule
+shadows both, so a workspace pins its orchestrator model under `main` and its
+children's model under `delegate`, and a `delegate.start` call can still pick a
+different model and effort for one child. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
 to core. Test presets that exercise host tools directly omit it.
