@@ -72,7 +72,7 @@ work remains in the FX Rift. The warm source was not changed.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/themes/fx.json`
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render.zig`
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render_engine/footer_layout.zig`
@@ -215,8 +215,8 @@ session switching, draft preservation, and full-transcript inspection.
 
 Source evidence:
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette-state.ts`: category selection and reset rules.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: category header and keyboard handling.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: category selection and reset rules.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: category header and keyboard handling.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+solid@0.5.10+8ea6d8f27251ca40/node_modules/@opentui/solid/index.bun.js`: `createScrollbackWriter` and `writeSolidToScrollback`.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/renderer.d.ts`: split-footer mode, scrollback surfaces, and replay reset.
 
@@ -519,7 +519,7 @@ directly after each title. FX uses a separate description column.
 
 - `/tmp/gent-fx-ui-menu-current.ansi`: current Gent menu.
 - `/tmp/gent-fx-ui-herdr-fx-menu.ansi`: reference FX menu.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: menu rows and outer border.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: menu rows and outer border.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: related completion menu layout.
 
 ## Picker layout pass
@@ -545,7 +545,7 @@ No appearance-only tests were added.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: shared menu frame and help row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/picker-text.ts`: grapheme-safe end clipping.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/platform/text-width-adapter.ts`: runtime text-width adapter.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: aligned command rows and narrow help.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: aligned command rows and narrow help.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: aligned completion rows and narrow help.
 - `/tmp/gent-fx-ui-picker-aligned.ansi`: equal-width menu frame comparison.
 - `/tmp/gent-fx-ui-picker-narrow-final.ansi`: narrow command menu with end ellipses.
@@ -670,7 +670,7 @@ The user's wide Gent pane and caller focus were restored. This fixes the
 reproduced menu-entry fault. It does not prove every native-history case.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: combines command menu and session overlay state.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/command/context.tsx`: command menu open state.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: command menu open state.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: native-output readiness and write/reset guards.
 - `/tmp/gent-fx-ui-menu-narrow-direct.ansi`: minimal failing menu entry.
 - `/tmp/gent-fx-ui-menu-delayed.ansi`: failure after a six-second startup delay.
@@ -929,7 +929,7 @@ left more blank rows above the live tail. Native-history spacing needs a
 separate check before final acceptance.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: screen ownership and snapshot replay.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: theme selection and Gent command list.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: theme selection and Gent command list.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/themes/fx.json`: expected light RGB values.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/builtins/commands.zig`: `/quit` exits the reference shell.
 - `/tmp/fx-final-narrow-idle.ansi`: fresh FX idle surface.
@@ -1012,7 +1012,7 @@ All terminal control streams ended. The original layout and debug session
 were restored.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: shared six-result height budget.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: unique session actions and preserved descriptions.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: unique session actions and preserved descriptions.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: matching completion height and filter row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: fresh transcript display origin.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/render-harness-boundary.tsx`: in-memory terminal setup before mounting.
@@ -1401,7 +1401,7 @@ or shortcuts. Rows without that column use the available title width.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/utils/session-labels.ts`: model context and debug labels.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/extensions/builtins/artifacts.client.ts`: shipped bottom-right artifact count.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/README.md`: workspace status default.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: session navigation and conditional detail column.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: session navigation and conditional detail column.
 - `/tmp/gent-fx-ui-shell-draft-return.txt`: restored draft and shell marker.
 
 The final Herdr capture shows complete session names at the same narrow
@@ -1429,7 +1429,7 @@ shows `Commands › debug` with one separator. FX's auth picker also uses a
 width-bounded query suffix; this is source evidence for the shared display
 choice, not a claim that every FX picker has identical internals.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: bounded query prefix and row.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: bounded query prefix and row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/picker-text.ts`: grapheme-safe query suffix.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/footer/picker_presentation.zig`: `teamQueryProjection` uses `suffixByWidth`.
 - `/tmp/gent-fx-ui-query-before.ansi`: wrapped query collides with the lower rule.
@@ -1637,7 +1637,7 @@ returns unchanged. A different draft on the second branch also returns unchanged
 Neither draft was submitted. Feed behavior tests cover identity changes and old
 navigation events. No appearance-only test was added. Full gate and E2E pass.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/use-session-feed.test.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/dependencies.ts`

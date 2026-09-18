@@ -26,7 +26,7 @@ import { useRequiredContext } from "../utils"
 import { builtinClientModules } from "./builtins/index"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { HeadlessToolRenderer } from "../headless"
-import type { Command } from "../command/types"
+import type { Command } from "../commands"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
 import type {
   AutocompleteContribution,

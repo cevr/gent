@@ -1,7 +1,7 @@
 import { createEffect, onCleanup, type Accessor } from "solid-js"
 import { Match, Option, Schema, type Effect } from "effect"
 import type { ClientContextValue } from "../client"
-import type { Command } from "../command/types"
+import type { Command } from "../commands"
 import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import { type FrecencyLookup, noFrecency, rankAutocompleteItems } from "../autocomplete"
 import { resolveModelQuery, type ModelQueryResult } from "../client/model-query"

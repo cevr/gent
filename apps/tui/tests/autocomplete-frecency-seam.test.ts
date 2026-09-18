@@ -29,7 +29,7 @@ import {
   readFrecencyStore,
   recordPick,
 } from "../src/autocomplete"
-import type { Command } from "../src/command/types"
+import type { Command } from "../src/commands"
 import type {
   AnyExtensionClientModule,
   AutocompleteContribution,

@@ -22,7 +22,7 @@ import {
   transitionComposerInteraction,
 } from "../../src/components/composer-interaction-state"
 import { ComposerState } from "../../src/components/composer-state"
-import { useCommand } from "../../src/command/context"
+import { useCommand } from "../../src/commands"
 import { useExtensionUI } from "../../src/extensions/context"
 import {
   SessionControllerContext,

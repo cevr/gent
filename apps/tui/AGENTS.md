@@ -196,4 +196,4 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 | `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup |
 | `src/utils/shell.ts`                        | Shell execution + truncation      |
 | `src/utils.ts`                              | @file#line expansion              |
-| `src/commands/slash-commands.ts`            | Slash command handlers            |
+| `src/commands.tsx`                          | Slash command handlers            |

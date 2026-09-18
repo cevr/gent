@@ -1,6 +1,5 @@
 import { describe, expect, test } from "effect-bun-test"
-import { executeSlashCommand, parseSlashCommand } from "../src/commands/slash-commands"
-import type { Command } from "../src/command/types"
+import { type Command, executeSlashCommand, parseSlashCommand } from "../src/commands"
 
 describe("parseSlashCommand", () => {
   test("parses simple command", () => {

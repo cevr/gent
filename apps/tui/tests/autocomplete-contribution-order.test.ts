@@ -18,7 +18,7 @@ import { slashAutocompleteItems } from "../src/routes/session-command-registry"
 import { builtinClientModules } from "../src/extensions/builtins/index"
 import { runAutocompleteContributions } from "../src/components/autocomplete-popup-boundary"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import type { Command } from "../src/command/types"
+import type { Command } from "../src/commands"
 import type {
   AnyExtensionClientModule,
   AutocompleteContribution,

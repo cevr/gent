@@ -62,7 +62,7 @@ import {
   server,
   sessions,
   storage,
-} from "./ops/commands"
+} from "./ops"
 
 // Clear client log on startup
 clearClientLog()

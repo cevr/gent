@@ -1,19 +1,20 @@
 /** @jsxImportSource @opentui/solid */
-
-import { createEffect, createMemo, createResource, createSignal, Show } from "solid-js"
-import { useTerminalDimensions } from "../terminal"
-import { matchSorter } from "match-sorter"
-import { Option } from "effect"
-import { useClient } from "../client"
-import type { Session as DomainSession } from "@gent/sdk"
-import { useCommand } from "../command/context"
+import { Array, Match, Option, Predicate, Schema } from "effect"
 import {
-  CommandPaletteEvent,
-  CommandPaletteState,
-  transitionCommandPalette,
-  type PaletteItem,
-  type PaletteLevel,
-} from "./command-palette-state"
+  type Accessor,
+  createContext,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  type JSX,
+  Show,
+} from "solid-js"
+import { truncate, truncateStart, useRequiredContext } from "./utils"
+import { useTerminalDimensions } from "./terminal"
+import { matchSorter } from "match-sorter"
+import { useClient } from "./client"
+import type { Session as DomainSession } from "@gent/sdk"
 import {
   ChromePanel,
   PickerFrame,
@@ -22,10 +23,365 @@ import {
   SelectList,
   type SelectListApi,
   type SelectListRow,
-} from "../ui"
-import { truncate, truncateStart } from "../utils"
-import { textWidth } from "../platform/text-width-adapter"
-import { useTheme } from "../theme"
+} from "./ui"
+import { textWidth } from "./platform/text-width-adapter"
+import { useTheme } from "./theme"
+
+// ── command types ───────────────────────────────────────────────────────────
+
+export interface Command {
+  id: string
+  title: string
+  description?: string
+  category?: string
+  keybind?: string
+  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
+  slash?: string
+  /** Additional slash names that resolve to this command */
+  aliases?: readonly string[]
+  /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
+  slashPriority?: number
+  onSelect: () => void
+  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
+  onSlash?: (args: string) => void
+}
+
+interface Keybind {
+  key: string
+  ctrl: boolean
+  shift: boolean
+  meta: boolean
+}
+
+function parseKeybind(config: string): Option.Option<Keybind> {
+  if (config.length === 0) return Option.none()
+
+  const parts = config.toLowerCase().split("+")
+  const keybind: Keybind = {
+    key: "",
+    ctrl: false,
+    shift: false,
+    meta: false,
+  }
+
+  for (const part of parts) {
+    switch (part) {
+      case "ctrl":
+      case "control":
+        keybind.ctrl = true
+        break
+      case "shift":
+        keybind.shift = true
+        break
+      case "meta":
+      case "cmd":
+      case "command":
+        keybind.meta = true
+        break
+      default:
+        keybind.key = part
+        break
+    }
+  }
+
+  return Option.some(keybind)
+}
+
+function matchKeybind(
+  keybind: Keybind,
+  event: { name: string; ctrl?: boolean; shift?: boolean; meta?: boolean },
+): boolean {
+  return (
+    keybind.key === event.name.toLowerCase() &&
+    keybind.ctrl === (event.ctrl ?? false) &&
+    keybind.shift === (event.shift ?? false) &&
+    keybind.meta === (event.meta ?? false)
+  )
+}
+
+// ── command registry ────────────────────────────────────────────────────────
+
+interface CommandContextValue {
+  commands: Accessor<Command[]>
+  register: (commands: Command[]) => () => void
+  trigger: (id: string) => void
+  handleKeybind: (event: {
+    name: string
+    ctrl?: boolean
+    shift?: boolean
+    meta?: boolean
+  }) => boolean
+  paletteOpen: Accessor<boolean>
+  openPalette: () => void
+  closePalette: () => void
+}
+
+const CommandContext = createContext<CommandContextValue>()
+
+export function useCommand(): CommandContextValue {
+  return useRequiredContext(CommandContext, "useCommand must be used within CommandProvider")
+}
+
+interface CommandProviderProps {
+  children: JSX.Element
+}
+
+export function CommandProvider(props: CommandProviderProps) {
+  const [registrations, setRegistrations] = createSignal<Command[][]>([])
+  const [paletteOpen, setPaletteOpen] = createSignal(false)
+
+  const commands = () => {
+    const seen = new Set<string>()
+    const all: Command[] = []
+    for (const reg of registrations()) {
+      for (const cmd of reg) {
+        if (seen.has(cmd.id)) continue
+        seen.add(cmd.id)
+        all.push(cmd)
+      }
+    }
+    return all
+  }
+
+  const register = (cmds: Command[]) => {
+    setRegistrations((arr) => [...arr, cmds])
+    return () => {
+      setRegistrations((arr) => arr.filter((x) => x !== cmds))
+    }
+  }
+
+  const trigger = (id: string) => {
+    const cmd = commands().find((c) => c.id === id)
+    cmd?.onSelect()
+  }
+
+  const handleKeybind = (event: {
+    name: string
+    ctrl?: boolean
+    shift?: boolean
+    meta?: boolean
+  }): boolean => {
+    // Check for palette keybind (Ctrl+P)
+    if (event.ctrl === true && event.name === "p" && event.shift !== true && event.meta !== true) {
+      setPaletteOpen(true)
+      return true
+    }
+
+    // Don't process keybinds when palette is open
+    if (paletteOpen()) return false
+
+    for (const cmd of commands()) {
+      const kb = Option.flatMap(Option.fromNullishOr(cmd.keybind), parseKeybind)
+      if (Option.isSome(kb) && matchKeybind(kb.value, event)) {
+        cmd.onSelect()
+        return true
+      }
+    }
+    return false
+  }
+
+  const value: CommandContextValue = {
+    commands,
+    register,
+    trigger,
+    handleKeybind,
+    paletteOpen,
+    openPalette: () => setPaletteOpen(true),
+    closePalette: () => setPaletteOpen(false),
+  }
+
+  return <CommandContext.Provider value={value}>{props.children}</CommandContext.Provider>
+}
+
+// ── slash commands ──────────────────────────────────────────────────────────
+
+/**
+ * Slash command resolution — looks up commands by slash name or alias.
+ */
+
+interface SlashCommandResult {
+  handled: boolean
+  // eslint-disable-next-line effect/noNullish -- command results omit an error on success.
+  error?: string
+}
+
+/**
+ * Find and execute a slash command from the command registry.
+ * Matches by `slash` or `aliases`, sorted by `slashPriority` (lower wins).
+ */
+export const executeSlashCommand = (
+  cmd: string,
+  args: string,
+  commands: ReadonlyArray<Command>,
+): SlashCommandResult => {
+  const lowerCmd = cmd.toLowerCase()
+
+  // Collect all matching commands, sort by priority
+  const matches = commands
+    .filter((c) => {
+      const slash = Option.fromNullishOr(c.slash)
+      if (Option.isNone(slash)) return false
+      if (slash.value.toLowerCase() === lowerCmd) return true
+      const aliases = Option.fromNullishOr(c.aliases)
+      if (Option.isNone(aliases)) return false
+      return aliases.value.some((a) => a.toLowerCase() === lowerCmd)
+    })
+    .sort((a, b) => {
+      const aPriority = Option.getOrElse(Option.fromNullishOr(a.slashPriority), () => 10)
+      const bPriority = Option.getOrElse(Option.fromNullishOr(b.slashPriority), () => 10)
+      return aPriority - bPriority
+    })
+
+  const match = Option.fromNullishOr(matches[0])
+  if (Option.isNone(match)) {
+    return { handled: false, error: `Unknown command: /${cmd}` }
+  }
+
+  const onSlash = Option.fromNullishOr(match.value.onSlash)
+  if (Option.isSome(onSlash)) onSlash.value(args)
+  else match.value.onSelect()
+  return { handled: true }
+}
+
+/**
+ * Parse slash command from input
+ * @returns [command, args] or null if not a slash command
+ */
+// eslint-disable-next-line effect/noNullish -- parser API uses null as its no-match sentinel.
+export function parseSlashCommand(input: string): [string, string] | null {
+  const trimmed = input.trim()
+  // eslint-disable-next-line effect/noNullish -- parser API uses null as its no-match sentinel.
+  if (!trimmed.startsWith("/")) return null
+
+  const spaceIdx = trimmed.indexOf(" ")
+  if (spaceIdx === -1) {
+    return [trimmed.slice(1), ""]
+  }
+
+  return [trimmed.slice(1, spaceIdx), trimmed.slice(spaceIdx + 1).trim()]
+}
+
+/**
+ * Whether `/name` is a registered slash command, matched like
+ * {@link executeSlashCommand} does — by `slash` or `aliases`, case-insensitively.
+ *
+ * The composer asks this to decide whether completing a slash name should
+ * dispatch the command or only insert its text. No command in this repo
+ * requires an argument: the arg-aware ones (`/model`, `/think`, `/goal`,
+ * `/driver`, `/loop`, `/btw`) all treat an empty arg as "open my picker" or
+ * "show usage", so naming a command is always enough to run it.
+ */
+export const isSlashCommandName = (cmd: string, commands: ReadonlyArray<Command>): boolean => {
+  const lowerCmd = cmd.toLowerCase()
+  return commands.some((c) => {
+    const slash = Option.fromNullishOr(c.slash)
+    if (Option.isNone(slash)) return false
+    if (slash.value.toLowerCase() === lowerCmd) return true
+    const aliases = Option.fromNullishOr(c.aliases)
+    if (Option.isNone(aliases)) return false
+    return aliases.value.some((a) => a.toLowerCase() === lowerCmd)
+  })
+}
+
+// ── palette state ───────────────────────────────────────────────────────────
+
+/** A menu item in the command palette. */
+interface PaletteItem {
+  readonly id: string
+  readonly title: string
+  readonly description?: string
+  readonly category?: string
+  readonly shortcut?: string
+  readonly disabled?: boolean
+  readonly onSelect: () => void
+}
+
+/** A structural level in the palette stack.
+ *
+ *  `source` is a Solid accessor — can be a plain function for sync levels
+ *  or a `Resource` for async levels. Returns `undefined` while loading. */
+interface PaletteLevel {
+  readonly id: string
+  readonly title: string
+  // eslint-disable-next-line effect/noNullish -- Solid Resource returns undefined while its request is pending.
+  readonly source: Accessor<readonly PaletteItem[] | undefined>
+  readonly onEnter?: () => void
+}
+
+/**
+ * What the palette owns beyond its list: the level stack and the category
+ * lens on the current level. The query and the cursor belong to the
+ * `SelectList` it mounts.
+ */
+interface CommandPaletteState {
+  readonly levelStack: readonly PaletteLevel[]
+  readonly category: string
+}
+
+const PaletteSourceSchema = Schema.declare<PaletteLevel["source"]>(
+  (value): value is PaletteLevel["source"] => Predicate.isFunction(value),
+)
+const PaletteOnEnterSchema = Schema.declare<() => void>((value): value is () => void =>
+  Predicate.isFunction(value),
+)
+const PaletteLevelSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  source: PaletteSourceSchema,
+  onEnter: Schema.optionalKey(PaletteOnEnterSchema),
+})
+
+const CommandPaletteEvent = Schema.TaggedUnion({
+  Open: { rootLevel: PaletteLevelSchema },
+  Close: {},
+  PushLevel: { level: PaletteLevelSchema },
+  PopLevel: {},
+  SelectCategory: { category: Schema.String },
+})
+type CommandPaletteEvent = Schema.Schema.Type<typeof CommandPaletteEvent>
+
+const initial = (): CommandPaletteState => ({
+  levelStack: [],
+  category: "",
+})
+
+const currentLevel = (state: CommandPaletteState): Option.Option<PaletteLevel> =>
+  Array.last(state.levelStack)
+
+const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPaletteState => ({
+  levelStack: [...state.levelStack, level],
+  category: "",
+})
+
+const popLevel = (state: CommandPaletteState): CommandPaletteState => {
+  if (state.levelStack.length <= 1) return state
+  return {
+    levelStack: state.levelStack.slice(0, -1),
+    category: "",
+  }
+}
+
+const CommandPaletteState = {
+  initial,
+  currentLevel,
+}
+
+function transitionCommandPalette(
+  state: CommandPaletteState,
+  event: CommandPaletteEvent,
+): CommandPaletteState {
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      Open: (event) => ({ ...initial(), levelStack: [event.rootLevel] }),
+      Close: () => initial(),
+      PushLevel: (event) => pushLevel(state, event.level),
+      PopLevel: () => popLevel(state),
+      SelectCategory: (event) => ({ ...state, category: event.category }),
+    }),
+  )
+}
+
+// ── command palette ─────────────────────────────────────────────────────────
 
 const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
   if (query.length === 0) return items

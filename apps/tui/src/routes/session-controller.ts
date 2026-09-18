@@ -26,8 +26,7 @@ import {
   type ComposerEffect,
   ComposerState,
 } from "../components/composer-state"
-import { executeSlashCommand } from "../commands/slash-commands"
-import { useCommand } from "../command/context"
+import { executeSlashCommand, useCommand } from "../commands"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useAutocompleteFrecency } from "../hooks/use-autocomplete-frecency"
 import { useScopedKeyboard, type ScopedKeyboardEvent } from "../terminal"
