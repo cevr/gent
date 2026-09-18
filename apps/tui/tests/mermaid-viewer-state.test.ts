@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { MermaidViewerState, transitionMermaidViewer } from "../src/components/mermaid-viewer-state"
+import { MermaidViewerState, transitionMermaidViewer } from "../src/mermaid"
 
 describe("transitionMermaidViewer", () => {
   test("open resets viewer state", () => {

@@ -29,7 +29,7 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "../components/settings-picker"
-import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
+import { collectDiagrams, MermaidViewer } from "../mermaid"
 import { QueueWidget } from "../components/queue-widget"
 import { useWorkspace } from "../workspace"
 import {

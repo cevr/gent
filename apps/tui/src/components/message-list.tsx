@@ -16,7 +16,7 @@ import { SessionEventIndicator } from "./session-event-indicator"
 import type { SessionEvent } from "./session-event-label"
 import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "../client"
-import { replaceMermaidBlocks } from "../utils/mermaid"
+import { replaceMermaidBlocks } from "../mermaid"
 import { reasoningMarkdown } from "./reasoning-text"
 import {
   type ActivityCall,
