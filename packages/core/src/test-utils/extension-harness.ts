@@ -23,7 +23,7 @@ import {
   testExtensionProcess,
   testExtensionState,
 } from "./extension-host-context.js"
-import { createDependencies, StateLocation } from "../server/dependencies.js"
+import { createDependencies, StateLocation } from "../server/server.js"
 import {
   stubAgentRunnerLayer,
   testAgentsExtension,

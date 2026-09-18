@@ -11,6 +11,7 @@ import {
   SteerCommand,
 } from "../domain/agent.js"
 import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
+import { StorageError } from "../storage/storage.js"
 import { EventEnvelope, EventStoreError } from "../domain/event.js"
 import {
   BranchId,
@@ -24,7 +25,6 @@ import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
-import { StorageError } from "../storage/storage.js"
 import {
   AuthAuthorization,
   AuthMethod,

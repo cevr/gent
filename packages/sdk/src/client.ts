@@ -13,7 +13,7 @@ import {
   type GentRpcClient,
   type MessagePart,
 } from "@gent/core/protocol"
-import { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
+import { RpcHandlersLive } from "@gent/core-internal/server/server.js"
 import {
   makeNamespacedClient,
   type GentNamespacedClient,

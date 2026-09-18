@@ -14,8 +14,7 @@ import { GentPlatform } from "../../../src/runtime/gent-platform"
 import { SessionRuntime, type SessionRuntimeService } from "../../../src/runtime/session"
 import { AgentLoopSessionGovernance } from "../../../src/runtime/agent-loop"
 import { GentRpcs } from "../../../src/server/rpc"
-import { RpcHandlersLive } from "../../../src/server/rpc-handlers"
-import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
+import { RpcHandlersLive, SessionMutationsLive } from "../../../src/server/server"
 import { WORKSPACE_ID_HEADER, WorkspaceId } from "../../../src/server/workspace-rpc"
 import {
   BranchStorage,

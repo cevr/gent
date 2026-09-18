@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
-import { buildExtensionHealthSnapshot } from "../../src/server/extension-health"
+import { buildExtensionHealthSnapshot } from "../../src/server/server"
 import {
   ExtensionHealth,
   ExtensionHealthIssue,

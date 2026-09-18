@@ -9,7 +9,7 @@ import { textStep } from "../../src/test-utils/sequence-steps"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { GentRpcs } from "../../src/server/rpc"
-import { RpcHandlersLive } from "../../src/server/rpc-handlers"
+import { RpcHandlersLive } from "../../src/server/server"
 import {
   CurrentWorkspaceId,
   WORKSPACE_ID_HEADER,

@@ -287,8 +287,10 @@ const protectedHostFactFile = (file: string): boolean =>
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
-    pattern:
-      /@gent\/core-internal\/server\/(?:dependencies|connection-tracker|server-identity|server-routes)\.js/,
+    // Every hand-composable app service now lives in server/server.ts;
+    // server-root.ts is the one composition root an entrypoint may import.
+    // A type-only import composes nothing, so only a value import is banned.
+    pattern: /^(?!import type\b).*@gent\/core-internal\/server\/server\.js/,
     message: "Server entrypoints must use server-root instead of hand-composing app services",
   },
 ]

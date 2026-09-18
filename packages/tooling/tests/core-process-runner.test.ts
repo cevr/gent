@@ -32,7 +32,7 @@ describe("process runner guard", () => {
   test("leaves InProcessRunner and runProcess alone", () => {
     expect(
       findProcessRunnerFindings(
-        "packages/core/src/server/dependencies.ts",
+        "packages/core/src/server/server.ts",
         'import { InProcessRunner } from "../runtime/agent/agent-runner.js"',
       ),
     ).toEqual([])

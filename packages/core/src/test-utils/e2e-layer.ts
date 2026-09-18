@@ -31,7 +31,7 @@ import type { GentPlatform } from "../runtime/gent-platform.js"
 import { ExtensionHost } from "../extensions/api.js"
 import { testHostFacts } from "./index.js"
 import { buildServerRoot } from "../server/server-root.js"
-import { StateLocation } from "../server/dependencies.js"
+import { StateLocation } from "../server/server.js"
 import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/tools.js"
 import {
   stubAgentRunnerLayer,

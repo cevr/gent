@@ -14,7 +14,7 @@ import { BranchId, SessionId } from "../../src/domain/ids.js"
 import { Branch, dateFromMillis } from "../../src/domain/message.js"
 import { StorageError } from "../../src/domain/errors.js"
 import { BranchStorage } from "../../src/storage/storage.js"
-import { getBranchTree, buildBranchTree } from "../../src/server/session-utils.js"
+import { getBranchTree, buildBranchTree } from "../../src/server/server.js"
 
 const SESSION_ID = SessionId.make("test-session")
 const ROOT_ID = BranchId.make("branch-root")

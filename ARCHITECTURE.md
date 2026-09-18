@@ -40,7 +40,7 @@ updates this list in the same commit.
 5. **Event and projection commit together.** A session mutation writes its
    row and its events in one transaction, so a reader never sees one without
    the other. Receipt: `transactWithEvent` in
-   `packages/core/src/server/session-mutations-live.ts`.
+   `packages/core/src/server/server.ts`.
 6. **Tool calls replay from durable bindings.** A resumed turn re-delivers a
    tool result from `tool_call_bindings`; it never re-runs the tool.
    Receipts: `packages/core/src/storage/storage.ts`,
@@ -67,7 +67,7 @@ updates this list in the same commit.
 11. **A model change is a durable user-role notice.** Switching models writes
     one `model-change` message the next turn reads; an effort change writes
     nothing. Receipt: `modelChangeNotice` in
-    `packages/core/src/server/session-mutations-live.ts`.
+    `packages/core/src/server/server.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
     Receipts: `buildTurnPromptSections` in
@@ -188,7 +188,7 @@ Adapters:
 
 - `packages/sdk/src/client.ts`
 - `packages/core/src/server/rpc.ts`
-- `packages/core/src/server/server-routes.ts`
+- `packages/core/src/server/server.ts`
 
 Rule:
 
@@ -200,7 +200,7 @@ Rule:
 
 The app surface is split by concern:
 
-- `SessionMutations` (`packages/core/src/domain/extension.ts`; `SessionMutationsLive` in `packages/core/src/server/session-mutations-live.ts`) — every durable session/branch mutation, including `createSession`; request-id-bearing mutations replay their durable operation row and collapse concurrent same-request fibers in-process
+- `SessionMutations` (`packages/core/src/domain/extension.ts`; `SessionMutationsLive` in `packages/core/src/server/server.ts`) — every durable session/branch mutation, including `createSession`; request-id-bearing mutations replay their durable operation row and collapse concurrent same-request fibers in-process
 - `SessionQueries`
 - `InteractionCommands`
 
@@ -210,7 +210,7 @@ The app surface is split by concern:
 
 `AppServicesLive` is assembled inline at the top of `packages/core/src/server/server-root.ts` (private to the file — `buildServerRoot` is the only consumer).
 
-`packages/core/src/server/dependencies.ts` owns startup wiring:
+`packages/core/src/server/server.ts` owns startup wiring:
 
 - runtime platform
 - storage/event store
@@ -245,7 +245,7 @@ The production server uses one live profile owner:
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
   live. There is no reconciler, publication, or admission lease.
-- `server/dependencies.ts` selects the launch profile from that cache.
+- `server/server.ts` selects the launch profile from that cache.
 
 Turn profiles carry the process identity that built them. A process-local tool
 binding names that process and is valid only inside it.
@@ -1139,7 +1139,7 @@ Wide event boundaries (one structured log per unit of work) via `effect-wide-eve
 | Agent turn   | `agent-loop`  | `runtime/agent-loop.ts`   |
 | Tool call    | `tool-runner` | `runtime/tools.ts`        |
 | Model stream | `model`       | `runtime/agent-loop.ts`   |
-| RPC request  | `rpc`         | `server/rpc-handlers.ts`  |
+| RPC request  | `rpc`         | `server/server.ts`        |
 | Agent run    | `agent-run`   | `runtime/child-agents.ts` |
 
 Logging conventions:

@@ -2,19 +2,24 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Clock, Context, Effect, Layer } from "effect"
 import type { Scope } from "effect"
 import type { FileSystem } from "effect/FileSystem"
-import { createDependencies, type DependenciesConfig } from "./dependencies.js"
+import {
+  buildServerRoutes,
+  ConnectionTracker,
+  type ConnectionTrackerService,
+  createDependencies,
+  type DependenciesConfig,
+  RpcHandlersLive,
+  ServerIdentity,
+  type ServerIdentityApi,
+} from "./server.js"
 
 /**
  * A root names where its state lives when it names the root. Re-exported here
  * so a server entrypoint takes both from `server-root` and never reaches into
  * the dependency graph directly.
  */
-export { StateLocation } from "./dependencies.js"
+export { StateLocation } from "./server.js"
 
-import { ConnectionTracker, type ConnectionTrackerService } from "./connection-tracker.js"
-import { ServerIdentity, type ServerIdentityApi } from "./server-identity.js"
-import { buildServerRoutes } from "./server-routes.js"
-import { RpcHandlersLive } from "./rpc-handlers.js"
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels

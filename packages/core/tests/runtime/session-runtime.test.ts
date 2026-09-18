@@ -53,7 +53,7 @@ import {
 import { InteractionPendingError } from "../../src/domain/interaction"
 import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { SessionMutationsLive } from "../../src/server/session-mutations-live"
+import { SessionMutationsLive } from "../../src/server/server"
 import {
   BranchStorage,
   MessageStorage,

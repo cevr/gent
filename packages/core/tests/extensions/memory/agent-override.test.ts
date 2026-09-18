@@ -11,7 +11,7 @@ import { LanguageModelLayers } from "../../../src/test-utils/language-model"
 import { textStep } from "../../../src/test-utils/sequence-steps"
 import { AgentEvent, EventPublisherLive } from "../../../src/domain/event"
 import { type ExtensionContributions, SessionMutations } from "../../../src/domain/extension"
-import { SessionMutationsLive } from "../../../src/server/session-mutations-live"
+import { SessionMutationsLive } from "../../../src/server/server"
 import { noBranchTools, ToolRunner } from "../../../src/runtime/tools"
 import {
   ApprovalService,

@@ -16,7 +16,7 @@ import { GentPlatform } from "../../src/runtime/gent-platform"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { makeRequestDeduper, SessionRuntimeError } from "../../src/runtime/session"
 import { SessionMutations } from "../../src/domain/extension"
-import { SessionMutationsLive } from "../../src/server/session-mutations-live"
+import { SessionMutationsLive } from "../../src/server/server"
 import type { SteerCommand } from "../../src/domain/agent"
 import {
   BranchStorage,

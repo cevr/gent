@@ -28,7 +28,7 @@ import { dataPaths } from "./data-paths.js"
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core-internal/runtime/tools.js"
 import type { GentExtension } from "@gent/core/extensions/api"
-import type { RpcHandlersLive } from "@gent/core-internal/server/rpc-handlers.js"
+import type { RpcHandlersLive } from "@gent/core-internal/server/server.js"
 import { seedDebugSession } from "./debug-session.js"
 import {
   provideWorkspaceIdHeader,

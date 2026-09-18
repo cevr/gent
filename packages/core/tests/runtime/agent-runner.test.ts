@@ -104,7 +104,7 @@ import {
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { CapabilityError } from "../../src/domain/capability"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "../../src/test-utils"
-import { SessionMutationsLive } from "../../src/server/session-mutations-live"
+import { SessionMutationsLive } from "../../src/server/server"
 import { CurrentWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { SessionRuntimeStateSchema, type SessionRuntimeState } from "../../src/domain/agent-loop"
 import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"

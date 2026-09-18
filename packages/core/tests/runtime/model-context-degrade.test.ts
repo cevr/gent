@@ -10,7 +10,7 @@ import { textStep } from "../../src/test-utils/sequence-steps"
 import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
 import { ModelRegistry } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
-import { getSessionSnapshot } from "../../src/server/rpc-handlers"
+import { getSessionSnapshot } from "../../src/server/server"
 import {
   BranchStorage,
   EventStorage,

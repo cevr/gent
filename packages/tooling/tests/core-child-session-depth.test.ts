@@ -16,18 +16,18 @@ yield* sessionStorage.createSession(
 describe("child-session depth guard", () => {
   test("flags a core writer that nests a session without the shared admission", () => {
     const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/session-mutations-live.ts",
+      "packages/core/src/server/server.ts",
       childWriter,
     )
     expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/server/session-mutations-live.ts:3",
+      "packages/core/src/server/server.ts:3",
     ])
     expect(findings[0]?.message).toContain("admitChildSessionDepth")
   })
 
   test("accepts a writer once the file calls the shared admission", () => {
     const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/session-mutations-live.ts",
+      "packages/core/src/server/server.ts",
       `yield* admitChildSessionDepth(input.parentSessionId)\n${childWriter}`,
     )
     expect(findings).toEqual([])
@@ -35,7 +35,7 @@ describe("child-session depth guard", () => {
 
   test("ignores a root session row", () => {
     const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/session-mutations-live.ts",
+      "packages/core/src/server/server.ts",
       "new Session({ id, name, createdAt: now, updatedAt: now })",
     )
     expect(findings).toEqual([])

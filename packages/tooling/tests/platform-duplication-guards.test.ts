@@ -505,7 +505,7 @@ describe("platform duplication guards", () => {
     // mode, test harness) and must not trip the guard.
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/server/dependencies.ts",
+        "packages/core/src/server/server.ts",
         "persistenceMode === 'memory' ? EventStore.Memory : Layer.provide(EventStoreLive, ...)",
       ),
     ).toEqual([])
@@ -514,12 +514,12 @@ describe("platform duplication guards", () => {
   test("flags Bun platform providers outside platform roots", () => {
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/server/dependencies.ts",
+        "packages/core/src/server/server.ts",
         "Layer.provide(Auth.Live(dir), BunPlatformLive)",
       ),
     ).toEqual([
       {
-        file: "packages/core/src/server/dependencies.ts",
+        file: "packages/core/src/server/server.ts",
         line: 1,
         message: "Bun platform layers may only be provided by platform roots",
       },
@@ -1144,8 +1144,8 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/sdk/src/server.ts",
         [
-          'import { createDependencies } from "@gent/core-internal/server/dependencies.js"',
-          'import { buildServerRoutes } from "@gent/core-internal/server/server-routes.js"',
+          'import { createDependencies } from "@gent/core-internal/server/server.js"',
+          'import { buildServerRoutes } from "@gent/core-internal/server/server.js"',
         ].join("\n"),
       ),
     ).toEqual([

@@ -9,7 +9,7 @@ import { textStep } from "../../src/test-utils/sequence-steps"
 import { finishPart, LanguageModelLayers, textDeltaPart } from "../../src/test-utils/language-model"
 import { ModelRegistry, TEST_MODEL_CONTEXT_LIMIT_TOKENS } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
-import { getSessionSnapshot } from "../../src/server/rpc-handlers"
+import { getSessionSnapshot } from "../../src/server/server"
 import { BranchStorage, EventStorage, SessionStorage } from "../../src/storage/storage"
 import { baseLocalLayerWithProvider } from "../../src/test-utils/in-process-layer"
 const cowork = AgentDefinition.make({
