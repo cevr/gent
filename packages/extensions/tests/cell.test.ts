@@ -18,6 +18,8 @@ import {
 } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/config.js"
+import { SessionRuntime } from "@gent/core-internal/runtime/session.js"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -86,10 +88,8 @@ import { defineExtension, ExtensionContext, ExtensionHost, tool } from "@gent/co
 import {
   AgentDefinition,
   AgentName,
-  AgentRunnerService,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
-  makeRunSpec,
   SteerCommand,
 } from "@gent/core-internal/domain/agent.js"
 import {
@@ -100,6 +100,7 @@ import {
   createE2ELayer,
   createRpcHarness,
   ensureStorageParents,
+  runToolWithCtx,
   testHostFacts,
   testToolContext,
 } from "@gent/core-internal/test-utils/index.js"
@@ -145,12 +146,12 @@ import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domai
 import {
   ChildAgentHandle,
   ControlChildAgent,
+  DelegateEntry,
   DelegateExtension,
   DelegateTool,
 } from "../src/delegate.js"
 import { ReadSessionTool } from "../src/session-tools.js"
 import { Gent } from "@gent/sdk"
-import { admitChildSession } from "@gent/core-internal/runtime/child-agents.js"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { StorageError } from "@gent/core-internal/domain/errors.js"
@@ -2550,7 +2551,6 @@ describe("foreground child cell", () => {
             },
           ],
           branchTools: CellBranchTools,
-          subagentRunner: "live",
           extraLayers: [
             Layer.succeed(
               GentPlatform,
@@ -2733,7 +2733,6 @@ describe("branch cell lifetime", () => {
             },
           ],
           branchTools: CellBranchTools,
-          subagentRunner: "live",
           extraLayers: [
             Layer.succeed(
               GentPlatform,
@@ -2954,6 +2953,53 @@ describe("branch cell lifetime", () => {
 
 // ── cell/cell-recovery.test ─────────────────────────────────────────────────
 
+/**
+ * The delegate registry is one JSON array per parent branch under
+ * `<home>/.gent/delegates`. Seeding it is how a test admits a durable child
+ * the way a crashed process would have left one behind.
+ */
+const encodeRegistry = Schema.encodeSync(Schema.fromJsonString(Schema.Array(DelegateEntry)))
+
+const seedDelegateRegistry = Effect.fn("test.seedDelegateRegistry")(function* (
+  branchId: BranchId,
+  entries: ReadonlyArray<DelegateEntry>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const directory = `${(yield* RuntimeEnvironment).home}/.gent/delegates`
+  yield* fs.makeDirectory(directory, { recursive: true })
+  yield* fs.writeFileString(`${directory}/${branchId}.json`, encodeRegistry(entries))
+})
+
+/**
+ * The leaf view `agent-child` sees when the parent branch runs it. The real
+ * host context carries the session facade the tool steers through, so the
+ * cancellation reaches the child's loop exactly as it does in production.
+ */
+const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (parent: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}) {
+  const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
+  // Outside a loop the facade has no session control, so the cancellation the
+  // tool steers would die. The runtime is the same door the loop opens.
+  const runtime = yield* SessionRuntime
+  const provider = yield* makeExtensionHostContextProvider({
+    host: testHostFacts().host,
+    extensionRegistry: profile.registryService,
+    sessionControl: {
+      queueFollowUp: (input) => runtime.queueFollowUp(input),
+      dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
+      send: (input) => runtime.sendUserMessage(input),
+      steer: (command) => runtime.steer(command),
+    },
+  })
+  return {
+    ...provider.forRun({ ...parent, sessionCwd: "/tmp" }),
+    extensionId: ExtensionId.make("cell-recovery"),
+    toolCallId: ToolCallId.make("agent-child-call"),
+  }
+})
+
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,
   parent: { readonly sessionId: SessionId; readonly branchId: BranchId },
@@ -2972,21 +3018,20 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   )(outer.value.result)
   const operation = recovered.operations[0]
   if (Predicate.isUndefined(operation)) return yield* Effect.die("Missing unknown child operation")
-  const runner = yield* AgentRunnerService
-  const handle = {
-    parentSessionId: parent.sessionId,
-    parentBranchId: parent.branchId,
-    requestId: RequestId.make(operation.toolCallId),
-  }
-  expect(Option.isNone((yield* runner.inspect(handle)).completion)).toBe(true)
-  yield* runner.cancel(handle)
+  const requestId = RequestId.make(operation.toolCallId)
+  const ctx = yield* delegateToolContext(parent)
+  const observe = (action: "inspect" | "cancel") =>
+    runToolWithCtx(ControlChildAgent, { action, requestId }, ctx)
+  expect((yield* observe("inspect"))._tag).toBe("Pending")
+  yield* observe("cancel")
   const cancelled = yield* waitFor(
-    runner.inspect(handle),
-    (observed) => Option.isSome(observed.completion),
+    observe("inspect"),
+    (observed) => observed._tag === "Completed",
     2000,
     "cancelled child completion",
   )
-  expect(Option.getOrUndefined(cancelled.completion)?.interrupted).toBe(true)
+  if (cancelled._tag !== "Completed") return yield* Effect.die("child never completed")
+  expect(cancelled.interrupted).toBe(true)
 })
 
 it.scopedLive(
@@ -3058,6 +3103,12 @@ it.scopedLive(
         ]
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("Recovered"),
+          // The orphaned child's own turn. It is gated and never released, so
+          // the child is still at the model when the parent cancels it — the
+          // state a lost worker leaves behind.
+          { ...textStep("child"), gated: true },
+          // The parent reads the cancelled child's completion message.
+          textStep("Child cancelled"),
         ])
         // Keep the real server context to seed the crash gap before actor startup.
         const context = yield* Layer.build(
@@ -3068,7 +3119,6 @@ it.scopedLive(
             extensionInputs: [],
             branchTools: CellBranchTools,
             durableApproval: true,
-            subagentRunner: "live",
           }),
         )
         const { client } = yield* Gent.test(Layer.succeedContext(context))
@@ -3147,18 +3197,24 @@ it.scopedLive(
               input: { agent: DEFAULT_AGENT_NAME, prompt },
             })
             const toolCallId = admitted.operation.toolCallId
-            yield* admitChildSession({
-              agent: { name: DEFAULT_AGENT_NAME },
-              prompt,
+            const child = yield* client.session.create({
               cwd: "/tmp",
               parentSessionId: sessionId,
               parentBranchId: branchId,
-              toolCallId,
-              admission: {
-                requestId: RequestId.make(toolCallId),
-                runSpec: makeRunSpec({ parentToolCallId: toolCallId }),
-              },
             })
+            yield* seedDelegateRegistry(branchId, [
+              {
+                requestId: RequestId.make(toolCallId),
+                sessionId: child.sessionId,
+                branchId: child.branchId,
+                agentName: DEFAULT_AGENT_NAME,
+                prompt,
+                toolCallId,
+                background: true,
+                submitted: false,
+                delivered: false,
+              },
+            ])
           }
           if (state === "unadmitted" || state === "revoked") {
             const captured = yield* captureCurrentToolBinding("cell")
@@ -3268,7 +3324,27 @@ it.scopedLive(
             Effect.provideContext(context),
             Effect.provideService(CurrentWorkspaceId, workspaceId),
           )
-          expect(yield* controls.callCount).toBe(1)
+          // The cancelled child reports back, so the parent reads it in one
+          // more turn. Three model calls in all: the recovery turn, the
+          // child's gated turn, and the parent reading the completion. The
+          // recovered cell itself never replayed — that is the two results
+          // asserted above, not a fourth call.
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some(
+                (message) => message.metadata?.customType === "child-completion",
+              ),
+            5000,
+            "the cancelled child reported to the parent",
+          )
+          expect(
+            settled.messages.filter(
+              (message) => message.metadata?.customType === "child-completion",
+            ),
+          ).toHaveLength(1)
+          expect(yield* controls.callCount).toBe(3)
         }
         if (state === "completed") expect(outer).toEqual(savedResult)
         else if (state === "unadmitted")

@@ -81,7 +81,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "../domain/capability.js"
-import { type AgentDefinition, AgentRunnerService, Model } from "../domain/agent.js"
+import { type AgentDefinition, Model } from "../domain/agent.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
 import {
   DriverError,
@@ -2247,7 +2247,6 @@ export const makeExtensionHostContextProvider = (
     const branches = yield* facet(BranchStorage, "BranchStorage")
     const messages = yield* facet(MessageStorage, "MessageStorage")
     const relationships = yield* facet(RelationshipStorage, "RelationshipStorage")
-    const agents = yield* facet(AgentRunnerService, "AgentRunnerService")
     const mutations = yield* facet(SessionMutations, "SessionMutations")
     const eventStore = yield* facet(EventStore, "EventStore")
     // Enumerating a workspace's loops needs only the actor state registry,
@@ -2415,58 +2414,6 @@ export const makeExtensionHostContextProvider = (
 
       Agent: {
         listAgents: Effect.succeed([...extensionRegistry.getResolved().agents.values()]),
-        start: (params) =>
-          agents((runner) =>
-            runner.start({
-              ...params,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
-            }),
-          ),
-        inspect: (params) =>
-          agents((runner) =>
-            runner.inspect({
-              requestId: params.requestId,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        list: () =>
-          agents((runner) =>
-            runner.list({
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        cancel: (params) =>
-          agents((runner) =>
-            runner.cancel({
-              requestId: params.requestId,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        send: (params) =>
-          agents((runner) =>
-            runner.send({
-              ...params,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        run: (params) =>
-          agents((runner) =>
-            runner.run({
-              agent: params.agent,
-              prompt: params.prompt,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
-              runSpec: params.runSpec,
-              observe: params.observe,
-            }),
-          ).pipe(Effect.mapError(extensionServiceError("ExtensionAgent", "run"))),
       },
 
       Session: {

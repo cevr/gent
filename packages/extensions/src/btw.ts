@@ -10,6 +10,7 @@ import {
   request,
   requireCurrentAgent,
 } from "@gent/core/extensions/api"
+import { runChild } from "./delegate.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       const finish = (change: (run: SideQuestionRun) => SideQuestionRun) =>
         runs.update(branchId, change).pipe(Effect.andThen(pulse))
       // Services are captured here: the run continues after this request's scope closes.
-      const work = ctx.Agent.run({
+      const work = runChild({
         agent,
         prompt: sideQuestionPrompt({ question, previous: input.previous }),
         runSpec: makeRunSpec({
@@ -205,6 +206,8 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
         Effect.catchCause((cause) =>
           finish((run) => ({ ...run, done: true, error: Cause.pretty(cause) })),
         ),
+        // The context is captured here: the run outlives this request's scope.
+        Effect.provideService(ExtensionContext, ctx),
       )
       yield* runs.fork(work)
       return { started: true }

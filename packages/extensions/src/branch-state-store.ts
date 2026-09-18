@@ -7,9 +7,13 @@
  * cycle is serialized under the file lock across concurrent hooks. The
  * consumer binds only what differs: the directory, the codec, the empty value,
  * and the error a corrupt file raises.
+ *
+ * The store reads the current branch by default; `at(branchId)` binds the
+ * same operations to another branch's file, for a hook that runs on a child
+ * and writes its parent's record.
  */
-import { Effect, Schema } from "effect"
-import { ExtensionContext } from "@gent/core/extensions/api"
+import { Effect, Option, Schema } from "effect"
+import { type BranchId, ExtensionContext } from "@gent/core/extensions/api"
 
 interface BranchStateStoreInput<A, E> {
   /** Span prefix, e.g. `GoalStore`. */
@@ -27,54 +31,59 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
   const decode = Schema.decodeUnknownEffect(input.codec)
   const encode = Schema.encodeSync(input.codec)
 
-  const path = Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const directory = ctx.Files.join(ctx.home, ".gent", input.directory)
-    return { directory, file: ctx.Files.join(directory, `${ctx.branchId}.json`) }
-  })
+  const bind = (branch: Option.Option<BranchId>) => {
+    const path = Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
+      const directory = ctx.Files.join(ctx.home, ".gent", input.directory)
+      const branchId = Option.getOrElse(branch, () => ctx.branchId)
+      return { directory, file: ctx.Files.join(directory, `${branchId}.json`) }
+    })
 
-  const read = Effect.fn(`${input.name}.read`)(function* () {
-    const ctx = yield* ExtensionContext
-    const { file } = yield* path
-    if (!(yield* ctx.Files.exists(file))) return input.empty
-    const text = yield* ctx.Files.read(file)
-    return yield* decode(text).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
-  })
-
-  const write = Effect.fn(`${input.name}.write`)(function* (value: A) {
-    const ctx = yield* ExtensionContext
-    const { directory, file } = yield* path
-    yield* ctx.Files.makeDirectory(directory, { recursive: true })
-    yield* ctx.Files.write(file, encode(value), { atomic: true })
-  })
-
-  /**
-   * Serializes read-modify-write cycles on one branch across concurrent hooks.
-   * Returning the value that was read skips the write.
-   */
-  const modify = <B, E2, R>(
-    update: (current: A) => Effect.Effect<{ readonly next: A; readonly result: B }, E2, R>,
-  ) =>
-    Effect.gen(function* () {
+    const read = Effect.fn(`${input.name}.read`)(function* () {
       const ctx = yield* ExtensionContext
       const { file } = yield* path
-      return yield* ctx.FileLock.withLock(
-        file,
-        Effect.gen(function* () {
-          const current = yield* read()
-          const { next, result } = yield* update(current)
-          if (next !== current) yield* write(next)
-          return result
-        }),
-      )
+      if (!(yield* ctx.Files.exists(file))) return input.empty
+      const text = yield* ctx.Files.read(file)
+      return yield* decode(text).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
     })
 
-  /** A pure replacement of the branch value under the lock; resolves to the value written. */
-  const update = (change: (current: A) => A) =>
-    modify((current) => {
-      const next = change(current)
-      return Effect.succeed({ next, result: next })
+    const write = Effect.fn(`${input.name}.write`)(function* (value: A) {
+      const ctx = yield* ExtensionContext
+      const { directory, file } = yield* path
+      yield* ctx.Files.makeDirectory(directory, { recursive: true })
+      yield* ctx.Files.write(file, encode(value), { atomic: true })
     })
 
-  return { read, modify, update }
+    /**
+     * Serializes read-modify-write cycles on one branch across concurrent hooks.
+     * Returning the value that was read skips the write.
+     */
+    const modify = <B, E2, R>(
+      update: (current: A) => Effect.Effect<{ readonly next: A; readonly result: B }, E2, R>,
+    ) =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        const { file } = yield* path
+        return yield* ctx.FileLock.withLock(
+          file,
+          Effect.gen(function* () {
+            const current = yield* read()
+            const { next, result } = yield* update(current)
+            if (next !== current) yield* write(next)
+            return result
+          }),
+        )
+      })
+
+    /** A pure replacement of the branch value under the lock; resolves to the value written. */
+    const update = (change: (current: A) => A) =>
+      modify((current) => {
+        const next = change(current)
+        return Effect.succeed({ next, result: next })
+      })
+
+    return { read, modify, update }
+  }
+
+  return { ...bind(Option.none()), at: (branchId: BranchId) => bind(Option.some(branchId)) }
 }

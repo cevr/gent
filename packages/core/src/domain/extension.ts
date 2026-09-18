@@ -15,9 +15,6 @@ import {
 import {
   type AgentDefinition,
   type AgentName,
-  type AgentRunError,
-  type AgentRunResult,
-  type ChildAgentRegistryEntry,
   DEFAULT_AGENT_NAME,
   type RunSpec,
   type SessionDepthLimitError,
@@ -43,11 +40,12 @@ import {
   type ActorCommandId,
   type BranchId,
   ExtensionId,
+  type MessageId,
   type RequestId,
   type SessionId,
   type ToolCallId,
 } from "./ids.js"
-import type { AgentEvent, EventStoreError, TurnCompleted } from "./event.js"
+import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
@@ -427,6 +425,8 @@ export interface SystemPromptInput {
 export interface TurnAfterInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  /** The user message that opened the turn; `TurnCompleted.messageId` carries the same id. */
+  readonly messageId: MessageId
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
@@ -874,62 +874,17 @@ export interface ExtensionSessionService {
   >
 }
 
-interface ExtensionAgentStartParams {
-  readonly agent: AgentDefinition
-  readonly prompt: string
-  readonly requestId: RequestId
-  readonly cwd?: string
-  readonly runSpec?: RunSpec
-}
-
-interface ExtensionAgentRunParams {
-  readonly agent: AgentDefinition
-  readonly prompt: string
-  readonly cwd?: string
-  readonly runSpec?: RunSpec
-  /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
-  readonly observe?: (event: AgentEvent) => Effect.Effect<void>
-}
-
+/**
+ * The roster a child inherits from. Delegation lives in the `@gent/delegate`
+ * extension, built on the `Session` facade; the facet keeps only the roster
+ * lookup, which the host owns.
+ */
 interface ExtensionAgentService {
   readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
-  /** Start from a host-owned tool call. The host supplies parent and tool identity. */
-  readonly start: (
-    params: ExtensionAgentStartParams,
-  ) => Effect.Effect<
-    { readonly sessionId: SessionId; readonly branchId: BranchId },
-    AgentRunError | ExtensionServiceError
-  >
-  readonly inspect: (params: { readonly requestId: RequestId }) => Effect.Effect<
-    {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly completion: Option.Option<TurnCompleted>
-    },
-    AgentRunError
-  >
-  readonly list: () => Effect.Effect<ReadonlyArray<ChildAgentRegistryEntry>, AgentRunError>
-  readonly cancel: (params: { readonly requestId: RequestId }) => Effect.Effect<void, AgentRunError>
-  /** Message a child that is still running. `sendId` makes a replayed call deliver once. */
-  readonly send: (params: {
-    readonly requestId: RequestId
-    readonly message: string
-    readonly sendId: RequestId
-  }) => Effect.Effect<void, AgentRunError>
-  readonly run: (
-    params: ExtensionAgentRunParams,
-  ) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
 }
 
-/** The host's agent facet. `start` still needs the tool call the child is owned by. */
-export interface ExtensionHostAgentService extends Omit<ExtensionAgentService, "start"> {
-  readonly start: (
-    params: ExtensionAgentStartParams & { readonly toolCallId: ToolCallId },
-  ) => Effect.Effect<
-    { readonly sessionId: SessionId; readonly branchId: BranchId },
-    AgentRunError | ExtensionServiceError
-  >
-}
+/** The host's agent facet: the same roster lookup, forwarded from the run that built it. */
+export type ExtensionHostAgentService = ExtensionAgentService
 
 export interface ExtensionInteractionService {
   readonly approve: (
@@ -1063,19 +1018,6 @@ const extensionServicesFromHostContext = (
     readonly turn?: ExtensionTurnContext
   },
 ): Context.Context<ExtensionContext> => {
-  const Agent: ExtensionAgentService = {
-    ...ctx.Agent,
-    start: Effect.fn("ExtensionAgent.start")(function* (params) {
-      if (Predicate.isUndefined(ctx.toolCallId)) {
-        return yield* new ExtensionServiceError({
-          service: "ExtensionAgent",
-          operation: "start",
-          message: "Child start requires a host-owned tool call",
-        })
-      }
-      return yield* ctx.Agent.start({ ...params, toolCallId: ctx.toolCallId })
-    }),
-  }
   const extensionIdOption = Option.fromUndefinedOr(ctx.extensionId)
   return Context.empty().pipe(
     Context.add(ExtensionContext, {
@@ -1088,7 +1030,7 @@ const extensionServicesFromHostContext = (
       cwd: ctx.cwd,
       home: ctx.home,
       Session: ctx.Session,
-      Agent,
+      Agent: ctx.Agent,
       Interaction: ctx.Interaction,
       Process: ctx.Process,
       Files: ctx.Files,

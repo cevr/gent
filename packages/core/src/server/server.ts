@@ -109,7 +109,7 @@ import {
   type SessionRuntimeError,
 } from "../runtime/session.js"
 import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
-import type { AgentRunnerService, DriverRef } from "../domain/agent.js"
+import type { DriverRef } from "../domain/agent.js"
 import {
   Auth,
   AuthApi,
@@ -148,7 +148,6 @@ import {
 import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { PromptSection } from "../domain/capability.js"
-import { ChildCompletionDelivery, InProcessRunner } from "../runtime/child-agents.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow } from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
@@ -1502,7 +1501,6 @@ interface DependencyOverrides {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
-  readonly agentRunnerLayer?: Layer.Layer<AgentRunnerService>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
@@ -1785,12 +1783,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const allWithRuntime = Layer.mergeAll(allDeps, sessionMutationsLive, sessionRuntimeLive)
 
-  const agentRuntimeLive =
-    config.overrides?.agentRunnerLayer ??
-    Layer.provide(
-      InProcessRunner.pipe(Layer.provideMerge(ChildCompletionDelivery.Live)),
-      allWithRuntime,
-    )
   const runtimeWithHandlers = Layer.provideMerge(
     Layer.unwrap(
       Effect.gen(function* () {
@@ -1799,7 +1791,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         return AgentLoopLiveActor({ baseSections: baseSectionsSeed.value })
       }),
     ),
-    Layer.merge(allWithRuntime, agentRuntimeLive),
+    allWithRuntime,
   )
   return Layer.merge(
     runtimeWithHandlers,

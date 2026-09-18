@@ -15,7 +15,7 @@ import {
   TxQueue,
   TxRef,
 } from "effect"
-import { clipChars, Message } from "./message.js"
+import { Message } from "./message.js"
 import {
   BranchId,
   branded,
@@ -25,7 +25,7 @@ import {
   SessionId,
   ToolCallId,
 } from "./ids.js"
-import { AgentName, ModelId, ReasoningEffort } from "./agent.js"
+import { ModelId, ReasoningEffort } from "./agent.js"
 
 // ── event ───────────────────────────────────────────────────────────────────
 
@@ -235,37 +235,6 @@ export const AgentEvent = Schema.TaggedUnion({
     fromBranchId: BranchId,
     toBranchId: BranchId,
   },
-  AgentRunSpawned: {
-    parentSessionId: SessionId,
-    childSessionId: SessionId,
-    agentName: AgentName,
-    prompt: Schema.String,
-    toolCallId: Schema.optional(ToolCallId),
-    branchId: Schema.optional(BranchId),
-    childBranchId: Schema.optional(BranchId),
-  },
-  AgentRunSucceeded: {
-    parentSessionId: SessionId,
-    childSessionId: SessionId,
-    agentName: AgentName,
-    toolCallId: Schema.optional(ToolCallId),
-    branchId: Schema.optional(BranchId),
-    usage: Schema.optional(
-      Schema.Struct({
-        input: Schema.Finite,
-        output: Schema.Finite,
-        cost: Schema.optional(Schema.Finite),
-      }),
-    ),
-    preview: Schema.optional(Schema.String),
-  },
-  AgentRunFailed: {
-    parentSessionId: SessionId,
-    childSessionId: SessionId,
-    agentName: AgentName,
-    toolCallId: Schema.optional(ToolCallId),
-    branchId: Schema.optional(BranchId),
-  },
   /**
    * Typed state-change notification emitted when an extension's
    * externally-observable state may have changed. Carries no payload —
@@ -343,43 +312,6 @@ export const BranchCreated = AgentEvent.cases.BranchCreated
 export type BranchCreated = typeof AgentEvent.cases.BranchCreated.Type
 export const BranchSwitched = AgentEvent.cases.BranchSwitched
 export type BranchSwitched = typeof AgentEvent.cases.BranchSwitched.Type
-export const AgentRunSpawned = AgentEvent.cases.AgentRunSpawned
-export type AgentRunSpawned = typeof AgentEvent.cases.AgentRunSpawned.Type
-export const AgentRunSucceeded = AgentEvent.cases.AgentRunSucceeded
-export type AgentRunSucceeded = typeof AgentEvent.cases.AgentRunSucceeded.Type
-/** Bounded child reply carried on `AgentRunSucceeded.preview`. Every producer clips through here. */
-const agentRunPreviewChars = 200
-const clipPreview = (text: string): string => clipChars(text, agentRunPreviewChars)
-/**
- * The one receipt a finished child run publishes. Both producers — the
- * in-process runner and child-completion delivery — build it here, so the
- * preview clip and the usage shape cannot drift apart.
- */
-export const childRunSucceeded = (params: {
-  readonly parentSessionId: SessionId
-  readonly childSessionId: SessionId
-  readonly agentName: AgentName
-  readonly toolCallId?: ToolCallId
-  readonly branchId?: BranchId
-  readonly usage?: { readonly input: number; readonly output: number; readonly cost?: number }
-  readonly text: string
-}) => {
-  const fields = {
-    parentSessionId: params.parentSessionId,
-    childSessionId: params.childSessionId,
-    agentName: params.agentName,
-    preview: clipPreview(params.text),
-  }
-  if (Predicate.isNotUndefined(params.toolCallId)) {
-    Object.assign(fields, { toolCallId: params.toolCallId })
-  }
-  if (Predicate.isNotUndefined(params.branchId))
-    Object.assign(fields, { branchId: params.branchId })
-  if (Predicate.isNotUndefined(params.usage)) Object.assign(fields, { usage: params.usage })
-  return AgentRunSucceeded.make(fields)
-}
-export const AgentRunFailed = AgentEvent.cases.AgentRunFailed
-export type AgentRunFailed = typeof AgentEvent.cases.AgentRunFailed.Type
 export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 export const StreamSynchronized = AgentEvent.cases.StreamSynchronized
@@ -476,10 +408,9 @@ export const makeSerializedEventDelivery = (
   })
 
 // Every variant names its session as `sessionId`, except the message
-// envelope and the child-run receipts, which name the parent.
+// envelope, which names it on the message.
 export const getEventSessionId = (event: AgentEvent): SessionId => {
   if (event._tag === "MessageReceived") return event.message.sessionId
-  if ("parentSessionId" in event) return event.parentSessionId
   return event.sessionId
 }
 

@@ -1,7 +1,5 @@
-import { Context, Option, Predicate, Schema, SchemaGetter } from "effect"
+import { Option, Predicate, Schema, SchemaGetter } from "effect"
 import { BranchId, branded, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
-import type * as EffectNs from "effect/Effect"
-import type { AgentEvent, TurnCompleted } from "./event.js"
 import { omitUndefined } from "./guards.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
@@ -363,124 +361,16 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
     max: Schema.Int,
   },
 ) {}
-/** Maximum unfinished durable start receipts owned by one parent branch. */
-export const DEFAULT_MAX_PENDING_AGENT_STARTS = 4
-/** Model attempts one child turn may spend before it stops, unless the caller sets `maxModelAttempts`. */
-export const DEFAULT_MAX_CHILD_MODEL_ATTEMPTS = 32
-
-// Agent runner types
-
+/**
+ * One child turn's tool call, in the shape the delegate persists on its run
+ * receipt and `message.ts` decodes when replaying a child's history.
+ */
 export const AgentRunToolCallSchema = Schema.Struct({
   toolName: Schema.String,
   args: Schema.Record(Schema.String, Schema.Unknown),
   isError: Schema.Boolean,
 })
 export type AgentRunToolCall = Schema.Schema.Type<typeof AgentRunToolCallSchema>
-
-const AgentRunUsageSchema = Schema.Struct({
-  input: Schema.Finite,
-  output: Schema.Finite,
-  cost: Schema.optional(Schema.Finite),
-})
-type AgentRunUsage = typeof AgentRunUsageSchema.Type
-
-/** The receipt's token totals in the run-result shape. */
-export const agentRunUsage = (usage: {
-  readonly inputTokens: number
-  readonly outputTokens: number
-}): AgentRunUsage => ({ input: usage.inputTokens, output: usage.outputTokens })
-
-const AgentRunSuccessStruct = Schema.TaggedStruct("Success", {
-  text: Schema.String,
-  sessionId: SessionId,
-  agentName: AgentName,
-  usage: Schema.optional(AgentRunUsageSchema),
-  toolCalls: Schema.optional(Schema.Array(AgentRunToolCallSchema)),
-})
-const AgentRunFailureStruct = Schema.TaggedStruct("Error", {
-  error: Schema.String,
-  sessionId: Schema.optional(SessionId),
-  agentName: Schema.optional(AgentName),
-})
-
-export const AgentRunResult = Schema.Union([AgentRunSuccessStruct, AgentRunFailureStruct]).pipe(
-  Schema.toTaggedUnion("_tag"),
-)
-export type AgentRunResult = Schema.Schema.Type<typeof AgentRunResult>
-
-export class AgentRunError extends Schema.TaggedError<AgentRunError>()("AgentRunError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
-
-/** One child known to the parent host. Completed is a turn receipt, not task success. */
-export const ChildAgentRegistryEntry = Schema.Struct({
-  requestId: RequestId,
-  sessionId: SessionId,
-  branchId: BranchId,
-  agentName: AgentName,
-  completed: Schema.Boolean,
-})
-export type ChildAgentRegistryEntry = typeof ChildAgentRegistryEntry.Type
-
-export interface AgentRunner {
-  /** Admit one durable child. Reuse requestId only with identical input. */
-  readonly start: (params: {
-    agent: AgentDefinition
-    prompt: string
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    cwd: string
-    requestId: RequestId
-    toolCallId: ToolCallId
-    runSpec?: RunSpec
-  }) => EffectNs.Effect<{ sessionId: SessionId; branchId: BranchId }, AgentRunError>
-  /** Missing completion is unknown, not proof of a running child. */
-  readonly inspect: (params: {
-    requestId: RequestId
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-  }) => EffectNs.Effect<
-    { sessionId: SessionId; branchId: BranchId; completion: Option.Option<TurnCompleted> },
-    AgentRunError
-  >
-  /** The parent-owned child registry for one branch. Completion arrives as a follow-up message. */
-  readonly list: (params: {
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-  }) => EffectNs.Effect<ReadonlyArray<ChildAgentRegistryEntry>, AgentRunError>
-  /** Submit cancellation for the admitted turn only. Completion arrives as a follow-up message. */
-  readonly cancel: (
-    params: Parameters<AgentRunner["inspect"]>[0],
-  ) => EffectNs.Effect<void, AgentRunError>
-  /**
-   * Put a message into the child's running turn; it reads it at its next
-   * step. A finished child takes no more messages: one start owes the parent
-   * one completion, and a second turn would have no one to report to.
-   * `sendId` makes a replayed call deliver once.
-   */
-  readonly send: (
-    params: Parameters<AgentRunner["inspect"]>[0] & {
-      readonly message: string
-      readonly sendId: RequestId
-    },
-  ) => EffectNs.Effect<void, AgentRunError>
-  readonly run: (params: {
-    agent: AgentDefinition
-    prompt: string
-    parentSessionId: SessionId
-    parentBranchId: BranchId
-    cwd: string
-    /** Per-run dispatch config. `history`, `visibility`, `overrides`, `tags`, `parentToolCallId`. */
-    runSpec?: RunSpec
-    /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. */
-    observe?: (event: AgentEvent) => EffectNs.Effect<void>
-  }) => EffectNs.Effect<AgentRunResult, AgentRunError>
-}
-
-export class AgentRunnerService extends Context.Service<AgentRunnerService, AgentRunner>()(
-  "@gent/core/src/domain/agent/AgentRunnerService",
-) {}
 
 // ── steer ───────────────────────────────────────────────────────────────────
 

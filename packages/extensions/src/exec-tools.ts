@@ -18,7 +18,6 @@ import {
 } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import {
-  AgentRunError,
   type BranchId,
   defineExtension,
   defineResource,
@@ -43,6 +42,11 @@ export class BackgroundBashStorageError extends Schema.TaggedError<BackgroundBas
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+/** A background job asked for outside the tool call that would own it. */
+class BackgroundBashError extends Schema.TaggedError<BackgroundBashError>()("BackgroundBashError", {
+  message: Schema.String,
+}) {}
 
 const BackgroundBashStatus = Schema.Literals(["running", "completed", "failed", "interrupted"])
 type BackgroundBashStatus = typeof BackgroundBashStatus.Type
@@ -528,7 +532,7 @@ interface BackgroundBashSupervisorService {
     job: BackgroundBashJob,
   ) => Effect.Effect<
     void,
-    BackgroundBashStorageError | AgentRunError,
+    BackgroundBashStorageError | BackgroundBashError,
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | ExtensionContext
   >
 }
@@ -603,7 +607,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         if (Predicate.isUndefined(ctx.toolCallId)) {
-          return yield* new AgentRunError({
+          return yield* new BackgroundBashError({
             message: "Background bash requires a host-owned tool call",
           })
         }

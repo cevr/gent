@@ -708,7 +708,31 @@ const ADAPTER_PATTERNS: ReadonlyArray<RegExp> = [
   /\bscope:\s*"([a-z][A-Za-z0-9]*)"/g,
 ]
 
+/**
+ * A facet a shipped extension reaches only through a public-API helper is
+ * adapted too. `requireCurrentAgent` reads `ctx.Agent` for three extensions
+ * that never touch the raw facet; without this the `Agent` facet reads as
+ * dead surface. The helpers live in the seam-declaration file and are
+ * re-exported from `@gent/core/extensions/api`, so a `ctx.X` there is part of
+ * the shipped adapter chain, not a core-only consumer.
+ */
+const PUBLIC_API_HELPER_FILE = SEAM_DECLARATION_FILE
+
+const facetsReachedByPublicHelpers = (text: string): ReadonlySet<string> => {
+  const names = new Set<string>()
+  for (const match of text.matchAll(/\bctx\.([A-Z][A-Za-z0-9]*)/g)) {
+    Option.match(Option.fromNullishOr(match[1]), {
+      onNone: () => {},
+      onSome: (name) => {
+        names.add(name)
+      },
+    })
+  }
+  return names
+}
+
 export const adaptedSeamsIn = (file: string, text: string): ReadonlySet<string> => {
+  if (file === PUBLIC_API_HELPER_FILE) return facetsReachedByPublicHelpers(text)
   if (!isAdapterSource(file)) return new Set()
   const names = new Set<string>()
   for (const pattern of ADAPTER_PATTERNS) {

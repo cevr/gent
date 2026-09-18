@@ -2510,6 +2510,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         durationMs: Number(turnDurationMs),
+        messageId: params.messageId,
         agentName: params.turnAgent,
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,

@@ -12,6 +12,7 @@ import {
   SessionId,
   tool,
 } from "@gent/core/extensions/api"
+import { runChild } from "./delegate.js"
 
 // ── read-session ────────────────────────────────────────────────────────────
 
@@ -134,7 +135,7 @@ export const ReadSessionTool = tool({
     if (Option.isSome(goal)) {
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${goal.value}`
       const agent = yield* requireCurrentAgent
-      const result = yield* ctx.Agent.run({
+      const result = yield* runChild({
         agent,
         prompt,
         runSpec: makeRunSpec({

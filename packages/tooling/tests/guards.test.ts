@@ -563,6 +563,35 @@ describe("unadapted seam guard", () => {
   test("test files never count as adapters", () => {
     expect(adaptedSeamsIn("packages/extensions/tests/notes.test.ts", "ctx.Telepathy").size).toBe(0)
   })
+
+  test("a facet a public-API helper reaches in the seam file is adapted", () => {
+    // `requireCurrentAgent` reads `ctx.Agent` for extensions that never touch
+    // the raw facet. The helper is re-exported public API, so the seam file's
+    // own `ctx.X` fills the seam and the facet is not dead surface.
+    const seams = adaptedSeamsIn(
+      SEAMS_FILE,
+      `export const requireCurrentAgent = Effect.gen(function* () {
+         const ctx = yield* ExtensionContext
+         const agents = yield* ctx.Agent.listAgents
+         return agents[0]
+       })`,
+    )
+    expect([...seams]).toEqual(["Agent"])
+  })
+
+  test("a facet only the seam file reaches counts, but a shipped-extension facet still must be reached", () => {
+    // The seam file credits Agent through its helper; Telepathy, which no
+    // helper and no extension reaches, is still reported.
+    const source = `${facetsSource}
+export const requireFiles = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  return yield* ctx.Files.read("x")
+})`
+    const adapted = adaptedSeamsIn(SEAMS_FILE, source)
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), adapted)
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
+  })
 })
 
 // ── e2e-fixture-imports.test ────────────────────────────────────────────────

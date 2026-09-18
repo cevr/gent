@@ -11,7 +11,6 @@ import {
   PubSub,
   Random,
   Ref,
-  Schema,
   Stream,
 } from "effect"
 import {
@@ -40,13 +39,7 @@ import {
   registerContributions,
 } from "../domain/extension.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
-import {
-  type AgentDefinition,
-  type AgentRunner,
-  AgentRunnerService,
-  AgentRunResult,
-  DEFAULT_AGENT_NAME,
-} from "../domain/agent.js"
+import { type AgentDefinition } from "../domain/agent.js"
 import { Auth, ModelRegistry } from "../runtime/provider.js"
 import { getToolMetadata, type ToolCapability } from "../domain/capability.js"
 import { defineExtension } from "../extensions/api.js"
@@ -90,12 +83,6 @@ const die = (operation: string) =>
 
 const defaultAgent = (): ExtensionHostAgentService => ({
   listAgents: die("Agent.listAgents"),
-  start: () => die("Agent.start"),
-  inspect: () => die("Agent.inspect"),
-  list: () => die("Agent.list"),
-  cancel: () => die("Agent.cancel"),
-  send: () => die("Agent.send"),
-  run: () => die("Agent.run"),
 })
 
 const defaultSession = (): ExtensionSessionService => ({
@@ -281,33 +268,6 @@ export const testAgentsExtension = (
     }),
   })
 
-const defaultRun: Pick<AgentRunner, "run"> = {
-  run: () =>
-    Effect.succeed(
-      AgentRunResult.cases.Success.make({
-        text: "",
-        sessionId: SessionId.make("test-subagent-session"),
-        agentName: DEFAULT_AGENT_NAME,
-      }),
-    ),
-}
-
-/** An agent runner whose `run` answers (empty success by default) and whose other methods die. */
-export const stubAgentRunnerLayer = (
-  runner: Pick<AgentRunner, "run"> = defaultRun,
-): Layer.Layer<AgentRunnerService> =>
-  Layer.succeed(
-    AgentRunnerService,
-    AgentRunnerService.of({
-      start: () => Effect.die("AgentRunner.start not configured in test"),
-      inspect: () => Effect.die("AgentRunner.inspect not configured in test"),
-      list: () => Effect.die("AgentRunner.list not configured in test"),
-      cancel: () => Effect.die("AgentRunner.cancel not configured in test"),
-      send: () => Effect.die("AgentRunner.send not configured in test"),
-      ...runner,
-    }),
-  )
-
 // ── extension-harness ───────────────────────────────────────────────────────
 
 /** Test helpers for extension tool execution. */
@@ -324,8 +284,6 @@ export interface ToolTestLayerConfig {
   readonly extensions?: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Extra tools to register (authored via `tool({...})`). */
   readonly tools?: ReadonlyArray<ToolCapability>
-  /** AgentRunner mock — default returns success with empty text */
-  readonly subagentRunner?: Pick<AgentRunner, "run">
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
@@ -346,7 +304,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
     overrides: {
       ...testOverrides(),
       toolRunnerLayer: ToolRunner.Test(),
-      agentRunnerLayer: stubAgentRunnerLayer(config.subagentRunner),
       extraLayers: config.extraLayers,
     },
   }).pipe(Layer.provide(BunPlatformLive), Layer.orDie)
@@ -378,12 +335,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
   const host = testExtensionHostContext().host
   const Agent: ExtensionContextService["Agent"] = {
     listAgents: dieEffect("agent.listAgents"),
-    start: dieStub("agent.start"),
-    inspect: dieStub("agent.inspect"),
-    list: dieStub("agent.list"),
-    cancel: dieStub("agent.cancel"),
-    send: dieStub("agent.send"),
-    run: dieStub("agent.run"),
   }
   const Session: ExtensionContextService["Session"] = {
     getSession: dieStub("session.getSession"),
@@ -578,58 +529,6 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
   }),
 )
 
-// Sequence Assertions
-
-const CallMatch = Schema.Record(Schema.String, Schema.Unknown)
-type CallMatch = typeof CallMatch.Type
-const encodeCallMatch = Schema.encodeSync(Schema.fromJsonString(CallMatch))
-
-const callMatches = (
-  call: CallRecord,
-  expected: { service: string; method: string; match?: CallMatch },
-) => {
-  if (call.service !== expected.service || call.method !== expected.method) return false
-  if (Predicate.isUndefined(expected.match)) return true
-  if (!Schema.is(CallMatch)(call.args)) return false
-  const args = call.args
-  return Object.entries(expected.match).every(([key, value]) => args[key] === value)
-}
-
-export const assertSequence = (
-  actual: ReadonlyArray<CallRecord>,
-  expected: ReadonlyArray<{
-    service: string
-    method: string
-    match?: CallMatch
-  }>,
-) => {
-  let actualIdx = 0
-
-  for (const exp of expected) {
-    let found = false
-    while (actualIdx < actual.length) {
-      const call = actual[actualIdx]
-      if (!Predicate.isUndefined(call) && callMatches(call, exp)) {
-        found = true
-        actualIdx++
-        break
-      }
-      actualIdx++
-    }
-
-    if (!found) {
-      const matchDescription = Option.fromUndefinedOr(exp.match).pipe(
-        Option.match({ onNone: () => "", onSome: (match) => ` with ${encodeCallMatch(match)}` }),
-      )
-      return Effect.runSync(
-        Effect.die(
-          new Error(`Expected call not found: ${exp.service}.${exp.method}${matchDescription}`),
-        ),
-      )
-    }
-  }
-}
-
 // ── Test Extension Host ──
 
 /** Facts the test extension host reports to `setup` Effects. */
@@ -740,8 +639,6 @@ export interface E2ELayerConfig {
   readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
-  /** Use "live" for real child sessions. Default mocks blocking run only. */
-  readonly subagentRunner?: "live" | Pick<AgentRunner, "run">
   /** Approval service override. Default auto-approves for E2E tests. */
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
@@ -853,10 +750,6 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  * through `createDependencies`/`buildServerRoot`.
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
-  let subagentRunnerLayer = Option.none<Layer.Layer<AgentRunnerService>>()
-  if (config.subagentRunner !== "live") {
-    subagentRunnerLayer = Option.some(stubAgentRunnerLayer(config.subagentRunner))
-  }
   let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
   if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
@@ -877,7 +770,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
         configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
         sessionProfileCacheLayer: config.sessionProfileCacheLayer,
-        agentRunnerLayer: Option.getOrUndefined(subagentRunnerLayer),
         toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
         extraLayers: config.extraLayers,
       },

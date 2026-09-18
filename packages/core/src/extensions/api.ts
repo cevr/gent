@@ -59,11 +59,9 @@ export {
   DriverRef,
   ExternalDriverRef,
   makeRunSpec,
+  type RunSpec,
   RunSpecSchema,
-  AgentRunResult,
   AgentRunToolCallSchema,
-  ChildAgentRegistryEntry,
-  AgentRunError,
 } from "../domain/agent.js"
 export { requireCurrentAgent } from "../domain/extension.js"
 export {
@@ -85,6 +83,7 @@ export type {
   ProviderResolution,
 } from "../domain/driver.js"
 export {
+  ActorCommandId,
   SessionId,
   BranchId,
   MessageId,
@@ -95,8 +94,12 @@ export {
 export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 export { AuthMethod } from "../runtime/provider.js"
 export { type Message, type Branch } from "../domain/message.js"
-export type { Question } from "../domain/event.js"
-export { messagePartsDisplayText } from "../domain/message.js"
+export type { AgentEvent, Question } from "../domain/event.js"
+export {
+  latestAssistantText,
+  messagePartsDisplayText,
+  messagesToolCalls,
+} from "../domain/message.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).

@@ -77,7 +77,7 @@ updates this list in the same commit.
     HTML parsing, and past-session queries happen in the cell. Receipt:
     `packages/extensions/src/cell.ts`.
 14. **A child's completion arrives as a user message, never a tool result.**
-    Receipt: `packages/core/src/runtime/child-agents.ts`.
+    Receipt: `packages/extensions/src/delegate.ts`.
 15. **Platform edges stay explicit.** File, process, lock, and network access
     go through `GentPlatform` facets; the TUI session controller owns screen
     state, views render and dispatch; app-specific UI facets live at the app
@@ -278,56 +278,30 @@ Shape:
   The mailbox request can return before the model finishes. The worker releases
   keep-alive on completion, failure, or interruption so idle entities can expire.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
-- `AgentRunner` is the helper-agent boundary. Every child is a session in the one runtime; a run with `visibility: "private"` admits without a spawn receipt, publishes no completion receipt, and deletes its session once the answer is read.
-- Durable child admission uses one shared ancestry check. Missing or incomplete
-  ancestry is an error, not root depth. A parent at the depth limit cannot spawn.
-  This check is not a concurrency or token budget and does not add child handles.
-- `SessionRuntime.sendUserMessage` accepts an explicit completion mode. `admission`
-  uses the existing persisted `SubmitDurable` actor operation and returns after
-  enqueue. `turn` waits through `SubmitAndWait`. Omission preserves existing
-  correlation-based behavior. Admission callers must reuse their command or
-  request ID for retries. This provides a queue-owned start path without a new
-  detached worker or scheduler; the child-handle API remains unfinished.
-- Durable child creation accepts an optional admission request. The existing
-  `SessionOperationStorage` records `agent.start` input and child IDs in the same
-  transaction as the child session, branch, and spawn event. Repeated identical
-  input returns the same child. Changed input fails. The receipt belongs to the
-  parent branch, so deleting the child does not allow a retry to recreate it.
-  Caller-owned transactions are rejected before admission.
-- New durable start requests reserve at most four unfinished children per parent
-  branch. The existing creation transaction verifies parent-branch ownership,
-  reuses an existing receipt first, then checks capacity and creates the child.
-  Capacity comes from stored start receipts without a matching completed user
-  turn, not live actors. Unstarted and unknown outcomes retain reservations.
-  A fresh runner sees the same count. This limit applies to the private durable
-  start path, not foreground `run`, and is not a token budget.
-  Deleting completion evidence does not silently release an uncertain reservation.
-- The durable runner's private `start` operation joins child creation to
-  `SessionRuntime.sendUserMessage` with admission completion. Its command ID is
-  derived from the stable start request. The same receipt and command are reused
-  on retry. It returns child session/branch IDs while the actor owns execution.
-  It sets parent tool identity from the host input. This operation is not yet exposed to extensions or cells and does not
-  implement child budgets.
-- The durable runner's private `inspect` operation accepts the start request ID
-  and parent session/branch. It checks the workspace-scoped receipt before child
-  reads, then verifies child ancestry and branch ownership. It reads the exact
-  admitted message's `TurnCompleted` event in the same read transaction. A later
-  turn cannot replace this result. Missing completion means no recorded terminal
-  receipt, not proof of a running actor. Inspection does not start or resume work.
-  It returns the raw completion flags without claiming task success. The public
-  child-handle facade and cell integration remain unfinished.
-- There is no `wait` operation. A parent never blocks on a child. The private
-  `list` operation reads the parent-owned child registry from the same durable
-  start receipts, and `ChildCompletionDelivery` turns each child's terminal
-  receipt into one idempotent follow-up message on the parent branch (see
-  Agent Runs). The follow-up carries `wake`, so a parent branch with no prior
-  turn still starts a turn to read it.
-- The private durable `cancel` operation checks the same owned receipt and sends
-  a stable steering command for the admitted message only. A stored completion
-  makes cancellation a no-op. Caller transactions are rejected. The return value
-  confirms durable command submission, not completed cancellation; `wait` reads
-  the resulting completion. Processed targeted cancellation is retained before
-  queue admission; the full child creation-to-enqueue restart check remains open.
+- The `@gent/delegate` extension is the helper-agent boundary, built only on the public extension API. Every child is a session in the one runtime, created through the addressed `Session` facade verbs. The delegate owns its own child registry on disk; core carries no runner and no child-run events.
+- Child admission uses one shared ancestry check on the `session.create` command
+  path (`admitChildSessionDepth`). Missing or incomplete ancestry is an error,
+  not root depth. A parent at the depth limit cannot spawn. This check is not a
+  concurrency or token budget.
+- The `@gent/delegate` extension admits a child by creating a session through the
+  `Session` facade with `parentSessionId`/`parentBranchId`, then `send`ing the
+  child's first message. It never blocks on the child. A `background: true` child
+  returns its handle at once; a foreground child is read back through the child's
+  own turn receipt. The delegate reserves at most four unfinished children per
+  parent branch, counted from its own on-disk registry, not live actors.
+- The delegate keeps one child registry per parent branch as a JSON file under
+  `~/.gent/delegates/<branchId>.json`. `agent-children` reads it; the delegate
+  reconciles it lazily on the parent's next turn and on every read, so a caller
+  that died between the child's receipt and delivery leaves a child the registry
+  still resolves, never a running one nobody delivers.
+- Completion delivery is the delegate's own `turnAfter` hook on the child branch.
+  It turns each child's terminal receipt into one idempotent follow-up message on
+  the parent branch (metadata `customType: "child-completion"`). The follow-up
+  carries `wake`, so a parent branch with no prior turn still starts a turn to
+  read it. The follow-up message id is the idempotency key.
+- `agent-child` with `cancel` deletes the child session through the facade; a
+  finished child is a no-op. `agent-child` with `send` steers a running child on
+  its branch, read at its next step; a finished child refuses the message.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
@@ -429,69 +403,44 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 ### Agent Runs
 
-- `AgentRunnerService` exposes durable `start`, `inspect`, `list`, and `cancel`
-  beside blocking `run`. Start takes a stable request ID and exact parent/tool
-  address, returns the child handle at once, and never returns the child's
-  answer. The service closes storage/runtime requirements at construction and
-  delegates to the existing durable child owner; it creates no worker or queue.
-  Storage failures become `AgentRunError`. Inspect returns the original turn
-  receipt, not a task-success assertion. List reads the parent-owned child
-  registry (`durable_operations`), which survives restarts.
-- `ChildCompletionDelivery` is the host's completion path. It watches the
-  child's turn receipt and queues one ordinary user message on the parent branch
-  (`follow-up:…:child:<requestId>:complete`, metadata `customType:
-"child-completion"`) with the outcome and a bounded preview, then publishes
-  `AgentRunSucceeded` for the transcript. The follow-up
-  message id is the idempotency key; delivery is serialized and watchers are
-  deduplicated per request. Startup reconciles the registry: finished children
-  are delivered, unfinished ones are watched again. Admission and the watcher
-  run as one uninterruptible step: a caller that dies between them (a cell
-  worker that crashed mid-op, a cancelled tool call) still leaves a watched
-  child, never a running one nobody delivers. No cell or tool waits for a
-  child; the model reads completion on a later turn.
-  `ExtensionContext.Agent` exposes these operations with host-owned parent IDs.
-  Start requires a tool context and injects its tool-call ID. Requests can inspect,
-  list, and cancel owned starts but cannot invent a tool identity to start work.
-  The builtin `DelegateExtension` supplies one admission call, `delegate`, plus
-  `agent-child` and `agent-children` as ordinary tools. Cells use `tools.call`;
-  the bridge keeps permissions, bound generations, and operation receipts.
+- The `@gent/delegate` extension owns child runs. It is built only on the
+  public extension API — no core runner, no privileged seam. Every child is a
+  session created through the addressed `Session` facade verbs (`create` with
+  `parentSessionId`/`parentBranchId`, `send`, `steer`, `events`, `delete`). The
+  delegate keeps its own child registry as one JSON file per parent branch under
+  `~/.gent/delegates/<branchId>.json`, so a `agent-children` list survives
+  restarts without any `durable_operations` row.
+- Completion delivery is the delegate's own `turnAfter` hook on the child
+  branch. It reads the child's turn receipt and queues one ordinary user message
+  on the parent branch (metadata `customType: "child-completion"`) with the
+  outcome and a bounded preview. Lazy reconcile covers the crash window between
+  the receipt and the hook: the delegate reconciles its registry on the parent's
+  next turn and on every `agent-children` read, so a caller that died mid-op
+  leaves a child the registry still resolves, never a running one nobody
+  delivers. No cell or tool waits for a child; the model reads completion on a
+  later turn.
+- The delegate ships `delegate` as one admission call plus `agent-child` and
+  `agent-children` as ordinary tools; `requireCurrentAgent` (a public-API
+  helper) reads the current agent through the `Agent` facet's `listAgents`.
   `delegate` returns a tagged result: `completed` with the foreground child's
-  output, or `running` with the handle of a `background: true` child admitted
-  under the delegate tool-call ID. It accepts the existing RunSpec overrides for
-  model, reasoning, tool selection, and added instructions, and always denies
-  the child the delegation tools: fan-out is the caller's decision, and a
-  project prompt that addresses "the orchestrator" reaches children too. The host still fixes
-  the parent/tool address. Control returns pending or
-  the original completed-turn flags, not task success. Absent completion flags
-  are omitted from the JSON result. For a recovered Unknown delegate operation,
-  its inner toolCallId is the child requestId. The parent can inspect or cancel
-  that start without rerunning cell source or issuing another delegation.
-  The parent can also message a child that is still running (`agent-child`
-  with `send`): the text is steering on the child's branch, so the child reads
-  it at its next step. Steering that arrives while a step writes its answer
-  joins the same turn, so the one completion the parent receives carries the
-  answer given after the message. A finished child refuses the message.
-  Parents read child output through the existing `read_session` tool using the
-  returned session and branch IDs. Omitting its extraction goal avoids another
-  model call. This reads the session tree, not an exact-turn result snapshot.
-  The session is the only copy of a child's output: core writes no file mirror
-  under `/tmp`, so a result carries text, usage, tool calls, and the session id.
-  The extension is not in BuiltinExtensions yet. Default
-  cutover remains unfinished.
-- Admitted child sessions share a durable limit of 32 native-model resolution
-  attempts across their branches. SessionOperationStorage reserves each attempt
-  before model resolution, including the summary path. Reservations are not
-  refunded after failure or interruption. The counter uses the existing durable
-  operation store. An exhausted child produces a failed-turn receipt. External
-  drivers are rejected for admitted children because their internal model calls
-  have no accounting contract. Root sessions and legacy children without a start
-  receipt are outside this limit. This is not a token or whole-subtree budget.
-- The production root builds `SessionRuntime.Client` and `AgentRunnerService`
-  before registering AgentLoop handlers. Encore's client-only actor layer uses
-  the same cluster and memoized state registry as the handler layer. The handlers
-  capture the completed service context, so recursive calls have an agent runner.
-  Interaction recovery starts after handler registration. No second actor owner
-  or scheduler is created. `SessionRuntime.Live` retains the combined test surface.
+  output, or `running` with the handle of a `background: true` child. It accepts
+  RunSpec overrides for model, reasoning, tool selection, and added
+  instructions, and always denies the child the delegation tools: fan-out is the
+  caller's decision, and a project prompt that addresses "the orchestrator"
+  reaches children too. The parent can message a running child (`agent-child`
+  with `send`): the text is steering on the child's branch, read at its next
+  step. A finished child refuses the message. Parents read child output through
+  `read_session` on the returned session/branch IDs. The session is the only
+  copy of a child's output; a result carries text, usage, tool calls, and the
+  session id.
+- The TUI child view reads the delegate's registry via `DelegateRpc.Children`,
+  scoped to the parent branch. It repaints on the delegate's
+  `ExtensionStateChanged` pulses and hydrates each child's tool calls and stream
+  text from per-child event streams. Core publishes no `AgentRun*` events; the
+  view is delegate-owned state end to end.
+- Child session nesting depth is admitted on the `session.create` command path
+  (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
+  root depth; a parent at the depth limit cannot spawn.
 - One shipped agent, `main`. A child spawned from a cell with `delegate` inherits the caller's agent and model; a run may narrow it with RunSpec overrides (model, tools, prompt addendum). Helper runs such as `read_session` goal extraction pass `visibility: "private"`. A run may pass `history: "inherit"` to seed its branch with a copy of the parent branch's visible messages; `/btw` uses this for tool-less side questions that never write back to the parent.
 - Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time; `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note }`; `fired` is an alarm, `matched`/`timed-out` a monitor) with `wake: true`; firing removes the entry. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from `wake.list`. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
@@ -1133,13 +1082,12 @@ Both exported from `@gent/core-internal/test-utils/e2e-layer`.
 
 Wide event boundaries (one structured log per unit of work) via `effect-wide-event`:
 
-| Boundary     | Service       | File                      |
-| ------------ | ------------- | ------------------------- |
-| Agent turn   | `agent-loop`  | `runtime/agent-loop.ts`   |
-| Tool call    | `tool-runner` | `runtime/tools.ts`        |
-| Model stream | `model`       | `runtime/agent-loop.ts`   |
-| RPC request  | `rpc`         | `server/server.ts`        |
-| Agent run    | `agent-run`   | `runtime/child-agents.ts` |
+| Boundary     | Service       | File                    |
+| ------------ | ------------- | ----------------------- |
+| Agent turn   | `agent-loop`  | `runtime/agent-loop.ts` |
+| Tool call    | `tool-runner` | `runtime/tools.ts`      |
+| Model stream | `model`       | `runtime/agent-loop.ts` |
+| RPC request  | `rpc`         | `server/server.ts`      |
 
 Logging conventions:
 

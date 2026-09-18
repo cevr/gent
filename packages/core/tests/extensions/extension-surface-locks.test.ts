@@ -509,8 +509,14 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionTurnContext = PublicExtensionApi.ExtensionTurnContext
     // @ts-expect-error — host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
-    // @ts-expect-error — raw runtime events can forge product state
-    type _BadAgentEvent = typeof PublicExtensionApi.AgentEvent
+    // The event type is public (an extension reads its own branch's stream);
+    // the constructors are not, so raw runtime events cannot be forged.
+    type _AgentEventType = PublicExtensionApi.AgentEvent
+    const forgeAgentEvent = () => {
+      // @ts-expect-error — raw runtime event constructors can forge product state
+      void PublicExtensionApi.AgentEvent
+    }
+    void forgeAgentEvent
     // @ts-expect-error — transport event envelopes are SDK/TUI plumbing, not authoring API
     type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
     // @ts-expect-error — interaction wire state is client/runtime plumbing

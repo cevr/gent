@@ -83,6 +83,7 @@ import {
   ActorCommandId,
   BranchId,
   ExtensionId,
+  MessageId,
   ProcessGenerationId,
   RequestId,
   SessionId,
@@ -2135,6 +2136,8 @@ describe("runtime slots", () => {
             interrupted: false,
             streamFailed: false,
             unanswered: false,
+
+            messageId: MessageId.make("turn-message"),
             usage: { inputTokens: 0, outputTokens: 0 },
           } satisfies TurnAfterInput)
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
@@ -2169,6 +2172,8 @@ describe("runtime slots", () => {
           interrupted: false,
           streamFailed: false,
           unanswered: false,
+
+          messageId: MessageId.make("turn-message"),
           usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
@@ -2206,6 +2211,8 @@ describe("runtime slots", () => {
           interrupted: false,
           streamFailed: false,
           unanswered: false,
+
+          messageId: MessageId.make("turn-message"),
           usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(
@@ -3634,6 +3641,8 @@ const stubEvent: TurnAfterInput = {
   interrupted: false,
   streamFailed: false,
   unanswered: false,
+
+  messageId: MessageId.make("turn-message"),
   usage: { inputTokens: 0, outputTokens: 0 },
 }
 

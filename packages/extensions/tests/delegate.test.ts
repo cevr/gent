@@ -1,15 +1,19 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Option, Predicate, Stream, Struct } from "effect"
-import { narrowR } from "../../core/tests/helpers/effect"
-import { DelegateTool } from "../src/delegate.js"
 import {
-  AgentDefinition,
-  AgentName,
-  AgentRunResult,
-  DEFAULT_AGENT_NAME,
-  type ExtensionContextService,
-  ModelId,
-} from "@gent/core/extensions/api"
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Predicate,
+  Schema,
+  Stream,
+  Struct,
+} from "effect"
+import { BunFileSystem } from "@effect/platform-bun"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
+import { DelegateEntry, DelegateTool } from "../src/delegate.js"
+import { DEFAULT_AGENT_NAME } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "./helpers/builtin-agents.js"
 import {
   createRpcHarness,
@@ -19,6 +23,7 @@ import {
 import {
   finishPart,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   multiToolCallStep,
   textDeltaPart,
   textStep,
@@ -26,409 +31,112 @@ import {
   toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
-import { BranchId, RequestId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { type BranchId, RequestId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import { SteerCommand } from "@gent/core-internal/domain/agent"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
-// ── delegate/delegate-tool.test ─────────────────────────────────────────────
+// ── delegate/harness ────────────────────────────────────────────────────────
 
-const helperAgent = AgentDefinition.make({
-  name: AgentName.make("helper"),
-  model: ModelId.make("openai/gpt-5.4-mini"),
-})
+/**
+ * Every test here runs a real child through the public facade. The registry
+ * the extension keeps is read back from the temp home so each assertion sees
+ * what a restarted process would.
+ */
 
-const makeCtx = (overrides: {
-  agentName?: AgentName
-  agentRun?: (
-    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
-  ) => Effect.Effect<AgentRunResult>
-}) =>
-  testToolContext({
-    agentName: overrides.agentName,
-    Agent: {
-      run:
-        overrides.agentRun ??
-        (() =>
-          Effect.succeed(
-            AgentRunResult.cases.Success.make({
-              text: "",
-              sessionId: SessionId.make("s1"),
-              agentName: AgentName.make("test"),
-            }),
-          )),
-      listAgents: Effect.succeed([...AllBuiltinAgents, helperAgent]),
-    },
-  })
+const registryCodec = Schema.fromJsonString(Schema.Array(DelegateEntry))
+const decodeRegistry = Schema.decodeUnknownSync(registryCodec)
+const encodeRegistry = Schema.encodeSync(registryCodec)
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
-describe("Delegate Tool", () => {
-  it.live("delegates to a child running as the default agent and returns output", () => {
-    const ctx = makeCtx({
-      agentRun: (params) =>
-        Effect.succeed(
-          AgentRunResult.cases.Success.make({
-            text: `${params.agent.name}:${params.prompt}`,
-            sessionId: SessionId.make("child-session"),
-            agentName: params.agent.name,
-          }),
-        ),
+const harnessWithHome = (providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"]) =>
+  Effect.gen(function* () {
+    const home = yield* makeTempDirectoryScoped("delegate-")
+    const harness = yield* createRpcHarness({
+      ...e2ePreset,
+      providerLayer,
+      extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home, platform: "darwin" })],
     })
-
-    return narrowR(
-      runToolWithCtx(DelegateTool, { todo: "hello" }, ctx).pipe(
-        Effect.map((result) => {
-          expect("output" in result).toBe(true)
-          if (!("output" in result)) return
-          expect(result.output).toBe(
-            `${DEFAULT_AGENT_NAME}:hello\n\nFull session: session://child-session`,
-          )
-          const metadata = Option.fromUndefinedOr(result.metadata)
-          if (Option.isSome(metadata) && "sessionId" in metadata.value) {
-            expect(metadata.value.sessionId).toBe(SessionId.make("child-session"))
-          }
-        }),
-      ),
-    )
-  })
-
-  it.live("a foreground child cannot delegate further", () => {
-    const runs: Array<ReadonlyArray<string>> = []
-    const ctx = makeCtx({
-      agentRun: (params) =>
-        Effect.sync(() => {
-          runs.push(params.runSpec?.overrides?.deniedTools ?? [])
-          return AgentRunResult.cases.Success.make({
-            text: "done",
-            sessionId: SessionId.make("child-session"),
-            agentName: params.agent.name,
-          })
-        }),
-    })
-    return narrowR(
-      runToolWithCtx(DelegateTool, { todo: "hello" }, ctx).pipe(
-        Effect.map(() => {
-          expect(runs).toEqual([["delegate", "agent-child", "agent-children"]])
-        }),
-      ),
-    )
-  })
-
-  it.live("child inherits the caller's agent from the tool context", () => {
-    const ctx = makeCtx({
-      agentName: helperAgent.name,
-      agentRun: (params) =>
-        Effect.succeed(
-          AgentRunResult.cases.Success.make({
-            text: `${params.agent.name}:${params.prompt}`,
-            sessionId: SessionId.make("child-session"),
-            agentName: params.agent.name,
-          }),
-        ),
-    })
-
-    return narrowR(
-      runToolWithCtx(DelegateTool, { todo: "hello" }, ctx).pipe(
-        Effect.map((result) => {
-          expect("output" in result).toBe(true)
-          if (!("output" in result)) return
-          expect(result.output).toBe("helper:hello\n\nFull session: session://child-session")
-        }),
-      ),
-    )
-  })
-
-  it.live("foreground delegation ties the child to the calling tool call", () => {
-    let capturedRunSpec = Option.none<{ parentToolCallId?: string }>()
-    const ctx = makeCtx({
-      agentRun: (params) => {
-        capturedRunSpec = Option.fromUndefinedOr(params.runSpec)
-        return Effect.succeed(
-          AgentRunResult.cases.Success.make({
-            text: "ok",
-            sessionId: SessionId.make("s"),
-            agentName: params.agent.name,
-          }),
+    const fs = yield* FileSystem.FileSystem
+    const registryOf = (branchId: BranchId) =>
+      fs.readFileString(`${home}/.gent/delegates/${branchId}.json`).pipe(Effect.map(decodeRegistry))
+    const writeRegistry = (branchId: BranchId, entries: ReadonlyArray<DelegateEntry>) =>
+      fs
+        .makeDirectory(`${home}/.gent/delegates`, { recursive: true })
+        .pipe(
+          Effect.andThen(
+            fs.writeFileString(`${home}/.gent/delegates/${branchId}.json`, encodeRegistry(entries)),
+          ),
         )
-      },
+    return { ...harness, home, registryOf, writeRegistry }
+  }).pipe(Effect.provide(BunFileSystem.layer))
+
+type Harness = Effect.Success<ReturnType<typeof harnessWithHome>>
+
+/** The one child session under the parent, once it exists. */
+const childOf = (harness: Harness) =>
+  waitFor(
+    harness.client.session.list(),
+    (sessions) => sessions.some((session) => session.parentSessionId === harness.sessionId),
+    5_000,
+    "the child session exists",
+  ).pipe(
+    Effect.flatMap((sessions) => {
+      const child = sessions.find((session) => session.parentSessionId === harness.sessionId)
+      if (Predicate.isUndefined(child)) return Effect.die("no child session")
+      return Effect.succeed({ sessionId: child.id, branchId: child.activeBranchId })
+    }),
+  )
+
+/** The first `delegate` tool result on the parent branch. */
+const delegateResult = (harness: Harness) =>
+  harness.client.session.events({ sessionId: harness.sessionId, branchId: harness.branchId }).pipe(
+    Stream.filter(isToolResultFor("delegate")),
+    Stream.take(1),
+    Stream.runCollect,
+    Effect.map((events) => Array.from(events)[0]?.event),
+    Effect.forkScoped,
+  )
+
+const reply = (text: string) =>
+  Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
+
+const toolStep = (name: string, input: Record<string, string | boolean>, id: string) =>
+  Stream.fromIterable([
+    toolCallPart(name, input, { toolCallId: ToolCallId.make(id) }),
+    finishPart({ finishReason: "tool-calls" }),
+  ])
+
+/** Every text part of the prompt's user and assistant messages, in order. */
+const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
+  prompt.content.flatMap((message) => {
+    if (message.role === "system") return []
+    return message.content.flatMap((part) => {
+      if (part.type !== "text") return []
+      return [part.text]
     })
-
-    return narrowR(
-      runToolWithCtx(DelegateTool, { todo: "go" }, ctx).pipe(
-        Effect.map(() => {
-          expect(
-            Option.flatMap(capturedRunSpec, (runSpec) =>
-              Option.fromUndefinedOr(runSpec.parentToolCallId),
-            ),
-          ).toEqual(Option.some(ctx.toolCallId))
-        }),
-      ),
-    )
   })
-})
 
-// ── delegate/delegate-rpc.test ──────────────────────────────────────────────
+const sendPrompt = (harness: Harness, content: string) =>
+  harness.client.message.send({
+    sessionId: harness.sessionId,
+    branchId: harness.branchId,
+    content,
+  })
 
-/**
- * Delegate tool RPC acceptance test — exercises the `delegate` tool through
- * a real agent turn (LLM emits the tool call, runtime dispatches it inside
- * the per-request scope). The existing `delegate-tool.test.ts` calls the
- * executor directly via `runToolWithCtx`, which bypasses the scope boundary
- * production uses.
- *
- * Maps W36 C5 (audit L5-P2-1).
- */
-
-describe("DelegateExtension via model turn", () => {
-  it.live(
-    "delegate tool call routes through per-request scope and returns subagent output",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("delegate", { todo: "summarise repo layout" }),
-            textStep("delegated"),
-          ])
-          const subagentRunner = {
-            run: (params: { prompt: string; agent: { name: AgentName } }) =>
-              Effect.succeed(
-                AgentRunResult.cases.Success.make({
-                  text: `subagent:${params.agent.name}:${params.prompt}`,
-                  sessionId: SessionId.make("delegate-child-session"),
-                  agentName: params.agent.name,
-                }),
-              ),
-          }
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            subagentRunner,
-          })
-
-          const toolEventFiber = yield* client.session
-            .events({ sessionId, branchId })
-            .pipe(
-              Stream.filter(isToolResultFor("delegate")),
-              Stream.take(1),
-              Stream.runCollect,
-              Effect.forkScoped,
-            )
-
-          yield* client.message.send({
-            sessionId,
-            branchId,
-            content: "delegate this task",
-          })
-
-          const events = Array.from(yield* Fiber.join(toolEventFiber))
-          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
-          expect(succeeded).toBeDefined()
-          if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).toContain(
-              `subagent:${DEFAULT_AGENT_NAME}:summarise repo layout`,
-            )
-          }
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-})
-
-// ── delegate/delegate-preview.test ──────────────────────────────────────────
+// ── delegate/foreground ─────────────────────────────────────────────────────
 
 /**
- * `AgentRunSucceeded.preview` has two producers: the in-process runner
- * (foreground delegate) and child-completion delivery (background
- * delegate). The agents pane reads both. One clip policy covers both.
- */
-
-const longReply = "p".repeat(300)
-
-const runSucceededPreview = (params: { readonly background: boolean }) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        toolCallStep("delegate", {
-          todo: "Reply with three hundred characters",
-          background: params.background,
-        }),
-        // The shared step queue serves the child and the parent's continuation
-        // in whichever order they call, so every reply is the long one.
-        textStep(longReply),
-        textStep(longReply),
-        textStep(longReply),
-      ])
-      const { client, sessionId, branchId } = yield* createRpcHarness({
-        ...e2ePreset,
-        providerLayer,
-        subagentRunner: "live",
-      })
-      const succeededFiber = yield* client.session.events({ sessionId, branchId }).pipe(
-        Stream.map((envelope) => envelope.event),
-        Stream.filter((event) => event._tag === "AgentRunSucceeded"),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkScoped,
-      )
-      yield* client.message.send({ sessionId, branchId, content: "delegate this task" })
-      const [succeeded] = Array.from(yield* Fiber.join(succeededFiber))
-      expect(succeeded?._tag).toBe("AgentRunSucceeded")
-      if (succeeded?._tag !== "AgentRunSucceeded") return Option.none<string>()
-      return Option.fromUndefinedOr(succeeded.preview)
-    }).pipe(Effect.timeout("8 seconds")),
-  )
-
-describe("agent run preview", () => {
-  it.live(
-    "a foreground child's 300-char reply is clipped with a marker",
-    () =>
-      Effect.gen(function* () {
-        const preview = yield* runSucceededPreview({ background: false })
-        expect(preview).toEqual(Option.some("p".repeat(200) + "…"))
-      }),
-    10_000,
-  )
-  it.live(
-    "a background child's 300-char reply is clipped with the same marker",
-    () =>
-      Effect.gen(function* () {
-        const preview = yield* runSucceededPreview({ background: true })
-        expect(preview).toEqual(Option.some("p".repeat(200) + "…"))
-      }),
-    10_000,
-  )
-})
-
-// ── delegate/delegate-background.test ───────────────────────────────────────
-
-describe("DelegateTool background mode", () => {
-  it.live("admits a durable child under the tool call id and returns its handle", () =>
-    Effect.gen(function* () {
-      const started: Array<{
-        requestId: RequestId
-        prompt: string
-        deniedTools: ReadonlyArray<string>
-      }> = []
-      const ctx = testToolContext({
-        toolCallId: ToolCallId.make("delegate-call"),
-        Agent: {
-          listAgents: Effect.succeed(AllBuiltinAgents),
-          start: (params) =>
-            Effect.sync(() => {
-              started.push({
-                requestId: params.requestId,
-                prompt: params.prompt,
-                deniedTools: params.runSpec?.overrides?.deniedTools ?? [],
-              })
-              return {
-                sessionId: SessionId.make("child-session"),
-                branchId: BranchId.make("child-branch"),
-              }
-            }),
-        },
-      })
-      const result = yield* runToolWithCtx(
-        DelegateTool,
-        { todo: "analyze the codebase", background: true, overrides: { deniedTools: ["bash"] } },
-        ctx,
-      )
-      // The handle returns now. The result arrives later as a message on the parent branch.
-      expect(result).toEqual({
-        _tag: "Running",
-        requestId: RequestId.make("delegate-call"),
-        sessionId: SessionId.make("child-session"),
-        branchId: BranchId.make("child-branch"),
-      })
-      // The child keeps the caller's denials and cannot delegate further.
-      expect(started).toEqual([
-        {
-          requestId: RequestId.make("delegate-call"),
-          prompt: "analyze the codebase",
-          deniedTools: ["delegate", "agent-child", "agent-children", "bash"],
-        },
-      ])
-    }),
-  )
-
-  it.live("refuses background delegation without a host-owned tool call", () =>
-    Effect.gen(function* () {
-      const ctx = Struct.omit(
-        testToolContext({ Agent: { listAgents: Effect.succeed(AllBuiltinAgents) } }),
-        ["toolCallId"],
-      )
-      const error = yield* runToolWithCtx(
-        DelegateTool,
-        { todo: "analyze the codebase", background: true, overrides: { deniedTools: ["bash"] } },
-        ctx,
-      ).pipe(Effect.flip)
-      expect(error).toMatchObject({
-        _tag: "AgentRunError",
-        message: "Background delegation requires a host-owned tool call",
-      })
-    }),
-  )
-})
-
-// ── delegate/delegate-background-child.test ─────────────────────────────────
-
-/**
- * Background delegation admits a durable child and returns at once. The
- * child's completion must come back as a message on the parent branch,
- * which wakes the parent for another turn. Nothing else carries the result.
- */
-
-describe("background delegation with a real child", () => {
-  it.live(
-    "the child's completion lands on the parent branch and wakes it",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("delegate", { todo: "Reply with the single word pong", background: true }),
-            textStep("child started"),
-            textStep("pong"),
-            textStep("parent read pong"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            subagentRunner: "live",
-          })
-          yield* client.message.send({ sessionId, branchId, content: "delegate this task" })
-          const snapshot = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.messages.some(
-                (message) =>
-                  message.role === "user" && message.metadata?.customType === "child-completion",
-              ) && current.runtime._tag === "Idle",
-            8_000,
-            "child completion delivered to the parent",
-          )
-          const completion = snapshot.messages.find(
-            (message) => message.metadata?.customType === "child-completion",
-          )
-          expect(completion).toBeDefined()
-          const last = snapshot.messages.at(-1)
-          expect(last?.role).toBe("assistant")
-        }).pipe(Effect.timeout("10 seconds")),
-      ),
-    12_000,
-  )
-})
-
-// ── delegate/delegate-foreground-child.test ─────────────────────────────────
-
-/**
- * Foreground delegation runs a real child session. The child's loop
- * state must land in the child's own storage: a write against the
- * parent database has no matching session row and fails the foreign
- * key, which surfaced live as "Failed to persist loop queue".
+ * Foreground delegation runs a real child session and awaits it. The child's
+ * loop state lands in the child's own storage (a write against the parent's
+ * rows surfaced live as "Failed to persist loop queue"), and the parent's
+ * registry lists the child under the tool call that owns it.
  */
 
 describe("foreground delegation with a real child", () => {
   it.live(
-    "returns the child's text from a run of the current agent",
+    "returns the child's text, inherits the caller's agent, and is listed under its tool call",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -437,37 +145,93 @@ describe("foreground delegation with a real child", () => {
             textStep("pong"),
             textStep("child said pong"),
           ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            subagentRunner: "live",
+          const harness = yield* harnessWithHome(providerLayer)
+          const resultFiber = yield* delegateResult(harness)
+          yield* sendPrompt(harness, "delegate this task")
+          const succeeded = yield* Fiber.join(resultFiber)
+          expect(succeeded?._tag).toBe("ToolCallSucceeded")
+          if (succeeded?._tag !== "ToolCallSucceeded") return
+          expect(succeeded.output).not.toContain("Failed to persist")
+          expect(parseJson(succeeded.output)).toMatchObject({
+            _tag: "Completed",
+            output: expect.stringContaining("pong"),
+            metadata: { agentName: DEFAULT_AGENT_NAME },
           })
 
-          const toolEventFiber = yield* client.session
-            .events({ sessionId, branchId })
-            .pipe(
-              Stream.filter(isToolResultFor("delegate")),
-              Stream.take(1),
-              Stream.runCollect,
-              Effect.forkScoped,
+          const child = yield* childOf(harness)
+          const [entry] = yield* harness.registryOf(harness.branchId)
+          expect(entry).toMatchObject({
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            agentName: DEFAULT_AGENT_NAME,
+            toolCallId: succeeded.toolCallId,
+            background: false,
+            completed: { streamFailed: false },
+            preview: "pong",
+          })
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live("a foreground child cannot delegate further", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const childTools = yield* Deferred.make<ReadonlyArray<string>>()
+        let calls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          calls += 1
+          if (calls === 1) {
+            return Effect.succeed(
+              Stream.fromIterable([
+                toolCallPart("delegate", { todo: "Try to delegate" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ]),
             )
-
-          yield* client.message.send({ sessionId, branchId, content: "delegate this task" })
-
-          const events = Array.from(yield* Fiber.join(toolEventFiber))
-          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
-          expect(succeeded).toBeDefined()
-          if (succeeded?.event._tag === "ToolCallSucceeded") {
-            expect(succeeded.event.output).not.toContain("Failed to persist")
-            expect(succeeded.event.output).toContain("pong")
           }
+          if (calls === 2) {
+            return Deferred.succeed(
+              childTools,
+              options.tools.map((tool) => tool.name),
+            ).pipe(Effect.as(reply("could not delegate")))
+          }
+          return Effect.succeed(reply("child finished"))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        yield* sendPrompt(harness, "delegate this task")
+        const tools = yield* Deferred.await(childTools)
+        expect(tools).toContain("bash")
+        expect(tools).not.toContain("delegate")
+        expect(tools).not.toContain("agent-child")
+        expect(tools).not.toContain("agent-children")
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
+  it.live(
+    "a 300-char reply is clipped to one line in the registry",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const longReply = "p".repeat(300)
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("delegate", { todo: "Reply with three hundred characters" }),
+            textStep(longReply),
+            textStep(longReply),
+          ])
+          const harness = yield* harnessWithHome(providerLayer)
+          const resultFiber = yield* delegateResult(harness)
+          yield* sendPrompt(harness, "delegate this task")
+          yield* Fiber.join(resultFiber)
+          const [entry] = yield* harness.registryOf(harness.branchId)
+          expect(entry?.preview).toBe("p".repeat(200) + "…")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
   )
 })
 
-// ── delegate/delegate-foreground-interrupt.test ─────────────────────────────
+// ── delegate/foreground-interrupt ───────────────────────────────────────────
 
 /**
  * A foreground delegation is owned by its tool call. When the parent turn is
@@ -508,27 +272,11 @@ describe("foreground delegation under a parent interrupt", () => {
             Stream.fromIterable([textDeltaPart("ack"), finishPart({ finishReason: "stop" })]),
           )
         })
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          subagentRunner: "live",
-        })
-        yield* client.message.send({ sessionId, branchId, content: "delegate one task" })
-        const child = yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.map((envelope) => envelope.event),
-          Stream.filter((event) => event._tag === "AgentRunSpawned"),
-          Stream.map((event) =>
-            Option.map(Option.fromUndefinedOr(event.childBranchId), (childBranchId) => ({
-              sessionId: event.childSessionId,
-              branchId: childBranchId,
-            })),
-          ),
-          Stream.take(1),
-          Stream.runHead,
-          Effect.map(Option.flatten),
-          Effect.flatMap(Effect.fromOption),
-        )
+        const harness = yield* harnessWithHome(providerLayer)
+        const { client, sessionId, branchId } = harness
+        yield* sendPrompt(harness, "delegate one task")
         yield* Deferred.await(childStreaming)
+        const child = yield* childOf(harness)
         yield* client.steer.command({
           command: SteerCommand.make({
             _tag: "Interrupt",
@@ -550,7 +298,163 @@ describe("foreground delegation under a parent interrupt", () => {
   )
 })
 
-// ── delegate/delegate-pending-cap.test ──────────────────────────────────────
+// ── delegate/background ─────────────────────────────────────────────────────
+
+/**
+ * Background delegation admits a durable child and returns at once. The
+ * child's completion must come back as a message on the parent branch,
+ * which wakes the parent for another turn. Nothing else carries the result.
+ */
+
+describe("background delegation with a real child", () => {
+  it.live(
+    "returns the handle under the tool call id; the completion lands on the parent branch and wakes it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The parent's turns and the child draw from one queue in scheduling
+          // order, so route by prompt: the child alone answers its own task.
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts.includes("Reply with the single word pong")) {
+              return Effect.succeed(reply("pong"))
+            }
+            if (texts.some((text) => text.startsWith("delegate this"))) {
+              return Effect.succeed(
+                toolStep(
+                  "delegate",
+                  { todo: "Reply with the single word pong", background: true },
+                  "bg-child",
+                ),
+              )
+            }
+            return Effect.succeed(reply("parent read pong"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          const resultFiber = yield* delegateResult(harness)
+          yield* sendPrompt(harness, "delegate this task")
+          const running = yield* Fiber.join(resultFiber)
+          expect(running?._tag).toBe("ToolCallSucceeded")
+          if (running?._tag !== "ToolCallSucceeded") return
+          // The handle is keyed by the tool call, so a replayed call finds its child.
+          expect(parseJson(running.output)).toMatchObject({
+            _tag: "Running",
+            requestId: "bg-child",
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "user" && message.metadata?.customType === "child-completion",
+              ) && current.runtime._tag === "Idle",
+            8_000,
+            "child completion delivered to the parent",
+          )
+          const completion = snapshot.messages.find(
+            (message) => message.metadata?.customType === "child-completion",
+          )
+          expect(completion).toBeDefined()
+          // The completion woke the parent for a fresh turn.
+          expect(snapshot.messages.some((message) => message.role === "assistant")).toBe(true)
+
+          const child = yield* childOf(harness)
+          const [entry] = yield* harness.registryOf(branchId)
+          expect(entry).toMatchObject({
+            requestId: "bg-child",
+            ...child,
+            background: true,
+            submitted: true,
+            delivered: true,
+            completed: { interrupted: false, streamFailed: false, unanswered: false },
+            preview: "pong",
+          })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live("refuses background delegation without a host-owned tool call", () =>
+    Effect.gen(function* () {
+      const ctx = Struct.omit(
+        testToolContext({ Agent: { listAgents: Effect.succeed(AllBuiltinAgents) } }),
+        ["toolCallId"],
+      )
+      const error = yield* runToolWithCtx(
+        DelegateTool,
+        { todo: "analyze the codebase", background: true, overrides: { deniedTools: ["bash"] } },
+        ctx,
+      ).pipe(Effect.flip)
+      expect(error).toMatchObject({
+        _tag: "DelegateError",
+        message: "Background delegation requires a host-owned tool call",
+      })
+    }),
+  )
+
+  it.live(
+    "a start left unsubmitted on disk is sent on the parent's next turn and still delivers",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The parent's turn, the child's answer, and the parent's reading of
+          // it draw from one queue in whichever order they reach the model.
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("ack"),
+            textStep("ack"),
+            textStep("ack"),
+          ])
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          // A process that died between admitting the child and sending its prompt.
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          yield* harness.writeRegistry(branchId, [
+            {
+              requestId: RequestId.make("crashed-start"),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DEFAULT_AGENT_NAME,
+              prompt: "Reply with the single word pong",
+              toolCallId: ToolCallId.make("crashed-tool"),
+              background: true,
+              submitted: false,
+              delivered: false,
+            },
+          ])
+          yield* sendPrompt(harness, "hello again")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some(
+                (message) => message.metadata?.customType === "child-completion",
+              ) && current.runtime._tag === "Idle",
+            8_000,
+            "the recovered child delivered its completion",
+          )
+          expect(
+            snapshot.messages.filter((m) => m.metadata?.customType === "child-completion"),
+          ).toHaveLength(1)
+          const [entry] = yield* harness.registryOf(branchId)
+          expect(entry).toMatchObject({
+            requestId: "crashed-start",
+            submitted: true,
+            delivered: true,
+          })
+          const childMessages = yield* client.message.list(child)
+          expect(childMessages.filter((m) => m.role === "user")).toHaveLength(1)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
+// ── delegate/pending-cap ────────────────────────────────────────────────────
 
 /**
  * The parent branch admits at most four unfinished background children. A
@@ -600,12 +504,9 @@ describe("background delegation over the pending-start cap", () => {
             // draw from this one queue, in whatever order they reach the model.
             ...Array.from({ length: 8 }, () => textStep("ack")),
           ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            subagentRunner: "live",
-          })
-          yield* client.message.send({ sessionId, branchId, content: "delegate six tasks" })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate six tasks")
 
           // The two over-cap delegations come back as ordinary tool results on
           // the parent branch. A turn that died on the rejection would never
@@ -642,7 +543,7 @@ describe("background delegation over the pending-start cap", () => {
   )
 })
 
-// ── delegate/agent-child-send.test ──────────────────────────────────────────
+// ── delegate/agent-child-send ───────────────────────────────────────────────
 
 /**
  * The orchestrator can correct a child that is still working: `agent-child`
@@ -652,25 +553,6 @@ describe("background delegation over the pending-start cap", () => {
 
 const childTask = "CHILD-TASK: summarize the ledger"
 const correction = "CORRECTION: only look at src/store"
-
-const reply = (text: string) =>
-  Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
-
-const toolStep = (name: string, input: Record<string, string | boolean>, id: string) =>
-  Stream.fromIterable([
-    toolCallPart(name, input, { toolCallId: ToolCallId.make(id) }),
-    finishPart({ finishReason: "tool-calls" }),
-  ])
-
-/** Every text part of the prompt's user and assistant messages, in order. */
-const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
-  prompt.content.flatMap((message) => {
-    if (message.role === "system") return []
-    return message.content.flatMap((part) => {
-      if (part.type !== "text") return []
-      return [part.text]
-    })
-  })
 
 const promptToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
   prompt.content.flatMap((message) => {
@@ -737,12 +619,9 @@ describe("agent-child send", () => {
           }
           return Deferred.succeed(delivered, void 0).pipe(Effect.as(reply("ack")))
         })
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          subagentRunner: "live",
-        })
-        yield* client.message.send({ sessionId, branchId, content: "split the work" })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { client, sessionId, branchId } = harness
+        yield* sendPrompt(harness, "split the work")
         yield* Deferred.await(childSawCorrection)
         // The parent hears a child once. The receipt must carry the answer the
         // child gave after it read the correction, not the one before.
@@ -788,12 +667,9 @@ describe("agent-child send", () => {
           }
           return Effect.succeed(reply("ack"))
         })
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          subagentRunner: "live",
-        })
-        yield* client.message.send({ sessionId, branchId, content: "split the work" })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { client, sessionId, branchId } = harness
+        yield* sendPrompt(harness, "split the work")
         const snapshot = yield* waitFor(
           client.session.getSnapshot({ sessionId, branchId }),
           (current) => sendResults(current.messages).length === 1,
