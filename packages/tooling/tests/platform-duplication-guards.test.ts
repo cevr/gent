@@ -81,7 +81,7 @@ describe("platform duplication guards", () => {
     // The Anthropic root is allowlisted: `BunGentPlatformLive` has no public path.
     expect(
       findPlatformDuplicationViolations(
-        "packages/extensions/src/anthropic/index.ts",
+        "packages/extensions/src/anthropic.ts",
         'import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"',
       ),
     ).toEqual([])

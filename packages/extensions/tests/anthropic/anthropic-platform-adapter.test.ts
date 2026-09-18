@@ -12,7 +12,7 @@
  * non-default `GENT_HOME`.
  */
 import { describe, expect, test } from "bun:test"
-import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
+import { AnthropicPlatform } from "../../src/anthropic.js"
 import type { ExtensionHostService } from "@gent/core/extensions/api"
 import { testHostFacts } from "@gent/core-internal/test-utils"
 

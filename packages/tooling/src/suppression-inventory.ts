@@ -172,12 +172,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off device endpoints at extension boundary",
   },
   {
-    file: "packages/extensions/src/anthropic/index.ts",
-    scope: "next-line",
-    text: "strictEffectProvide:off",
-  },
-  {
-    file: "packages/extensions/src/anthropic/oauth/refresh.ts",
+    file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
     text: "strictEffectProvide:off",
   },

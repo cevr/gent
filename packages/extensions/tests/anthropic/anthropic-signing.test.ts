@@ -13,7 +13,7 @@ import {
   computeCch as computeCchEffect,
   computeVersionSuffix as computeVersionSuffixEffect,
   extractFirstUserMessageText,
-} from "../../src/anthropic/signing.js"
+} from "../../src/anthropic.js"
 
 // `BunGentPlatformLive` is `Layer.succeed` — the real SHA256 hash is
 // computed synchronously, so each helper can run via `Effect.runSync`.

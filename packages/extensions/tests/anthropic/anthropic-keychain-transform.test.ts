@@ -17,19 +17,22 @@ import { TestClock } from "effect/testing"
 import { testHostFacts } from "@gent/core-internal/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { buildKeychainTransformClient } from "../../src/anthropic/keychain-transform.js"
-import type { AnthropicKeychainEnv } from "../../src/anthropic/platform-adapter.js"
+import {
+  AnthropicBetaCache,
+  type AnthropicBetaCacheApi,
+  type AnthropicCredentialIO,
+  AnthropicCredentialService,
+  type AnthropicKeychainEnv,
+  AnthropicPlatform,
+  buildKeychainTransformClient,
+  type ClaudeCredentials,
+} from "../../src/anthropic.js"
 
 const TEST_ENV: AnthropicKeychainEnv = {}
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
-import type { AnthropicCredentialIO } from "../../src/anthropic/credential-service.js"
 import type { CredentialCache } from "../../src/providers.js"
-import { AnthropicCredentialService } from "../../src/anthropic/credential-service.js"
-import { AnthropicBetaCache, type AnthropicBetaCacheApi } from "../../src/anthropic/beta-cache.js"
-import type { ClaudeCredentials } from "../../src/anthropic/oauth/credentials.js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
-import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import { runEffectBoundary } from "../run-effect-boundary.js"
 // ── Helpers ──
 // Real Clock here (no TestClock), so expiresAt must be a real future

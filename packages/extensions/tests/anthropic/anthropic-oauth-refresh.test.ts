@@ -13,13 +13,11 @@ import { Option, Schema } from "effect"
 import {
   freshEnoughForUse,
   parseOAuthResponse,
-  updateCredentialBlob,
-} from "../../src/anthropic/oauth/credentials.js"
-import {
   PRIMARY_CLAUDE_SERVICE,
   shouldFallBackToCli,
   shouldFallBackToCredentialsFile,
-} from "../../src/anthropic/oauth/keychain.js"
+  updateCredentialBlob,
+} from "../../src/anthropic.js"
 import { encodeExternalJson, externalWireNull } from "../helpers/external-wire.js"
 
 const WrappedCredentialBlob = Schema.Struct({
