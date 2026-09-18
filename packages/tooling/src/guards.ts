@@ -2206,7 +2206,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off self-contained probe, no scope lifetime",
   },
   {
-    file: "packages/sdk/tests/server-lock.test.ts",
+    file: "packages/sdk/tests/server.test.ts",
     scope: "file",
     text: "nodeBuiltinImport:off",
   },
