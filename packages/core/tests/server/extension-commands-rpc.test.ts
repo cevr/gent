@@ -45,8 +45,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import * as ExtensionApi from "@gent/core/extensions/api"
-import { BranchId, ExtensionId, SessionId } from "../../src/domain/ids"
-import { ProcessGenerationId } from "../../src/domain/process-generation"
+import { BranchId, ExtensionId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
 import { ConfigService } from "../../src/runtime/config-service"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../../src/server/errors"

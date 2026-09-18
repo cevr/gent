@@ -18,6 +18,7 @@ import {
   type BranchId,
   type ExtensionId,
   type MessageId,
+  type ProcessGenerationId,
   type SessionId,
   ToolCallId,
   ToolId,
@@ -32,7 +33,6 @@ import {
   ToolSourceRevision,
 } from "../../domain/tool-binding.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import type { ProcessGenerationId } from "../../domain/process-generation.js"
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type { LoadedExtension } from "../../domain/extension.js"

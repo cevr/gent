@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+// ── ids ─────────────────────────────────────────────────────────────────────
+
 /** Schema.brand helper kept only to standardize branded-id declarations. */
 export const branded =
   <B extends string>(brand: B) =>
@@ -41,3 +43,12 @@ export type RequestId = typeof RequestId.Type
 
 export const ExtensionId = Schema.String.pipe(branded("ExtensionId"))
 export type ExtensionId = typeof ExtensionId.Type
+
+// ── process-generation ──────────────────────────────────────────────────────
+
+/**
+ * Identity of one live process. A process-local tool binding names the
+ * process that recorded it and is never valid after a restart.
+ */
+export const ProcessGenerationId = Schema.NonEmptyString.pipe(Schema.brand("ProcessGenerationId"))
+export type ProcessGenerationId = typeof ProcessGenerationId.Type

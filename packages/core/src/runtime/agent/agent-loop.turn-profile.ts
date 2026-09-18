@@ -1,6 +1,6 @@
 import { Context, Effect } from "effect"
 import type { ExtensionHostContext } from "../../domain/extension-services.js"
-import type { ProcessGenerationId } from "../../domain/process-generation.js"
+import type { ProcessGenerationId } from "../../domain/ids.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import { provideCurrentCapabilityContext } from "../extensions/extension-capability-context.js"

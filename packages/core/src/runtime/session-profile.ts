@@ -30,7 +30,7 @@ import type {
   LoadedExtension,
 } from "../domain/extension.js"
 import { sortExtensionsByScope } from "../domain/extension.js"
-import { ProcessGenerationId } from "../domain/process-generation.js"
+import { ProcessGenerationId } from "../domain/ids.js"
 import { resolveExtensions, ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { toFailedExtension } from "./extensions/activation.js"

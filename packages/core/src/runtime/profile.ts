@@ -19,7 +19,7 @@ import {
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
 import { GENT_CONFIG_DIRECTORY } from "./extensions/disabled.js"
 import { environmentSection } from "../domain/prompt.js"
-import type { ProcessGenerationId } from "../domain/process-generation.js"
+import type { ProcessGenerationId } from "../domain/ids.js"
 
 /**
  * Inputs that fully describe a runtime profile.
