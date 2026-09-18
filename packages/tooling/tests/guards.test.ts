@@ -696,6 +696,23 @@ describe("a lock include must name a tracked file", () => {
     expect(findings).toEqual([])
   })
 
+  test("a trailing slash, a ./ prefix, a .. segment, and a glob are legal forms", () => {
+    const findings = findMissingLockIncludes(
+      LOCKS,
+      "",
+      { include: ["src/", "./tests/domain/actor.test.ts", "../core/src", "tests/**/*.test.ts"] },
+      ["packages/core/src/domain/ids.ts", "packages/core/tests/domain/actor.test.ts"],
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("a directory include does not match a sibling that shares its prefix", () => {
+    const findings = findMissingLockIncludes(LOCKS, "", { include: ["src"] }, [
+      "packages/core/srcfoo/a.ts",
+    ])
+    expect(findings).toHaveLength(1)
+  })
+
   test("an include naming a deleted test is reported on its line", () => {
     const findings = findMissingLockIncludes(LOCKS, text, config, [
       "packages/core/src/domain/ids.ts",

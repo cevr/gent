@@ -78,7 +78,9 @@ Hoisted — the two copies were the same declaration, so one was kept:
 - `decodeWire`, `encodeWire`, `WireRecord` — `acp-agents/protocol` dropped its
   copy; `acp-agents/fake-acp-peer` keeps it.
 - `encodeAlarms` — `wake/wake-store` dropped its copy; `wake/wake` keeps it.
-- `ctx`, `ToolLayer` — `fs-tools/write` dropped its copies; `fs-tools/read`
+- `ctx`, `ToolLayer` — `fs-tools/write` dropped its copies (`ToolLayer` was the
+  same value under a different text: `write` inlined the layer `read` named
+  `PlatformLayer`); `fs-tools/read`
   keeps them. Four imports `write` no longer needs were dropped with them.
 - `promptText` — `compaction/model-compaction-rpc` dropped its copy; the
   unused `Predicate` import went with it.
@@ -111,9 +113,9 @@ Other edits the fold needed:
 
 - `cell/cell-process` imported `buildCellWorker as buildWorker` from the folded
   fixture. The alias is gone; the file now calls `buildCellWorker`.
-- Nine files imported `describe`/`test`/`it`/`expect` from `bun:test` while a
+- Ten files imported `describe`/`test`/`it`/`expect` from `bun:test` while a
   fold sibling took them from `effect-bun-test`. They now all use
-  `effect-bun-test`. Two of them (`anthropic-keychain`, `anthropic-oauth-refresh`,
+  `effect-bun-test`. Three of them (`anthropic-keychain`, `anthropic-oauth-refresh`,
   `anthropic-signing`) ran sync bodies through `it()`; those bodies now use
   `test()`, because `effect-bun-test`'s plain `it()` is inert.
 - Specifier mismatches that would duplicate an identifier after the merge:

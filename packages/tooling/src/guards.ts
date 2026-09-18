@@ -1134,6 +1134,26 @@ export const LocksTsconfigSchema = Schema.Struct({
 
 export type LocksTsconfig = typeof LocksTsconfigSchema.Type
 
+/** `a/./b/../c/` → `a/c`: the forms a tsconfig include may take, as one path. */
+const normalizeIncludePath = (path: string): string => {
+  const segments: Array<string> = []
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment === "..") segments.pop()
+    else segments.push(segment)
+  }
+  return segments.join("/")
+}
+
+/** A glob include matches like an oxlint override; a plain one is a file or a directory. */
+const includeMatcher = (path: string): ((file: string) => boolean) => {
+  if (/[*?{]/.test(path)) {
+    const matcher = globMatcher(path)
+    return (file) => matcher.test(file)
+  }
+  return (file) => file === path || file.startsWith(`${path}/`)
+}
+
 /**
  * A lock tsconfig lists the test files whose `@ts-expect-error` lines prove a
  * type surface stays closed. `tsc` ignores an include that names no file, so
@@ -1148,8 +1168,9 @@ export const findMissingLockIncludes = (
   const configDir = configFile.slice(0, configFile.lastIndexOf("/") + 1)
   const findings: Array<LintConfigFinding> = []
   for (const include of config.include ?? []) {
-    const path = `${configDir}${include}`
-    if (trackedFiles.some((file) => file === path || file.startsWith(`${path}/`))) continue
+    const path = normalizeIncludePath(`${configDir}${include}`)
+    const matches = includeMatcher(path)
+    if (trackedFiles.some(matches)) continue
     findings.push({
       file: configFile,
       line: lineOfGlob(configText, include),
