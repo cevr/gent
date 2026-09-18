@@ -13,8 +13,7 @@ import { LanguageModelLayers, textDeltaPart } from "@gent/core-internal/test-uti
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { e2ePreset } from "../helpers/test-preset"
-import { GOAL_CONTEXT_MESSAGE_TYPE, GOAL_EXTENSION_ID } from "../../src/goal/index.js"
-import { GoalSnapshot } from "../../src/goal/goal-protocol.js"
+import { GOAL_CONTEXT_MESSAGE_TYPE, GOAL_EXTENSION_ID, GoalSnapshot } from "../../src/goal.js"
 
 describe("goal stream failure", () => {
   it.scopedLive(

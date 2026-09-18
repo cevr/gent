@@ -12,8 +12,7 @@ import { runToolWithCtx } from "@gent/core-internal/test-utils"
 import { testExtensionFiles } from "@gent/core-internal/test-utils/extension-host-context"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"
-import { GoalTool } from "../../src/goal/index.js"
-import { GoalSnapshot, goalContinuationSource } from "../../src/goal/goal-protocol.js"
+import { goalContinuationSource, GoalSnapshot, GoalTool } from "../../src/goal.js"
 
 describe("goal store", () => {
   it.scopedLive("completing a goal pulls its queued continuation and leaves one clean file", () =>
