@@ -10,7 +10,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { RpcHandlersLive } from "./rpc-handlers.js"
-import { GentRpcs } from "./rpcs.js"
+import { GentRpcs } from "./rpc.js"
 import type { ServerIdentityApi } from "./server-identity.js"
 
 // ── WebSocket lifecycle tracing ──

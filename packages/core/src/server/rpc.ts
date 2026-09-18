@@ -1,20 +1,17 @@
-import { Schema } from "effect"
-import type { Effect } from "effect"
+import { type Effect, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
   DriverRef,
+  Model,
   ModelId,
   ReasoningEffort,
   RunSpecSchema,
+  SessionDepthLimitError,
+  SteerCommand,
 } from "../domain/agent.js"
-import {
-  AuthAuthorization,
-  AuthMethod,
-  AuthProviderInfo,
-  ListAuthProvidersPayload,
-} from "../runtime/provider.js"
-import { EventEnvelope } from "../domain/event.js"
+import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
+import { EventEnvelope, EventStoreError } from "../domain/event.js"
 import {
   BranchId,
   ExtensionId,
@@ -23,14 +20,66 @@ import {
   RequestId,
   SessionId,
 } from "../domain/ids.js"
+import { InteractionRequestMismatchError } from "../domain/interaction.js"
+import { DriverError, ProviderAuthError } from "../domain/driver.js"
+import { ConfigLoadError } from "../runtime/config.js"
+import { SessionRuntimeError } from "../runtime/session.js"
+import { StorageError } from "../storage/storage.js"
+import {
+  AuthAuthorization,
+  AuthMethod,
+  AuthProviderInfo,
+  ListAuthProvidersPayload,
+} from "../runtime/provider.js"
 import {
   Branch,
   BranchTreeNode,
+  Message,
   ProjectedMessage,
   QueueSnapshot,
   Session,
 } from "../domain/message.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../domain/agent-loop.js"
+import {
+  Rpc,
+  type RpcClient,
+  type RpcClientError,
+  RpcGroup,
+  type RpcGroup as RpcGroupNs,
+} from "effect/unstable/rpc"
+import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+
+// ── errors ──────────────────────────────────────────────────────────────────
+
+export { InvalidStateError, NotFoundError } from "../domain/errors.js"
+
+export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocolError>()(
+  "ExtensionProtocolError",
+  {
+    extensionId: ExtensionId,
+    tag: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+export const GentRpcError = Schema.Union([
+  ConfigLoadError,
+  StorageError,
+  SessionRuntimeError,
+  ProviderError,
+  ProviderAuthError,
+  DriverError,
+  ExtensionProtocolError,
+  EventStoreError,
+  InteractionRequestMismatchError,
+  NotFoundError,
+  InvalidStateError,
+  SessionDepthLimitError,
+]).pipe(Schema.toTaggedUnion("_tag"))
+
+export type GentRpcError = typeof GentRpcError.Type
+
+// ── transport-contract ──────────────────────────────────────────────────────
 
 export { Branch, BranchTreeNode, Session }
 export type { SessionRuntimeState } from "../domain/agent-loop.js"
@@ -109,7 +158,7 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   metrics: SessionRuntimeMetrics,
 }) {}
 
-export { SteerCommand } from "../domain/agent.js"
+export { SteerCommand }
 
 export const QueueTarget = Schema.Struct({
   sessionId: SessionId,
@@ -165,7 +214,7 @@ export const DeleteAuthKeyInput = Schema.Struct({
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
-export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
+const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
 
 export const AuthorizeAuthInput = Schema.Struct({
   sessionId: SessionId,
@@ -174,7 +223,7 @@ export const AuthorizeAuthInput = Schema.Struct({
 })
 export type AuthorizeAuthInput = typeof AuthorizeAuthInput.Type
 
-export const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
+const AuthorizeAuthSuccess = Schema.NullOr(AuthAuthorization)
 
 export const CallbackAuthInput = Schema.Struct({
   sessionId: SessionId,
@@ -329,3 +378,225 @@ export interface GentLifecycle {
   readonly restart: Effect.Effect<void, GentConnectionError>
   readonly waitForReady: Effect.Effect<void>
 }
+
+// ── rpcs/session ────────────────────────────────────────────────────────────
+
+export class SessionRpcs extends RpcGroup.make(
+  Rpc.make("session.create", {
+    payload: CreateSessionInput.fields,
+    success: Schema.Struct({
+      sessionId: SessionId,
+      branchId: BranchId,
+      name: Schema.String,
+    }),
+    error: GentRpcError,
+  }),
+  Rpc.make("session.list", {
+    success: Schema.Array(Session),
+    error: GentRpcError,
+  }),
+  Rpc.make("session.thread", {
+    payload: { sessionId: SessionId },
+    success: Schema.Array(Session),
+    error: GentRpcError,
+  }),
+  Rpc.make("session.get", {
+    payload: { sessionId: SessionId },
+    success: Schema.NullOr(Session),
+    error: GentRpcError,
+  }),
+  Rpc.make("session.delete", {
+    payload: { sessionId: SessionId },
+    error: GentRpcError,
+  }),
+  Rpc.make("session.getSnapshot", {
+    payload: GetSessionSnapshotInput.fields,
+    success: SessionSnapshot,
+    error: GentRpcError,
+  }),
+  Rpc.make("session.updateSettings", {
+    payload: UpdateSessionSettingsInput.fields,
+    success: SessionSettings,
+    error: GentRpcError,
+  }),
+  Rpc.make("session.events", {
+    payload: SubscribeEventsInput.fields,
+    success: EventEnvelope,
+    stream: true,
+    error: GentRpcError,
+  }),
+  Rpc.make("session.watchRuntime", {
+    payload: { sessionId: SessionId, branchId: BranchId },
+    success: SessionRuntimeStateSchema,
+    stream: true,
+    error: GentRpcError,
+  }),
+  Rpc.make("branch.list", {
+    payload: { sessionId: SessionId },
+    success: Schema.Array(Branch),
+    error: GentRpcError,
+  }),
+  Rpc.make("branch.create", {
+    payload: CreateBranchInput.fields,
+    success: Schema.Struct({ branchId: BranchId }),
+    error: GentRpcError,
+  }),
+  Rpc.make("branch.getTree", {
+    payload: { sessionId: SessionId },
+    success: Schema.Array(BranchTreeNode),
+    error: GentRpcError,
+  }),
+  Rpc.make("branch.switch", {
+    payload: SwitchBranchInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("branch.fork", {
+    payload: ForkBranchInput.fields,
+    success: Schema.Struct({ branchId: BranchId }),
+    error: GentRpcError,
+  }),
+  Rpc.make("message.send", {
+    payload: SendMessageInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("message.list", {
+    payload: { branchId: BranchId },
+    success: Schema.Array(Message),
+    error: GentRpcError,
+  }),
+  Rpc.make("steer.command", {
+    payload: { command: SteerCommand },
+    error: GentRpcError,
+  }),
+  Rpc.make("queue.drain", {
+    payload: QueueDrainInput.fields,
+    success: QueueSnapshot,
+    error: GentRpcError,
+  }),
+  Rpc.make("queue.get", {
+    payload: QueueTarget.fields,
+    success: QueueSnapshot,
+    error: GentRpcError,
+  }),
+  Rpc.make("interaction.respondInteraction", {
+    payload: RespondInteractionInput.fields,
+    error: GentRpcError,
+  }),
+) {}
+
+// ── rpcs/index ──────────────────────────────────────────────────────────────
+
+// ============================================================================
+// Runtime status
+// ============================================================================
+
+const RuntimeStatusResult = Schema.Struct({
+  serverId: Schema.String,
+  pid: Schema.Finite,
+  hostname: Schema.String,
+  uptime: Schema.Finite,
+  connectionCount: Schema.Finite,
+  dbPath: Schema.String,
+  buildFingerprint: Schema.String,
+})
+type RuntimeStatusResult = typeof RuntimeStatusResult.Type
+
+class RuntimeRpcs extends RpcGroup.make(
+  Rpc.make("runtime.status", {
+    success: RuntimeStatusResult,
+    error: GentRpcError,
+  }),
+) {}
+
+// ============================================================================
+// Auth
+// ============================================================================
+
+class AuthRpcs extends RpcGroup.make(
+  Rpc.make("listProviders", {
+    payload: ListAuthProvidersPayload.fields,
+    success: Schema.Array(AuthProviderInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("setKey", {
+    payload: SetAuthKeyInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("deleteKey", {
+    payload: DeleteAuthKeyInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("listMethods", {
+    success: ListAuthMethodsSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("authorize", {
+    payload: AuthorizeAuthInput.fields,
+    success: AuthorizeAuthSuccess,
+    error: GentRpcError,
+  }),
+  Rpc.make("callback", {
+    payload: CallbackAuthInput.fields,
+    error: GentRpcError,
+  }),
+).prefix("auth.") {}
+
+// ============================================================================
+// Extension + driver + model
+// ============================================================================
+
+class ExtensionRpcs extends RpcGroup.make(
+  Rpc.make("extension.request", {
+    payload: ExtensionRpcRequestInput.fields,
+    success: Schema.Unknown,
+    error: GentRpcError,
+  }),
+  Rpc.make("extension.listStatus", {
+    payload: { sessionId: Schema.optional(SessionId) },
+    success: ExtensionHealthSnapshot,
+    error: GentRpcError,
+  }),
+  Rpc.make("extension.listSlashCommands", {
+    payload: { sessionId: SessionId },
+    success: Schema.Array(SlashCommandInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("driver.list", {
+    success: DriverListResult,
+    error: GentRpcError,
+  }),
+  Rpc.make("driver.set", {
+    payload: SetDriverOverrideInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("driver.clear", {
+    payload: ClearDriverOverrideInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("model.list", {
+    success: Schema.Array(Model),
+    error: GentRpcError,
+  }),
+) {}
+
+// ============================================================================
+// Merged RPC Group
+// ============================================================================
+
+export class GentRpcs extends RpcGroup.make()
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, RuntimeRpcs)
+  .middleware(WorkspaceRpcMiddleware) {}
+
+// ============================================================================
+// RPC Client Types
+// ============================================================================
+
+export type GentRpcClient = RpcClient.RpcClient<
+  RpcGroupNs.Rpcs<typeof GentRpcs>,
+  RpcClientError.RpcClientError | GentConnectionError
+>
+
+export type GentClientRpcError =
+  | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
+  | RpcClientError.RpcClientError
+  | GentConnectionError

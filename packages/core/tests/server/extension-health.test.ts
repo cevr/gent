@@ -5,7 +5,7 @@ import {
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
-} from "../../src/server/transport-contract"
+} from "../../src/server/rpc"
 import { ExtensionId } from "../../src/domain/ids"
 
 describe("buildExtensionHealthSnapshot", () => {

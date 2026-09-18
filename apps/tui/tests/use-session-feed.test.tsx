@@ -20,7 +20,7 @@ import {
 } from "@gent/core/protocol"
 import { EventId } from "@gent/core-internal/domain/event"
 import { ExtensionId, InteractionRequestId } from "@gent/core-internal/domain/ids"
-import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
+import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
 import { emptyQueueSnapshot, type SessionSnapshot } from "@gent/sdk"
 import { useSessionFeed } from "../src/session"
 import type { Session } from "../src/client"

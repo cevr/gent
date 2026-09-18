@@ -1,5 +1,34 @@
 import { Predicate, Clock, Effect, Layer, Option, Stream } from "effect"
-import { GentRpcs } from "./rpcs.js"
+import {
+  type AuthorizeAuthInput,
+  type CallbackAuthInput,
+  type ClearDriverOverrideInput,
+  type CreateBranchInput,
+  type CreateSessionInput,
+  type DeleteAuthKeyInput,
+  DriverInfo,
+  DriverListResult,
+  ExtensionProtocolError,
+  type ExtensionRpcRequestInput,
+  type ForkBranchInput,
+  GentRpcs,
+  type GetSessionSnapshotInput,
+  InvalidStateError,
+  type ListAuthProvidersPayload,
+  NotFoundError,
+  type QueueDrainInput,
+  type QueueTarget,
+  type RespondInteractionInput,
+  type SendMessageInput,
+  SessionSnapshot,
+  type SetAuthKeyInput,
+  type SetDriverOverrideInput,
+  SlashCommandInfo,
+  type SubscribeEventsInput,
+  type SwitchBranchInput,
+  type SteerCommand as TransportSteerCommand,
+  type UpdateSessionSettingsInput,
+} from "./rpc.js"
 import type { DriverRef } from "../domain/agent.js"
 import { Auth, AuthApi, AuthGuard, ModelRegistry, ProviderAuth } from "../runtime/provider.js"
 import { ProviderAuthError } from "../domain/driver.js"
@@ -30,38 +59,11 @@ import { projectMessagesWithToolInteractions, toolCallDurations } from "../domai
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
 import { ConnectionTracker } from "./connection-tracker.js"
-import { ExtensionProtocolError, InvalidStateError, NotFoundError } from "./errors.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
 import { ServerIdentity } from "./server-identity.js"
 import { SessionMutations } from "../domain/extension.js"
 import { getBranchTree } from "./session-utils.js"
 import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
-import {
-  DriverInfo,
-  DriverListResult,
-  SessionSnapshot,
-  SlashCommandInfo,
-  type AuthorizeAuthInput,
-  type CallbackAuthInput,
-  type ClearDriverOverrideInput,
-  type CreateBranchInput,
-  type CreateSessionInput,
-  type DeleteAuthKeyInput,
-  type ExtensionRpcRequestInput,
-  type ForkBranchInput,
-  type GetSessionSnapshotInput,
-  type ListAuthProvidersPayload,
-  type QueueDrainInput,
-  type QueueTarget,
-  type RespondInteractionInput,
-  type SendMessageInput,
-  type SetAuthKeyInput,
-  type SetDriverOverrideInput,
-  type SteerCommand as TransportSteerCommand,
-  type SubscribeEventsInput,
-  type SwitchBranchInput,
-  type UpdateSessionSettingsInput,
-} from "./transport-contract.js"
 
 /** The registry serving a cwd: its profile's when a profile cache is wired, else the launch registry. */
 const resolveRegistryForCwd = Effect.fn("SessionQueries.resolveRegistryForCwd")(function* (

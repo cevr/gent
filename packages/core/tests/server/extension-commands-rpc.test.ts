@@ -39,7 +39,7 @@ import { SqliteStorage } from "../../src/storage/storage"
 import { createToolTestLayer } from "../../src/test-utils/extension-harness"
 import { createRpcHarness } from "../../src/test-utils/rpc-harness"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { SlashCommandInfo } from "../../src/server/transport-contract"
+import { ExtensionProtocolError, SlashCommandInfo } from "../../src/server/rpc"
 import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   CapabilityError,
@@ -52,7 +52,6 @@ import * as ExtensionApi from "@gent/core/extensions/api"
 import { BranchId, ExtensionId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
 import { ConfigService } from "../../src/runtime/config"
 import { WideEventLogger, type LogEvent } from "../../src/runtime/wide-event-boundary"
-import { ExtensionProtocolError } from "../../src/server/errors"
 class ProfileToken extends Context.Service<
   ProfileToken,
   {

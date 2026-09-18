@@ -367,7 +367,7 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   if (serverRootConsumerFiles.has(file)) patterns.push(...bannedServerRootConsumerPatterns)
   if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
   if (shippedExtensionFile(file)) patterns.push(...bannedShippedExtensionPatterns)
-  if (file === "packages/core/src/server/transport-contract.ts") {
+  if (file === "packages/core/src/server/rpc.ts") {
     patterns.push(...bannedTransportContractPatterns)
   }
   return patterns

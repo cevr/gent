@@ -15,7 +15,7 @@ import type { Session as DomainSession, GentNamespacedClient, GentRuntime } from
 import { ExtensionUIProvider } from "../src/extensions/host"
 import { ComposerDraftsProvider, SessionShellProvider } from "../src/session"
 import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
-import type { SessionRuntimeState } from "@gent/core-internal/server/transport-contract"
+import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
 import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 

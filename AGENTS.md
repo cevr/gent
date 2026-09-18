@@ -158,7 +158,7 @@ assertSequence(calls, [
 | `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
 | `packages/core/src/test-utils/index.ts`            | `SequenceRecorder`, recording layers                |
 | `packages/core/src/server/dependencies.ts`         | startup wiring + dependency graph                   |
-| `packages/core/src/server/transport-contract.ts`   | shared client contract                              |
+| `packages/core/src/server/rpc.ts`                  | shared client contract                              |
 | `packages/core/src/domain/agent-loop.ts`           | loop state, entity id, and the actor protocol       |
 | `packages/core/src/runtime/agent-loop.ts`          | mailbox, worker, behavior, and the actor            |
 | `packages/core/src/runtime/turn.ts`                | per-branch turn engine used by the actor            |

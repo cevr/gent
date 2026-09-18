@@ -46,8 +46,7 @@ import {
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
 } from "../storage/storage.js"
-import { NotFoundError } from "./errors.js"
-import type { CreateSessionInput } from "./transport-contract.js"
+import { type CreateSessionInput, NotFoundError } from "./rpc.js"
 import { CurrentWorkspaceId } from "./workspace-rpc.js"
 
 interface CreateSessionResult {

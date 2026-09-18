@@ -16,7 +16,7 @@ import {
   ExternalDriverRef,
   ModelDriverRef,
 } from "../../src/domain/agent"
-import { DriverListResult } from "../../src/server/transport-contract"
+import { DriverListResult } from "../../src/server/rpc"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "../../src/test-utils/e2e-layer"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"

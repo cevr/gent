@@ -57,7 +57,7 @@ import type {
   SessionSettings,
   SwitchBranchInput,
   UpdateSessionSettingsInput,
-} from "../server/transport-contract.js"
+} from "../server/rpc.js"
 
 // ── resource ────────────────────────────────────────────────────────────────
 

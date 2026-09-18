@@ -36,7 +36,7 @@ updates this list in the same commit.
    `packages/extensions/src/index.ts`.
 4. **Schema-first transport contract.** Every RPC input and output is a
    Schema; thin adapters carry it. Receipts:
-   `packages/core/src/server/transport-contract.ts`, `packages/core/src/server/rpcs.ts`.
+   `packages/core/src/server/rpc.ts`, `packages/core/src/server/rpc.ts`.
 5. **Event and projection commit together.** A session mutation writes its
    row and its events in one transaction, so a reader never sees one without
    the other. Receipt: `transactWithEvent` in
@@ -111,7 +111,7 @@ names the decision that left it open.
   would re-await what the cell awaits. Reopen only if a run shows a child
   result needed inside a later cell before its message lands.
 - **The agents view keeps a server half.** The live catalog
-  (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpcs/session.ts`) differ after a
+  (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
 - **Compaction is measured on long sessions only by hand.** The handoff
@@ -176,7 +176,7 @@ Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.stat
 
 Source of truth:
 
-- `packages/core/src/server/transport-contract.ts`
+- `packages/core/src/server/rpc.ts`
 
 That module owns:
 
@@ -187,7 +187,7 @@ That module owns:
 Adapters:
 
 - `packages/sdk/src/client.ts`
-- `packages/core/src/server/rpcs.ts`
+- `packages/core/src/server/rpc.ts`
 - `packages/core/src/server/server-routes.ts`
 
 Rule:

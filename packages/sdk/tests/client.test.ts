@@ -4,7 +4,7 @@ import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { extractText, extractImages, type Message as DomainMessage } from "../src/index"
 import { makeNamespacedClient } from "../src/namespaced-client"
-import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpcs"
+import { GentRpcs, type GentRpcClient } from "@gent/core-internal/server/rpc"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
   dateFromMillis,

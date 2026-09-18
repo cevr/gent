@@ -42,8 +42,8 @@ export { messagePartsImages, messagePartsReasoning, messagePartsText } from "./d
 export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/message.js"
 export { type ModelContextMetrics } from "./domain/agent-loop.js"
-export { GentRpcError } from "./server/errors.js"
-export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpcs.js"
+export { GentRpcError } from "./server/rpc.js"
+export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpc.js"
 export {
   BranchTreeNode,
   ConnectionState,
@@ -56,4 +56,4 @@ export {
   type GentLifecycle,
   SessionSnapshot,
   type SteerCommand,
-} from "./server/transport-contract.js"
+} from "./server/rpc.js"

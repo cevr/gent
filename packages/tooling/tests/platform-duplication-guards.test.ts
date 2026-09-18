@@ -368,7 +368,7 @@ describe("platform duplication guards", () => {
     )
 
     expect(
-      findPlatformDuplicationViolations("packages/core/src/server/rpcs/session.ts", ""),
+      findPlatformDuplicationViolations("packages/core/src/server/rpcs/product.ts", ""),
     ).toEqual([])
   })
 
@@ -384,12 +384,12 @@ describe("platform duplication guards", () => {
   test("flags session transport dto names only in the transport contract", () => {
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/server/transport-contract.ts",
+        "packages/core/src/server/rpc.ts",
         "export class SessionInfo {}",
       ),
     ).toEqual([
       {
-        file: "packages/core/src/server/transport-contract.ts",
+        file: "packages/core/src/server/rpc.ts",
         line: 1,
         message: "Transport session DTOs mirror domain types",
       },
@@ -404,17 +404,17 @@ describe("platform duplication guards", () => {
 
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/server/transport-contract.ts",
+        "packages/core/src/server/rpc.ts",
         ["export class BranchInfo {}", "const runtime = ExtensionRuntime"].join("\n"),
       ),
     ).toEqual([
       {
-        file: "packages/core/src/server/transport-contract.ts",
+        file: "packages/core/src/server/rpc.ts",
         line: 1,
         message: "Transport session DTOs mirror domain types",
       },
       {
-        file: "packages/core/src/server/transport-contract.ts",
+        file: "packages/core/src/server/rpc.ts",
         line: 2,
         message: "ExtensionRuntime marker service is deleted; use explicit services",
       },

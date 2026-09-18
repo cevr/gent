@@ -1,10 +1,6 @@
 import { Option, Predicate } from "effect"
 import type { ExtensionStatusInfo } from "../domain/extension.js"
-import {
-  ExtensionHealth,
-  ExtensionHealthIssue,
-  ExtensionHealthSnapshot,
-} from "./transport-contract.js"
+import { ExtensionHealth, ExtensionHealthIssue, ExtensionHealthSnapshot } from "./rpc.js"
 
 export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
