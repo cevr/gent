@@ -7,7 +7,7 @@ import type {
 } from "../../domain/extension.js"
 import { ExtensionLoadError, isClientFile } from "../../domain/extension.js"
 import { ExtensionHost, makeCollectingExtensionHost } from "../../domain/extension-host.js"
-import { bindRequestCapabilityExtension } from "../../domain/capability/request.js"
+import { bindRequestCapabilityExtension } from "../../domain/capability.js"
 import { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"

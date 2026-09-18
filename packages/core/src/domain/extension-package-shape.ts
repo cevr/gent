@@ -1,10 +1,5 @@
 import { Effect, Option, Predicate, Schema } from "effect"
-import {
-  getToolId,
-  getToolMetadata,
-  isToolCapability,
-  type ToolCapability,
-} from "./capability/tool.js"
+import { getToolId, getToolMetadata, isToolCapability, type ToolCapability } from "./capability.js"
 import type { ExtensionManifest } from "./extension.js"
 import { ExtensionLoadError } from "./extension.js"
 import type { ExtensionContributions } from "./contribution.js"

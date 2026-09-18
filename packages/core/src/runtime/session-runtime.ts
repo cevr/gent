@@ -29,7 +29,7 @@ import {
   SessionId,
   type InteractionRequestId,
 } from "../domain/ids.js"
-import type { PromptSection } from "../domain/prompt.js"
+import type { PromptSection } from "../domain/capability.js"
 import type { AgentLoopQueueStorage } from "../storage/agent-loop-queue-storage.js"
 import type { BranchStorage } from "../storage/branch-storage.js"
 import type { EventStorage } from "../storage/event-storage.js"

@@ -1,5 +1,5 @@
 import { Effect, Option, Predicate } from "effect"
-import type { PromptSection } from "../domain/prompt.js"
+import type { PromptSection } from "../domain/capability.js"
 import type { Branch, Session } from "../domain/message.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { StorageError } from "../domain/errors.js"

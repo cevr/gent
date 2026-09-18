@@ -1,5 +1,10 @@
 import type { AgentDefinition } from "../../domain/agent.js"
-import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
+import {
+  getToolId,
+  getToolMetadata,
+  type PromptSection,
+  type ToolCapability,
+} from "../../domain/capability.js"
 import {
   assistantMessageIdForTurn,
   type Message,
@@ -7,7 +12,6 @@ import {
 } from "../../domain/message.js"
 import { type ActorCommandId, MessageId } from "../../domain/ids.js"
 import { Predicate } from "effect"
-import type { PromptSection } from "../../domain/prompt.js"
 
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +

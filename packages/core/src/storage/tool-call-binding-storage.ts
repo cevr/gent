@@ -8,7 +8,7 @@ import {
   validateToolBindingIdentity,
   type ToolBindingIdentity,
   type ToolCallBindingKey,
-} from "../domain/tool-binding.js"
+} from "../domain/capability.js"
 import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 import { StorageError, storageError, storageErrorExcept } from "../domain/errors.js"
 import { CurrentWorkspaceId } from "../server/workspace-rpc.js"

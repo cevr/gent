@@ -13,7 +13,7 @@ import {
   DEFAULT_AGENT_NAME,
 } from "../domain/agent.js"
 import { Auth } from "../domain/auth.js"
-import type { ToolCapability } from "../domain/capability/tool.js"
+import type { ToolCapability } from "../domain/capability.js"
 import { SessionId } from "../domain/ids.js"
 import { defineExtension, ExtensionHost } from "../extensions/api.js"
 import { ApprovalService } from "../runtime/approval-service.js"

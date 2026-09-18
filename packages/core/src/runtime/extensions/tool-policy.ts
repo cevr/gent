@@ -13,8 +13,12 @@
 import { Option, Predicate } from "effect"
 import type { AgentDefinition } from "../../domain/agent.js"
 import type { TurnProjection } from "../../domain/extension.js"
-import { type PromptSection } from "../../domain/prompt.js"
-import { getToolId, getToolMetadata, type ToolCapability } from "../../domain/capability/tool.js"
+import {
+  getToolId,
+  getToolMetadata,
+  type PromptSection,
+  type ToolCapability,
+} from "../../domain/capability.js"
 
 interface CompiledToolPolicy {
   readonly tools: ReadonlyArray<ToolCapability>

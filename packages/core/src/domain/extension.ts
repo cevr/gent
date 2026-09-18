@@ -3,11 +3,10 @@ import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import type { AgentDefinition, AgentName } from "./agent.js"
-import type { ToolCapability } from "./capability/tool.js"
+import type { PromptSection, ToolCapability } from "./capability.js"
 import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids.js"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
-import type { PromptSection } from "./prompt.js"
 import type { ExtensionHost } from "./extension-host.js"
 
 // Extension Manifest — authored by extension author

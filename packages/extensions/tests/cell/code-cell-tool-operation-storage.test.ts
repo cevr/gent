@@ -36,7 +36,7 @@ import {
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
-} from "@gent/core-internal/domain/tool-binding.js"
+} from "@gent/core-internal/domain/capability.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"

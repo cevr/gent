@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
-import { getToolMetadata, tool } from "../../src/domain/capability/tool.js"
+import { getToolMetadata, tool } from "../../src/domain/capability.js"
 
 const params = Schema.Struct({ text: Schema.String })
 const output = Schema.String

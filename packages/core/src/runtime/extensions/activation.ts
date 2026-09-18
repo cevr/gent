@@ -5,9 +5,8 @@ import type {
   LoadedExtension,
   ExtensionLoaderServices,
 } from "../../domain/extension.js"
-import { getToolMetadata, isToolCapability } from "../../domain/capability/tool.js"
+import { getToolMetadata, isToolCapability, type PromptSection } from "../../domain/capability.js"
 import { causeMessage } from "../../domain/guards.js"
-import type { PromptSection } from "../../domain/prompt.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"

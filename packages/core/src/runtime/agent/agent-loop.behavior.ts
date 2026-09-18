@@ -51,7 +51,7 @@ import {
   makeExtensionHostContextProvider,
 } from "../make-extension-host-context.js"
 import type { ConfigService } from "../config-service.js"
-import type { PromptSection } from "../../domain/prompt.js"
+import type { PromptSection } from "../../domain/capability.js"
 import type { StorageError } from "../../domain/errors.js"
 import type { SessionStorage } from "../../storage/session-storage.js"
 import { MessageStorage } from "../../storage/message-storage.js"

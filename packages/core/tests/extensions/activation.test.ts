@@ -21,9 +21,12 @@ import {
 import { registerContributions } from "../../src/domain/extension-host.js"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { ConfigService } from "../../src/runtime/config-service"
-import { GentToolMetadataTag, getToolMetadata } from "../../src/domain/capability/tool"
+import {
+  GentToolMetadataTag,
+  getToolMetadata,
+  type PromptSection,
+} from "../../src/domain/capability"
 import { ExtensionId } from "../../src/domain/ids"
-import type { PromptSection } from "../../src/domain/prompt"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),

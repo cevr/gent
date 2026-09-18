@@ -3,7 +3,7 @@
 import { Effect, Layer } from "effect"
 import type { AgentDefinition, AgentRunner } from "../domain/agent.js"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
-import type { ToolCapability } from "../domain/capability/tool.js"
+import { getToolMetadata, type ToolCapability } from "../domain/capability.js"
 import {
   ExtensionContext,
   provideExtensionServices,
@@ -11,7 +11,6 @@ import {
   type ExtensionHostContext,
   type ExtensionStateFacet,
 } from "../domain/extension-services.js"
-import { getToolMetadata } from "../domain/capability/tool.js"
 import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
 import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/agent/tools.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"

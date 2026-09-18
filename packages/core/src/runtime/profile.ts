@@ -2,7 +2,7 @@
 
 import { Context, DateTime, Effect, FileSystem, Layer, Path } from "effect"
 import type { GentExtension, ExtensionSetupServices } from "../domain/extension.js"
-import { type PromptSection } from "../domain/prompt.js"
+import { environmentSection, type PromptSection } from "../domain/capability.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform } from "./gent-platform.js"
 import {
@@ -18,7 +18,6 @@ import {
 } from "./extensions/activation.js"
 import { discoverExtensions, type DiscoveredExtension } from "./extensions/loader.js"
 import { GENT_CONFIG_DIRECTORY } from "./extensions/disabled.js"
-import { environmentSection } from "../domain/prompt.js"
 import type { ProcessGenerationId } from "../domain/ids.js"
 
 /**

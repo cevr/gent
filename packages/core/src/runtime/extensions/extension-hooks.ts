@@ -10,7 +10,7 @@ import {
   type TurnAfterInput,
 } from "../../domain/extension.js"
 import type { ExtensionId } from "../../domain/ids.js"
-import type { PromptSection } from "../../domain/prompt.js"
+import type { PromptSection } from "../../domain/capability.js"
 import {
   exitErasedEffect,
   sealErasedEffect,

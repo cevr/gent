@@ -12,10 +12,17 @@ import type { AgentDefinition } from "../../domain/agent.js"
 import { omitUndefined } from "../../domain/guards.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ExtensionId, RpcId } from "../../domain/ids.js"
-import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import {
+  type CapabilityError,
   CapabilityError as CapabilityErrorClass,
+  type CapabilityNotFoundError,
   CapabilityNotFoundError as CapabilityNotFoundErrorClass,
+  getToolId,
+  getToolMetadata,
+  isToolCapability,
+  type PromptSection,
+  type RequestCapability,
+  type ToolCapability,
 } from "../../domain/capability.js"
 import { provideExtensionLeaf, sealErasedEffect } from "./extension-effect-membrane.js"
 import type { CurrentExtensionHostContext } from "../agent/tools.js"
@@ -25,14 +32,6 @@ import {
   type FailedExtension,
   type LoadedExtension,
 } from "../../domain/extension.js"
-import { type PromptSection } from "../../domain/prompt.js"
-import type { RequestCapability } from "../../domain/capability/request.js"
-import {
-  getToolId,
-  getToolMetadata,
-  isToolCapability,
-  type ToolCapability,
-} from "../../domain/capability/tool.js"
 import { compileExtensionHooks, type CompiledExtensionHooks } from "./extension-hooks.js"
 
 // SlashCommand — public-facing slash entry. Built from `requests:` bucket

@@ -1,5 +1,5 @@
 import { Effect, Option, Predicate, Schema } from "effect"
-import type { ToolCapability } from "../../domain/capability/tool.js"
+import type { ToolCapability } from "../../domain/capability.js"
 import {
   type AgentDefinition as AgentDefinitionType,
   AgentName,

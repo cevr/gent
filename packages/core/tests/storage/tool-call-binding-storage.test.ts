@@ -9,7 +9,7 @@ import {
   ToolSchemaRevision,
   ToolSourceRevision,
   ToolBindingIdentity,
-} from "../../src/domain/tool-binding"
+} from "../../src/domain/capability"
 import {
   BranchId,
   ExtensionId,

@@ -132,7 +132,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off",
   },
   {
-    file: "packages/core/src/domain/capability/request.ts",
+    file: "packages/core/src/domain/capability.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off — the erased handler crosses the runtime membrane; the public overloads keep authors typed.",
   },

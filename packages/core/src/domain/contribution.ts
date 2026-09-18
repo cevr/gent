@@ -20,8 +20,7 @@
  * @module
  */
 import type { AgentDefinition } from "./agent.js"
-import type { RequestCapability } from "./capability/request.js"
-import type { ToolCapability } from "./capability/tool.js"
+import type { RequestCapability, ToolCapability } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyResourceContribution } from "./resource.js"
 import type { AnyExtensionHook } from "./extension.js"

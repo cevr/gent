@@ -13,11 +13,15 @@ import {
   resolveAgentModel,
   type RunSpec,
 } from "../../domain/agent.js"
-import { getToolId, type ToolCapability } from "../../domain/capability/tool.js"
+import {
+  compileSystemPrompt,
+  getToolId,
+  type PromptSection,
+  type ToolCapability,
+} from "../../domain/capability.js"
 import { ErrorOccurred, EventPublisher } from "../../domain/event.js"
 import { type BranchId, type SessionId } from "../../domain/ids.js"
 import type { TurnProjection } from "../../domain/extension.js"
-import { compileSystemPrompt, type PromptSection } from "../../domain/prompt.js"
 import { MessageStorage } from "../../storage/message-storage.js"
 import { SessionStorage } from "../../storage/session-storage.js"
 import { ConfigService } from "../config-service.js"

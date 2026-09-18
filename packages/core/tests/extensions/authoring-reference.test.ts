@@ -6,7 +6,7 @@ import SessionNotesExtension, {
 } from "../../../../examples/extensions/session-notes.js"
 import { getToolId, type GentExtension } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
-import { getToolMetadata } from "../../src/domain/capability/tool"
+import { getToolMetadata } from "../../src/domain/capability"
 import type { LoadedExtension } from "../../src/domain/extension"
 import { resolveExtensions } from "../../src/runtime/extensions/registry"
 import { buildResourceLayer } from "../../src/runtime/extensions/resource-host/resource-layer"

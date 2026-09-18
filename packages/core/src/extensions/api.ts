@@ -113,14 +113,14 @@ export {
   tool,
   type ToolInput,
   type ToolCapability,
-} from "../domain/capability/tool.js"
+} from "../domain/capability.js"
 export {
   defineRequests,
   ref,
   request,
   type RequestCapability,
   type RequestInput,
-} from "../domain/capability/request.js"
+} from "../domain/capability.js"
 export type { CapabilityRef } from "../domain/capability.js"
 export { CapabilityError } from "../domain/capability.js"
 export { ToolResultFailure } from "../domain/message.js"

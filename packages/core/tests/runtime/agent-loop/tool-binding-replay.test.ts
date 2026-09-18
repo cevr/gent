@@ -16,7 +16,7 @@ import {
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
-} from "../../../src/domain/tool-binding"
+} from "../../../src/domain/capability"
 import { EventPublisher, MessageReceived, ToolCallSucceeded } from "../../../src/domain/event"
 import {
   ExtensionContext,

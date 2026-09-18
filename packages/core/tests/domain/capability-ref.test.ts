@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test"
 import { Context, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { defineRequests, getToolId, ref, request, tool } from "@gent/core/extensions/api"
-import { getToolMetadata, isToolCapability } from "../../src/domain/capability/tool"
+import { getToolMetadata, isToolCapability } from "../../src/domain/capability"
 import type { RpcId, ToolId } from "../../src/domain/ids"
 import { ExtensionId } from "../../src/domain/ids"
 

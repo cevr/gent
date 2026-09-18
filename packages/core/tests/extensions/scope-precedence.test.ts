@@ -22,7 +22,7 @@ import { CurrentExtensionHostContext } from "../../src/runtime/agent/tools"
 import { hook, tool, type ToolCapability } from "@gent/core/extensions/api"
 import { runToolWithCtx, testExtensionHostContext, testToolContext } from "../../src/test-utils"
 import { AgentDefinition } from "../../src/domain/agent"
-import { isToolCapability } from "../../src/domain/capability/tool"
+import { isToolCapability } from "../../src/domain/capability"
 
 const stubCtx = testExtensionHostContext()
 

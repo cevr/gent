@@ -13,12 +13,14 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { getToolMetadata } from "../../src/domain/capability/tool"
-import { bindRequestCapabilityExtension } from "../../src/domain/capability/request"
+import {
+  bindRequestCapabilityExtension,
+  getToolMetadata,
+  type PromptSection,
+} from "../../src/domain/capability"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { compileToolPolicy } from "../../src/runtime/extensions/tool-policy"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import type { PromptSection } from "../../src/domain/prompt"
 import { failingLanguageModel } from "../helpers/failing-language-model"
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the

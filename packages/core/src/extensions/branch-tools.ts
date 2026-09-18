@@ -61,12 +61,12 @@ export {
 } from "../domain/tool-call-recovery.js"
 
 // Identifying and resolving the calls a feature dispatches.
-export { ToolBindingIdentity } from "../domain/tool-binding.js"
+export { ToolBindingIdentity } from "../domain/capability.js"
 export { innerOperationBindingIdentity, resolveStoredToolBinding } from "../runtime/agent/tools.js"
 export { CurrentDispatchingCall } from "../runtime/agent/tools.js"
 export { CurrentToolCall } from "../runtime/agent/tools.js"
 export { type ResolvedToolCapability, ToolRunner } from "../runtime/agent/tools.js"
-export { getToolMetadata } from "../domain/capability/tool.js"
+export { getToolMetadata } from "../domain/capability.js"
 export { summarizeOutput } from "../domain/message.js"
 
 // Running a turn's worth of work, and stopping when the turn is interrupted.

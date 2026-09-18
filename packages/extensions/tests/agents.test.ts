@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Stream } from "effect"
-import { compileSystemPrompt } from "@gent/core-internal/domain/prompt.js"
+import { compileSystemPrompt } from "@gent/core-internal/domain/capability.js"
 import { BunFileSystem } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {

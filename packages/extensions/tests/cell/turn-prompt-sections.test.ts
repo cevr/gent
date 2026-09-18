@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { AgentDefinition, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent.js"
-import { tool } from "@gent/core-internal/domain/capability/tool.js"
+import { tool } from "@gent/core-internal/domain/capability.js"
 import { buildTurnPromptSections } from "@gent/core-internal/runtime/agent/agent-loop.utils.js"
 import { CellTool } from "../../src/cell.js"
 

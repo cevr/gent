@@ -73,7 +73,11 @@ import {
 } from "../../domain/ids.js"
 import { GentPlatform } from "../gent-platform.js"
 import { CurrentWorkspaceId } from "../../server/workspace-rpc.js"
-import type { PromptSection } from "../../domain/prompt.js"
+import type {
+  CapabilityError,
+  CapabilityNotFoundError,
+  PromptSection,
+} from "../../domain/capability.js"
 import { SessionProfileCache } from "../session-profile.js"
 import { interjectionMessageIdForCommand } from "./agent-loop.utils.js"
 import { AgentLoopError, asAgentLoopError } from "./agent-loop.state.js"
@@ -87,7 +91,6 @@ import {
 import { MessageStorage } from "../../storage/message-storage.js"
 import { AgentLoopQueueStorage } from "../../storage/agent-loop-queue-storage.js"
 import { SessionOperationStorage } from "../../storage/session-operation-storage.js"
-import type { CapabilityError, CapabilityNotFoundError } from "../../domain/capability.js"
 import { parseEntityId } from "./agent-loop.entity-id.js"
 import { type CurrentExtensionHostContext, ProcessLocalToolReplay } from "./tools.js"
 import { AgentLoopSessionGovernance } from "./agent-loop.session-governance.js"
