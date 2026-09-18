@@ -4,7 +4,7 @@ import {
   BashHeadlessToolRenderer,
   CellHeadlessToolRenderer,
   type HeadlessToolRenderer,
-} from "../../headless-tool-renderers"
+} from "../../headless"
 
 interface BuiltinToolRendererEntry {
   readonly toolNames: ReadonlyArray<string>

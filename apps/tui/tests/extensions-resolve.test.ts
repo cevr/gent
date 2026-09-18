@@ -17,7 +17,7 @@ import {
 } from "../src/extensions/client-facets.js"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ToolRenderer, ToolRendererProps } from "../src/components/tool-renderers/types"
-import type { HeadlessToolRenderer } from "../src/headless-tool-renderers"
+import type { HeadlessToolRenderer } from "../src/headless"
 
 const make = (
   id: string,

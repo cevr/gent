@@ -44,8 +44,7 @@ import {
   resolveStartupAuthState,
   type InitialState,
 } from "./app-bootstrap"
-import { runHeadless } from "./headless-runner"
-import { DEFAULT_HEADLESS_TOOL_RENDERERS } from "./headless-tool-renderers"
+import { DEFAULT_HEADLESS_TOOL_RENDERERS, runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import { builtinClientModules } from "./extensions/builtins/index"
 import { loadExtensionUi } from "./services/extension-context-boundary"

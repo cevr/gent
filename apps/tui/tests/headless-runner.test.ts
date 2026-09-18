@@ -8,8 +8,7 @@ import {
 } from "@gent/core-internal/domain/event"
 import { BranchId, EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
 import { GentConnectionError } from "@gent/sdk"
-import { runHeadless } from "../src/headless-runner"
-import { renderHeadlessToolCall } from "../src/headless-tool-renderers"
+import { renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
