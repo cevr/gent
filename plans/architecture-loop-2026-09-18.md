@@ -88,9 +88,11 @@ commit with counsel and a gamut run:
 Keep in core: governance, dedup, pubsub, interaction cold park, the auth
 store, the compaction seam, the extension host.
 
-| #   | Move                                             | Status                                                                                                                                                                                                                                                                                                                                                                                                      |
-| --- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| L1  | models.dev fetch + cache → driver-owned catalogs | done `62149d11`, guard `1e661e7b` (core must not name a catalog host; proven red on the old `provider.ts`), review fixup `7d364f26` (empty load not memoized, memo test concurrent, both proven red). `provider.ts` 1,033 → 853; `packages/extensions/src/models-dev.ts` 249. `/model` now lists 104 resolvable models, not 7,843 models.dev entries. Gamut `opus-sonnet` baseline + `/model` pane checked. |
+| #   | Move                                                                             | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1  | models.dev fetch + cache → driver-owned catalogs                                 | done `62149d11`, guard `1e661e7b` (core must not name a catalog host; proven red on the old `provider.ts`), review fixup `7d364f26` (empty load not memoized, memo test concurrent, both proven red). `provider.ts` 1,033 → 853; `packages/extensions/src/models-dev.ts` 249. `/model` now lists 104 resolvable models, not 7,843 models.dev entries. Gamut `opus-sonnet` baseline + `/model` pane checked.                                                                                                                         |
+| L2  | Five addressed facade verbs + child runner → `@gent/delegate` (survey items 2–4) | rejected, design on record (session hand-back 2026-09-18): the move needs addressed verbs (`send`, `steer`, `deleteSession`, `events`, `receipts` on any branch) — a capability grant `AGENTS.md` forbids — plus a new `startup` hook kind, because a process resource builds before `SessionRuntime` exists and cannot run the restart reconcile. Net core −730 of ~20k lines. opencode stops at the same line (job registry + reconcile in core, tool outside); gent already has the tool half outside. Owner decision to reopen. |
+| L3  | `present` → interaction-tools (~20 lines)                                        | not done: below the noise floor of a commit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## Test folds
 
@@ -120,3 +122,11 @@ declaration that shadows an import is not a reported collision; `"x"` and
 `import.meta.dir`) are not repointed; `packages/tooling/tests/` mentions are
 not repointed; a `@effect-diagnostics-next-line` comment is separated from
 its import.
+
+## Closed 2026-09-18
+
+Every package is folded to one file per concern (104 source, 85 test files),
+the loop is five files, models.dev left core, and the remaining lean-core
+candidate is blocked by the extension-authority rule rather than by effort.
+Merged to main at `211f4563` + this ledger commit. Nothing structural is
+left in the sweeps; do not start another pass without a new decision on L2.
