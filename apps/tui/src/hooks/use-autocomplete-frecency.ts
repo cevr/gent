@@ -34,7 +34,7 @@ import {
   recordFrecencyPick,
   setFrecencySnapshot,
 } from "../components/autocomplete-frecency-store"
-import { useWorkspace } from "../workspace/context"
+import { useWorkspace } from "../workspace"
 import { useRuntime } from "./use-runtime"
 
 /** Wall-clock millis, in the house style for a Solid callback outside Effect. */

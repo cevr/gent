@@ -36,7 +36,7 @@ import {
   type UiError,
   useRequiredContext,
 } from "../utils"
-import { useWorkspace } from "../workspace/context"
+import { useWorkspace } from "../workspace"
 import { AgentStatus, type AgentState } from "./agent-state"
 import { createClientEventHub } from "./event-hub"
 

@@ -9,7 +9,7 @@
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
 - **Message part types** - Import shared message, event, and RPC types from `@gent/core/protocol` when a UI projection needs them. Never redeclare.
 - **render() is async** - Use `Effect.promise(() => render(...))`, not `Effect.sync`.
-- **File naming** - All files kebab-case: `message-list.tsx`, `workspace/context.tsx`.
+- **File naming** - All files kebab-case: `message-list.tsx`, `workspace.tsx`.
 - **Error boundaries** - Always wrap potentially failing operations in try/catch or Effect.tryPromise to prevent TUI crashes.
 - **Exit pattern** - Use `renderer.destroy()` then `useEnv().shutdown()` for clean exit. Never `process.exit()` — it bypasses Effect scope finalizers (server lock cleanup, SQLite WAL checkpoint).
 - **Solid underscores** - Multi-word components use underscores: `scroll_box`, `tab_select`.

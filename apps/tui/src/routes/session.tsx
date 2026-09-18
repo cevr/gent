@@ -31,7 +31,7 @@ import {
 } from "../components/settings-picker"
 import { collectDiagrams, MermaidViewer } from "../components/mermaid-viewer"
 import { QueueWidget } from "../components/queue-widget"
-import { useWorkspace } from "../workspace/context"
+import { useWorkspace } from "../workspace"
 import {
   buildContextLabels,
   buildTopRightLabels,

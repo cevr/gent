@@ -1,7 +1,7 @@
 import { createContext, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { DateTime, Effect, Fiber, Option, Random, Schedule } from "effect"
-import { useEnv } from "../env/context"
+import { useEnv } from "../workspace"
 import { shutdownLog } from "../utils/client-logger"
 import { formatError, useRequiredContext } from "../utils"
 import type {

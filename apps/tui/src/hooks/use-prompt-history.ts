@@ -11,7 +11,7 @@
 
 import { createSignal } from "solid-js"
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { useWorkspace } from "../workspace/context"
+import { useWorkspace } from "../workspace"
 import { useRuntime } from "./use-runtime"
 
 const MAX_ENTRIES = 100

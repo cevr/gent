@@ -8,7 +8,7 @@ import { Session } from "./routes/session"
 import { useClient } from "./client/index"
 import { KeyboardScopeProvider, useScopedKeyboard } from "./terminal"
 import { useRenderer } from "@opentui/solid"
-import { useEnv } from "./env/context"
+import { useEnv } from "./workspace"
 
 interface AppProps {
   missingAuthProviders?: readonly string[]
