@@ -16,7 +16,7 @@ import type { AgentRowEntry } from "@gent/extensions/client"
 import { useTerminalDimensions } from "../../terminal"
 import { useTheme } from "../../theme"
 import { truncate, workingIconFrame } from "../../utils"
-import { useSpinnerClock } from "../../hooks/use-spinner-clock"
+import { useSpinnerClock } from "../../ui"
 import type { AgentsController } from "./agents-view.client"
 
 interface SubtreeCounts {

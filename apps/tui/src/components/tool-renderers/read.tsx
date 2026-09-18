@@ -9,8 +9,7 @@ import { Match, Option, Schema } from "effect"
 import { Show, For, createMemo } from "solid-js"
 import { headTail } from "@gent/core-internal/domain/head-tail.js"
 import { useTheme } from "../../theme"
-import { ToolFrame } from "../tool-frame"
-import { GutterText } from "../gutter-text"
+import { GutterText, ToolFrame } from "../../ui"
 import {
   decodeToolOutputOption,
   fileUrl,

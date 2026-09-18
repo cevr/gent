@@ -18,7 +18,7 @@ import {
 } from "@gent/extensions/client.js"
 import { useTheme } from "../../theme"
 import { useTerminalDimensions } from "../../terminal"
-import { useSpinnerClock } from "../../hooks/use-spinner-clock"
+import { useSpinnerClock } from "../../ui"
 import { clientContributions, defineClientExtension, widgetContribution } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
 import { ClientLifecycle, ClientShell, makeClientSessionResource } from "../client-services"

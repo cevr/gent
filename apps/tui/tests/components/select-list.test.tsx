@@ -17,7 +17,7 @@ import {
   selectable,
   transitionSelectList,
   type SelectListRow,
-} from "../../src/components/select-list"
+} from "../../src/ui"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

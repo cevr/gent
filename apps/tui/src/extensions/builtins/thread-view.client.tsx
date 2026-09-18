@@ -17,20 +17,18 @@
 import { DateTime, Effect, Option, Schema } from "effect"
 import { createSignal, Show } from "solid-js"
 import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
-import { ChromePanel } from "../../components/chrome-panel"
 import {
+  ChromePanel,
+  decoration,
   PickerFrame,
   pickerHeight,
   pickerLines,
-  usePickerGeometry,
-} from "../../components/picker-frame"
-import { formatAge, plural, truncate } from "../../utils"
-import {
-  SelectList,
-  decoration,
   selectable,
+  SelectList,
   type SelectListRow,
-} from "../../components/select-list"
+  usePickerGeometry,
+} from "../../ui"
+import { formatAge, plural, truncate } from "../../utils"
 import { useTerminalDimensions } from "../../terminal"
 import { useTheme } from "../../theme"
 import {

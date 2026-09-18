@@ -3,7 +3,7 @@ import type { Schema } from "effect"
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme"
 import { toolArgSummary } from "../../utils.js"
-import { useSpinnerClock } from "../../hooks/use-spinner-clock"
+import { useSpinnerClock } from "../../ui"
 
 interface ToolCallInfo {
   toolName: string

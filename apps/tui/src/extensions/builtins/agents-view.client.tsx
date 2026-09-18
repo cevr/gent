@@ -17,23 +17,21 @@ import { DateTime, Effect, Option, Schedule } from "effect"
 import { createSignal, Show } from "solid-js"
 import { AgentsViewRpc, type AgentRowEntry } from "@gent/extensions/client"
 import { ref } from "@gent/core/extensions/api"
-import { ChromePanel } from "../../components/chrome-panel"
 import {
+  ChromePanel,
+  decoration,
   PickerFrame,
   pickerHeight,
   pickerLines,
-  usePickerGeometry,
-} from "../../components/picker-frame"
-import {
-  SelectList,
-  decoration,
   selectable,
+  SelectList,
   type SelectListRow,
-} from "../../components/select-list"
+  usePickerGeometry,
+  useSpinnerClock,
+} from "../../ui"
 import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
 import { useTheme } from "../../theme"
 import { formatAge, formatDuration, truncate, workingIconFrame } from "../../utils"
-import { useSpinnerClock } from "../../hooks/use-spinner-clock"
 import {
   clientCommandContribution,
   clientContributions,

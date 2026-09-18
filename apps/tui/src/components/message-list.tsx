@@ -3,9 +3,13 @@ import { Match, Option, Predicate, Schema } from "effect"
 import type { SyntaxStyle } from "@opentui/core"
 import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
-import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import {
+  formatToolCallIdentity,
+  ToolCallIdentityProvider,
+  ToolFrameBody,
+  useSpinnerClock,
+} from "../ui"
 import type { ToolCall } from "./tool-renderers/index"
-import { formatToolCallIdentity, ToolCallIdentityProvider, ToolFrameBody } from "./tool-frame"
 import { GenericToolRenderer } from "./tool-renderers/generic"
 import { useExtensionUI } from "../extensions/context"
 import { SessionEventIndicator } from "./session-event-indicator"

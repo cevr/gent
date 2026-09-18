@@ -26,9 +26,15 @@ import { Effect, Option } from "effect"
 import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal"
 import { useClient, useRuntime } from "../client"
-import { ChromePanel } from "./chrome-panel"
-import { PickerFrame, pickerHeight, usePickerGeometry } from "./picker-frame"
-import { SelectList, selectable, type SelectListRow } from "./select-list"
+import {
+  ChromePanel,
+  PickerFrame,
+  pickerHeight,
+  selectable,
+  SelectList,
+  type SelectListRow,
+  usePickerGeometry,
+} from "../ui"
 import type { Branch, BranchTreeNode } from "@gent/sdk"
 import type { BranchId, SessionId } from "@gent/core/protocol"
 import { formatError, truncate } from "../utils"

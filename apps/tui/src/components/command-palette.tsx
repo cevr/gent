@@ -14,9 +14,15 @@ import {
   type PaletteItem,
   type PaletteLevel,
 } from "./command-palette-state"
-import { ChromePanel } from "./chrome-panel"
-import { PickerFrame, pickerHeight } from "./picker-frame"
-import { SelectList, selectable, type SelectListApi, type SelectListRow } from "./select-list"
+import {
+  ChromePanel,
+  PickerFrame,
+  pickerHeight,
+  selectable,
+  SelectList,
+  type SelectListApi,
+  type SelectListRow,
+} from "../ui"
 import { truncate, truncateStart } from "../utils"
 import { textWidth } from "../platform/text-width-adapter"
 import { useTheme } from "../theme"

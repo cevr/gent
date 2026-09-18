@@ -1,5 +1,5 @@
 import { useTheme } from "../theme"
-import { useSpinnerClock } from "../hooks/use-spinner-clock"
+import { useSpinnerClock } from "../ui"
 import { getSessionEventLabel, type SessionEvent } from "./session-event-label"
 import { DateTime } from "effect"
 

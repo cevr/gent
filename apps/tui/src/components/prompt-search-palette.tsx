@@ -11,10 +11,9 @@
 
 import { createMemo, createSignal, Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal"
-import { ChromePanel } from "./chrome-panel"
+import { ChromePanel, selectable, SelectList, type SelectListRow } from "../ui"
 import { useTheme } from "../theme"
 import { truncate } from "../utils"
-import { SelectList, selectable, type SelectListRow } from "./select-list"
 import {
   filterPromptEntries,
   PromptSearchEvent,

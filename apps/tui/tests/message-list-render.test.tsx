@@ -11,7 +11,7 @@ import {
   type SessionItem,
   type ToolCall,
 } from "../src/components/message-list"
-import { ToolCallIdentityProvider, ToolFrame } from "../src/components/tool-frame"
+import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import { ReadToolRenderer } from "../src/components/tool-renderers/read"
 import { EditToolRenderer } from "../src/components/tool-renderers/edit"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"

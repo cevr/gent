@@ -24,7 +24,7 @@ import {
 } from "@gent/core/protocol"
 import { BranchPicker } from "../../src/components/branch-picker"
 import { modelRows, SettingsPicker } from "../../src/components/settings-picker"
-import { pickerHeight, pickerLines, usePickerGeometry } from "../../src/components/picker-frame"
+import { pickerHeight, pickerLines, usePickerGeometry } from "../../src/ui"
 import { ThreadPane, type ThreadWindow } from "../../src/extensions/builtins/thread-view.client"
 import type { Branch } from "@gent/sdk"
 import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"

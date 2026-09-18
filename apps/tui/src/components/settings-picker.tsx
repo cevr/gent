@@ -3,9 +3,15 @@ import { Option } from "effect"
 import { ReasoningEffort, type Model } from "@gent/core/protocol"
 import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal"
-import { PickerFrame, pickerHeight, usePickerGeometry } from "./picker-frame"
+import {
+  PickerFrame,
+  pickerHeight,
+  selectable,
+  SelectList,
+  type SelectListRow,
+  usePickerGeometry,
+} from "../ui"
 import { truncate } from "../utils"
-import { SelectList, selectable, type SelectListRow } from "./select-list"
 
 /** One selectable row: the id goes back to the caller, name and detail render. */
 interface PickerRow {

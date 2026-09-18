@@ -1,11 +1,10 @@
 import { Show } from "solid-js"
 import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
-import { ChromePanel } from "./chrome-panel"
+import { ChromePanel, selectable, SelectList, type SelectListRow } from "../ui"
 import { MessageId, type Message } from "@gent/core/protocol"
 import { extractImages, extractText } from "@gent/sdk"
 import { truncate } from "../utils"
-import { SelectList, selectable, type SelectListRow } from "./select-list"
 
 interface PickerItem {
   id: string

@@ -14,9 +14,14 @@
 import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
 import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
-import { ChromePanel } from "./chrome-panel"
-import { PickerFrame, pickerHeight } from "./picker-frame"
-import { SelectList, selectable, type SelectListRow } from "./select-list"
+import {
+  ChromePanel,
+  PickerFrame,
+  pickerHeight,
+  selectable,
+  SelectList,
+  type SelectListRow,
+} from "../ui"
 import { truncate } from "../utils"
 import { useExtensionUI } from "../extensions/context"
 import { useClient } from "../client"

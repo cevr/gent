@@ -34,8 +34,7 @@ import { omitUndefined } from "@gent/core-internal/domain/guards.js"
 import { LinkOpener } from "../os"
 import { useTheme } from "../theme"
 import { useClient, useRuntime } from "../client"
-import { ChromePanel } from "../components/chrome-panel"
-import { SelectList, selectable, type SelectListRow } from "../components/select-list"
+import { ChromePanel, selectable, SelectList, type SelectListRow } from "../ui"
 import { ClientError, formatError, type UiError } from "../utils"
 import {
   AuthEvent,

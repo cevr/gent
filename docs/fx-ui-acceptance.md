@@ -334,7 +334,7 @@ remains enabled. The full gate passed after this change:
 
 Evidence:
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/chrome-panel.tsx`: menu-body scrollbar visibility.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: menu-body scrollbar visibility.
 - `/tmp/gent-fx-ui-herdr-menu-clean.ansi`: current command menu without the scrollbar marker.
 
 ## Clear-display control
@@ -542,7 +542,7 @@ The full gate passed before the final import-order cleanup. The current
 E2E run has an auth wait failure. A focused auth check is in progress.
 No appearance-only tests were added.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/picker-frame.tsx`: shared menu frame and help row.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: shared menu frame and help row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/picker-text.ts`: grapheme-safe end clipping.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/platform/text-width-adapter.ts`: runtime text-width adapter.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: aligned command rows and narrow help.
@@ -608,7 +608,7 @@ open.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/sdk/src/server.ts`: debug seed workspace and failure logging.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/debug/session.ts`: active branch and sample tool results.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-frame.tsx`: plain tool header and atomic ID column.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: plain tool header and atomic ID column.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list-render.test.tsx`: unchanged tool identity and failure checks.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/transcript/tool_group_projection.zig`: plain group headers and indented detail.
 - `/tmp/gent-fx-ui-tool-header-final.ansi`: expanded tool output in Herdr.
@@ -1011,7 +1011,7 @@ duplicate rows. This is a real remaining defect, not a failed draft restore.
 All terminal control streams ended. The original layout and debug session
 were restored.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/picker-frame.tsx`: shared six-result height budget.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: shared six-result height budget.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/command-palette.tsx`: unique session actions and preserved descriptions.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: matching completion height and filter row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: fresh transcript display origin.
@@ -1094,7 +1094,7 @@ the symptom, not its cause. Only the isolated debug process was restarted.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/use-composer-controller.ts`: paste expansion before cleanup.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-command-registry.ts`: tree command label and handler.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/session-tree.tsx`: session tree view and key handlers.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/chrome-panel.tsx`: panel background.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: panel background.
 - `/tmp/gent-fx-ui-navigation-draft-before.ansi`: lost typed draft before the change.
 - `/tmp/gent-fx-ui-navigation-draft-after.ansi`: restored typed draft.
 - `/tmp/gent-fx-ui-navigation-paste-before.ansi`: four-line paste marker.
@@ -1122,7 +1122,7 @@ Herdr verified that query text stays visible and Escape returns to the editor.
 The full gate passed. These checks do not prove final FX menu parity.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/session-tree.tsx`: bounded effect dependencies.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/chrome-panel.tsx`: menu background.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: menu background.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-command-registry.ts`: corrected command label.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/components/session-tree.test.tsx`: child selection and Escape behavior.
 - `/tmp/gent/logs/6707ae38-20260906202644-client.log`: live stack overflow.
@@ -1493,7 +1493,7 @@ No new appearance-only test was added.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/todo-widget.tsx`: bounded neutral preview and details hint.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/todo-dialog.tsx`: correct list/detail branch, panel bounds, and keyboard scrolling.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-scroll-sync.ts`: post-layout selection restore with cleanup.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: post-layout selection restore with cleanup.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/components/todo-dialog.test.tsx`: task navigation regression test.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/widgets-render.test.tsx`: existing preview expectation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/todo/tools.ts`: real task creation used in the preview.

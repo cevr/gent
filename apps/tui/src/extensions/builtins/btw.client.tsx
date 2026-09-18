@@ -26,7 +26,7 @@ import {
 } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
 import { ClientLifecycle, ClientShell } from "../client-services"
-import { ChromePanel } from "../../components/chrome-panel"
+import { ChromePanel } from "../../ui"
 import { useTheme } from "../../theme"
 import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
 

@@ -6,7 +6,7 @@ import {
   formatGenericToolText,
   formatToolInput,
 } from "../../utils"
-import { ToolFrame } from "../tool-frame"
+import { ToolFrame } from "../../ui"
 import type { ToolRendererProps } from "./types"
 
 export function GenericToolRenderer(props: ToolRendererProps) {
