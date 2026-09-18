@@ -1,13 +1,28 @@
-import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Option } from "effect"
+import { describe, expect, it, test } from "effect-bun-test"
+import { Effect, Layer, Option, Schema } from "effect"
+import { ExtensionId, getToolId } from "@gent/core/extensions/api"
+import { BuiltinExtensions } from "../src/index.js"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
-import { getToolId } from "@gent/core/extensions/api"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { GentPlatform } from "../../core/src/runtime/gent-platform"
 import { setupExtension } from "../../core/src/runtime/extension-host"
+
+// ── starting-extensions.test ────────────────────────────────────────────────
+
+const hasPublicExtensionContract = (extension: (typeof BuiltinExtensions)[number]) =>
+  Schema.is(ExtensionId)(extension.manifest.id) && Effect.isEffect(extension.setup)
+
+describe("starting extensions", () => {
+  test("exported starting set uses the public extension shape", () => {
+    expect(BuiltinExtensions.length).toBeGreaterThan(0)
+    expect(BuiltinExtensions.every(hasPublicExtensionContract)).toBe(true)
+  })
+})
+
+// ── tool-schema.test ────────────────────────────────────────────────────────
 
 describe("builtin tool schemas", () => {
   it.live("are compatible with Anthropic tool structured output", () => {

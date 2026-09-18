@@ -453,7 +453,7 @@ export type SessionUpdate = typeof SessionUpdate.Type
       findingsFor([
         { file: EXTENSION_FILE, text: `export const findMatch = 1\n` },
         {
-          file: "packages/extensions/tests/fs-tools/edit.test.ts",
+          file: "packages/extensions/tests/fs-tools.test.ts",
           text: `import { findMatch } from "../../src/fs-tools/edit"\n`,
         },
       ]),
