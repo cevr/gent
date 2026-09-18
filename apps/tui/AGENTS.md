@@ -80,7 +80,7 @@ State ownership rules:
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
 - Render-local view unions in `src/` may be plain `_tag` unions. The root `CLAUDE.md` rule requiring `Schema.TaggedUnion` covers wire and domain data; a union built inline by one projection and matched in the same file decodes nothing, so a schema would add a runtime decode to a path with no untrusted input.
-- Auth is a view (`routes/auth.tsx`); it mounts as an overlay above the session view when the session controller's auth gate detects missing required providers.
+- Auth is a view (`auth.tsx`); it mounts as an overlay above the session view when the session controller's auth gate detects missing required providers.
 - There is no router. `client.session()` says which session shows, `switchSession` is its one writer, and `App` keys the session mount on it.
 - `useRuntime()` is zero-arg — reads `useClient()` internally.
 - Composer reads from `SessionControllerContext`, not props.

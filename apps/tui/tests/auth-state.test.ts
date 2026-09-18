@@ -14,7 +14,7 @@ import {
   providerFor,
   transitionAuth,
   type AuthEvent,
-} from "../src/routes/auth-state"
+} from "../src/auth"
 
 const provider = {
   provider: ProviderId.make("anthropic"),
