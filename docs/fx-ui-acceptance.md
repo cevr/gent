@@ -859,8 +859,8 @@ No appearance test was added. The full gate and all 61 E2E checks passed.
 Long question documents, multi-select, and approval review screens still
 need live checks. This result does not close the full interaction criterion.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: option text flow and width-fitting help.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/ask-user.tsx`: question progression and answer resolution.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`: option text flow and width-fitting help.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`: question progression and answer resolution.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/ask-user.ts`: actual tool and answer protocol.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/test-utils/language-model.ts`: process-local sequence model.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/footer/approval_ui.zig`: width-fitting approval hints retain confirm and cancel controls.
@@ -893,7 +893,7 @@ No production model override or appearance test was added.
 The full gate and all 61 E2E checks passed. The larger final FX comparison
 remains open.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: measured document viewport and fixed answer controls.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`: measured document viewport and fixed answer controls.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`: external spacing and status reservation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/prompt.ts`: real confirmation tool path.
 - `/tmp/gent-fx-ui-multi-selected.ansi`: two selected options in the live pane.
@@ -963,7 +963,7 @@ depends on scrolling inside that area and needs a separate keyboard check.
 The full gate and all 61 E2E checks passed. The normal debug process was
 restored. No appearance test or production model override was added.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: bounded options and focus-driven scrolling.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`: bounded options and focus-driven scrolling.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/index.bun.js`: `scrollChildIntoView` implementation.
 - `/tmp/gent-fx-ui-long-options-before.ansi`: cut-off last option and hidden help.
 - `/tmp/gent-fx-ui-long-options-after.ansi`: bounded choices and visible help.
@@ -1273,7 +1273,7 @@ prove access, not an ideal reading height.
 The full gate and all 61 E2E checks passed. No appearance-only test was added.
 The normal isolated debug preview was restored.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: page-key routing and help text.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`: page-key routing and help text.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/ask-user.ts`: real interaction request schema and response path.
 - `/tmp/gent-fx-ui-long-choice-before.txt`: failed final-detail check before the change.
 - `/tmp/gent-fx-ui-long-choice-after.txt`: final choice detail visible through Page Down.
@@ -1539,7 +1539,7 @@ Evidence:
 
 Source:
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/prompt.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/runtime/prompt-presenter-live.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/server/interaction-commands.ts`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/domain/interaction-request.ts`
@@ -1607,7 +1607,7 @@ two rows. The controls and live status stay visible. Enter submits the choice
 and the agent completes its turn. The temporary terminal size control was
 stopped after verification.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/interaction-renderers.tsx`
 - `/tmp/gent-fx-ui-question-budget-before.ansi`: question limited to one row.
 - `/tmp/gent-fx-ui-question-budget-after.ansi`: balanced question and choice regions.
 - `/tmp/gent-fx-ui-question-budget-end.ansi`: both final lines at 44×22.

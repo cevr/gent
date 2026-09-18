@@ -10,8 +10,7 @@ import {
   rendererContribution,
 } from "../client-facets.js"
 import { BUILTIN_TOOL_RENDERERS } from "../../tool-renderers"
-import { PromptRenderer } from "../../components/interaction-renderers/prompt"
-import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
+import { AskUserRenderer, PromptRenderer } from "../../interaction-renderers"
 import { ClientShell } from "../client-services"
 
 export const builtinTools = defineClientExtension("@gent/tools", {

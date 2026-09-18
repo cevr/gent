@@ -1,17 +1,23 @@
+/** @jsxImportSource @opentui/solid */
+import { createEffect, createSignal, createUniqueId, For, type JSX, Show } from "solid-js"
+import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core"
+import { Effect, Option, Schema } from "effect"
+import { type QuestionOption, QuestionSchema } from "@gent/core/protocol"
+import { useTheme } from "./theme"
+import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
+import { textWidth } from "./platform/text-width-adapter"
+import type { InteractionRendererProps } from "./extensions/client-facets.js"
+import { useRenderer } from "@opentui/solid"
+import { useEnv } from "./workspace"
+import { useClient, useRuntime } from "./client"
+import { openExternalEditor, resolveEditor } from "./os"
+
+// ── option list ─────────────────────────────────────────────────────────────
+
 /**
  * Shared option-list UI for interaction renderers.
  * Renders a question with options, optional markdown, freeform input, and keyboard navigation.
  */
-
-/** @jsxImportSource @opentui/solid */
-
-import { createSignal, createUniqueId, Show, For, type JSX } from "solid-js"
-import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core"
-import { Option } from "effect"
-import type { QuestionOption } from "@gent/core/protocol"
-import { useTheme } from "../../theme"
-import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"
-import { textWidth } from "../../platform/text-width-adapter"
 
 const markdownSyntaxStyle = SyntaxStyle.create()
 
@@ -26,7 +32,7 @@ interface OptionListProps {
   readonly onCancel: () => void
 }
 
-export function OptionList(props: OptionListProps): JSX.Element {
+function OptionList(props: OptionListProps): JSX.Element {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
@@ -323,5 +329,222 @@ export function OptionList(props: OptionListProps): JSX.Element {
         </box>
       </box>
     </box>
+  )
+}
+
+// ── ask user renderer ───────────────────────────────────────────────────────
+
+const decodeAskUserMetadata = Schema.decodeUnknownOption(
+  Schema.Struct({ type: Schema.Literal("ask-user"), questions: Schema.Array(QuestionSchema) }),
+)
+const encodeAnswers = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String))),
+)
+
+type AskUserMetadata = InteractionRendererProps["event"]["metadata"]
+const parseAskUserMetadata = (metadata: AskUserMetadata) => decodeAskUserMetadata(metadata)
+
+export function AskUserRenderer(props: InteractionRendererProps) {
+  const meta = () => parseAskUserMetadata(props.event.metadata)
+  const questions = () =>
+    Option.getOrElse(
+      Option.map(meta(), (metadata) => metadata.questions),
+      () => [],
+    )
+  const [questionIndex, setQuestionIndex] = createSignal(0)
+  const [answers, setAnswers] = createSignal<string[][]>([])
+
+  const currentQuestion = () => Option.fromNullishOr(questions()[questionIndex()])
+
+  const handleSubmit = (selections: readonly string[]) => {
+    const nextAnswers = [...answers(), [...selections]]
+    setAnswers(nextAnswers)
+
+    if (questionIndex() < questions().length - 1) {
+      setQuestionIndex((i) => i + 1)
+    } else {
+      // All questions answered — encode as JSON for structured roundtrip
+      props.resolve({ approved: true, notes: encodeAnswers(nextAnswers) })
+    }
+  }
+
+  const progress = () => {
+    if (questions().length <= 1) return Option.none<string>()
+    return Option.some(`(${questionIndex() + 1}/${questions().length})`)
+  }
+
+  return (
+    <Show
+      when={Option.getOrUndefined(currentQuestion())}
+      keyed
+      fallback={
+        <OptionList
+          header="Question"
+          question={props.event.text}
+          options={[{ label: "Yes" }, { label: "No" }]}
+          onSubmit={(selections) => {
+            const selection = Option.map(Option.fromNullishOr(selections[0]), (value) =>
+              value.toLowerCase(),
+            )
+            const selected = Option.getOrElse(selection, () => "no")
+            const freeform = Option.fromNullishOr(
+              selections.find((value) => !["yes", "no"].includes(value.toLowerCase())),
+            )
+            if (Option.isSome(freeform)) {
+              props.resolve({ approved: selected === "yes", notes: freeform.value })
+              return
+            }
+            props.resolve({ approved: selected === "yes" })
+          }}
+          onCancel={() => props.resolve({ approved: false })}
+        />
+      }
+    >
+      {(q) => (
+        <OptionList
+          header={q.header}
+          question={q.question}
+          markdown={q.markdown}
+          options={Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(q.options), (options) => [...options]),
+          )}
+          multiple={q.multiple}
+          progress={Option.getOrUndefined(progress())}
+          onSubmit={handleSubmit}
+          onCancel={() => props.resolve({ approved: false })}
+        />
+      )}
+    </Show>
+  )
+}
+
+// ── prompt renderer ─────────────────────────────────────────────────────────
+
+const decodePromptMetadata = Schema.decodeUnknownOption(
+  Schema.Struct({
+    type: Schema.Literal("prompt"),
+    mode: Schema.optional(Schema.Literals(["present", "confirm", "review"])),
+    title: Schema.optional(Schema.String),
+    path: Schema.optional(Schema.String),
+  }),
+)
+
+type PromptMetadata = InteractionRendererProps["event"]["metadata"]
+const parsePromptMetadata = (metadata: PromptMetadata) =>
+  Option.getOrUndefined(decodePromptMetadata(metadata))
+
+export function PromptRenderer(props: InteractionRendererProps) {
+  const renderer = useRenderer()
+  const env = useEnv()
+  const runtime = useRuntime()
+  const { theme } = useTheme()
+  const [editing, setEditing] = createSignal(false)
+  const [editorError, setEditorError] = createSignal("")
+  const meta = () => parsePromptMetadata(props.event.metadata)
+  const mode = () => meta()?.mode ?? "confirm"
+  const title = () => meta()?.title
+
+  createEffect(() => {
+    if (!editing()) return
+    runtime.call(
+      openExternalEditor(
+        props.event.text,
+        () => renderer.suspend(),
+        () => renderer.resume(),
+        resolveEditor(env.visual, env.editor),
+      ).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            if (result._tag === "applied") {
+              props.resolve({ approved: true, notes: "edit", editedContent: result.content })
+            } else if (result._tag === "error") {
+              setEditorError(result.message)
+            }
+            setEditing(false)
+          }),
+        ),
+      ),
+    )
+  })
+
+  const options = () => {
+    if (mode() === "review") {
+      return [{ label: "Yes" }, { label: "No" }, { label: "Edit" }]
+    }
+    return [{ label: "Yes" }, { label: "No" }]
+  }
+
+  return (
+    <>
+      <Show when={editorError().length > 0}>
+        <text style={{ fg: theme.error }}>{editorError()}</text>
+      </Show>
+      <Show
+        when={!editing()}
+        fallback={<text style={{ fg: theme.textMuted }}>Opening editor…</text>}
+      >
+        <OptionList
+          header={title() ?? "Prompt"}
+          question={props.event.text}
+          options={options()}
+          onSubmit={(selections) => {
+            const sel = Option.fromNullishOr(selections[0]).pipe(
+              Option.map((value) => value.toLowerCase()),
+              Option.getOrElse(() => "no"),
+            )
+            if (sel === "edit" && mode() === "review") {
+              setEditorError("")
+              setEditing(true)
+              return
+            }
+            const freeform = Option.fromNullishOr(
+              selections.find((value) => !["yes", "no", "edit"].includes(value.toLowerCase())),
+            )
+            if (Option.isSome(freeform)) {
+              props.resolve({ approved: sel === "yes", notes: freeform.value })
+              return
+            }
+            props.resolve({ approved: sel === "yes" })
+          }}
+          onCancel={() => props.resolve({ approved: false })}
+        />
+      </Show>
+    </>
+  )
+}
+
+// ── handoff renderer ────────────────────────────────────────────────────────
+
+/** Confirms a handoff. A confirmed one opens the new session seeded with the summary. */
+export function HandoffRenderer(props: InteractionRendererProps) {
+  const client = useClient()
+  const resolve = (result: Parameters<InteractionRendererProps["resolve"]>[0]) => {
+    props.resolve(result)
+    if (!result.approved) return
+    // `openHandoffSession` activates the new session on the client, and the
+    // shell mounts whatever that says. Nothing left to navigate.
+    client.openHandoffSession(props.event.text)
+  }
+  return (
+    <OptionList
+      header="Handoff"
+      question={props.event.text}
+      options={[{ label: "Yes" }, { label: "No" }]}
+      onSubmit={(selections) => {
+        const sel = Option.fromNullishOr(selections[0]).pipe(
+          Option.map((value) => value.toLowerCase()),
+          Option.getOrElse(() => "no"),
+        )
+        const freeform = Option.fromNullishOr(
+          selections.find((value) => !["yes", "no"].includes(value.toLowerCase())),
+        )
+        if (Option.isSome(freeform)) {
+          resolve({ approved: sel === "yes", notes: freeform.value })
+          return
+        }
+        resolve({ approved: sel === "yes" })
+      }}
+      onCancel={() => resolve({ approved: false })}
+    />
   )
 }

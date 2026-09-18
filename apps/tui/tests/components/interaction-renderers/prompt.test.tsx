@@ -9,7 +9,7 @@ import {
   type ApprovalResult,
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core-internal/domain/ids"
-import { PromptRenderer } from "../../../src/components/interaction-renderers/prompt"
+import { PromptRenderer } from "../../../src/interaction-renderers"
 import { destroyRenderSetup, renderWithProviders } from "../../render-harness-boundary"
 import { waitForRenderedFrame } from "../../helpers-boundary"
 import { EnvProvider } from "../../../src/workspace"

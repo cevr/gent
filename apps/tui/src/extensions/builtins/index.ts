@@ -22,7 +22,7 @@ import {
 } from "../client-facets.js"
 import { ClientTransport } from "../client-transport"
 import { ClientWorkspace } from "../client-services"
-import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
+import { HandoffRenderer } from "../../interaction-renderers"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils"
 import {
