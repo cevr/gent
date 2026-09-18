@@ -11,11 +11,14 @@
  */
 
 import { Effect, FileSystem, Option } from "effect"
-import { defineClientExtension, autocompleteContribution } from "../client-facets.js"
+import {
+  autocompleteContribution,
+  ClientWorkspace,
+  defineClientExtension,
+} from "../client-facets.js"
 import { truncatePath } from "../../utils"
 import { getFileTag } from "../../components/file-tag"
 import { searchFiles, trackSelection } from "../../utils/file-finder"
-import { ClientWorkspace } from "../client-services"
 
 const MAX_RESULTS = 50
 

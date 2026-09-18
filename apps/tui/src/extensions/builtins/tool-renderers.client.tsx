@@ -3,15 +3,15 @@
  */
 import { Effect } from "effect"
 import {
-  defineClientExtension,
-  clientContributions,
   clientCommandContribution,
+  clientContributions,
+  ClientShell,
+  defineClientExtension,
   interactionRendererContribution,
   rendererContribution,
 } from "../client-facets.js"
 import { BUILTIN_TOOL_RENDERERS } from "../../tool-renderers"
 import { AskUserRenderer, PromptRenderer } from "../../interaction-renderers"
-import { ClientShell } from "../client-services"
 
 export const builtinTools = defineClientExtension("@gent/tools", {
   setup: Effect.gen(function* () {

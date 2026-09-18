@@ -35,12 +35,15 @@ import { formatAge, formatDuration, truncate, workingIconFrame } from "../../uti
 import {
   clientCommandContribution,
   clientContributions,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
   defineClientExtension,
-  widgetContribution,
+  type ExtensionAgentDetail,
+  makeClientSessionQuery,
   type OverlayProps,
+  widgetContribution,
 } from "../client-facets"
-import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-services"
-import { ClientTransport, type ExtensionAgentDetail } from "../client-transport"
 import { SubagentTray, subtreeCounts } from "./agents-tray.client"
 
 export const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"

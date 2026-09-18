@@ -34,12 +34,14 @@ import { useTheme } from "../../theme"
 import {
   clientCommandContribution,
   clientContributions,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
   defineClientExtension,
-  widgetContribution,
+  makeClientSessionQuery,
   type OverlayProps,
+  widgetContribution,
 } from "../client-facets"
-import { ClientLifecycle, ClientShell, makeClientSessionQuery } from "../client-services"
-import { ClientTransport } from "../client-transport"
 
 const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
 

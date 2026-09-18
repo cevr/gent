@@ -10,17 +10,19 @@
 
 import { Layer, ManagedRuntime, Option } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { ClientRuntime } from "./client-facets.js"
-import { makeClientActivityLayer, type ClientActivitySnapshot } from "./client-activity"
-import { makeClientTransportLayer, type ClientShellTransportDefinition } from "./client-transport"
 import {
+  type ClientActivitySnapshot,
   type ClientLifecycleDefinition,
+  type ClientRuntime,
   type ClientShellDefinition,
+  type ClientShellTransportDefinition,
   type ClientWorkspaceDefinition,
+  makeClientActivityLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
+  makeClientTransportLayer,
   makeClientWorkspaceLayer,
-} from "./client-services"
+} from "./client-facets.js"
 
 interface ClientRuntimeDeps {
   readonly transport: ClientShellTransportDefinition

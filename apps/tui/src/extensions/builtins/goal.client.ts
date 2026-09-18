@@ -7,15 +7,20 @@
  */
 import { Effect, Option } from "effect"
 import { ref } from "@gent/core/extensions/api"
-import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
+import {
+  borderLabelContribution,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
+  defineClientExtension,
+  makeClientSessionResource,
+} from "../client-facets.js"
 import {
   GoalRpc,
   GOAL_EXTENSION_ID,
   type GoalSnapshot,
   remainingTokens,
 } from "@gent/extensions/client.js"
-import { ClientTransport } from "../client-transport"
-import { ClientLifecycle, ClientShell, makeClientSessionResource } from "../client-services"
 
 export default defineClientExtension(GOAL_EXTENSION_ID, {
   setup: Effect.gen(function* () {

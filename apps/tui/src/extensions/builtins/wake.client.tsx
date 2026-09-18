@@ -19,9 +19,15 @@ import {
 import { useTheme } from "../../theme"
 import { useTerminalDimensions } from "../../terminal"
 import { useSpinnerClock } from "../../ui"
-import { clientContributions, defineClientExtension, widgetContribution } from "../client-facets.js"
-import { ClientTransport } from "../client-transport"
-import { ClientLifecycle, ClientShell, makeClientSessionResource } from "../client-services"
+import {
+  clientContributions,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
+  defineClientExtension,
+  makeClientSessionResource,
+  widgetContribution,
+} from "../client-facets.js"
 import { truncate } from "../../utils"
 
 const TRAY_MAX_ROWS = 3

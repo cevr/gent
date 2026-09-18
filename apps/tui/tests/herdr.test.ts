@@ -5,10 +5,10 @@ import { createSignal } from "solid-js"
 import { SessionId } from "@gent/core/extensions/api"
 import herdr from "../src/extensions/builtins/herdr.client"
 import {
-  makeClientActivityLayer,
   type ClientActivitySnapshot,
-} from "../src/extensions/client-activity"
-import { makeClientLifecycleLayer } from "../src/extensions/client-services"
+  makeClientActivityLayer,
+  makeClientLifecycleLayer,
+} from "../src/extensions/client-facets"
 import { makeHerdrReporter } from "../src/extensions/herdr/reporter"
 import { makeHerdrTestServer } from "./herdr-test-server-boundary"
 

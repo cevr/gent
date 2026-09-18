@@ -1,14 +1,14 @@
 import { Deferred, Effect, Option } from "effect"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
-import type { ClientShellDefinition } from "../src/extensions/client-services"
-import type { ClientShellTransportDefinition } from "../src/extensions/client-transport"
-import { makeClientRuntime } from "../src/extensions/client-runtime"
 import type {
   AnyExtensionClientModule,
   BorderLabelPosition,
   ClientContributions,
   ClientRuntime,
-} from "../src/extensions/client-facets.js"
+  ClientShellDefinition,
+  ClientShellTransportDefinition,
+} from "../src/extensions/client-facets"
+import { makeClientRuntime } from "../src/extensions/client-runtime"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
 export type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }

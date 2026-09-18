@@ -7,10 +7,14 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import { ClientActivity } from "../src/extensions/client-activity"
+import {
+  ClientActivity,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
+  ClientWorkspace,
+} from "../src/extensions/client-facets"
 import { makeClientRuntime } from "../src/extensions/client-runtime"
-import { ClientLifecycle, ClientShell, ClientWorkspace } from "../src/extensions/client-services"
-import { ClientTransport } from "../src/extensions/client-transport"
 import { makeClientTestTransport } from "./extension-test-harness-boundary"
 import { createMockRuntime } from "./render-harness-boundary"
 import { runRuntimeEffectBoundary } from "./run-effect-boundary"

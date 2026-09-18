@@ -11,7 +11,7 @@ import { createRoot } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import { makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
-import type { ExtensionAgentDetail } from "../../src/extensions/client-transport"
+import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 
 const row = (id: string, live = true): AgentRowEntry => ({
   sessionId: SessionId.make(id),

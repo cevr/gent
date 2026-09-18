@@ -1,4 +1,13 @@
-import type { AnyExtensionClientModule } from "../client-facets.js"
+import {
+  type AnyExtensionClientModule,
+  autocompleteContribution,
+  clientContributions,
+  ClientTransport,
+  ClientWorkspace,
+  defineClientExtension,
+  interactionRendererContribution,
+  widgetContribution,
+} from "../client-facets.js"
 
 import { Clock, Effect, Option } from "effect"
 import type { FileSystem, Path } from "effect"
@@ -13,15 +22,6 @@ import builtinGoal from "./goal.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
 import { builtinInteractions, builtinTools } from "./tool-renderers.client"
-import {
-  defineClientExtension,
-  autocompleteContribution,
-  clientContributions,
-  interactionRendererContribution,
-  widgetContribution,
-} from "../client-facets.js"
-import { ClientTransport } from "../client-transport"
-import { ClientWorkspace } from "../client-services"
 import { HandoffRenderer } from "../../interaction-renderers"
 import { ConnectionWidget } from "../../components/connection-widget"
 import { truncate } from "../../utils"

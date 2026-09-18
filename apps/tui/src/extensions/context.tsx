@@ -30,6 +30,7 @@ import type { Command } from "../commands"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
 import type {
   AutocompleteContribution,
+  ClientActivitySnapshot,
   ClientRuntime,
   InteractionRendererComponent,
   OverlayComponent,
@@ -39,8 +40,6 @@ import { makeClientRuntime } from "./client-runtime"
 import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
-
-import type { ClientActivitySnapshot } from "./client-activity"
 
 interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void

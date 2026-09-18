@@ -18,14 +18,15 @@ import {
   type SideTurnType,
 } from "@gent/extensions/client.js"
 import {
-  clientContributions,
   clientCommandContribution,
+  clientContributions,
+  ClientLifecycle,
+  ClientShell,
+  ClientTransport,
   defineClientExtension,
   overlayContribution,
   type OverlayProps,
 } from "../client-facets.js"
-import { ClientTransport } from "../client-transport"
-import { ClientLifecycle, ClientShell } from "../client-services"
 import { ChromePanel } from "../../ui"
 import { useTheme } from "../../theme"
 import { useScopedKeyboard, useTerminalDimensions } from "../../terminal"

@@ -1,9 +1,12 @@
 /** Herdr lifecycle integration. Inactive outside an identified Herdr pane. */
 import { createEffect, createRoot } from "solid-js"
 import { Effect, Option } from "effect"
-import { defineClientExtension, clientContributions } from "../client-facets"
-import { ClientActivity } from "../client-activity"
-import { ClientLifecycle } from "../client-services"
+import {
+  ClientActivity,
+  clientContributions,
+  ClientLifecycle,
+  defineClientExtension,
+} from "../client-facets"
 import { herdrEnvironment, makeHerdrReporter } from "../herdr/reporter"
 
 export default defineClientExtension("@gent/herdr", {

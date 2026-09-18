@@ -13,7 +13,7 @@ import { BranchId, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import { AgentsPane, makeAgentsController } from "../../src/extensions/builtins/agents-view.client"
 import { usePickerGeometry } from "../../src/ui"
-import type { ExtensionAgentDetail } from "../../src/extensions/client-transport"
+import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

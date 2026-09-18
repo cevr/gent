@@ -1,7 +1,7 @@
 /** Ordered, bounded Herdr socket reports, owned by the TUI extension scope. */
 import { BunSocket } from "@effect/platform-bun"
 import { Clock, Config, Deferred, Effect, Exit, Fiber, Option, Queue, Schema } from "effect"
-import type { ClientActivitySnapshot } from "../client-activity"
+import type { ClientActivitySnapshot } from "../client-facets"
 
 const SOURCE = "herdr:gent"
 const AGENT = "gent"

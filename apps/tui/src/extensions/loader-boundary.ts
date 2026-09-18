@@ -12,12 +12,12 @@
  */
 
 import { Effect, Option, Predicate, Schema } from "effect"
-import type {
-  AnyExtensionClientModule,
-  ClientContributions,
-  ClientRuntime,
+import {
+  type AnyExtensionClientModule,
+  type ClientContributions,
+  type ClientRuntime,
+  ClientSetupError,
 } from "./client-facets.js"
-import { ClientSetupError } from "./client-effect.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,

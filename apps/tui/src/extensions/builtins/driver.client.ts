@@ -16,10 +16,13 @@
  */
 
 import { Effect, Option } from "effect"
-import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
+import {
+  clientCommandContribution,
+  ClientShell,
+  ClientTransport,
+  defineClientExtension,
+} from "../client-facets.js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/protocol"
-import { ClientShell } from "../client-services"
-import { ClientTransport } from "../client-transport"
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"
 
