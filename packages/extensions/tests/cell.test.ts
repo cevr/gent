@@ -18,6 +18,8 @@ import {
 } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/config.js"
+import { SessionRuntime } from "@gent/core-internal/runtime/session.js"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -86,10 +88,8 @@ import { defineExtension, ExtensionContext, ExtensionHost, tool } from "@gent/co
 import {
   AgentDefinition,
   AgentName,
-  AgentRunnerService,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
-  makeRunSpec,
   SteerCommand,
 } from "@gent/core-internal/domain/agent.js"
 import {
@@ -100,6 +100,7 @@ import {
   createE2ELayer,
   createRpcHarness,
   ensureStorageParents,
+  runToolWithCtx,
   testHostFacts,
   testToolContext,
 } from "@gent/core-internal/test-utils/index.js"
@@ -110,6 +111,7 @@ import {
   type SequenceStep,
   textDeltaPart,
   textStep,
+  toolCallPart,
   toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
@@ -144,13 +146,14 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver.js"
 import {
   ChildAgentHandle,
-  ControlChildAgent,
+  CancelChild,
+  DelegateEntry,
   DelegateExtension,
-  DelegateTool,
+  ListChildren,
+  StartChild,
 } from "../src/delegate.js"
 import { ReadSessionTool } from "../src/session-tools.js"
 import { Gent } from "@gent/sdk"
-import { admitChildSession } from "@gent/core-internal/runtime/child-agents.js"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { StorageError } from "@gent/core-internal/domain/errors.js"
@@ -1551,7 +1554,7 @@ it.effect(
       })
       const result = Prompt.toolResultPart({
         id: toolCallId,
-        name: "delegate",
+        name: "delegate.start",
         isFailure: false,
         providerExecuted: false,
         result: { output: "pong", metadata },
@@ -2509,25 +2512,57 @@ describe("external driver cell dispatch", () => {
   )
 })
 
-// ── cell/cell-child-foreground.test ─────────────────────────────────────────
+// ── cell/cell-child.test ────────────────────────────────────────────────────
 
-describe("foreground child cell", () => {
+describe("child cell", () => {
   it.scopedLive(
     "a child delegated from a cell runs its own cell instead of refusing as a nested outer cell",
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
         const artifact = yield* buildCellExecutable
-        // The shared model queue serves the parent turn, then the child's
-        // turn admitted from inside the parent's cell operation.
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", {
-            code: "const r = await tools.call('delegate', { todo: 'compute' }); r._tag === 'Completed' && r.output.includes('child says 2') && r.metadata.toolCalls.length === 1 && r.metadata.toolCalls[0].toolName === 'cell' && r.metadata.toolCalls[0].isError === false",
-          }),
-          toolCallStep("cell", { code: "1 + 1" }),
-          textStep("child says 2"),
-          textStep("done"),
-        ])
+        // The parent starts the child from a cell and ends its turn; the
+        // child runs its own cell. Each branch is told apart by its first
+        // user text, so the two turns never race for one script.
+        const childTask = "compute"
+        const firstText = (prompt: Prompt.Prompt) =>
+          prompt.content.flatMap((message) => {
+            if (message.role !== "user") return []
+            return message.content.flatMap((part) => {
+              if (part.type !== "text") return []
+              return [part.text]
+            })
+          })[0]
+        const step = <A>(parts: ReadonlyArray<A>) => Effect.succeed(Stream.fromIterable(parts))
+        let parentCalls = 0
+        let childCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          if (firstText(options.prompt) === childTask) {
+            childCalls += 1
+            if (childCalls === 1) {
+              return step([
+                toolCallPart("cell", { code: "1 + 1" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            return step([textDeltaPart("child says 2"), finishPart({ finishReason: "stop" })])
+          }
+          parentCalls += 1
+          if (parentCalls === 1) {
+            return step([
+              toolCallPart("cell", {
+                code: "const h = await tools.call('delegate.start', { todo: 'compute' }); typeof h.requestId === 'string'",
+              }),
+              finishPart({ finishReason: "tool-calls" }),
+            ])
+          }
+          // The turn that started the child ends here; "done" is the turn
+          // the child's completion wakes.
+          if (parentCalls === 2) {
+            return step([textDeltaPart("started"), finishPart({ finishReason: "stop" })])
+          }
+          return step([textDeltaPart("done"), finishPart({ finishReason: "stop" })])
+        })
         const fixture = defineExtension({
           id: "cell-child-foreground-fixture",
           setup: Effect.gen(function* () {
@@ -2550,7 +2585,6 @@ describe("foreground child cell", () => {
             },
           ],
           branchTools: CellBranchTools,
-          subagentRunner: "live",
           extraLayers: [
             Layer.succeed(
               GentPlatform,
@@ -2563,27 +2597,38 @@ describe("foreground child cell", () => {
         })
         const content = "delegate from a cell"
         yield* client.message.send({ sessionId, branchId, content })
-        const messages = yield* waitFor(client.message.list({ branchId }), (items) =>
-          items.some((item) => item.role === "user" && messageSingleText(item.parts) === content),
+        // The child's completion wakes the parent; the parent's reply to it
+        // is the last thing to land.
+        const parentMessages = yield* waitFor(
+          client.message.list({ branchId }),
+          (items) =>
+            items.some(
+              (item) => item.role === "assistant" && messageSingleText(item.parts) === "done",
+            ),
+          12_000,
+          "the parent read the child's completion",
         )
-        const user = messages.find(
-          (item) => item.role === "user" && messageSingleText(item.parts) === content,
-        )
-        if (Predicate.isUndefined(user)) return yield* Effect.die("Missing parent message")
-        yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter(
-            (envelope) =>
-              envelope.event._tag === "TurnCompleted" && envelope.event.messageId === user.id,
-          ),
-          Stream.take(1),
-          Stream.runDrain,
-        )
-        const completed = yield* client.message.list({ branchId })
-        const results = completed
+        const startResults = parentMessages
           .flatMap((message) => message.parts)
           .filter((part) => part.type === "tool-result" && part.name === "cell")
-        expect(results).toHaveLength(1)
-        expect(results[0]).toMatchObject({ isFailure: false, result: { display: "true" } })
+        expect(startResults).toHaveLength(1)
+        expect(startResults[0]).toMatchObject({ isFailure: false, result: { display: "true" } })
+        const completion = parentMessages.find(
+          (item) => item.metadata?.customType === "child-completion",
+        )
+        expect(completion).toBeDefined()
+        expect(messageSingleText(completion?.parts ?? [])).toContain("child says 2")
+
+        const sessions = yield* client.session.list()
+        const child = sessions.find((session) => session.parentSessionId === sessionId)
+        if (Predicate.isUndefined(child?.activeBranchId)) {
+          return yield* Effect.die("Missing child session")
+        }
+        const childResults = (yield* client.message.list({ branchId: child.activeBranchId }))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.name === "cell")
+        expect(childResults).toHaveLength(1)
+        expect(childResults[0]).toMatchObject({ isFailure: false, result: { display: "2" } })
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
   )
@@ -2627,33 +2672,33 @@ describe("branch cell lifetime", () => {
         }> = [
           {
             send: true,
-            code: "const child = await tools.call('delegate', {todo: 'Wait for cancellation', background: true}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
+            code: "const child = await tools.call('delegate.start', {todo: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
           },
           {
             send: true,
-            code: "(await tools.call('agent-child', {action: 'inspect', requestId: child.requestId}))._tag === 'Pending'",
+            code: "(await tools.call('delegate.list', {})).find((kid) => kid.requestId === child.requestId).completed === false",
           },
           {
             send: true,
             reset: true,
-            code: "typeof child === 'undefined' && (await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId}))._tag === 'Pending'",
+            code: "const saved = await tools.call('child-handle', {_tag: 'get'}); typeof child === 'undefined' && (await tools.call('delegate.list', {})).find((kid) => kid.requestId === saved.requestId).completed === false",
           },
           {
             send: true,
-            code: "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('agent-child', {action: 'cancel', requestId: id}); true",
+            code: "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('delegate.cancel', {requestId: id}); true",
           },
           // The cancelled child's completion arrives as a message; no cell ever waited for it.
           {
             send: false,
-            code: "(await tools.call('agent-child', {action: 'inspect', requestId: (await tools.call('child-handle', {_tag: 'get'})).requestId})).interrupted === true",
+            code: "const cancelled = await tools.call('child-handle', {_tag: 'get'}); (await tools.call('delegate.list', {})).find((kid) => kid.requestId === cancelled.requestId).interrupted === true",
           },
           {
             send: true,
-            code: "const finished = await tools.call('delegate', {todo: 'Return the result', background: true, overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
+            code: "const finished = await tools.call('delegate.start', {todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
           },
           {
             send: false,
-            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('agent-children', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
+            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
           },
         ]
         const steps = turns.flatMap<SequenceStep>((turn, index) => [
@@ -2733,7 +2778,6 @@ describe("branch cell lifetime", () => {
             },
           ],
           branchTools: CellBranchTools,
-          subagentRunner: "live",
           extraLayers: [
             Layer.succeed(
               GentPlatform,
@@ -2954,6 +2998,53 @@ describe("branch cell lifetime", () => {
 
 // ── cell/cell-recovery.test ─────────────────────────────────────────────────
 
+/**
+ * The delegate registry is one JSON array per parent branch under
+ * `<home>/.gent/delegates`. Seeding it is how a test admits a durable child
+ * the way a crashed process would have left one behind.
+ */
+const encodeRegistry = Schema.encodeSync(Schema.fromJsonString(Schema.Array(DelegateEntry)))
+
+const seedDelegateRegistry = Effect.fn("test.seedDelegateRegistry")(function* (
+  branchId: BranchId,
+  entries: ReadonlyArray<DelegateEntry>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const directory = `${(yield* RuntimeEnvironment).home}/.gent/delegates`
+  yield* fs.makeDirectory(directory, { recursive: true })
+  yield* fs.writeFileString(`${directory}/${branchId}.json`, encodeRegistry(entries))
+})
+
+/**
+ * The leaf view `delegate.cancel` sees when the parent branch runs it. The real
+ * host context carries the session facade the tool steers through, so the
+ * cancellation reaches the child's loop exactly as it does in production.
+ */
+const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (parent: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}) {
+  const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
+  // Outside a loop the facade has no session control, so the cancellation the
+  // tool steers would die. The runtime is the same door the loop opens.
+  const runtime = yield* SessionRuntime
+  const provider = yield* makeExtensionHostContextProvider({
+    host: testHostFacts().host,
+    extensionRegistry: profile.registryService,
+    sessionControl: {
+      queueFollowUp: (input) => runtime.queueFollowUp(input),
+      dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
+      send: (input) => runtime.sendUserMessage(input),
+      steer: (command) => runtime.steer(command),
+    },
+  })
+  return {
+    ...provider.forRun({ ...parent, sessionCwd: "/tmp" }),
+    extensionId: ExtensionId.make("cell-recovery"),
+    toolCallId: ToolCallId.make("delegate-cancel-call"),
+  }
+})
+
 const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   outer: Option.Option<Message["parts"][number]>,
   parent: { readonly sessionId: SessionId; readonly branchId: BranchId },
@@ -2964,7 +3055,7 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
     Schema.Struct({
       operations: Schema.Array(
         Schema.TaggedStruct("Unknown", {
-          toolName: Schema.Literal("delegate"),
+          toolName: Schema.Literal("delegate.start"),
           toolCallId: ToolCallId,
         }),
       ),
@@ -2972,21 +3063,20 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   )(outer.value.result)
   const operation = recovered.operations[0]
   if (Predicate.isUndefined(operation)) return yield* Effect.die("Missing unknown child operation")
-  const runner = yield* AgentRunnerService
-  const handle = {
-    parentSessionId: parent.sessionId,
-    parentBranchId: parent.branchId,
-    requestId: RequestId.make(operation.toolCallId),
-  }
-  expect(Option.isNone((yield* runner.inspect(handle)).completion)).toBe(true)
-  yield* runner.cancel(handle)
+  const requestId = RequestId.make(operation.toolCallId)
+  const ctx = yield* delegateToolContext(parent)
+  const observe = runToolWithCtx(ListChildren, {}, ctx).pipe(
+    Effect.map((children) => children.find((child) => child.requestId === requestId)),
+  )
+  expect((yield* observe)?.completed).toBe(false)
+  yield* runToolWithCtx(CancelChild, { requestId }, ctx)
   const cancelled = yield* waitFor(
-    runner.inspect(handle),
-    (observed) => Option.isSome(observed.completion),
+    observe,
+    (observed) => observed?.completed === true,
     2000,
     "cancelled child completion",
   )
-  expect(Option.getOrUndefined(cancelled.completion)?.interrupted).toBe(true)
+  expect(cancelled?.interrupted).toBe(true)
 })
 
 it.scopedLive(
@@ -3015,8 +3105,8 @@ it.scopedLive(
             artifactIdentity: LoadedArtifactIdentity.make("cell-recovery-source"),
             contributions: {
               tools: [
-                DelegateTool,
-                ControlChildAgent,
+                StartChild,
+                CancelChild,
                 tool({
                   id: "approve",
                   description: "Approve inner operation",
@@ -3058,6 +3148,12 @@ it.scopedLive(
         ]
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("Recovered"),
+          // The orphaned child's own turn. It is gated and never released, so
+          // the child is still at the model when the parent cancels it — the
+          // state a lost worker leaves behind.
+          { ...textStep("child"), gated: true },
+          // The parent reads the cancelled child's completion message.
+          textStep("Child cancelled"),
         ])
         // Keep the real server context to seed the crash gap before actor startup.
         const context = yield* Layer.build(
@@ -3068,7 +3164,6 @@ it.scopedLive(
             extensionInputs: [],
             branchTools: CellBranchTools,
             durableApproval: true,
-            subagentRunner: "live",
           }),
         )
         const { client } = yield* Gent.test(Layer.succeedContext(context))
@@ -3134,7 +3229,7 @@ it.scopedLive(
           if (state === "completed") yield* cells.complete(cell, savedResult)
           const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
           if (state === "unknown-child") {
-            const selected = yield* captureCurrentToolBinding("delegate")
+            const selected = yield* captureCurrentToolBinding("delegate.start")
             const identity = Option.flatMap(selected, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
@@ -3147,18 +3242,24 @@ it.scopedLive(
               input: { agent: DEFAULT_AGENT_NAME, prompt },
             })
             const toolCallId = admitted.operation.toolCallId
-            yield* admitChildSession({
-              agent: { name: DEFAULT_AGENT_NAME },
-              prompt,
+            const child = yield* client.session.create({
               cwd: "/tmp",
               parentSessionId: sessionId,
               parentBranchId: branchId,
-              toolCallId,
-              admission: {
-                requestId: RequestId.make(toolCallId),
-                runSpec: makeRunSpec({ parentToolCallId: toolCallId }),
-              },
             })
+            yield* seedDelegateRegistry(branchId, [
+              {
+                requestId: RequestId.make(toolCallId),
+                sessionId: child.sessionId,
+                branchId: child.branchId,
+                agentName: DEFAULT_AGENT_NAME,
+                prompt,
+                toolCallId,
+                private: false,
+                submitted: false,
+                delivered: false,
+              },
+            ])
           }
           if (state === "unadmitted" || state === "revoked") {
             const captured = yield* captureCurrentToolBinding("cell")
@@ -3268,7 +3369,27 @@ it.scopedLive(
             Effect.provideContext(context),
             Effect.provideService(CurrentWorkspaceId, workspaceId),
           )
-          expect(yield* controls.callCount).toBe(1)
+          // The cancelled child reports back, so the parent reads it in one
+          // more turn. Three model calls in all: the recovery turn, the
+          // child's gated turn, and the parent reading the completion. The
+          // recovered cell itself never replayed — that is the two results
+          // asserted above, not a fourth call.
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some(
+                (message) => message.metadata?.customType === "child-completion",
+              ),
+            5000,
+            "the cancelled child reported to the parent",
+          )
+          expect(
+            settled.messages.filter(
+              (message) => message.metadata?.customType === "child-completion",
+            ),
+          ).toHaveLength(1)
+          expect(yield* controls.callCount).toBe(3)
         }
         if (state === "completed") expect(outer).toEqual(savedResult)
         else if (state === "unadmitted")
@@ -3296,10 +3417,10 @@ it.scopedLive(
         if (state === "unadmitted") {
           expect(yield* Ref.get(cellCalls)).toBe(1)
           expect(yield* Ref.get(selectedNames)).toEqual([
-            "agent-child",
             "approve",
             "cell",
-            "delegate",
+            "delegate.cancel",
+            "delegate.start",
             "sibling",
           ])
         } else expect(yield* Ref.get(cellCalls)).toBe(0)

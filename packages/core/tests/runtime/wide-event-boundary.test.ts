@@ -13,7 +13,6 @@ import {
   withWideEvent,
   WideEventLogger,
   turnBoundary,
-  agentRunBoundary,
 } from "../../src/runtime/wide-event-boundary"
 import type { LogEvent } from "../../src/runtime/wide-event-boundary"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
@@ -125,28 +124,6 @@ describe("wide-event-boundary", () => {
         expect(a["service"]).toBe("rpc")
         expect(a["method"]).toBe("sendMessage")
         expect(a["sessionId"]).toBe("sess-1")
-      }),
-    )
-
-    it.live("agentRunBoundary produces agent-run context", () =>
-      Effect.gen(function* () {
-        const ref = captured()
-
-        yield* captureWideEvents(
-          ref,
-          WideEvent.set({ childSessionId: "child-1" }).pipe(
-            withWideEvent(
-              agentRunBoundary(AgentName.make("researcher"), SessionId.make("parent-1")),
-            ),
-          ),
-        )
-
-        const a = getAnnotations(ref)
-        expect(a["service"]).toBe("agent-run")
-        expect(a["method"]).toBe("run")
-        expect(a["actor"]).toBe("researcher")
-        expect(a["parentSessionId"]).toBe("parent-1")
-        expect(a["childSessionId"]).toBe("child-1")
       }),
     )
   })

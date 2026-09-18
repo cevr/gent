@@ -508,7 +508,6 @@ function AgentTree(props: AgentTreeProps) {
 const decodeDelegateInput = Schema.decodeUnknownOption(
   Schema.Struct({
     todo: Schema.optional(Schema.String),
-    background: Schema.optional(Schema.Boolean),
   }),
 )
 
@@ -517,13 +516,7 @@ const parseDelegateInput = (input: ToolInput) => decodeDelegateInput(input)
 function SubagentToolRenderer(props: ToolRendererProps) {
   const delegateInput = () => parseDelegateInput(props.toolCall.input)
 
-  const title = () => {
-    const background = delegateInput().pipe(
-      Option.flatMap((inp) => Option.fromNullishOr(inp.background)),
-    )
-    if (Option.isSome(background) && background.value) return "delegate (background)"
-    return "delegate"
-  }
+  const title = () => "delegate"
 
   const subtitle = (): Option.Option<string> => {
     const todo = delegateInput().pipe(Option.flatMap((inp) => Option.fromNullishOr(inp.todo)))
@@ -1470,7 +1463,7 @@ export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["cell"], component: CellToolRenderer, headless: CellHeadlessToolRenderer },
   { toolNames: ["write"], component: WriteToolRenderer },
   { toolNames: ["grep"], component: GrepToolRenderer },
-  { toolNames: ["delegate"], component: SubagentToolRenderer },
+  { toolNames: ["delegate.start"], component: SubagentToolRenderer },
   {
     toolNames: ["read_session"],
     component: ReadSessionToolRenderer,

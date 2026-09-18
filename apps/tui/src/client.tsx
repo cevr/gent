@@ -11,9 +11,10 @@ import {
   Option,
   type PlatformError,
   Predicate,
+  Queue,
   Ref,
   Schema,
-  type Scope,
+  Scope,
   Stream,
   SubscriptionRef,
 } from "effect"
@@ -64,6 +65,8 @@ import {
 import { createStore } from "solid-js/store"
 import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
 import { omitUndefined } from "@gent/core-internal/domain/guards.js"
+import { DelegateChild, DelegateRpc } from "@gent/extensions/client.js"
+import { ref } from "@gent/core/extensions/api"
 import {
   formatConnectionIssue,
   formatError,
@@ -394,11 +397,14 @@ const createClientEventHub = (log: ClientLog) => {
 /**
  * Framework-agnostic child session tracking service.
  *
- * Listens for AgentRunSpawned/Succeeded/Failed on a parent event stream,
- * opens per-child event subscriptions, and tracks child tool call state.
- * Entries persist after completion as the single TUI source of truth.
- * Child subscription fibers are interrupted on terminal state; closing the
- * scope that built the tracker interrupts every remaining subscription.
+ * Reads the delegate extension's own child registry — the delegate owns this
+ * state, and core carries no child-run events. Each `track` call reads the
+ * roster for the parent branch, and every delegate `ExtensionStateChanged`
+ * pulse re-reads it. New rows open a per-child event subscription for tool
+ * call and stream hydration; a row that turns terminal drains the child's
+ * saved history once and closes its subscription. Entries persist after
+ * completion as the single TUI source of truth. Closing the scope that built
+ * the tracker interrupts every remaining subscription.
  */
 
 // =============================================================================
@@ -437,16 +443,35 @@ export interface ChildSessionEntry {
 // =============================================================================
 
 export interface ChildSessionTrackerService {
-  /** Start tracking children for a parent session/branch. Subscribes to live events. */
-  readonly track: (params: { sessionId: SessionId; branchId?: BranchId }) => Effect.Effect<void>
+  /** Start tracking children for a parent session/branch. Reads the delegate
+   *  roster, then re-reads it on every delegate state pulse. */
+  readonly track: (params: { sessionId: SessionId; branchId: BranchId }) => Effect.Effect<void>
   /** Current children plus subsequent state snapshots for reactive consumers */
   readonly changes: Stream.Stream<ReadonlyMap<string, ChildSessionEntry>>
 }
 
+/** The pieces the tracker reads from, all delegate-owned or per-child. */
+export interface ChildSessionTrackerDeps {
+  /** Per-child event stream, for tool call and stream hydration. */
+  readonly events: GentNamespacedClient["session"]["events"]
+  /** The delegate registry for one parent branch, read as a client renders it. */
+  readonly fetchChildren: (parent: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<ReadonlyArray<DelegateChild>>
+  /** Subscribe to `ExtensionStateChanged` pulses; the tracker filters to the
+   *  delegate and the parent it tracks. Returns an unsubscribe function. */
+  readonly onExtensionStateChanged: (
+    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
+  ) => () => void
+}
+
 export const makeChildSessionTracker = (
-  events: GentNamespacedClient["session"]["events"],
+  deps: ChildSessionTrackerDeps,
 ): Effect.Effect<ChildSessionTrackerService, never, Scope.Scope> =>
   Effect.gen(function* () {
+    const { events } = deps
+    const trackerScope = yield* Effect.scope
     const entries = yield* SubscriptionRef.make(new Map<string, ChildSessionEntry>())
     const childFibers = yield* Ref.make(new Map<string, Fiber.Fiber<void>>())
     const fiberSet = yield* FiberSet.make<void>()
@@ -545,65 +570,61 @@ export const makeChildSessionTracker = (
         }
       })
 
-    const handleParentEvent = (event: AgentEvent) =>
+    // Reconcile one delegate registry row into the entries. A row with no
+    // tool call has no delegate call the tool view could render it under,
+    // so it is skipped. A new row opens a subscription; a row that has turned
+    // terminal drains the child's saved history once, then closes it.
+    const reconcileChild = (child: DelegateChild) =>
       Effect.gen(function* () {
-        switch (event._tag) {
-          case "AgentRunSpawned": {
-            const childId = event.childSessionId
-            const toolCallId = Option.fromNullishOr(event.toolCallId)
-            if (Option.isNone(toolCallId)) return
+        const toolCallId = Option.fromNullishOr(child.toolCallId)
+        if (Option.isNone(toolCallId)) return
+        const childId = child.sessionId
+        const childBranchId = child.branchId
 
-            const entry: ChildSessionEntry = {
-              childSessionId: childId,
-              childBranchId: event.childBranchId,
-              toolCallId: toolCallId.value,
-              agentName: event.agentName,
-              status: "running",
-              toolCalls: [],
-              streamText: "",
+        const added = yield* SubscriptionRef.modifySome(
+          entries,
+          (current): [boolean, Option.Option<Map<string, ChildSessionEntry>>] => {
+            const existing = Option.fromNullishOr(current.get(childId))
+            if (Option.isNone(existing)) {
+              const entry: ChildSessionEntry = {
+                childSessionId: childId,
+                childBranchId,
+                toolCallId: toolCallId.value,
+                agentName: child.agentName,
+                status: child.status,
+                toolCalls: [],
+                streamText: "",
+                ...omitUndefined({ usage: child.usage, preview: child.preview }),
+              }
+              return [true, Option.some(new Map(current).set(childId, entry))]
             }
-            const added = yield* SubscriptionRef.modifySome(
-              entries,
-              (current): [boolean, Option.Option<Map<string, ChildSessionEntry>>] => {
-                if (current.has(childId)) return [false, Option.none()]
-                return [true, Option.some(new Map(current).set(childId, entry))]
-              },
-            )
-            if (!added) return
-            // Subscribe to child events for tool call hydration.
-            // Completion drains saved child history before it closes the subscription.
-            yield* subscribeChild(childId, event.childBranchId)
-            break
-          }
-
-          case "AgentRunSucceeded": {
-            const childId = event.childSessionId
-            yield* finishChild(childId)
-            const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
-              ...entry,
-              status: "completed",
-              usage: event.usage,
-              preview: event.preview,
-            }))
-            if (Option.isNone(updated)) return
-            break
-          }
-
-          case "AgentRunFailed": {
-            const childId = event.childSessionId
-            yield* finishChild(childId)
-            const updated = yield* updateEntry(childId, (entry): ChildSessionEntry => ({
-              ...entry,
-              status: "error",
-            }))
-            if (Option.isNone(updated)) return
-            break
-          }
-
-          // Entries persist after parent tool completion — the tracker is the single
-          // source of truth for completed subagent state in the TUI.
+            const next: ChildSessionEntry = {
+              ...existing.value,
+              status: child.status,
+              ...omitUndefined({ usage: child.usage, preview: child.preview }),
+            }
+            return [false, Option.some(new Map(current).set(childId, next))]
+          },
+        )
+        if (added) {
+          // Subscribe to child events for tool call hydration.
+          // Completion drains saved child history before it closes the subscription.
+          yield* subscribeChild(childId, BranchId.make(childBranchId))
+        }
+        // A terminal row drains the child's durable history once and closes its
+        // subscription. `finishChild` is idempotent: a second pulse for an
+        // already-finished row finds no subscription and re-folds the same state.
+        if (child.status !== "running") {
+          yield* finishChild(childId)
         }
       })
+
+    const reconcileRoster = (parent: { sessionId: SessionId; branchId: BranchId }) =>
+      deps
+        .fetchChildren(parent)
+        .pipe(
+          Effect.flatMap((children) => Effect.forEach(children, reconcileChild, { discard: true })),
+        )
 
     const finishChild = Effect.fn("ChildSessionTracker.finishChild")(function* (
       childSessionId: string,
@@ -638,17 +659,36 @@ export const makeChildSessionTracker = (
     })
 
     const service: ChildSessionTrackerService = {
-      track: ({ sessionId, branchId }) =>
-        FiberSet.run(fiberSet)(
-          Stream.runForEach(
-            events({
-              sessionId,
-              branchId,
-              after: 0,
-            }),
-            (envelope: EventEnvelope) => handleParentEvent(envelope.event),
-          ).pipe(Effect.catchEager(() => Effect.void)),
-        ),
+      track: (parent) =>
+        Effect.gen(function* () {
+          // The delegate names its own extension id on the request ref; the
+          // pulse filter reads it from there rather than a duplicated literal.
+          const delegateExtensionId = ref(DelegateRpc.Children).extensionId
+
+          // A pulse fires on a client thread and cannot yield, so it offers the
+          // parent onto a queue that a scoped fiber drains into a roster read.
+          const pulses = yield* Queue.make<typeof parent>()
+          yield* FiberSet.run(fiberSet)(
+            Queue.take(pulses).pipe(
+              Effect.flatMap((tracked) =>
+                reconcileRoster(tracked).pipe(Effect.catchEager(() => Effect.void)),
+              ),
+              Effect.forever,
+            ),
+          )
+
+          const unsubscribe = deps.onExtensionStateChanged((pulse) => {
+            if (pulse.extensionId !== delegateExtensionId) return
+            if (pulse.sessionId !== parent.sessionId) return
+            if (pulse.branchId !== parent.branchId) return
+            Queue.offerUnsafe(pulses, parent)
+          })
+          yield* Scope.addFinalizer(trackerScope, Effect.sync(unsubscribe))
+
+          // Seed the roster once so children spawned before this session was
+          // mounted show up without waiting for the next pulse.
+          yield* reconcileRoster(parent).pipe(Effect.catchEager(() => Effect.void))
+        }),
 
       changes: SubscriptionRef.changes(entries),
     }
@@ -1730,7 +1770,36 @@ interface UseChildSessionsReturn {
   getChildren: (toolCallId: string) => ChildSessionEntry[]
 }
 
-type ChildSessionClient = Pick<ClientContextValue, "sessionIdentity" | "runtime" | "client">
+type ChildSessionClient = Pick<
+  ClientContextValue,
+  "sessionIdentity" | "runtime" | "client" | "onExtensionStateChanged"
+>
+
+/**
+ * Read the delegate roster for one parent branch, as a client renders it.
+ *
+ * The delegate owns this state; core carries no child-run events. A read that
+ * fails (no session yet, a transport blip) is an empty roster — the next pulse
+ * or the next mount reads it again.
+ */
+const fetchDelegateChildren = (
+  client: ChildSessionClient["client"],
+  parent: { sessionId: SessionId; branchId: BranchId },
+): Effect.Effect<ReadonlyArray<DelegateChild>> => {
+  const childrenRef = ref(DelegateRpc.Children)
+  return client.extension
+    .request({
+      sessionId: parent.sessionId,
+      extensionId: childrenRef.extensionId,
+      capabilityId: childrenRef.capabilityId,
+      input: {},
+      branchId: parent.branchId,
+    })
+    .pipe(
+      Effect.flatMap((reply) => Schema.decodeUnknownEffect(Schema.Array(DelegateChild))(reply)),
+      Effect.catchEager(() => Effect.succeed([] satisfies ReadonlyArray<DelegateChild>)),
+    )
+}
 
 export function useChildSessions(client: ChildSessionClient): UseChildSessionsReturn {
   const [store, setStore] = createStore<{ entries: Record<string, ChildSessionEntry> }>({
@@ -1747,7 +1816,7 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
     setStore({ entries: {} })
   }
 
-  const startTracking = (sessionId: SessionId, branchId?: BranchId) => {
+  const startTracking = (sessionId: SessionId, branchId: BranchId) => {
     stopAll()
 
     // Single long-running scoped fiber: creates tracker, subscribes to changes,
@@ -1756,7 +1825,11 @@ export function useChildSessions(client: ChildSessionClient): UseChildSessionsRe
       client.runtime.fork(
         Effect.scoped(
           Effect.gen(function* () {
-            const tracker = yield* makeChildSessionTracker(client.client.session.events)
+            const tracker = yield* makeChildSessionTracker({
+              events: client.client.session.events,
+              fetchChildren: (parent) => fetchDelegateChildren(client.client, parent),
+              onExtensionStateChanged: client.onExtensionStateChanged,
+            })
 
             // Fork: pump tracker snapshots → Solid store
             yield* Effect.forkScoped(

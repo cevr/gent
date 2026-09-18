@@ -115,7 +115,6 @@ describe("side questions", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            subagentRunner: "live",
           })
           const parentEvents: Array<string> = []
           yield* client.session.events({ sessionId, branchId }).pipe(
@@ -171,7 +170,6 @@ describe("side questions", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            subagentRunner: "live",
           })
           const progress = () =>
             client.extension
@@ -250,7 +248,6 @@ describe("side questions", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
-          subagentRunner: "live",
         })
         const exit = yield* Effect.exit(
           client.extension.request({

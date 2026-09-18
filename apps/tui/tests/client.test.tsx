@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Result,
   Schema,
   Scope,
@@ -18,16 +19,18 @@ import {
   ErrorOccurred,
   EventId,
   EventStore,
-  type EventStoreError,
   type EventStoreService,
   MessageReceived,
   StreamEnded,
   StreamStarted,
   TurnCompleted,
 } from "@gent/core-internal/domain/event"
+import { DelegateChild, DelegateRpc } from "@gent/extensions/client"
+import { ref } from "@gent/core/extensions/api"
 import {
   AgentStatus,
   type ChildSessionEntry,
+  type ChildSessionTrackerDeps,
   type ChildSessionTrackerService,
   type ClientContextValue,
   makeChildSessionTracker,
@@ -64,7 +67,7 @@ import { createMemo, createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { ExtensionId, InteractionRequestId } from "@gent/core-internal/domain/ids"
+import { ExtensionId, InteractionRequestId, RequestId } from "@gent/core-internal/domain/ids"
 import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
 import { useSessionFeed } from "../src/session"
 
@@ -203,12 +206,12 @@ const waitForEntry = (
     Effect.timeout("2 seconds"),
   )
 
-/** Closing the tracker scope must end parent tracking: a later spawn never lands. */
+/** Closing the tracker scope must end tracking: a later roster pulse never lands. */
 const expectTrackingEnded = (harness: {
   tracker: ChildSessionTrackerService
   trackerScope: Scope.Closeable
   lateChild: { sessionId: string }
-  lateSpawn: Effect.Effect<unknown, EventStoreError>
+  lateSpawn: Effect.Effect<void>
 }) =>
   Effect.gen(function* () {
     yield* Scope.close(harness.trackerScope, Exit.void)
@@ -218,6 +221,68 @@ const expectTrackingEnded = (harness: {
       Effect.timeoutOption("300 millis"),
     )
     expect(Option.isNone(late)).toBe(true)
+  })
+
+/** A controllable delegate roster and pulse source, standing in for the extension. */
+interface DelegateRosterControl {
+  readonly deps: ChildSessionTrackerDeps
+  readonly set: (children: ReadonlyArray<DelegateChild>) => Effect.Effect<void>
+}
+
+const makeDelegateRoster = (
+  events: ChildSessionTrackerDeps["events"],
+  parent: { sessionId: SessionId; branchId: BranchId },
+): Effect.Effect<DelegateRosterControl> =>
+  Effect.gen(function* () {
+    const roster = yield* Ref.make<ReadonlyArray<DelegateChild>>([])
+    const subscribers = new Set<(pulse: DelegatePulse) => void>()
+    const deps: ChildSessionTrackerDeps = {
+      events,
+      fetchChildren: () => Ref.get(roster),
+      onExtensionStateChanged: (cb) => {
+        subscribers.add(cb)
+        return () => {
+          subscribers.delete(cb)
+        }
+      },
+    }
+    // A set both stores the new roster and pulses every subscriber for the
+    // tracked parent, exactly as an `ExtensionStateChanged` from the delegate
+    // on that branch would.
+    const set = (children: ReadonlyArray<DelegateChild>) =>
+      Ref.set(roster, children).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            for (const cb of subscribers) {
+              cb({
+                extensionId: DELEGATE_EXTENSION_ID,
+                sessionId: parent.sessionId,
+                branchId: parent.branchId,
+              })
+            }
+          }),
+        ),
+      )
+    return { deps, set }
+  })
+
+type DelegatePulse = { sessionId: SessionId; branchId: BranchId; extensionId: string }
+
+const DELEGATE_EXTENSION_ID = ref(DelegateRpc.Children).extensionId
+
+const runningChild = (over: {
+  sessionId: SessionId
+  branchId: BranchId
+  agentName: string
+  toolCallId: ToolCallId
+}): DelegateChild =>
+  DelegateChild.make({
+    requestId: RequestId.make(`req-${over.sessionId}`),
+    sessionId: over.sessionId,
+    branchId: over.branchId,
+    agentName: AgentName.make(over.agentName),
+    toolCallId: over.toolCallId,
+    status: "running",
   })
 
 const makeHarness = Effect.gen(function* () {
@@ -242,22 +307,17 @@ const makeHarness = Effect.gen(function* () {
   const child = yield* client.session.create({ cwd: "/tmp" })
   const lateChild = yield* client.session.create({ cwd: "/tmp" })
   const trackerScope = yield* Scope.fork(yield* Effect.scope)
-  const tracker = yield* makeChildSessionTracker(client.session.events).pipe(
-    Scope.provide(trackerScope),
-  )
+  const roster = yield* makeDelegateRoster(client.session.events, parent)
+  const tracker = yield* makeChildSessionTracker(roster.deps).pipe(Scope.provide(trackerScope))
   const parentToolCallId = ToolCallId.make("delegate-call")
   const childToolCallId = ToolCallId.make("child-tool-call")
-  const spawn = eventStore.publish(
-    AgentEvent.cases.AgentRunSpawned.make({
-      parentSessionId: parent.sessionId,
-      childSessionId: child.sessionId,
-      childBranchId: child.branchId,
-      branchId: parent.branchId,
-      agentName: AgentName.make("review"),
-      prompt: "audit this",
-      toolCallId: parentToolCallId,
-    }),
-  )
+  const runningRow = runningChild({
+    sessionId: child.sessionId,
+    branchId: child.branchId,
+    agentName: "review",
+    toolCallId: parentToolCallId,
+  })
+  const spawn = roster.set([runningRow])
   const toolStarted = eventStore.publish(
     AgentEvent.cases.ToolCallStarted.make({
       ...child,
@@ -266,31 +326,27 @@ const makeHarness = Effect.gen(function* () {
       input: { path: "note.txt" },
     }),
   )
-  const succeeded = eventStore.publish(
-    AgentEvent.cases.AgentRunSucceeded.make({
-      parentSessionId: parent.sessionId,
-      childSessionId: child.sessionId,
-      branchId: parent.branchId,
-      agentName: AgentName.make("review"),
-      toolCallId: parentToolCallId,
-      usage: { input: 10, output: 20, cost: 0.01 },
+  const succeeded = roster.set([
+    {
+      ...runningRow,
+      status: "completed",
+      usage: { input: 10, output: 20 },
       preview: "done",
-    }),
-  )
-  const lateSpawn = eventStore.publish(
-    AgentEvent.cases.AgentRunSpawned.make({
-      parentSessionId: parent.sessionId,
-      childSessionId: lateChild.sessionId,
-      childBranchId: lateChild.branchId,
-      branchId: parent.branchId,
-      agentName: AgentName.make("review"),
-      prompt: "too late",
+    },
+  ])
+  const lateSpawn = roster.set([
+    runningRow,
+    runningChild({
+      sessionId: lateChild.sessionId,
+      branchId: lateChild.branchId,
+      agentName: "review",
       toolCallId: ToolCallId.make("late-call"),
     }),
-  )
+  ])
   return {
     client,
     eventStore,
+    roster,
     tracker,
     trackerScope,
     parent,
@@ -298,6 +354,7 @@ const makeHarness = Effect.gen(function* () {
     lateChild,
     parentToolCallId,
     childToolCallId,
+    runningRow,
     spawn,
     toolStarted,
     succeeded,
@@ -305,8 +362,8 @@ const makeHarness = Effect.gen(function* () {
   }
 })
 
-describe("ChildSessionTracker over RPC", () => {
-  it.scopedLive("tracks live child tools and text without a server service in the client", () =>
+describe("ChildSessionTracker over the delegate roster", () => {
+  it.scopedLive("tracks live child tools and text from the delegate registry", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness
       const { eventStore, tracker, parent, child, childToolCallId, spawn, toolStarted, succeeded } =
@@ -350,91 +407,78 @@ describe("ChildSessionTracker over RPC", () => {
       ])
       expect(completed.streamText).toBe("live text")
       expect(completed.preview).toBe("done")
-      expect(completed.usage).toEqual({ input: 10, output: 20, cost: 0.01 })
+      expect(completed.usage).toEqual({ input: 10, output: 20 })
       yield* expectTrackingEnded(harness)
     }).pipe(Effect.timeout("4 seconds")),
   )
 
   const outcomes: ReadonlyArray<ChildSessionEntry["status"]> = ["completed", "error"]
   for (const outcome of outcomes) {
-    it.scopedLive(
-      `hydrates ${outcome} children after parent completion has already been saved`,
-      () =>
-        Effect.gen(function* () {
-          const harness = yield* makeHarness
-          const {
-            client,
-            eventStore,
-            tracker,
-            parent,
-            child,
-            childToolCallId,
-            parentToolCallId,
-            spawn,
-            toolStarted,
-            succeeded,
-          } = harness
-          yield* spawn
-          yield* toolStarted
-          yield* eventStore.publish(
-            AgentEvent.cases.StreamChunk.make({ ...child, chunk: "retained history" }),
-          )
-          const otherBranch = yield* client.branch.create({
+    it.scopedLive(`hydrates ${outcome} children after their turn has already been saved`, () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness
+        const { client, eventStore, roster, tracker, parent, child, childToolCallId, runningRow } =
+          harness
+        yield* eventStore.publish(
+          AgentEvent.cases.ToolCallStarted.make({
+            ...child,
+            toolCallId: childToolCallId,
+            toolName: "read",
+            input: { path: "note.txt" },
+          }),
+        )
+        yield* eventStore.publish(
+          AgentEvent.cases.StreamChunk.make({ ...child, chunk: "retained history" }),
+        )
+        const otherBranch = yield* client.branch.create({
+          sessionId: child.sessionId,
+          name: "other",
+        })
+        yield* eventStore.publish(
+          AgentEvent.cases.ToolCallStarted.make({
             sessionId: child.sessionId,
-            name: "other",
-          })
+            branchId: otherBranch.branchId,
+            toolCallId: ToolCallId.make("unrelated-call"),
+            toolName: "write",
+          }),
+        )
+        if (outcome === "completed") {
           yield* eventStore.publish(
-            AgentEvent.cases.ToolCallStarted.make({
-              sessionId: child.sessionId,
-              branchId: otherBranch.branchId,
-              toolCallId: ToolCallId.make("unrelated-call"),
-              toolName: "write",
-            }),
-          )
-          if (outcome === "completed") {
-            yield* eventStore.publish(
-              AgentEvent.cases.ToolCallSucceeded.make({
-                ...child,
-                toolCallId: childToolCallId,
-                toolName: "read",
-              }),
-            )
-            yield* succeeded
-          } else {
-            yield* eventStore.publish(
-              AgentEvent.cases.ToolCallFailed.make({
-                ...child,
-                toolCallId: childToolCallId,
-                toolName: "read",
-              }),
-            )
-            yield* eventStore.publish(
-              AgentEvent.cases.AgentRunFailed.make({
-                parentSessionId: parent.sessionId,
-                childSessionId: child.sessionId,
-                branchId: parent.branchId,
-                agentName: AgentName.make("review"),
-                toolCallId: parentToolCallId,
-              }),
-            )
-          }
-          yield* tracker.track(parent)
-          const restored = yield* waitForEntry(
-            tracker,
-            child.sessionId,
-            (entry) => entry.status === outcome,
-          )
-          expect(restored.toolCalls).toEqual([
-            {
+            AgentEvent.cases.ToolCallSucceeded.make({
+              ...child,
               toolCallId: childToolCallId,
               toolName: "read",
-              status: outcome,
-              input: { path: "note.txt" },
-            },
-          ])
-          expect(restored.streamText).toBe("retained history")
-          yield* expectTrackingEnded(harness)
-        }).pipe(Effect.timeout("4 seconds")),
+            }),
+          )
+        } else {
+          yield* eventStore.publish(
+            AgentEvent.cases.ToolCallFailed.make({
+              ...child,
+              toolCallId: childToolCallId,
+              toolName: "read",
+            }),
+          )
+        }
+        // The registry already reads this child as terminal before tracking
+        // starts, exactly as a crashed or already-finished run would.
+        yield* roster.set([{ ...runningRow, status: outcome }])
+        yield* tracker.track(parent)
+        const restored = yield* waitForEntry(
+          tracker,
+          child.sessionId,
+          (entry) => entry.status === outcome,
+        )
+        expect(restored.toolCalls).toEqual([
+          {
+            toolCallId: childToolCallId,
+            toolName: "read",
+            status: outcome,
+            input: { path: "note.txt" },
+          },
+        ])
+        expect(restored.streamText).toBe("retained history")
+        yield* expectTrackingEnded(harness)
+      }).pipe(Effect.timeout("4 seconds")),
     )
   }
 })
@@ -480,24 +524,23 @@ const sessionNamed = (name: string): Session => ({
   reasoningLevel: Option.getOrUndefined(Option.none()),
 })
 
-const spawnEnvelope = EventEnvelope.make({
-  id: EventId.make(1),
-  event: AgentEvent.cases.AgentRunSpawned.make({
-    parentSessionId,
-    childSessionId,
-    agentName: AgentName.make("cowork"),
-    prompt: "do the thing",
-    toolCallId,
-  }),
-  createdAt: 0,
+const childRow = DelegateChild.make({
+  requestId: RequestId.make("req-child"),
+  sessionId: childSessionId,
+  branchId: BranchId.make("branch-child"),
+  agentName: AgentName.make("cowork"),
+  toolCallId,
+  status: "running",
 })
+
+const delegateChildrenRef = ref(DelegateRpc.Children)
 
 describe("useChildSessions", () => {
   it.live("keeps its projected child rows when the session is renamed", () =>
     Effect.gen(function* () {
       let renameTo: (name: string) => void = () => {}
       let getChildren: (id: string) => ReadonlyArray<unknown> = () => []
-      let parentSubscriptions = 0
+      let rosterFetches = 0
 
       const dispose = createRoot((disposeRoot) => {
         // The record the client holds: a rename rebuilds it, ids unchanged.
@@ -521,15 +564,18 @@ describe("useChildSessions", () => {
         )
         const client = {
           sessionIdentity,
+          // No pulse fires in this test: the roster is read once on mount and
+          // must survive a rename without a restart re-reading it.
+          onExtensionStateChanged: () => () => {},
           runtime: createMockRuntime(),
           client: createMockClient({
-            session: {
-              events: (input: { readonly sessionId: SessionId }) => {
-                // The child stream stays open; the parent stream replays the
-                // one spawn so the tracker has a row to lose.
-                if (input.sessionId !== parentSessionId) return Stream.never
-                parentSubscriptions += 1
-                return Stream.concat(Stream.make(spawnEnvelope), Stream.never)
+            extension: {
+              request: (input: { readonly capabilityId: string }) => {
+                // The delegate roster read; every other request is empty.
+                if (input.capabilityId !== delegateChildrenRef.capabilityId)
+                  return Effect.succeed(Option.getOrUndefined(Option.none()))
+                rosterFetches += 1
+                return Effect.succeed([childRow])
               },
             },
           }),
@@ -543,16 +589,16 @@ describe("useChildSessions", () => {
         Effect.timeout("2 seconds"),
         Effect.onError(() => Effect.sync(dispose)),
       )
-      const subscriptionsBeforeRename = parentSubscriptions
+      const fetchesBeforeRename = rosterFetches
 
       // The tracker holds the only copy of these rows. Restarting it on a
-      // rename would drop them with no refetch behind it.
+      // rename would drop them, then re-read the roster to rebuild them.
       renameTo("A better name")
       // gent/no-sleep: allow a real-clock gap so a restart, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
 
       expect(getChildren(toolCallId)).toHaveLength(1)
-      expect(parentSubscriptions).toBe(subscriptionsBeforeRename)
+      expect(rosterFetches).toBe(fetchesBeforeRename)
       dispose()
     }),
   )

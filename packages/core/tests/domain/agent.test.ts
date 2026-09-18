@@ -3,7 +3,6 @@ import { Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
-  AgentRunResult,
   AgentRunToolCallSchema,
   DEFAULT_AGENT_NAME,
   type DriverRef,
@@ -17,7 +16,7 @@ import {
   ProviderId,
   resolveAgentDriver,
 } from "../../src/domain/agent"
-import { SessionId, ToolCallId } from "../../src/domain/ids"
+import { ToolCallId } from "../../src/domain/ids"
 import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction"
 
 // ── agent.test ──────────────────────────────────────────────────────────────
@@ -31,28 +30,6 @@ describe("AgentName brand", () => {
     expect(Schema.is(AgentName)("cowork")).toBe(true) // brand-only filter accepts strings at runtime
     const decoded = Effect.runSync(Schema.decodeEffect(AgentName)("research"))
     expect(decoded).toBe(AgentName.make("research"))
-  })
-})
-
-describe("AgentRunResult", () => {
-  test("Success uses the stable wire tag 'Success'", () => {
-    const result = AgentRunResult.cases.Success.make({
-      text: "ok",
-      sessionId: SessionId.make("s1"),
-      agentName: AgentName.make("cowork"),
-    })
-    expect(result._tag).toBe("Success")
-  })
-
-  test("Failure uses the stable wire tag 'Error'", () => {
-    const result = AgentRunResult.cases.Error.make({ error: "boom" })
-    expect(result._tag).toBe("Error")
-  })
-
-  test("decode rejects unknown variant tags", () => {
-    expect(() =>
-      Effect.runSync(Schema.decodeUnknownEffect(AgentRunResult)({ _tag: "pending" })),
-    ).toThrow()
   })
 })
 

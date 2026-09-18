@@ -18,6 +18,7 @@ import {
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   type CallRecord,
+  createRpcHarness,
   RecordingEventStore,
   runToolWithCtx,
   SequenceRecorder,
@@ -35,13 +36,11 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionHost,
-  ExtensionServiceError,
   type GentExtension,
   getToolId,
   hook,
   request,
   type RequestCapability,
-  requireCurrentAgent,
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -78,8 +77,16 @@ import {
   BranchStorage,
 } from "../../src/storage/storage"
 import { CurrentWorkspaceId, WorkspaceId, workspaceIdForCwd } from "../../src/server/workspace-rpc"
-import { BranchId, ExtensionId, ProcessGenerationId, SessionId } from "../../src/domain/ids"
-import { dateFromMillis, Session, Branch } from "../../src/domain/message"
+import {
+  ActorCommandId,
+  BranchId,
+  ExtensionId,
+  MessageId,
+  ProcessGenerationId,
+  RequestId,
+  SessionId,
+} from "../../src/domain/ids"
+import { dateFromMillis, Session, Branch, messagePartsDisplayText } from "../../src/domain/message"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import type {
   ExternalDriverContribution,
@@ -116,6 +123,7 @@ import {
   type PromptSection,
 } from "../../src/domain/capability"
 import { builtinAgent, getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import { ref } from "../../src/extensions/api.js"
 import {
   type AnyResourceContribution,
@@ -125,7 +133,6 @@ import {
   type ExtensionHostContext,
   type ExtensionLoadError,
   LoadedArtifactIdentity,
-  provideExtensionServices,
   registerContributions,
   type SystemPromptInput,
   type TurnAfterInput,
@@ -133,10 +140,10 @@ import {
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
 import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
-import { AgentEvent, EventPublisherLive, EventStore } from "../../src/domain/event"
+import { AgentEvent, EventPublisher, EventPublisherLive, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import { SessionRuntime } from "../../src/runtime/session"
+import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
 // ── ambient-host-context.test ───────────────────────────────────────────────
 
@@ -261,6 +268,50 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
     ),
+  )
+
+  it.scopedLive(
+    "an event replay lands in the workspace the run was built under, not the puller's",
+    () =>
+      Effect.gen(function* () {
+        const runWorkspace = workspaceIdForCwd("/tmp/run-workspace")
+        const otherWorkspace = workspaceIdForCwd("/tmp/other-workspace")
+        // The branch and its one event exist only in the run's workspace.
+        yield* ensureStorageParents({ sessionId, branchId }).pipe(
+          Effect.provideService(CurrentWorkspaceId, runWorkspace),
+        )
+        const publisher = yield* EventPublisher
+        yield* publisher
+          .publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
+          .pipe(Effect.provideService(CurrentWorkspaceId, runWorkspace))
+
+        const ctx = yield* ambientContext.pipe(
+          Effect.provideService(CurrentWorkspaceId, runWorkspace),
+        )
+
+        // The subscription reads at pull time; the puller sits elsewhere.
+        const replayed = yield* ctx.Session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil((event) => event._tag === "StreamSynchronized"),
+          Stream.runCollect,
+          Effect.provideService(CurrentWorkspaceId, otherWorkspace),
+        )
+        expect(replayed.map((event) => event._tag)).toStrictEqual([
+          "SessionStarted",
+          "StreamSynchronized",
+        ])
+      }).pipe(
+        // The storage-backed store validates the session and loads the rows
+        // under the workspace in scope at pull time; the memory store reads none.
+        Effect.provide(
+          Layer.provideMerge(
+            EventPublisherLive,
+            Layer.provideMerge(
+              EventStoreLive,
+              SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+            ),
+          ),
+        ),
+      ),
   )
 })
 
@@ -2081,6 +2132,9 @@ describe("runtime slots", () => {
             agentName: AgentName.make("cowork"),
             interrupted: false,
             streamFailed: false,
+            unanswered: false,
+
+            messageId: MessageId.make("turn-message"),
             usage: { inputTokens: 0, outputTokens: 0 },
           } satisfies TurnAfterInput)
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
@@ -2114,6 +2168,9 @@ describe("runtime slots", () => {
           agentName: AgentName.make("cowork"),
           interrupted: false,
           streamFailed: false,
+          unanswered: false,
+
+          messageId: MessageId.make("turn-message"),
           usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
@@ -2150,6 +2207,9 @@ describe("runtime slots", () => {
           agentName: AgentName.make("cowork"),
           interrupted: false,
           streamFailed: false,
+          unanswered: false,
+
+          messageId: MessageId.make("turn-message"),
           usage: { inputTokens: 0, outputTokens: 0 },
         } satisfies TurnAfterInput)
         .pipe(
@@ -2168,11 +2228,10 @@ describe("runtime slots", () => {
  * Host facet survivor regression suite.
  *
  * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.Session.listBranches` and the `requireCurrentAgent` helper remain as the
- * two non-trivial host-wired behaviors with no other direct test coverage.
- * The RPC suites exercise the durable mutation surface from the public
- * RPC angle; these tests pin the host-facet shape from the extension
- * angle.
+ * `ctx.Session.listBranches` remains as the one non-trivial host-wired
+ * behavior with no other direct test coverage. The RPC suites exercise the
+ * durable mutation surface from the public RPC angle; this test pins the
+ * host-facet shape from the extension angle.
  */
 
 const SESSION_ID = SessionId.make("test-session")
@@ -2181,34 +2240,6 @@ const FIXTURE_DATE = dateFromMillis(0)
 const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
 
 describe("host facet survivors after C9.5 prune", () => {
-  it.live(
-    "requireCurrentAgent fails with typed ExtensionServiceError when the agent is missing",
-    () =>
-      Effect.gen(function* () {
-        const base = testToolContext()
-        const exit = yield* Effect.exit(
-          provideExtensionServices(
-            {
-              ...base,
-              agentName: AgentName.make("missing-agent"),
-              Agent: { ...base.Agent, listAgents: Effect.succeed([]) },
-            },
-            requireCurrentAgent,
-          ),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag !== "Failure") return
-        const error = Cause.findErrorOption(exit.cause)
-        expect(Option.isSome(error)).toBe(true)
-        if (!Option.isSome(error)) return
-        expect(Schema.is(ExtensionServiceError)(error.value)).toBe(true)
-        if (!Schema.is(ExtensionServiceError)(error.value)) return
-        expect(error.value.service).toBe("ExtensionAgent")
-        expect(error.value.operation).toBe("require")
-        expect(error.value.message).toBe('Agent "missing-agent" not found in registry')
-      }),
-  )
-
   it.live("ctx.Session.listBranches returns branches for the current session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
@@ -3577,6 +3608,9 @@ const stubEvent: TurnAfterInput = {
   agentName: AgentName.make("cowork"),
   interrupted: false,
   streamFailed: false,
+  unanswered: false,
+
+  messageId: MessageId.make("turn-message"),
   usage: { inputTokens: 0, outputTokens: 0 },
 }
 
@@ -4066,5 +4100,220 @@ describe("ExternalDriver registry", () => {
       }).pipe(Effect.provide(registryLayer))
       expect(result).toBeUndefined()
     }),
+  )
+})
+
+// ── addressed session verbs ─────────────────────────────────────────────────
+//
+// Every extension gets the same facade, so a child runner is buildable
+// outside core. Each verb is exercised through the RPC path with real
+// per-request scopes: create a child, prompt it, read its receipt, queue a
+// follow-up on it, steer it, delete it.
+
+describe("addressed session verbs via RPC", () => {
+  const extensionId = ExtensionId.make("@gent/test-addressed")
+  const Target = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
+
+  const Verbs = defineRequests(extensionId, {
+    Spawn: request({
+      id: "spawn",
+      input: Schema.Struct({ requestId: RequestId, prompt: Schema.String }),
+      output: Schema.Struct({
+        ...Target.fields,
+        completed: Schema.Boolean,
+        answer: Schema.String,
+        historyMessages: Schema.Finite,
+      }),
+      execute: Effect.fn("Spawn.execute")(function* (input) {
+        const ctx = yield* ExtensionContext
+        const child = yield* ctx.Session.create({
+          name: "child",
+          parentSessionId: ctx.sessionId,
+          parentBranchId: ctx.branchId,
+          historyBranchId: ctx.branchId,
+          requestId: input.requestId,
+        })
+        const detailBefore = yield* ctx.Session.getDetail(child.sessionId)
+        const historyMessages =
+          detailBefore.branches.find((b) => b.branch.id === child.branchId)?.messages.length ?? 0
+        // A commandId waits for the child's turn to end.
+        yield* ctx.Session.send({
+          ...child,
+          content: input.prompt,
+          commandId: ActorCommandId.make(`spawn:${input.requestId}`),
+          interactive: false,
+        })
+        // The durable history ends at the marker; a bounded read takes until it.
+        const history = yield* ctx.Session.events(child).pipe(
+          Stream.takeUntil((event) => event._tag === "StreamSynchronized"),
+          Stream.runCollect,
+        )
+        const completed = history.some(
+          (event) =>
+            event._tag === "TurnCompleted" && event.messageId === `spawn:${input.requestId}`,
+        )
+        const detail = yield* ctx.Session.getDetail(child.sessionId)
+        const answer = messagePartsDisplayText(
+          detail.branches
+            .flatMap((b) => b.messages)
+            .filter((m) => m.role === "assistant")
+            .at(-1)?.parts ?? [],
+        )
+        return { ...child, completed, answer, historyMessages }
+      }),
+    }),
+    QueueOn: request({
+      id: "queue-on",
+      input: Target,
+      output: Schema.Struct({ queued: Schema.Boolean }),
+      execute: Effect.fn("QueueOn.execute")(function* (target) {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Session.queueFollowUp({
+          ...target,
+          sourceId: "addressed-test",
+          content: "follow-up for the child",
+        })
+        return { queued: true }
+      }),
+    }),
+    SendToSelf: request({
+      id: "send-to-self",
+      input: Schema.Struct({}),
+      output: Schema.Struct({ refused: Schema.Boolean }),
+      execute: Effect.fn("SendToSelf.execute")(function* () {
+        const ctx = yield* ExtensionContext
+        const result = yield* ctx.Session.send({
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          content: "loop on myself",
+        }).pipe(Effect.exit)
+        return { refused: Exit.isFailure(result) }
+      }),
+    }),
+    Steer: request({
+      id: "steer",
+      input: Target,
+      output: Schema.Struct({ steered: Schema.Boolean }),
+      execute: Effect.fn("Steer.execute")(function* (target) {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Session.steer({
+          _tag: "Interrupt",
+          ...target,
+          requestId: RequestId.make("addressed-interrupt"),
+        })
+        return { steered: true }
+      }),
+    }),
+    Delete: request({
+      id: "delete",
+      input: Schema.Struct({ sessionId: SessionId }),
+      output: Schema.Struct({ gone: Schema.Boolean }),
+      execute: Effect.fn("Delete.execute")(function* (input) {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Session.delete(input.sessionId)
+        const after = yield* ctx.Session.getSession(input.sessionId)
+        return { gone: Predicate.isUndefined(after) }
+      }),
+    }),
+  })
+
+  const extension = defineExtension({
+    id: extensionId,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("request", ...Object.values(Verbs))
+    }),
+  })
+
+  type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
+  const call = <I, A>(
+    harness: Harness,
+    capability: {
+      readonly id: string
+      readonly input: Schema.Codec<I, unknown>
+      readonly output: Schema.Codec<A, unknown>
+    },
+    input: I,
+  ) =>
+    harness.client.extension
+      .request({
+        sessionId: harness.sessionId,
+        branchId: harness.branchId,
+        extensionId,
+        capabilityId: capability.id,
+        input,
+      })
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(capability.output)))
+
+  it.scopedLive(
+    "a request creates, prompts, reads, queues on, steers, and deletes a child",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("parent answer"),
+          textStep("child answer"),
+          textStep("follow-up answer"),
+        ])
+        const harness = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [...e2ePreset.extensionInputs, extension],
+        })
+        // One parent turn, so the child has history to inherit.
+        yield* harness.client.message.send({
+          sessionId: harness.sessionId,
+          branchId: harness.branchId,
+          content: "hello parent",
+        })
+
+        const spawned = yield* call(harness, Verbs.Spawn, {
+          requestId: "req-1",
+          prompt: "do the thing",
+        })
+        expect(spawned.sessionId).not.toBe(harness.sessionId)
+        // The parent's two visible rows were copied in before the child's prompt.
+        expect(spawned.historyMessages).toBe(2)
+        expect(spawned.completed).toBe(true)
+        expect(spawned.answer).toBe("child answer")
+
+        // The same requestId returns the same child: create is durable-once.
+        const again = yield* call(harness, Verbs.Spawn, {
+          requestId: "req-1",
+          prompt: "do the thing",
+        })
+        expect(again.sessionId).toBe(spawned.sessionId)
+
+        const child = { sessionId: spawned.sessionId, branchId: spawned.branchId }
+        const queued = yield* call(harness, Verbs.QueueOn, child)
+        expect(queued.queued).toBe(true)
+        // The child is idle with history, so the follow-up runs as its next turn.
+        const childMessages = yield* waitFor(
+          harness.client.message.list(child),
+          (messages) => messages.some((m) => m.id.includes("addressed-test")),
+          5_000,
+          "follow-up landed on the child",
+        )
+        // Inherited "hello parent", the prompt, and the follow-up.
+        expect(childMessages.filter((m) => m.role === "user")).toHaveLength(3)
+
+        const self = yield* call(harness, Verbs.SendToSelf, {})
+        expect(self.refused).toBe(true)
+
+        const steered = yield* call(harness, Verbs.Steer, child)
+        expect(steered.steered).toBe(true)
+        // A target that does not exist is refused before any loop is opened for it.
+        const phantom = yield* call(harness, Verbs.Steer, {
+          sessionId: SessionId.make("no-such-session"),
+          branchId: BranchId.make("no-such-branch"),
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(phantom)).toBe(true)
+        if (Exit.isFailure(phantom)) {
+          expect(Cause.pretty(phantom.cause)).toContain("Session not found: no-such-session")
+        }
+
+        const deleted = yield* call(harness, Verbs.Delete, { sessionId: child.sessionId })
+        expect(deleted.gone).toBe(true)
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
   )
 })

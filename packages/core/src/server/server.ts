@@ -105,12 +105,11 @@ import {
   admitChildSessionDepth,
   EventStoreLive,
   makeRequestDeduper,
-  type SendUserMessagePayload,
   SessionRuntime,
   type SessionRuntimeError,
 } from "../runtime/session.js"
 import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
-import type { AgentRunnerService, DriverRef } from "../domain/agent.js"
+import type { DriverRef } from "../domain/agent.js"
 import {
   Auth,
   AuthApi,
@@ -129,7 +128,7 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { foldSessionMetrics } from "../domain/agent-loop.js"
+import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
 import {
@@ -149,8 +148,8 @@ import {
 import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { PromptSection } from "../domain/capability.js"
-import { ChildCompletionDelivery, InProcessRunner } from "../runtime/child-agents.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
+import { messagesInCurrentWindow } from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
 
 // ── connection-tracker ──────────────────────────────────────────────────────
@@ -607,6 +606,32 @@ const makeSessionMutationsService: Effect.Effect<
 
         yield* sessionStorage.createSession(session)
         yield* branchStorage.createBranch(branch)
+        // An inheriting session starts from what the source's model sees now:
+        // the current context window, with hidden rows out, as in that
+        // branch's own turn. The rows get fresh ids, so a copied window
+        // marker's anchor never resolves; that is harmless, because the copy
+        // already is the window.
+        if (!Predicate.isUndefined(input.historyBranchId)) {
+          const source = yield* branchStorage.getBranch(input.historyBranchId)
+          if (Predicate.isUndefined(source)) {
+            return yield* new NotFoundError({
+              message: `History branch not found: ${input.historyBranchId}`,
+            })
+          }
+          const history = messagesInCurrentWindow(
+            yield* messageStorage.listMessages(input.historyBranchId),
+          )
+          for (const message of history) {
+            if (message.metadata?.hidden === true) continue
+            yield* messageStorage.createMessage(
+              copyMessageToBranch(message, {
+                id: MessageId.make(yield* platform.randomId),
+                sessionId,
+                branchId,
+              }),
+            )
+          }
+        }
         const envelope = yield* eventPublisher.append(SessionStarted.make({ sessionId, branchId }))
         const result: StoredCreateSessionResult = {
           sessionId,
@@ -1476,7 +1501,6 @@ interface DependencyOverrides {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
   readonly toolRunnerLayer?: Layer.Layer<ToolRunner>
-  readonly agentRunnerLayer?: Layer.Layer<AgentRunnerService>
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
@@ -1759,12 +1783,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const allWithRuntime = Layer.mergeAll(allDeps, sessionMutationsLive, sessionRuntimeLive)
 
-  const agentRuntimeLive =
-    config.overrides?.agentRunnerLayer ??
-    Layer.provide(
-      InProcessRunner.pipe(Layer.provideMerge(ChildCompletionDelivery.Live)),
-      allWithRuntime,
-    )
   const runtimeWithHandlers = Layer.provideMerge(
     Layer.unwrap(
       Effect.gen(function* () {
@@ -1773,7 +1791,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         return AgentLoopLiveActor({ baseSections: baseSectionsSeed.value })
       }),
     ),
-    Layer.merge(allWithRuntime, agentRuntimeLive),
+    allWithRuntime,
   )
   return Layer.merge(
     runtimeWithHandlers,

@@ -331,10 +331,6 @@ const stubCtx = testToolContext({
   toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
-  Agent: {
-    run: dieStub("run"),
-    listAgents: Effect.die("listAgents not wired in test"),
-  },
   Session: {
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
@@ -342,6 +338,11 @@ const stubCtx = testToolContext({
     listBranches: Effect.die("listBranches not wired in test"),
     queueFollowUp: dieStub("queueFollowUp"),
     dequeueFollowUp: dieStub("dequeueFollowUp"),
+    create: dieStub("create"),
+    delete: dieStub("delete"),
+    send: dieStub("send"),
+    steer: dieStub("steer"),
+    events: () => Stream.die("events not wired in test"),
     listSessions: Effect.die("listSessions not wired in test"),
     listActiveLoops: Effect.die("listActiveLoops not wired in test"),
   },

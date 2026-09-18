@@ -1,9 +1,6 @@
 import { Deferred, Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import {
   AgentEvent,
-  AgentRunFailed,
-  AgentRunSpawned,
-  AgentRunSucceeded,
   BranchCreated,
   BranchSwitched,
   type EventEnvelope,
@@ -21,7 +18,6 @@ import {
   StreamChunk,
   TurnCompleted,
 } from "../../src/domain/event"
-import { AgentName } from "../../src/domain/agent"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
@@ -33,7 +29,6 @@ import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/
 
 const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")
-const child = SessionId.make("child-session")
 
 test("turn receipts preserve model failure and leave historical outcomes unspecified", () => {
   const decode = Schema.decodeUnknownSync(Schema.fromJsonString(TurnCompleted))
@@ -54,28 +49,6 @@ describe("event session routing", () => {
       chunk: "hi",
     })
     expect(getEventSessionId(event)).toBe(session)
-  })
-
-  test("AgentRun variants surface parentSessionId", () => {
-    const spawned = AgentRunSpawned.make({
-      parentSessionId: session,
-      childSessionId: child,
-      agentName: AgentName.make("cowork"),
-      prompt: "go",
-    })
-    const succeeded = AgentRunSucceeded.make({
-      parentSessionId: session,
-      childSessionId: child,
-      agentName: AgentName.make("cowork"),
-    })
-    const failed = AgentRunFailed.make({
-      parentSessionId: session,
-      childSessionId: child,
-      agentName: AgentName.make("cowork"),
-    })
-    expect(getEventSessionId(spawned)).toBe(session)
-    expect(getEventSessionId(succeeded)).toBe(session)
-    expect(getEventSessionId(failed)).toBe(session)
   })
 })
 

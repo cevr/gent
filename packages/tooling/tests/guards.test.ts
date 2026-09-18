@@ -563,6 +563,29 @@ describe("unadapted seam guard", () => {
   test("test files never count as adapters", () => {
     expect(adaptedSeamsIn("packages/extensions/tests/notes.test.ts", "ctx.Telepathy").size).toBe(0)
   })
+
+  test("the seam file never credits a facet, not even one its own helpers reach", () => {
+    // `extensionServicesFromHostContext` mirrors the host-context param into a
+    // new struct with `Facet: ctx.Facet` lines, and a helper in the same file
+    // may read a facet. Neither is a shipped extension filling the seam:
+    // crediting them would make every facet permanently adapted and defeat
+    // the dead-facet check. Telepathy is still reported.
+    const source = `${facetsSource}
+const extensionServicesFromHostContext = (ctx: ExtensionContextService) =>
+  Effect.succeed({
+    Files: ctx.Files,
+    Telepathy: ctx.Telepathy,
+  })
+export const requireTelepathy = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  return yield* ctx.Telepathy.read("x")
+})`
+    const adapted = adaptedSeamsIn(SEAMS_FILE, source)
+    expect(adapted.size).toBe(0)
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["Files"]))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
+  })
 })
 
 // ── e2e-fixture-imports.test ────────────────────────────────────────────────

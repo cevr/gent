@@ -17,13 +17,17 @@ const preset = PRESETS["opus-luna"]!
 
 describe("gamut preset config", () => {
   // The exact bytes matter: this is the file gent reads from the work dir.
-  test("pins the orchestrator as agent main", () => {
+  test("pins the orchestrator as agent main and the worker as agent delegate", () => {
     expect(presetConfigJson(preset)).toBe(
       `{
   "agents": {
     "main": {
       "modelId": "anthropic/claude-opus-5",
       "reasoningEffort": "low"
+    },
+    "delegate": {
+      "modelId": "openai/gpt-5.6-luna",
+      "reasoningEffort": "max"
     }
   }
 }
@@ -42,11 +46,12 @@ describe("gamut preset config", () => {
 })
 
 describe("gamut roster block", () => {
-  test("names the worker and reviewer overrides the orchestrator must pass", () => {
+  test("names the paired worker and the reviewer overrides the orchestrator must pass", () => {
     const block = rosterBlock(preset)
-    expect(block).toContain("`overrides.modelId` = `openai/gpt-5.6-luna`")
-    expect(block).toContain("`overrides.reasoningEffort` = `max`")
+    expect(block).toContain("paired in `.gent/config.json` as `openai/gpt-5.6-luna` at `max`")
+    expect(block).not.toContain("`overrides.modelId` = `openai/gpt-5.6-luna`")
     expect(block).toContain("`overrides.modelId` = `anthropic/claude-opus-5`")
+    expect(block).toContain("`overrides.reasoningEffort` = `high`")
   })
 
   test("a rewrite replaces only the block and keeps the prose around it", () => {

@@ -708,6 +708,12 @@ const ADAPTER_PATTERNS: ReadonlyArray<RegExp> = [
   /\bscope:\s*"([a-z][A-Za-z0-9]*)"/g,
 ]
 
+/**
+ * Only a shipped extension fills a facet. The seam-declaration file copies
+ * every facet in `extensionServicesFromHostContext` (`Facet: ctx.Facet`), and
+ * crediting that plumbing would make every facet permanently adapted, which
+ * is the dead-facet check this guard exists for.
+ */
 export const adaptedSeamsIn = (file: string, text: string): ReadonlySet<string> => {
   if (!isAdapterSource(file)) return new Set()
   const names = new Set<string>()

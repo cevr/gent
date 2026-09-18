@@ -87,7 +87,7 @@ export function headTailChars(text: string, maxChars: number = 64_000): HeadTail
 /**
  * Keep the head of `text` up to `maxChars`. A longer text ends in `marker`.
  */
-export function clipChars(text: string, maxChars: number, marker: string = "…"): string {
+function clipChars(text: string, maxChars: number, marker: string = "…"): string {
   if (text.length <= maxChars) return text
   return text.slice(0, maxChars) + marker
 }
@@ -865,7 +865,7 @@ export const QueuedTurnItem = Schema.Struct({
   /**
    * `false` withholds the tools that ask the user, which a child turn has no
    * one to answer. Only `false` is read, so absent and `true` mean the same
-   * thing, and only `agent-runner.ts` writes it.
+   * thing, and only the `@gent/delegate` extension writes it.
    *
    * It stays optional under this name because a queue row on disk may predate
    * any change: a required field rejects a row whose key is absent, and a

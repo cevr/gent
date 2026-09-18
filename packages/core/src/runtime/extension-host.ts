@@ -14,6 +14,7 @@ import {
   Scope,
   type Scope as ScopeType,
   Semaphore,
+  Stream,
 } from "effect"
 import {
   type AnyExtensionHook,
@@ -32,8 +33,7 @@ import {
   type ExtensionProcessService,
   type ExtensionScope,
   extensionServiceError,
-  type ExtensionServiceError,
-  ExtensionServiceError as ExtensionServiceErrorClass,
+  ExtensionServiceError,
   type ExtensionSetupServices,
   type ExtensionStateFacet,
   type ExtensionStatusInfo,
@@ -81,7 +81,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "../domain/capability.js"
-import { type AgentDefinition, AgentRunnerService, Model } from "../domain/agent.js"
+import { type AgentDefinition, Model } from "../domain/agent.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
 import {
   DriverError,
@@ -104,6 +104,7 @@ import {
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   EventPublisher,
+  EventStore,
   EventStoreError,
   ExtensionStatePublisher,
   InteractionPresented,
@@ -132,7 +133,9 @@ import {
   AgentLoop as AgentLoopActor,
   entityIdOf,
   listWorkspaceLoops,
+  type SendUserMessagePayload,
   type SessionRuntimeState,
+  type SteerCommandType,
 } from "../domain/agent-loop.js"
 import { StorageError } from "../domain/errors.js"
 import type { AgentLoopTurnProfile } from "./turn.js"
@@ -2161,6 +2164,9 @@ interface ExtensionSessionControlService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
   }) => Effect.Effect<boolean, Error>
+  /** One user message on another branch's loop. */
+  readonly send: (input: SendUserMessagePayload) => Effect.Effect<void, Error>
+  readonly steer: (command: SteerCommandType) => Effect.Effect<void, Error>
 }
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
@@ -2183,10 +2189,7 @@ interface MakeExtensionHostContextRunInfo {
 
 interface ExtensionHostContextProviderService {
   readonly defaultExtensionRegistry: ExtensionRegistryService
-  readonly forRun: (
-    runInfo: MakeExtensionHostContextRunInfo,
-    extensionRegistry?: ExtensionRegistryService,
-  ) => ExtensionHostContext
+  readonly forRun: (runInfo: MakeExtensionHostContextRunInfo) => ExtensionHostContext
 }
 
 export class ExtensionHostContextProvider extends Context.Service<
@@ -2241,8 +2244,8 @@ export const makeExtensionHostContextProvider = (
     const branches = yield* facet(BranchStorage, "BranchStorage")
     const messages = yield* facet(MessageStorage, "MessageStorage")
     const relationships = yield* facet(RelationshipStorage, "RelationshipStorage")
-    const agents = yield* facet(AgentRunnerService, "AgentRunnerService")
     const mutations = yield* facet(SessionMutations, "SessionMutations")
+    const eventStore = yield* facet(EventStore, "EventStore")
     // Enumerating a workspace's loops needs only the actor state registry,
     // which exists only where an actor layer is in scope.
     const registry = yield* facet(ActorStateRegistry, "ActorStateRegistry")
@@ -2255,6 +2258,22 @@ export const makeExtensionHostContextProvider = (
     const workspaceId = yield* CurrentWorkspaceId
     const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
       effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+
+    // Every addressed verb validates its durable target first, as the RPC
+    // path does: an actor opened for a branch that does not exist would fail
+    // late on a foreign key and linger.
+    const requireTarget = (
+      operation: string,
+      target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    ) =>
+      sessions((sessionStorage) =>
+        branches((branchStorage) =>
+          resolveExistingSessionBranch(target).pipe(
+            Effect.provideService(SessionStorage, sessionStorage),
+            Effect.provideService(BranchStorage, branchStorage),
+          ),
+        ),
+      ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
 
     const Process: ExtensionProcessService = {
       randomId: host.randomId,
@@ -2345,10 +2364,7 @@ export const makeExtensionHostContextProvider = (
 
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
 
-    const forRun = (
-      runInfo: MakeExtensionHostContextRunInfo,
-      extensionRegistry: ExtensionRegistryService = input.extensionRegistry,
-    ): ExtensionHostContext => ({
+    const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
       cwd: runInfo.sessionCwd ?? platform.cwd,
@@ -2366,7 +2382,7 @@ export const makeExtensionHostContextProvider = (
               onNone: () => ({
                 changed: () =>
                   Effect.fail(
-                    new ExtensionServiceErrorClass({
+                    new ExtensionServiceError({
                       service: "ExtensionState",
                       operation: "changed",
                       message: "Extension id unavailable for state change notification",
@@ -2390,62 +2406,6 @@ export const makeExtensionHostContextProvider = (
             }),
         })) satisfies ExtensionStateFacet,
 
-      Agent: {
-        listAgents: Effect.succeed([...extensionRegistry.getResolved().agents.values()]),
-        start: (params) =>
-          agents((runner) =>
-            runner.start({
-              ...params,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
-            }),
-          ),
-        inspect: (params) =>
-          agents((runner) =>
-            runner.inspect({
-              requestId: params.requestId,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        list: () =>
-          agents((runner) =>
-            runner.list({
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        cancel: (params) =>
-          agents((runner) =>
-            runner.cancel({
-              requestId: params.requestId,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        send: (params) =>
-          agents((runner) =>
-            runner.send({
-              ...params,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-            }),
-          ),
-        run: (params) =>
-          agents((runner) =>
-            runner.run({
-              agent: params.agent,
-              prompt: params.prompt,
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: runInfo.branchId,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
-              runSpec: params.runSpec,
-              observe: params.observe,
-            }),
-          ).pipe(Effect.mapError(extensionServiceError("ExtensionAgent", "run"))),
-      },
-
       Session: {
         getSession: (sessionId) =>
           sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
@@ -2461,25 +2421,92 @@ export const makeExtensionHostContextProvider = (
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
-        queueFollowUp: (params) =>
-          control((loop) =>
-            loop.queueFollowUp({
-              sourceId: params.sourceId,
-              sessionId: runInfo.sessionId,
-              branchId: params.branchId ?? runInfo.branchId,
-              content: params.content,
-              metadata: params.metadata,
-              wake: params.wake,
+        create: (params) =>
+          mutations((service) =>
+            service.createSession({
+              name: params.name,
+              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              historyBranchId: params.historyBranchId,
+              requestId: params.requestId,
             }),
-          ).pipe(Effect.mapError(sessionError("queueFollowUp")), inWorkspace),
-        dequeueFollowUp: (params) =>
-          control((loop) =>
-            loop.dequeueFollowUp({
-              sourceId: params.sourceId,
-              sessionId: runInfo.sessionId,
-              branchId: params.branchId ?? runInfo.branchId,
-            }),
-          ).pipe(Effect.mapError(sessionError("dequeueFollowUp")), inWorkspace),
+          ).pipe(
+            Effect.map(({ sessionId, branchId }) => ({ sessionId, branchId })),
+            Effect.mapError(sessionError("create")),
+            inWorkspace,
+          ),
+        delete: (sessionId) =>
+          mutations((service) => service.deleteSession(sessionId)).pipe(
+            Effect.mapError(sessionError("delete")),
+            inWorkspace,
+          ),
+        send: (params) =>
+          Effect.gen(function* () {
+            if (params.sessionId === runInfo.sessionId && params.branchId === runInfo.branchId) {
+              return yield* new ExtensionServiceError({
+                service: "ExtensionSession",
+                operation: "send",
+                message: "send targets another branch; queue a follow-up on this one",
+              })
+            }
+            yield* requireTarget("send", params)
+            yield* control((loop) => loop.send(params)).pipe(Effect.mapError(sessionError("send")))
+          }).pipe(inWorkspace),
+        steer: (command) =>
+          requireTarget("steer", command).pipe(
+            Effect.andThen(
+              control((loop) => loop.steer(command)).pipe(Effect.mapError(sessionError("steer"))),
+            ),
+            inWorkspace,
+          ),
+        // The subscription does its reads at pull time, so the workspace is
+        // pinned on the stream, not on the effect that builds it.
+        events: (target) =>
+          Stream.unwrap(
+            eventStore((store) =>
+              Effect.succeed(
+                store.subscribe({ ...target, synchronize: true }).pipe(
+                  Stream.map((envelope) => envelope.event),
+                  Stream.mapError(sessionError("events")),
+                ),
+              ),
+            ),
+          ).pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
+        queueFollowUp: (params) => {
+          const target = {
+            sessionId: params.sessionId ?? runInfo.sessionId,
+            branchId: params.branchId ?? runInfo.branchId,
+          }
+          return requireTarget("queueFollowUp", target).pipe(
+            Effect.andThen(
+              control((loop) =>
+                loop.queueFollowUp({
+                  ...target,
+                  sourceId: params.sourceId,
+                  content: params.content,
+                  metadata: params.metadata,
+                  wake: params.wake,
+                }),
+              ).pipe(Effect.mapError(sessionError("queueFollowUp"))),
+            ),
+            inWorkspace,
+          )
+        },
+        dequeueFollowUp: (params) => {
+          const target = {
+            sessionId: params.sessionId ?? runInfo.sessionId,
+            branchId: params.branchId ?? runInfo.branchId,
+          }
+          return requireTarget("dequeueFollowUp", target).pipe(
+            Effect.andThen(
+              control((loop) =>
+                loop.dequeueFollowUp({ ...target, sourceId: params.sourceId }),
+              ).pipe(Effect.mapError(sessionError("dequeueFollowUp"))),
+            ),
+            inWorkspace,
+          )
+        },
         listBranches: branches((storage) => storage.listBranches(runInfo.sessionId)).pipe(
           Effect.mapError(sessionError("listBranches")),
           inWorkspace,
@@ -2618,7 +2645,7 @@ export const resolveTurnProfile = (params: {
       turnExtensionRegistry: profile.value.registryService,
       turnDriverRegistry: profile.value.driverRegistryService,
       turnBaseSections: profile.value.baseSections,
-      turnHostCtx: hostProvider.forRun(runInfo, profile.value.registryService),
+      turnHostCtx: hostProvider.forRun(runInfo),
       turnCapabilityContext: profile.value.layerContext,
       turnGenerationId: profile.value.generationId,
     }

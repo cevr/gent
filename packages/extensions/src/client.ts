@@ -1,3 +1,4 @@
+export { DelegateChild, DelegateRpc } from "./delegate.js"
 export { SkillsRpc } from "./skills.js"
 export { GOAL_EXTENSION_ID, GoalRpc, GoalSnapshot, remainingTokens } from "./goal.js"
 export {

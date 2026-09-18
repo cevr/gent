@@ -8,18 +8,16 @@ import {
   Path,
   Predicate,
   Schema,
+  type Stream,
   TxRef,
   TxSemaphore,
 } from "effect"
 import {
   type AgentDefinition,
   type AgentName,
-  type AgentRunError,
-  type AgentRunResult,
-  type ChildAgentRegistryEntry,
-  DEFAULT_AGENT_NAME,
   type RunSpec,
   type SessionDepthLimitError,
+  type SteerCommand,
 } from "./agent.js"
 import {
   getToolId,
@@ -38,13 +36,15 @@ import type {
   RunProcessOptions,
 } from "../runtime/gent-platform.js"
 import {
+  type ActorCommandId,
   type BranchId,
   ExtensionId,
+  type MessageId,
   type RequestId,
   type SessionId,
   type ToolCallId,
 } from "./ids.js"
-import type { AgentEvent, EventStoreError, TurnCompleted } from "./event.js"
+import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
 import type { Branch, Message, MessageMetadata, Session } from "./message.js"
@@ -424,6 +424,8 @@ export interface SystemPromptInput {
 export interface TurnAfterInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  /** The user message that opened the turn; `TurnCompleted.messageId` carries the same id. */
+  readonly messageId: MessageId
   readonly durationMs: number
   readonly agentName: AgentName
   readonly interrupted: boolean
@@ -440,6 +442,8 @@ export interface TurnAfterInput {
    * output. This is true only once both are exhausted.
    */
   readonly streamFailed: boolean
+  /** The turn spent its continuations and never answered. */
+  readonly unanswered: boolean
   /** Provider-reported tokens summed over every model call of the turn. */
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
 }
@@ -785,16 +789,65 @@ export interface ExtensionSessionService {
   readonly renameCurrent: (
     name: string,
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
+  /**
+   * A new session, under a parent when one is named. The parent chain is
+   * depth-limited. `historyBranchId` copies that branch's visible messages in
+   * before the first turn. A `requestId` makes the call durable-once.
+   */
+  readonly create: (params: {
+    readonly name?: string
+    readonly cwd?: string
+    readonly parentSessionId?: SessionId
+    readonly parentBranchId?: BranchId
+    readonly historyBranchId?: BranchId
+    readonly requestId?: RequestId
+  }) => Effect.Effect<
+    { readonly sessionId: SessionId; readonly branchId: BranchId },
+    ExtensionServiceError
+  >
+  /** Delete a session and every descendant. Their loops are tombstoned, not awaited; deleting the caller's own session ends its turn. */
+  readonly delete: (sessionId: SessionId) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * One user message on another branch. `completion: "admission"` returns
+   * once that loop holds the turn; a `commandId` waits for the turn to end.
+   * The current branch takes `queueFollowUp`, never `send`: a turn that
+   * waits on its own loop never returns. Two branches that `send` each other
+   * with a `commandId` wait on each other; `completion: "admission"` is the
+   * safe shape for mutual traffic.
+   */
+  readonly send: (params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly content: string
+    readonly commandId?: ActorCommandId
+    readonly agentOverride?: AgentName
+    readonly interactive?: boolean
+    readonly runSpec?: RunSpec
+    readonly completion?: "admission"
+  }) => Effect.Effect<void, ExtensionServiceError>
+  /** Cancel, interrupt, or interject into any branch's loop. */
+  readonly steer: (command: SteerCommand) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * A branch's events: the durable history first, one `StreamSynchronized`
+   * marker, then live delivery. Take until the marker for a bounded read.
+   */
+  readonly events: (target: {
+    readonly sessionId: SessionId
+    readonly branchId?: BranchId
+  }) => Stream.Stream<AgentEvent, ExtensionServiceError>
+  /** Queue a follow-up; the current branch when no target is named. */
   readonly queueFollowUp: (params: {
     readonly sourceId: string
     readonly content: string
     readonly metadata?: MessageMetadata
+    readonly sessionId?: SessionId
     readonly branchId?: BranchId
     readonly wake?: boolean
   }) => Effect.Effect<void, ExtensionServiceError>
-  /** Removes a queued follow-up by source. False when absent or already running. */
+  /** Removes a queued follow-up by source; the current branch when no target is named. False when absent or already running. */
   readonly dequeueFollowUp: (params: {
     readonly sourceId: string
+    readonly sessionId?: SessionId
     readonly branchId?: BranchId
   }) => Effect.Effect<boolean, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
@@ -817,63 +870,6 @@ export interface ExtensionSessionService {
       readonly status: Option.Option<string>
     }>,
     ExtensionServiceError
-  >
-}
-
-interface ExtensionAgentStartParams {
-  readonly agent: AgentDefinition
-  readonly prompt: string
-  readonly requestId: RequestId
-  readonly cwd?: string
-  readonly runSpec?: RunSpec
-}
-
-interface ExtensionAgentRunParams {
-  readonly agent: AgentDefinition
-  readonly prompt: string
-  readonly cwd?: string
-  readonly runSpec?: RunSpec
-  /** Sees child events in order as they happen, private runs included. Best effort: the run result can return before trailing events are observed, so read the answer from the result. Ephemeral runs only. */
-  readonly observe?: (event: AgentEvent) => Effect.Effect<void>
-}
-
-interface ExtensionAgentService {
-  readonly listAgents: Effect.Effect<ReadonlyArray<AgentDefinition>, ExtensionServiceError>
-  /** Start from a host-owned tool call. The host supplies parent and tool identity. */
-  readonly start: (
-    params: ExtensionAgentStartParams,
-  ) => Effect.Effect<
-    { readonly sessionId: SessionId; readonly branchId: BranchId },
-    AgentRunError | ExtensionServiceError
-  >
-  readonly inspect: (params: { readonly requestId: RequestId }) => Effect.Effect<
-    {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly completion: Option.Option<TurnCompleted>
-    },
-    AgentRunError
-  >
-  readonly list: () => Effect.Effect<ReadonlyArray<ChildAgentRegistryEntry>, AgentRunError>
-  readonly cancel: (params: { readonly requestId: RequestId }) => Effect.Effect<void, AgentRunError>
-  /** Message a child that is still running. `sendId` makes a replayed call deliver once. */
-  readonly send: (params: {
-    readonly requestId: RequestId
-    readonly message: string
-    readonly sendId: RequestId
-  }) => Effect.Effect<void, AgentRunError>
-  readonly run: (
-    params: ExtensionAgentRunParams,
-  ) => Effect.Effect<AgentRunResult, AgentRunError | ExtensionServiceError>
-}
-
-/** The host's agent facet. `start` still needs the tool call the child is owned by. */
-export interface ExtensionHostAgentService extends Omit<ExtensionAgentService, "start"> {
-  readonly start: (
-    params: ExtensionAgentStartParams & { readonly toolCallId: ToolCallId },
-  ) => Effect.Effect<
-    { readonly sessionId: SessionId; readonly branchId: BranchId },
-    AgentRunError | ExtensionServiceError
   >
 }
 
@@ -964,7 +960,6 @@ export interface ExtensionHostContext {
   readonly cwd: string
   readonly home: string
   readonly host: ExtensionHostPlatform
-  readonly Agent: ExtensionHostAgentService
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
   readonly Process: ExtensionProcessService
@@ -984,7 +979,6 @@ export interface ExtensionContextService {
   readonly cwd: string
   readonly home: string
   readonly Session: ExtensionSessionService
-  readonly Agent: ExtensionAgentService
   readonly Interaction: ExtensionInteractionService
   readonly Process: ExtensionProcessService
   readonly Files: ExtensionFilesService
@@ -998,10 +992,10 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
 
 /**
  * The per-leaf half of the extension context: the run's facets, plus the two
- * facts only a leaf knows. `Agent.start` charges the child to the leaf's tool
- * call, and `State.changed` reports under the leaf's extension id. Every other
- * facet is forwarded, because the run already built it over the services that
- * own its inputs.
+ * facts only a leaf knows. `toolCallId` names the call a leaf runs under, and
+ * `State.changed` reports under the leaf's extension id. Every other facet is
+ * forwarded, because the run already built it over the services that own its
+ * inputs.
  */
 const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & {
@@ -1009,19 +1003,6 @@ const extensionServicesFromHostContext = (
     readonly turn?: ExtensionTurnContext
   },
 ): Context.Context<ExtensionContext> => {
-  const Agent: ExtensionAgentService = {
-    ...ctx.Agent,
-    start: Effect.fn("ExtensionAgent.start")(function* (params) {
-      if (Predicate.isUndefined(ctx.toolCallId)) {
-        return yield* new ExtensionServiceError({
-          service: "ExtensionAgent",
-          operation: "start",
-          message: "Child start requires a host-owned tool call",
-        })
-      }
-      return yield* ctx.Agent.start({ ...params, toolCallId: ctx.toolCallId })
-    }),
-  }
   const extensionIdOption = Option.fromUndefinedOr(ctx.extensionId)
   return Context.empty().pipe(
     Context.add(ExtensionContext, {
@@ -1034,7 +1015,6 @@ const extensionServicesFromHostContext = (
       cwd: ctx.cwd,
       home: ctx.home,
       Session: ctx.Session,
-      Agent,
       Interaction: ctx.Interaction,
       Process: ctx.Process,
       Files: ctx.Files,
@@ -1052,27 +1032,6 @@ export const provideExtensionServices = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ExtensionContext>> =>
   effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))
-
-/**
- * The agent running the current turn. Children spawned from a cell inherit
- * it, so delegation never needs a roster of named agents.
- */
-export const requireCurrentAgent: Effect.Effect<
-  AgentDefinition,
-  ExtensionServiceError,
-  ExtensionContext
-> = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  const name = Option.getOrElse(Option.fromUndefinedOr(ctx.agentName), () => DEFAULT_AGENT_NAME)
-  const agents = yield* ctx.Agent.listAgents
-  const agent = agents.find((a) => a.name === name)
-  if (!Predicate.isUndefined(agent)) return agent
-  return yield* new ExtensionServiceError({
-    service: "ExtensionAgent",
-    operation: "require",
-    message: `Agent "${name}" not found in registry`,
-  })
-})
 
 // ── extension-load-boundary ─────────────────────────────────────────────────
 

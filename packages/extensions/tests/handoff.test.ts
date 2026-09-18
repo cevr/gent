@@ -2,7 +2,8 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Schema, Stream } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { HandoffTool } from "../src/handoff.js"
-import { AgentRunResult, type ExtensionContextService, SessionId } from "@gent/core/extensions/api"
+import { SessionId } from "@gent/core-internal/domain/ids"
+import type { ExtensionContextService } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
   runToolWithCtx,
@@ -20,26 +21,8 @@ import { isToolResultFor } from "./helpers/tool-event.js"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const makeCtx = (overrides: {
-  agentRun?: (
-    params: Parameters<ExtensionContextService["Agent"]["run"]>[0],
-  ) => Effect.Effect<AgentRunResult>
-  approve?: ExtensionContextService["Interaction"]["approve"]
-}) =>
+const makeCtx = (overrides: { approve?: ExtensionContextService["Interaction"]["approve"] }) =>
   testToolContext({
-    Agent: {
-      run:
-        overrides.agentRun ??
-        ((params) =>
-          Effect.succeed(
-            AgentRunResult.cases.Success.make({
-              text: `response from ${params.agent.name}`,
-              sessionId: SessionId.make("child-session"),
-              agentName: params.agent.name,
-            }),
-          )),
-      listAgents: Effect.die("agent.listAgents not wired in test"),
-    },
     Interaction: {
       approve: overrides.approve ?? dieStub("interaction.approve"),
       present: dieStub("interaction.present"),

@@ -2,7 +2,6 @@ import {
   Cache,
   Cause,
   Context,
-  DateTime,
   Duration,
   Effect,
   Exit,
@@ -37,9 +36,7 @@ import {
 } from "../storage/storage.js"
 import { omitUndefined } from "../domain/guards.js"
 import {
-  AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
-  RunSpecSchema,
   SessionDepthLimitError,
   type SteerCommand as SteerCommandType,
 } from "../domain/agent.js"
@@ -49,16 +46,14 @@ import {
   BranchId,
   ExtensionId,
   type InteractionRequestId,
-  MessageId,
   RequestId,
   SessionId,
 } from "../domain/ids.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import { Actor } from "effect-encore"
 import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
-import { Message, MessageMetadata, type QueueSnapshot } from "../domain/message.js"
+import type { QueueSnapshot } from "../domain/message.js"
 import type { PromptSection } from "../domain/capability.js"
 import {
   AgentLoop as AgentLoopActor,
@@ -67,10 +62,17 @@ import {
 } from "./agent-loop.js"
 import {
   AgentLoopError,
+  type DequeueFollowUpPayload,
+  dequeueFollowUpOn,
   entityIdOf,
-  followUpMessageIdForSource,
   listWorkspaceLoops,
+  type QueueFollowUpPayload,
+  queueFollowUpOn,
+  type SendUserMessagePayload,
   type SessionRuntimeState,
+  steerLoop,
+  submitUserMessage,
+  type AgentLoopClientServices,
 } from "../domain/agent-loop.js"
 import {
   type ApprovalService,
@@ -286,50 +288,6 @@ const SessionRuntimeTarget = Schema.Struct({
 })
 type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
 
-/**
- * Client-generated request ID for end-to-end correlation + transport-retry
- * dedup. Bounded so a malicious/buggy client cannot bloat per-server
- * dedup caches keyed on it. Callers in this repo use `crypto.randomUUID()`.
- */
-const FollowUpSourceIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
-
-export const SendUserMessagePayload = Schema.Struct({
-  /**
-   * `"admission"` returns once the turn is durably enqueued, without waiting
-   * for it to run. Omitted, the call waits for the turn when the caller gave a
-   * `requestId`/`commandId` to correlate on, and is fire-and-forget otherwise.
-   */
-  completion: Schema.optional(Schema.Literals(["admission"])),
-  commandId: Schema.optional(ActorCommandId),
-  sessionId: SessionId,
-  branchId: BranchId,
-  content: Schema.String,
-  agentOverride: Schema.optional(AgentName),
-  interactive: Schema.optional(Schema.Boolean),
-  runSpec: Schema.optional(RunSpecSchema),
-  /** Client-generated correlation id for end-to-end observability. */
-  requestId: Schema.optional(RequestId),
-})
-export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
-
-const QueueFollowUpPayload = Schema.Struct({
-  sourceId: FollowUpSourceIdSchema,
-  sessionId: SessionId,
-  branchId: BranchId,
-  content: Schema.String,
-  metadata: Schema.optional(MessageMetadata),
-  /** Start a turn for the item even on a branch with no prior history. */
-  wake: Schema.optional(Schema.Boolean),
-})
-type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
-
-const DequeueFollowUpPayload = Schema.Struct({
-  sourceId: FollowUpSourceIdSchema,
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
-
 const ExtensionRequestPayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
@@ -420,9 +378,6 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   return new SessionRuntimeError({ message, cause })
 }
 
-const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
-const commandIdForRequestId = (requestId: string) => ActorCommandId.make(`message:${requestId}`)
-
 const wrapStreamSessionRuntimeError = (
   operation: string,
   error: Schema.Schema.Type<typeof Schema.Unknown>,
@@ -449,6 +404,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     })
   const agentLoopSessionGovernance = yield* AgentLoopSessionGovernance
   const platform = yield* GentPlatform
+  const loopClientServices = yield* Effect.context<AgentLoopClientServices>()
   const storageContext = yield* Effect.context<SessionStorage | BranchStorage>()
   // Every public session-scoped boundary (writes + reads) MUST validate the
   // durable `(sessionId, branchId)` target before proceeding. In-memory
@@ -513,36 +469,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     )
   })
 
-  const queueFollowUpThroughActor = Effect.fn("SessionRuntime.queueFollowUpThroughActor")(
-    function* (input: QueueFollowUpPayload) {
-      const workspaceId = yield* CurrentWorkspaceId
-      const message = Message.cases.regular.make({
-        id: followUpMessageIdForSource({ workspaceId, ...input }),
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-        role: "user",
-        parts: [Prompt.textPart({ text: input.content })],
-        createdAt: yield* DateTime.nowAsDate,
-        metadata: input.metadata,
-      })
-      const payload = {
-        workspaceId,
-        message,
-        wake: input.wake,
-      }
-      const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-      yield* ref.execute(AgentLoopActor.QueueFollowUp.make(payload)).pipe(
-        Effect.mapError(
-          (cause) =>
-            new SessionRuntimeError({
-              message: `Failed to queue follow-up ${message.id}`,
-              cause,
-            }),
-        ),
-      )
-    },
-  )
-
   const redeliverPendingActorMessages = (target: SessionRuntimeTarget) =>
     Effect.gen(function* () {
       const workspaceId = yield* CurrentWorkspaceId
@@ -574,51 +500,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     input: SendUserMessagePayload,
   ) {
     yield* requireSessionBranch(input)
-    let commandId: ActorCommandId
-    if (Predicate.isNotUndefined(input.commandId)) {
-      commandId = input.commandId
-    } else if (Predicate.isNotUndefined(input.requestId)) {
-      commandId = commandIdForRequestId(input.requestId)
-    } else {
-      commandId = ActorCommandId.make(yield* platform.randomId)
-    }
-    const shouldHoldCompletion =
-      !Predicate.isUndefined(input.requestId) || !Predicate.isUndefined(input.commandId)
-    const messageId = userMessageIdForCommand(commandId)
-    const message = Message.cases.regular.make({
-      id: messageId,
-      sessionId: input.sessionId,
-      branchId: input.branchId,
-      role: "user",
-      parts: [Prompt.textPart({ text: input.content })],
-      createdAt: yield* DateTime.nowAsDate,
-    })
-
-    const payload = {
-      workspaceId: yield* CurrentWorkspaceId,
-      message,
-      // Actor operation payloads require optional fields explicitly.
-      // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
-      agentOverride: input.agentOverride,
-      // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
-      interactive: input.interactive,
-      // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
-      runSpec: input.runSpec,
-    }
-    const ref = yield* agentLoopActorRefFor(input.sessionId, input.branchId)
-    if (input.completion === "admission") {
-      yield* ref.execute(AgentLoopActor.SubmitDurable.make(payload))
-    } else if (shouldHoldCompletion) {
-      yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
-    } else {
-      yield* ref.execute(AgentLoopActor.Submit.make(payload))
-    }
-    yield* Effect.logInfo("session-runtime.message.submitted").pipe(
-      Effect.annotateLogs({
-        sessionId: input.sessionId,
-        branchId: input.branchId,
-      }),
-    )
+    yield* submitUserMessage(input).pipe(Effect.provideContext(loopClientServices))
   })
 
   return {
@@ -627,34 +509,9 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
         Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
       ),
 
-    // `ref.send` is fire-forget at the handler level — INTENTIONAL.
-    // `Steer.Interject` semantics: caller needs to know the steering item
-    // is registered (handler enqueue complete), not that the interjected
-    // turn ran. Switching to `ref.execute` (or `send + waitFor`) deadlocks
-    // because `applySteer` itself yields `ensureStarted` while the gated
-    // in-flight turn holds the actor; the persisted reply can't drain.
-    // Empirically validated twice: W35-C7.3 (commit `a8b084bc`),
-    // re-derived W37-S4-C10 (2026-05-11) — both produced 4s timeout on
-    // `tests/runtime/session-runtime.test.ts` ("steer interject interrupts
-    // the active turn ahead of queued follow-ups"). Note: `ref.send` does
-    // NOT silently drop runtime delivery errors — the discardCall Effect
-    // propagates; only statically typed `never`. `Steer.persisted: true`
-    // is the durability guarantee (Steer survives crash + redeliver) and
-    // is NOT what's being relaxed here.
     steer: (command) =>
       requireSessionBranch(command).pipe(
-        Effect.flatMap(() =>
-          Effect.gen(function* () {
-            const commandId = ActorCommandId.make(command.requestId)
-            const payload = {
-              workspaceId: yield* CurrentWorkspaceId,
-              commandId,
-              command,
-            }
-            const ref = yield* agentLoopActorRefFor(command.sessionId, command.branchId)
-            yield* ref.send(AgentLoopActor.Steer.make(payload))
-          }),
-        ),
+        Effect.andThen(steerLoop(command).pipe(Effect.provideContext(loopClientServices))),
         Effect.catchCause((cause) => Effect.fail(wrapError("steer failed", cause))),
       ),
 
@@ -664,19 +521,14 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
       ),
 
     queueFollowUp: (input) =>
-      actorCommand("queueFollowUp", input, () => queueFollowUpThroughActor(input)),
+      actorCommand("queueFollowUp", input, () =>
+        queueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices)),
+      ),
 
     dequeueFollowUp: (input) =>
-      actorCommand("dequeueFollowUp", input, (ref, { workspaceId, commandId }) =>
-        ref.execute(
-          AgentLoopActor.RemoveFollowUp.make({
-            workspaceId,
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            commandId,
-            messageId: followUpMessageIdForSource({ workspaceId, ...input }),
-          }),
-        ),
+      requireSessionBranch(input).pipe(
+        Effect.andThen(dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices))),
+        Effect.catchCause((cause) => Effect.fail(wrapError("dequeueFollowUp failed", cause))),
       ),
 
     requestExtension: (input) =>
