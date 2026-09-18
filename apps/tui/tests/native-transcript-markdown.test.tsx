@@ -4,8 +4,7 @@ import { Deferred, Effect, Option } from "effect"
 import { onCleanup } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { SyntaxStyle, type CliRendererExternalOutputEvent } from "@opentui/core"
-import { NativeTranscript } from "../src/components/native-transcript"
-import { MessageList, type Message } from "../src/components/message-list"
+import { type Message, MessageList, NativeTranscript } from "../src/message-list"
 import { renderWithProviders } from "./render-harness-boundary"
 
 const syntaxStyle = () => SyntaxStyle.create()

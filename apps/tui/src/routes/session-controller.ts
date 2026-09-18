@@ -14,7 +14,7 @@ import type {
   ReasoningEffort,
   SessionId,
 } from "@gent/core/protocol"
-import type { Message, SessionItem } from "../components/message-list"
+import type { Message, SessionItem } from "../message-list"
 import {
   ComposerInteractionEvent,
   ComposerInteractionState,

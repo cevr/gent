@@ -18,14 +18,14 @@ import { createSignal } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import { SyntaxStyle } from "@opentui/core"
 import type { CliRenderer, CliRendererExternalOutputEvent } from "@opentui/core"
-import { NativeTranscript } from "../src/components/native-transcript"
-import { transcriptFingerprint } from "../src/components/transcript-fingerprint"
 import {
-  MessageList,
   type Message,
+  MessageList,
+  NativeTranscript,
   type SessionItem,
   type ToolCall,
-} from "../src/components/message-list"
+  transcriptFingerprint,
+} from "../src/message-list"
 import { renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 

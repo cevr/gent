@@ -70,7 +70,7 @@ The isolated preview remains in Herdr pane wZ:pD. All existing architecture
 work remains in the FX Rift. The warm source was not changed.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/themes/fx.json`
@@ -194,7 +194,7 @@ Evidence:
 - `/tmp/gent-fx-ui-herdr-scroll.ansi`: older transcript rows with a clean footer boundary.
 - `/tmp/gent-fx-ui-herdr-menu.ansi`: Gent command menu under the composer while viewing older transcript rows.
 - `/tmp/gent-fx-ui-herdr-fx-menu.ansi`: FX command menu in the equal-size reference pane.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`: measured text rail and bold user text.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: measured text rail and bold user text.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: transcript and footer allocation.
 
 The command menu still differs from FX's category-tab header and denser
@@ -278,7 +278,7 @@ snapshot path moved into the session component.
 
 Source evidence:
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: native commits, snapshot ownership, footer allocation, and transcript viewport.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: native commits, snapshot ownership, footer allocation, and transcript viewport.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/terminal.tsx`: terminal geometry independent of the footer.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: live transcript integration and overlay allocation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: transcript view state.
@@ -304,7 +304,7 @@ assertion failure. Its cause remains under review.
 Evidence:
 
 - `/tmp/gent-fx-ui-herdr-history-return.ansi`: visible short transcript and preserved draft after Escape.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: measured visible tail and complete-item commit boundary.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: measured visible tail and complete-item commit boundary.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/core/app/app_lifecycle.zig`: exact, changed, and resized primary-transcript restoration policies.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/transcript/writer.zig`: transcript storage separate from frame-owned viewport scrolling.
 
@@ -354,7 +354,7 @@ Evidence:
 - `/tmp/gent-fx-ui-herdr-clear-display.ansi`: cleared view with preserved draft after transcript inspection.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: non-negative display boundary and clear transition.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-controller.ts`: Ctrl+L dispatch without a session or model command.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: display boundary separate from full transcript items.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: display boundary separate from full transcript items.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/hooks/use-session-feed.ts`: feed projection retained across display clear.
 
 ## Ctrl+C ownership
@@ -411,7 +411,7 @@ message. This remains an open defect. Do not mark active clear complete.
 The source delay override was restored after the process started.
 
 - `/tmp/gent-fx-ui-herdr-clear-active.ansi`: cleared view with draft and active status.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: independent display-clear effect and current item-count boundary.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: independent display-clear effect and current item-count boundary.
 
 ## Content-aware display boundary
 
@@ -440,8 +440,8 @@ a temporary directory was absent. The current gate is
 
 Source evidence:
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/transcript-display.ts`: immutable clear capture and post-clear content projection.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: display revision, visible projection, and minimum measurement row.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: immutable clear capture and post-clear content projection.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: display revision, visible projection, and minimum measurement row.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session-ui-state.ts`: repeated clear revision instead of item count.
 
 ## Herdr active-clear follow-up
@@ -462,9 +462,9 @@ Evidence:
 
 - `/tmp/gent/logs/6707ae38-20260906172249-client.log`: projected text grows after clear while the measured height stays at one row.
 - `/tmp/gent/logs/6707ae38-20260906172619-client.log`: frame-level render tree for the same defect.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: viewport measurement and footer sizing.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`: assistant message layout.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/transcript-display.ts`: content projection after clear.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: viewport measurement and footer sizing.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: assistant message layout.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: content projection after clear.
 
 ## Active-clear measurement repair
 
@@ -485,7 +485,7 @@ is under inspection. Do not report the E2E gate as passed.
 No appearance-only test was added. Temporary renderer logs and the mock
 delay were removed from the source.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: scroll-overflow measurement setting.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: scroll-overflow measurement setting.
 - `/tmp/gent/logs/6707ae38-20260906173330-client.log`: nonempty code text with zero computed height before the repair.
 - `/tmp/gent-fx-ui-herdr-clear-scroll-measurement.ansi`: post-clear text in the live Herdr pane.
 - `/tmp/gent-fx-ui-scroll-measurement-gate.log`: passed full gate.
@@ -633,7 +633,7 @@ inside menu rows. A resize cleared it. Later entries were clean. This
 visual defect remains open. The passing gate does not cover this terminal
 buffer state. Do not treat the screen change as final history acceptance.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: screen ownership and ordered capture transitions.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: screen ownership and ordered capture transitions.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/core/app/app_lifecycle.zig`: separate full-transcript screen and primary restore policy.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/chunk-bun-bb3k0yt8.js`: screen-mode capture constraint and mode transitions.
 - `/tmp/gent-fx-ui-screen-before-fixed.ansi`: primary view with draft before inspection.
@@ -671,7 +671,7 @@ reproduced menu-entry fault. It does not prove every native-history case.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: combines command menu and session overlay state.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: command menu open state.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: native-output readiness and write/reset guards.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: native-output readiness and write/reset guards.
 - `/tmp/gent-fx-ui-menu-narrow-direct.ansi`: minimal failing menu entry.
 - `/tmp/gent-fx-ui-menu-delayed.ansi`: failure after a six-second startup delay.
 - `/tmp/gent-fx-ui-menu-clear-next-buffer.ansi`: failed buffer-clear probe.
@@ -702,7 +702,7 @@ together. The Solid snapshot writer is synchronous. Core also exposes a
 scrollback surface with settle and row-commit operations. These APIs need
 further evaluation before changing the history ownership policy.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: retained whole-message policy.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: retained whole-message policy.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+solid@0.5.10+8ea6d8f27251ca40/node_modules/@opentui/solid/index.bun.js`: synchronous snapshot measurement and write.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/renderer.d.ts`: scrollback surface API.
 - `/tmp/gent-fx-ui-native-overflow-history.ansi`: trial history and blank live tail.
@@ -735,7 +735,7 @@ closed, and the wide Gent pane and caller focus were restored.
 This fixes the blank live tail. Full snapshot content, a single oversized
 last message, and the remaining acceptance checks still need verification.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: content minimum height and leading-message commit threshold.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: content minimum height and leading-message commit threshold.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/index.bun.js`: default content minimum and scroll range calculation.
 - `/tmp/gent-fx-ui-history-range.log`: stale 11-row content area with a two-row viewport.
 - `/tmp/gent-fx-ui-history-content-fit.log`: corrected two-row content area and visible reply.
@@ -771,7 +771,7 @@ remains.
 The single oversized last message and a composer that fills the terminal
 still need separate history checks. Do not mark all history behavior done.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: scoped composer-only reservation around native writes.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: scoped composer-only reservation around native writes.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/node_modules/.bun/@opentui+core@0.5.10+3fa45be7788bc228/node_modules/@opentui/core/chunk-bun-bb3k0yt8.js`: queued snapshot emission and footer transition flush.
 - `/tmp/gent-fx-ui-snapshot-truncated.ansi`: truncated native history before the repair.
 - `/tmp/gent-fx-ui-snapshot-full-view.ansi`: later tools visible in full-transcript view.
@@ -928,7 +928,7 @@ unverified. Dark was restored. Repeated menu/theme/inspection transitions
 left more blank rows above the live tail. Native-history spacing needs a
 separate check before final acceptance.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: screen ownership and snapshot replay.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: screen ownership and snapshot replay.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: theme selection and Gent command list.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/theme/themes/fx.json`: expected light RGB values.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/builtins/commands.zig`: `/quit` exits the reference shell.
@@ -1014,7 +1014,7 @@ were restored.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/ui.tsx`: shared six-result height budget.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/commands.tsx`: unique session actions and preserved descriptions.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/autocomplete-popup.tsx`: matching completion height and filter row.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: fresh transcript display origin.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: fresh transcript display origin.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/render-harness-boundary.tsx`: in-memory terminal setup before mounting.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/core/shared/list_window.zig`: six-row default.
 - `/tmp/gent-fx-ui-80x24-control.jsonl`: authoritative terminal frame dimensions.
@@ -1153,7 +1153,7 @@ whole messages. FX's committed anchor tracks visual and history offsets
 separately. OpenTUI's snapshot API exposes a root and height but no row-offset
 field; a clipped snapshot and live projection need investigation.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: current whole-message commit boundary.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: current whole-message commit boundary.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/transcript/runtime.zig`: `CommittedTranscriptAnchor` visual and history offsets.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/node_modules/@opentui/core/renderer.d.ts`: scrollback snapshot contract.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/node_modules/@opentui/solid/index.bun.js`: Solid snapshot writer.
@@ -1188,7 +1188,7 @@ in the terminal's saved lines and must not enter that count.
 This is not full acceptance. Width changes, later messages, partial-item
 revisions, and compact tool views still need checks with the row offset.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: clipped snapshots, live row offset, and frame boundary.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: clipped snapshots, live row offset, and frame boundary.
 - `/tmp/gent-fx-ui-row-tail-initial.txt`: first row-split output.
 - `/tmp/gent-fx-ui-row-tail-return.txt`: first passing menu return, counted after the latest prompt.
 - `/tmp/gent-fx-ui-row-tail-inspection-return.txt`: failed inspection return before repaint repair.
@@ -1221,7 +1221,7 @@ would also remove earlier shell output in the pane. The user was asked whether
 that is acceptable; no such clearing behavior was added in this check.
 Both resize defects remain open. The stable-width checks do not prove reflow.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: row offset and current resize behavior.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: row offset and current resize behavior.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render_engine/terminal_diff.zig`: reset clear sequences and reset tests.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/transcript/runtime.zig`: separate resize-reset commit tracking.
 - `/tmp/gent-fx-ui-row-two-turns.txt`: first message and second reply intact.
@@ -1312,7 +1312,7 @@ the local provider were stopped. Gent's normal debug preview was restored.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/tests/e2e/tui-gateway-stream-lifecycle.test.ts`: provider URL setup and streamed-tool workflow.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/transcript/tool_group_projection.zig`: group header and per-call summary projection.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/README.md`: host-managed authentication and full-transcript controls.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`: current per-renderer expansion path.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: current per-renderer expansion path.
 - `/tmp/gent-fx-reference.U4lKJ1/provider.ts`: local-only provider used for the comparison.
 - `/tmp/gent-fx-reference.U4lKJ1/sample.ts`: read-only sample input.
 - `/tmp/fx-live-tool-active.ansi`: FX group summary and active turn.
@@ -1335,7 +1335,7 @@ Raw JSON summaries found in the first capture were removed from compact
 labels. This is not proof of full FX parity. Width reflow and native history
 still need repair. Extension-specific summary quality needs a further pass.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`: adjacent grouping, summaries, and failure visibility.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: adjacent grouping, summaries, and failure visibility.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`: separate group and full-detail controls.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/message-list-render.test.tsx`: existing unknown and registered tool failure identity checks.
 - `/tmp/gent-fx-ui-tool-groups-normal.ansi`: normal grouped output.
@@ -1370,7 +1370,7 @@ Normal-view width reflow remains broken. Its committed row offset still
 refers to the old layout. This fix restores full inspection; it does not
 claim to repair that separate offset or native-history duplication problem.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`: explicit automatic item height in full inspection.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`: explicit automatic item height in full inspection.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/node_modules/@opentui/core/chunk-bun-bb3k0yt8.js`: height setter rejects invalid dimensions.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/node_modules/@opentui/core/Renderable.d.ts`: supported height values.
 - `/tmp/gent-fx-ui-reflow-current-narrow.txt`: paragraph 30 before resize.
@@ -1571,7 +1571,7 @@ The fallback in `SingleToolCall` renders errors only. The live review prompt
 therefore needs a generic full-detail fallback in a later pass. This is separate
 from the repaired duplicate-call projection.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 
 ### Generic full tool details
 
@@ -1585,7 +1585,7 @@ title. It also shows the result mode, decision, and server file path. Escape
 returns to one compact prompt call. This follows the FX separation between
 normal tool summaries and full inspection. No appearance-only test was added.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/message-list.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/tool-renderers.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/utils.ts`
 - `/tmp/gent-fx-ui-generic-detail-herdr.ansi`: full prompt arguments and result.
@@ -1738,7 +1738,7 @@ from before the app. The user approved this policy in the next turn. Gent
 now clears saved lines on resize. It rebuilds the displayed transcript after
 a layout frame. Session messages remain unchanged. The goal is not complete.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/resize_runtime.zig`
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/render_engine/terminal_diff.zig`
 - `/tmp/gent-fx-ui-resize-latest-narrow.ansi`: final paragraph before resize.
@@ -1766,7 +1766,7 @@ final full gate and both E2E tasks pass. The complete FX acceptance audit is
 still open. Partial-item content changes and compact-history changes need
 separate checks. These resize results do not prove those cases.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/tests/app-auth.test.tsx`
 - `/tmp/gent-fx-ui-resize-reset-narrow.ansi`
 - `/tmp/gent-fx-ui-resize-reset-wide.ansi`
@@ -1795,7 +1795,7 @@ This rebuild clears saved terminal lines, as the approved resize policy
 does. Session data remains the source of truth. The partial-content repair
 has source verification; a dedicated live mutation check remains open.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
 - `/tmp/gent-fx-ui-tools-collapsed.txt`: no connected summary rows.
 - `/tmp/gent-fx-ui-tools-expanded-again.txt`: 13 connected summary rows.
@@ -1824,7 +1824,7 @@ At 28×12, progress, input, and model remain visible. Ctrl+C removes progress
 and shows the interruption notice. The terminal size control was stopped.
 No paid model calls or appearance-only tests were added.
 
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/native-transcript.tsx`
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/message-list.tsx`
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/routes/session.tsx`
 - `/tmp/gent-fx-ui-partial-replaced.txt`: exactly 45 new ordered rows.
 - `/tmp/gent-fx-ui-partial-short.txt`: exactly 3 new ordered rows.

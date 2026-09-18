@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { reasoningMarkdown } from "../src/components/reasoning-text"
+import { reasoningMarkdown } from "../src/message-list"
 
 describe("reasoning text", () => {
   it.effect("colliding summaries are split onto their own paragraphs", () =>

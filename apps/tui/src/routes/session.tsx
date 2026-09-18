@@ -13,8 +13,7 @@ import {
   type BranchId,
   type SessionId,
 } from "@gent/core/protocol"
-import { MessageList } from "../components/message-list"
-import { NativeTranscript } from "../components/native-transcript"
+import { MessageList, NativeTranscript } from "../message-list"
 import { Composer } from "../components/composer"
 import { ComposerFrame } from "../components/composer-frame"
 import { formatDuration, truncate } from "../utils"

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
 import { createSignal } from "solid-js"
-import { NativeTranscript } from "../src/components/native-transcript"
+import { NativeTranscript } from "../src/message-list"
 import { renderWithProviders } from "./render-harness-boundary"
 
 describe("native transcript mouse tracking", () => {
