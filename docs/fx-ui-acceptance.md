@@ -861,7 +861,7 @@ need live checks. This result does not close the full interaction criterion.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: option text flow and width-fitting help.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/ask-user.tsx`: question progression and answer resolution.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/ask-user.ts`: actual tool and answer protocol.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools.ts`: actual tool and answer protocol.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/test-utils/language-model.ts`: process-local sequence model.
 - `/Users/cvr/.cache/repo/vercel-labs/fx/src/ui/footer/approval_ui.zig`: width-fitting approval hints retain confirm and cancel controls.
 - `/tmp/gent-fx-ui-question-before.ansi`: joined option label and wrapped help.
@@ -895,7 +895,7 @@ remains open.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: measured document viewport and fixed answer controls.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/composer-frame.tsx`: external spacing and status reservation.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/prompt.ts`: real confirmation tool path.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools.ts`: real confirmation tool path.
 - `/tmp/gent-fx-ui-multi-selected.ansi`: two selected options in the live pane.
 - `/tmp/gent-fx-ui-long-confirm-before.ansi`: missing answer controls before the repair.
 - `/tmp/gent-fx-ui-long-confirm-after.ansi`: bounded review text and visible controls.
@@ -1246,8 +1246,8 @@ renderer question, not a failed result decode.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/core/src/debug/session.ts`: corrected samples.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools/search-sessions.ts`: search result schema.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools/read-session.ts`: extraction result schema.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/delegate/delegate-tool.ts`: valid delegate output field.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/session-tools.ts`: extraction result schema.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/delegate.ts`: valid delegate output field.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/search-sessions.tsx`: result decode and match presentation.
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/tool-renderers/read-session.tsx`: extraction summary.
 - `/tmp/gent-fx-ui-debug-results-visible.ansi`: corrected visible results.
@@ -1274,7 +1274,7 @@ The full gate and all 61 E2E checks passed. No appearance-only test was added.
 The normal isolated debug preview was restored.
 
 - `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/apps/tui/src/components/interaction-renderers/option-list.tsx`: page-key routing and help text.
-- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools/ask-user.ts`: real interaction request schema and response path.
+- `/Users/cvr/Developer/personal/.rifts/gent/fx-ui/packages/extensions/src/interaction-tools.ts`: real interaction request schema and response path.
 - `/tmp/gent-fx-ui-long-choice-before.txt`: failed final-detail check before the change.
 - `/tmp/gent-fx-ui-long-choice-after.txt`: final choice detail visible through Page Down.
 - `/tmp/gent-fx-ui-long-choice-submitted.ansi`: model continued after submission.

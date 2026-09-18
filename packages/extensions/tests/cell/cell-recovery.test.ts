@@ -1,4 +1,9 @@
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
+import {
+  CellBranchTools,
+  CellExecutionStorage,
+  CellToolOperationStorage,
+  makeCellToolHost,
+} from "../../src/cell.js"
 import { expect, it } from "effect-bun-test"
 import { waitFor } from "@gent/core-internal/test-utils/fixtures.js"
 import { Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
@@ -9,19 +14,16 @@ import {
   DEFAULT_AGENT_NAME,
   makeRunSpec,
 } from "@gent/core-internal/domain/agent.js"
-import { ControlChildAgent } from "../../src/delegate/child-agent-tools.js"
-import { DelegateTool } from "../../src/delegate/delegate-tool.js"
+import { ControlChildAgent, DelegateTool } from "../../src/delegate.js"
 import { admitChildSession } from "@gent/core-internal/runtime/agent/agent-runner.js"
-import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-storage.js"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { ExtensionContext, tool } from "@gent/core/extensions/api"
 import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
-import { makeCellToolHost } from "../../src/cell/cell-tool-host.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
-import { CellResponse } from "../../src/cell/cell-protocol.js"
+import { CellResponse } from "../../src/cell-protocol.js"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
 import {
   LoadedArtifactIdentity,
@@ -40,7 +42,6 @@ import {
   Message,
   dateFromMillis,
 } from "@gent/core-internal/domain/message.js"
-import { CellExecutionStorage } from "../../src/cell/cell-execution-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { AgentLoopQueueStorage } from "@gent/core-internal/storage/agent-loop-queue-storage.js"
 import { ToolCallBindingStorage } from "@gent/core-internal/storage/tool-call-binding-storage.js"

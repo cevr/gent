@@ -25,7 +25,7 @@ bun run gamut down                  # quit, close the pane, remove the scratch d
 repo, installs it, writes the preset into `work/.gent/config.json` and the
 roster block in `work/AGENTS.md`, builds `apps/tui/bin/gent` from **this**
 checkout, and launches it in a fresh pane. The run is recorded in
-`$TMPDIR/gent-gamut-current.json`.
+`$TMPDIR/gent-gamut-<checkout name>.json`, one file per checkout, so two rifts can run at once.
 
 ## What `status` proves
 

@@ -1,4 +1,11 @@
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
+import {
+  CellBranchTools,
+  CellExecutionStorage,
+  CellToolOperationStorage,
+  makeCellToolHost,
+  recoverCellExecution,
+  resumeCellToolOperation,
+} from "../../src/cell.js"
 import { expect, it } from "effect-bun-test"
 import {
   Deferred,
@@ -30,14 +37,10 @@ import {
 } from "@gent/core-internal/domain/ids.js"
 import { Message, dateFromMillis } from "@gent/core-internal/domain/message.js"
 import { makeExtensionHostContextProvider } from "@gent/core-internal/runtime/make-extension-host-context.js"
-import { makeCellToolHost, resumeCellToolOperation } from "../../src/cell/cell-tool-host.js"
 import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
-import { recoverCellExecution } from "../../src/cell/cell-recovery.js"
 import { ModelContextLedger } from "@gent/core-internal/runtime/model-context-ledger.js"
-import { CellResponse } from "../../src/cell/cell-protocol.js"
+import { CellResponse } from "../../src/cell-protocol.js"
 import { SessionProfileCache } from "@gent/core-internal/runtime/session-profile.js"
-import { CellExecutionStorage } from "../../src/cell/cell-execution-storage.js"
-import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
 import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"

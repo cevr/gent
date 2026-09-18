@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { narrowR } from "../../../core/tests/helpers/effect"
-import { DelegateTool } from "../../src/delegate/delegate-tool.js"
+import { DelegateTool } from "../../src/delegate.js"
 import {
   AgentDefinition,
   AgentName,

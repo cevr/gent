@@ -1,9 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Path } from "effect"
-import { installBundledSkills } from "../../src/skills/bundled-skills.js"
-import { bundledSkillFiles } from "../../src/skills/bundled-sources.js"
-import { Skills } from "../../src/skills/skills.js"
+import { bundledSkillFiles, installBundledSkills, Skills } from "../../src/skills.js"
 
 describe("bundled skills", () => {
   it.scopedLive("concurrent profiles publish one complete bundle of readable files", () =>

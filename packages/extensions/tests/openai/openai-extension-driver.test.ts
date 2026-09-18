@@ -19,9 +19,8 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Option, Schema, Stream, SynchronizedRef } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "../helpers/external-wire.js"
-import { buildOpenAIModelDriver } from "../../src/openai/index.js"
-import type { OpenAICredentials } from "../../src/openai/credential-service.js"
-import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
+import { buildOpenAIModelDriver, type OpenAICredentials } from "../../src/openai.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/providers.js"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
   makeFakeFetchState,

@@ -266,7 +266,7 @@ const platformProviderRootFiles = new Set([
   // The Anthropic extension wires a keychain-aware AnthropicClient layer that
   // needs the live Bun platform to satisfy `GentPlatform` inside the
   // request-signing transform. It's a shipped builtin, not a user extension.
-  "packages/extensions/src/anthropic/index.ts",
+  "packages/extensions/src/anthropic.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
@@ -283,7 +283,7 @@ const protectedHostFactFile = (file: string): boolean =>
   // This is the sole owner of that derivation; see its JSDoc.
   file !== "packages/core/src/server/workspace-rpc.ts" &&
   // The cell worker entry is a process entrypoint; it reads its own working directory once.
-  file !== "packages/extensions/src/cell/main.ts"
+  file !== "packages/extensions/src/cell-worker-boundary.ts"
 
 const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -338,7 +338,7 @@ const shippedExtensionCoreInternalFiles = new Set([
   // extension needs the live Bun platform to satisfy `GentPlatform` inside its
   // request-signing transform. Same file, same reason as the platform root
   // exemption in `platformProviderRootFiles`.
-  "packages/extensions/src/anthropic/index.ts",
+  "packages/extensions/src/anthropic.ts",
 ])
 
 const shippedExtensionFile = (file: string): boolean =>

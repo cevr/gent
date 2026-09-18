@@ -1,8 +1,11 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, Queue, Stream } from "effect"
-import { CellWorkerTransport, runCellWorker } from "../../src/cell/cell-worker.js"
-import { CellWorkerEnvironment } from "../../src/cell/bun-evaluator-boundary.js"
-import { CellProtocolError, CellRequest, type CellResponse } from "../../src/cell/cell-protocol.js"
+import {
+  CellWorkerEnvironment,
+  CellWorkerTransport,
+  runCellWorker,
+} from "../../src/cell-worker-boundary.js"
+import { CellProtocolError, CellRequest, type CellResponse } from "../../src/cell-protocol.js"
 
 const makeHarness = Effect.gen(function* () {
   const requests = yield* Queue.make<CellRequest>({ capacity: 64 })

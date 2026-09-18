@@ -1,18 +1,16 @@
-export { SkillsRpc } from "./skills/protocol.js"
-export { GOAL_EXTENSION_ID, GoalSnapshot } from "./goal/goal-protocol.js"
-export { GoalRpc } from "./goal/goal-rpc.js"
-export { remainingTokens } from "./goal/goal-protocol.js"
+export { SkillsRpc } from "./skills.js"
+export { GOAL_EXTENSION_ID, GoalRpc, GoalSnapshot, remainingTokens } from "./goal.js"
 export {
   BTW_EXTENSION_ID,
+  BtwRpc,
   type SideQuestionRun as SideQuestionRunType,
   type SideTurn as SideTurnType,
-} from "./btw/btw-protocol.js"
-export { BtwRpc } from "./btw/index.js"
-export { AgentsViewRpc, type AgentRowEntry } from "./agents-view/protocol.js"
+} from "./btw.js"
+export { AgentsViewRpc, type AgentRowEntry } from "./agents-view.js"
 export {
   WAKE_EXTENSION_ID,
   WakeDetails,
   type WakeEntry as WakeEntryType,
   type WakePending as WakePendingType,
-} from "./wake/protocol.js"
-export { WakeRpc } from "./wake/index.js"
+  WakeRpc,
+} from "./wake.js"

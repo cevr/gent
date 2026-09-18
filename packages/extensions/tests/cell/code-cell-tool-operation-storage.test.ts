@@ -4,7 +4,12 @@ import { BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { ApprovalService } from "@gent/core-internal/runtime/approval-service.js"
 import { CurrentInteractionOwner } from "@gent/core-internal/domain/interaction-owner.js"
-import { cellInteractionOwner } from "../../src/cell/cell-interaction-owner.js"
+import {
+  CellBranchTools,
+  CellExecutionStorage,
+  cellInteractionOwner,
+  CellToolOperationStorage,
+} from "../../src/cell.js"
 import { createE2ELayer } from "@gent/core-internal/test-utils/e2e-layer.js"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { EventStorage } from "@gent/core-internal/storage/event-storage.js"
@@ -33,13 +38,10 @@ import {
   InteractionPendingError,
 } from "@gent/core-internal/domain/interaction-request.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
-import { CellExecutionStorage } from "../../src/cell/cell-execution-storage.js"
-import { CellToolOperationStorage } from "../../src/cell/cell-tool-operation-storage.js"
 import { InteractionStorage } from "@gent/core-internal/storage/interaction-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 import { ensureStorageParents } from "@gent/core-internal/test-utils/index.js"
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
 
 const cell = {
   sessionId: SessionId.make("cell-operation-session"),

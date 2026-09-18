@@ -1,0 +1,214 @@
+import { Effect, Option, Predicate, Schema } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
+
+// ── websearch ───────────────────────────────────────────────────────────────
+
+// WebSearch Error
+
+export class WebSearchError extends Schema.TaggedError<WebSearchError>()("WebSearchError", {
+  message: Schema.String,
+  query: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
+
+// WebSearch Params
+
+const WebSearchParams = Schema.Struct({
+  query: Schema.String.annotate({
+    description: "Web search query",
+  }),
+  numResults: Schema.optionalKey(
+    Schema.Finite.annotate({
+      description: "Number of search results to return (default: 8)",
+    }),
+  ),
+  type: Schema.optionalKey(
+    Schema.Literals(["auto", "fast"]).annotate({
+      description: "Search type — auto: balanced (default), fast: quick results",
+    }),
+  ),
+})
+
+// WebSearch Result
+
+const WebSearchResult = Schema.Struct({
+  output: Schema.String,
+  query: Schema.String,
+})
+
+// Exa AI MCP endpoint
+
+const EXA_MCP_URL = "https://mcp.exa.ai/mcp"
+const DEFAULT_NUM_RESULTS = 8
+const TIMEOUT_MS = 25000
+
+interface McpRequest {
+  jsonrpc: string
+  id: number
+  method: string
+  params: {
+    name: string
+    arguments: {
+      query: string
+      numResults: number
+      livecrawl: "fallback"
+      type: "auto" | "fast"
+    }
+  }
+}
+
+const McpResponseSchema = Schema.Struct({
+  jsonrpc: Schema.String,
+  result: Schema.optional(
+    Schema.Struct({
+      content: Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.String })),
+      isError: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  error: Schema.optional(Schema.Struct({ code: Schema.Finite, message: Schema.String })),
+})
+type McpResponse = typeof McpResponseSchema.Type
+
+const decodeMcpResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(McpResponseSchema))
+
+/** Extract search result text from an MCP response object */
+function extractResult(data: McpResponse): Option.Option<string> {
+  if (Option.isSome(Option.fromNullishOr(data.error))) return Option.none()
+  const result = Option.fromNullishOr(data.result)
+  if (Option.isNone(result) || result.value.isError === true) return Option.none()
+  return Option.fromNullishOr(result.value.content[0]).pipe(Option.map((item) => item.text))
+}
+
+// WebSearch Tool
+
+export const WebSearchTool = tool({
+  id: "websearch",
+  description:
+    "Search the web using Exa AI. Returns content from the most relevant websites. Use the current year when searching for recent information.",
+  promptSnippet: "Search the web for information",
+  promptGuidelines: ["When you already have a specific URL, fetch it in the cell instead"],
+  params: WebSearchParams,
+  output: WebSearchResult,
+  execute: Effect.fn("WebSearchTool.execute")(function* (params) {
+    const searchRequest: McpRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "web_search_exa",
+        arguments: {
+          query: params.query,
+          numResults: Option.getOrElse(
+            Option.fromNullishOr(params.numResults),
+            () => DEFAULT_NUM_RESULTS,
+          ),
+          livecrawl: "fallback",
+          type: Option.getOrElse(Option.fromNullishOr(params.type), () => "auto"),
+        },
+      },
+    }
+
+    const http = yield* HttpClient.HttpClient
+    const result = yield* http
+      .execute(
+        HttpClientRequest.post(EXA_MCP_URL).pipe(
+          HttpClientRequest.setHeaders({
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+          }),
+          HttpClientRequest.bodyJsonUnsafe(searchRequest),
+        ),
+      )
+      .pipe(
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            if (response.status >= 400) {
+              const errorText = yield* response.text
+              return yield* new WebSearchError({
+                message: `Search error (${response.status}): ${errorText}`,
+                query: params.query,
+              })
+            }
+
+            const responseText = yield* response.text
+
+            const parseMcpJson = (raw: string) =>
+              decodeMcpResponse(raw).pipe(
+                Effect.catchEager((e) =>
+                  Effect.fail(
+                    new WebSearchError({
+                      message: `Invalid JSON: ${String(e)}`,
+                      query: params.query,
+                    }),
+                  ),
+                ),
+              )
+
+            // The endpoint answers either as one JSON object or as an SSE
+            // stream of `data:` frames. Scan for frames first; a body with
+            // none is the whole-object form.
+            const frames = responseText
+              .split("\n")
+              .filter((line) => line.startsWith("data: "))
+              .map((line) => line.substring(6))
+
+            if (frames.length === 0) {
+              const data = yield* parseMcpJson(responseText)
+              const text = extractResult(data)
+              if (Option.isSome(text)) return text.value
+              const errMsg = Option.fromNullishOr(data.error).pipe(
+                Option.map((error) => error.message),
+                Option.getOrElse(() => "Unknown error"),
+              )
+              return yield* new WebSearchError({
+                message: `Exa MCP error: ${errMsg}`,
+                query: params.query,
+              })
+            }
+
+            for (const frame of frames) {
+              const data = yield* parseMcpJson(frame)
+              const text = extractResult(data)
+              if (Option.isSome(text)) return text.value
+            }
+
+            return "No search results found. Try a different query."
+          }),
+        ),
+        Effect.timeout(TIMEOUT_MS),
+        Effect.catchEager((e) => {
+          if (Predicate.isTagged("TimeoutError")(e)) {
+            return Effect.fail(
+              new WebSearchError({ message: "Search request timed out", query: params.query }),
+            )
+          }
+          if (Predicate.isTagged("WebSearchError")(e)) return Effect.fail(e)
+          let message = String(e)
+          if (e instanceof Error) message = e.message
+          return Effect.fail(
+            new WebSearchError({
+              message: `Search failed: ${message}`,
+              query: params.query,
+              cause: e,
+            }),
+          )
+        }),
+      )
+
+    return {
+      output: result,
+      query: params.query,
+    }
+  }),
+})
+
+// ── extension ───────────────────────────────────────────────────────────────
+
+export const NetworkToolsExtension = defineExtension({
+  id: "@gent/network-tools",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("tool", WebSearchTool)
+  }),
+})

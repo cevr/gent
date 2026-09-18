@@ -1,4 +1,4 @@
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
+import { CellBranchTools, CellTool } from "../../src/cell.js"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Layer, Option, Schema, Stream } from "effect"
@@ -8,8 +8,7 @@ import { LoadedArtifactIdentity } from "@gent/core-internal/domain/extension.js"
 import { RequestId } from "@gent/core-internal/domain/ids.js"
 import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import type { Message } from "@gent/core-internal/domain/message.js"
-import { CellTool } from "../../src/cell/cell-tool.js"
-import { CompactionExtension } from "../../src/compaction/index.js"
+import { CompactionExtension } from "../../src/compaction.js"
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   windowDetails,

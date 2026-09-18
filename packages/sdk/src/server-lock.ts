@@ -7,10 +7,11 @@
  * unrelated process.
  */
 
-import { Predicate, Effect, FileSystem, Path, Schema } from "effect"
+import { Predicate, Effect, FileSystem, Schema } from "effect"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 
 export { BuildFingerprint } from "./build-fingerprint.js"
+import { dataPaths } from "./data-paths.js"
 
 export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEntry")({
   serverId: Schema.String,
@@ -24,24 +25,18 @@ export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEn
 
 const ServerLockEntryJson = Schema.fromJsonString(ServerLockEntry)
 
-const ensureGentDir = (
-  home: string,
-): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
+/**
+ * The lock sits in the data directory `data-paths.ts` resolves, beside the
+ * database it guards. Under `~/.gent` it was shared by every `GENT_DATA_DIR`
+ * run on the machine: a second run saw a foreign `dbPath`, signalled the
+ * first run's server as stale, and that TUI lost its server.
+ */
+const serverLockPath = (home: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const dir = path.join(home, ".gent")
-    yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
-    return dir
-  })
-
-const serverLockPath = (
-  home: string,
-): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    const dir = yield* ensureGentDir(home)
-    return path.join(dir, "server.lock")
+    const paths = yield* dataPaths(home)
+    yield* fs.makeDirectory(paths.dataDir, { recursive: true }).pipe(Effect.ignore)
+    return paths.serverLock
   })
 
 export const readServerLock = (
@@ -50,7 +45,7 @@ export const readServerLock = (
   // oxlint-disable-next-line effect/noNullish -- The lock file is an optional process boundary record consumed by the TUI.
   ServerLockEntry | undefined,
   never,
-  FileSystem.FileSystem | GentPlatform | Path.Path
+  FileSystem.FileSystem | GentPlatform
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -71,7 +66,7 @@ export const readServerLock = (
 export const writeServerLock = (
   home: string,
   entry: ServerLockEntry,
-): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* serverLockPath(home)
@@ -82,7 +77,7 @@ export const writeServerLock = (
 export const removeServerLock = (
   home: string,
   serverId: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem | GentPlatform | Path.Path> =>
+): Effect.Effect<boolean, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const current = yield* readServerLock(home)

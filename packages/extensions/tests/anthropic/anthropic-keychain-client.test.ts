@@ -4,13 +4,13 @@ import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import {
+  AnthropicPlatform,
   repairToolPairs,
+  SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
   transformResponseContent,
   transformStreamEvent,
-} from "../../src/anthropic/keychain-client.js"
-import { SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth/anthropic-headers.js"
-import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
+} from "../../src/anthropic.js"
 
 const testPlatformLayer = Layer.succeed(
   AnthropicPlatform,

@@ -12,7 +12,7 @@ import {
   type AgentRow,
   type DurableAgentRow,
   type LiveAgentRow,
-} from "../../src/agents-view/projection.js"
+} from "../../src/agents-view.js"
 
 const sid = (value: string) => SessionId.make(value)
 const bid = (value: string) => BranchId.make(value)

@@ -25,9 +25,9 @@ import {
   MODEL_COMPACTION_OUTPUT_TOKENS,
   ModelContextCompactorLive,
   referencedBindings,
+  RetainedBindings,
   selectSummarySource,
-} from "../../src/compaction/model-compaction.js"
-import { RetainedBindings } from "../../src/compaction/tool-contracts.js"
+} from "../../src/compaction.js"
 
 const sessionId = SessionId.make("compaction-session")
 const branchId = BranchId.make("compaction-branch")

@@ -15,12 +15,12 @@ import { Effect, Layer, Path, Predicate } from "effect"
 import { setupExtensions } from "@gent/core-internal/runtime/extensions/activation.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import {
-  acpDisposerRelease,
+  ACP_PROTOCOL_AGENTS,
   AcpAgentsExtension,
+  acpDisposerRelease,
+  type AcpSessionManager,
   makeAcpAgentsExtension,
-} from "../../src/acp-agents/index.js"
-import { ACP_PROTOCOL_AGENTS } from "../../src/acp-agents/config.js"
-import type { AcpSessionManager } from "../../src/acp-agents/executor.js"
+} from "../../src/acp-agents.js"
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),

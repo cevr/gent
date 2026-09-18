@@ -11,16 +11,19 @@ import {
 } from "@gent/core-internal/domain/ids.js"
 import { InteractionPendingError } from "@gent/core-internal/domain/interaction-request.js"
 import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message.js"
-import { CellExecution } from "../../src/cell/cell-execution.js"
-import { CellOperationHost, CellToolCallSuspended } from "../../src/cell/cell-kernel.js"
-import { CellEvaluationError } from "../../src/cell/cell-protocol.js"
+import {
+  CellBranchTools,
+  CellExecution,
+  CellOperationHost,
+  CellToolCallSuspended,
+} from "../../src/cell.js"
+import { CellEvaluationError } from "../../src/cell-protocol.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
 import { buildCellWorker } from "./cell-worker-fixture.js"
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
 const testLayer = SqliteStorage.MemoryWithSql(

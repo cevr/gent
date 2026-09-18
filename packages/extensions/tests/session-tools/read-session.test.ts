@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { renderMessageParts, renderSessionTree } from "../../src/session-tools/read-session.js"
+import { renderMessageParts, renderSessionTree } from "../../src/session-tools.js"
 import { messagePartsDisplayText } from "@gent/core-internal/domain/message-part-display"
 import {
   dateFromMillis,

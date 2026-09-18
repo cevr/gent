@@ -9,11 +9,10 @@ import { StorageError } from "@gent/core-internal/domain/storage-error.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
 import { BranchStorage } from "@gent/core-internal/storage/branch-storage.js"
-import { CellExecutionStorage } from "../../src/cell/cell-execution-storage.js"
+import { CellBranchTools, CellExecutionStorage } from "../../src/cell.js"
 import { MessageStorage } from "@gent/core-internal/storage/message-storage.js"
 import { SessionStorage } from "@gent/core-internal/storage/session-storage.js"
 import { SqliteStorage } from "@gent/core-internal/storage/sqlite-storage.js"
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
 
 const now = dateFromMillis(1_767_225_600_000)
 const code = "await tools.write({ path: 'result.txt', content: 'once' })"

@@ -27,6 +27,8 @@ interface DataPaths {
   readonly files: ReadonlyArray<string>
   /** Where `storage reset` moves the files it clears. */
   readonly archiveDir: string
+  /** The shared-server identity record. One server per database, so it sits beside it. */
+  readonly serverLock: string
 }
 
 /**
@@ -42,6 +44,7 @@ export const dataPathsIn = (dataDir: string): DataPaths => {
     dbPath,
     files: [dbPath, `${dbPath}-shm`, `${dbPath}-wal`],
     archiveDir: pathJoin(resolvedDir, "storage-archive"),
+    serverLock: pathJoin(resolvedDir, "server.lock"),
   }
 }
 

@@ -4,8 +4,8 @@
  */
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 
-export { ModelContextCompactorLive } from "../../src/compaction/model-compaction.js"
-import { CELL_EXTENSION_ID } from "../../src/cell/cell-extension.js"
+export { ModelContextCompactorLive } from "../../src/compaction.js"
+import { CELL_EXTENSION_ID } from "../../src/cell.js"
 import { AllBuiltinAgents } from "./builtin-agents.js"
 import type { E2ELayerConfig } from "@gent/core-internal/test-utils/e2e-layer"
 import type { ToolTestLayerConfig } from "@gent/core-internal/test-utils/extension-harness"

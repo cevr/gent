@@ -157,27 +157,22 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
   },
   {
-    file: "packages/extensions/src/openai/oauth.ts",
+    file: "packages/extensions/src/openai.ts",
     scope: "next-line",
     text: "strictEffectProvide:off OAuth token endpoint at extension boundary",
   },
   {
-    file: "packages/extensions/src/openai/oauth.ts",
+    file: "packages/extensions/src/openai.ts",
     scope: "next-line",
     text: "strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary",
   },
   {
-    file: "packages/extensions/src/openai/oauth.ts",
+    file: "packages/extensions/src/openai.ts",
     scope: "next-line",
     text: "strictEffectProvide:off device endpoints at extension boundary",
   },
   {
-    file: "packages/extensions/src/anthropic/index.ts",
-    scope: "next-line",
-    text: "strictEffectProvide:off",
-  },
-  {
-    file: "packages/extensions/src/anthropic/oauth/refresh.ts",
+    file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
     text: "strictEffectProvide:off",
   },

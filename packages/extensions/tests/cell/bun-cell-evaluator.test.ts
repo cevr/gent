@@ -4,8 +4,8 @@ import {
   makeBunCellEvaluator,
   CellHost,
   CellWorkerEnvironment,
-} from "../../src/cell/bun-evaluator-boundary.js"
-import { maximumCellDisplayLength, maximumCellSourceLength } from "../../src/cell/cell-protocol.js"
+} from "../../src/cell-worker-boundary.js"
+import { maximumCellDisplayLength, maximumCellSourceLength } from "../../src/cell-protocol.js"
 
 /** Cells share the test process realm, so each test clears its bindings at scope exit. */
 const makeKernel = (host: typeof CellHost.Service) =>

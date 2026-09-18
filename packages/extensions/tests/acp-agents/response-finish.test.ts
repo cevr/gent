@@ -9,8 +9,7 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "effect-bun-test"
 
-import { toResponseFinishReason } from "../../src/acp-agents/response-finish.js"
-import { StopReason } from "../../src/acp-agents/schema.js"
+import { StopReason, toResponseFinishReason } from "../../src/acp-agents.js"
 
 describe("acp finish reason mapping", () => {
   it.live("maps every ACP stop reason to its Response.FinishReason", () =>

@@ -12,7 +12,7 @@
 import { Effect, Fiber, Predicate, Schema, Stream } from "effect"
 import { describe, expect, it, yieldFibers } from "effect-bun-test"
 
-import { AcpClosedError, makeAcpConnection } from "../../src/acp-agents/protocol.js"
+import { AcpClosedError, makeAcpConnection } from "../../src/acp-agents.js"
 import { makeFakeAcpPeer, type FakeAcpPeer } from "./fake-acp-peer.js"
 
 const WireRecord = Schema.Record(Schema.String, Schema.Unknown)

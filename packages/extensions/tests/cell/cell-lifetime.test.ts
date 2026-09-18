@@ -1,12 +1,11 @@
-import { CellBranchTools } from "../../src/cell/cell-storage.js"
+import { CellBranchTools, CellExtension, CellTool, dispatchCell } from "../../src/cell.js"
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import { ExtensionHost, defineExtension, tool } from "@gent/core/extensions/api"
 import { AgentDefinition, AgentName, DEFAULT_AGENT_NAME } from "@gent/core-internal/domain/agent.js"
-import { ChildAgentHandle } from "../../src/delegate/child-agent-tools.js"
-import { DelegateExtension } from "../../src/delegate/delegate-tool.js"
-import { ReadSessionTool } from "../../src/session-tools/read-session.js"
+import { ChildAgentHandle, DelegateExtension } from "../../src/delegate.js"
+import { ReadSessionTool } from "../../src/session-tools.js"
 import {
   LoadedArtifactIdentity,
   type LoadedExtension,
@@ -14,9 +13,6 @@ import {
 import { ExtensionId, RequestId } from "@gent/core-internal/domain/ids.js"
 import { SteerCommand } from "@gent/core-internal/domain/steer.js"
 import { messageSingleText } from "@gent/core-internal/domain/message-part-display.js"
-import { dispatchCell } from "../../src/cell/cell-dispatch.js"
-import { CellTool } from "../../src/cell/cell-tool.js"
-import { CellExtension } from "../../src/cell/cell-extension.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness.js"

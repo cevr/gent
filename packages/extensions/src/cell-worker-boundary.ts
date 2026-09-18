@@ -1,0 +1,507 @@
+import {
+  Context,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect"
+import { createRequire } from "node:module"
+import { inspect } from "node:util"
+import {
+  catalogPageSize,
+  type CellCatalogEntry,
+  CellEvaluation,
+  CellEvaluationError,
+  cellOutputBoundary,
+  CellProtocolError,
+  type CellRequest,
+  cellRequestFd,
+  CellResponse,
+  cellResponseFd,
+  decodeCellRequest,
+  encodeCellResponse,
+  encodeSnapshot,
+  makeBoundedOutput,
+  makeCellFrameReader,
+  maximumCallsPerCell,
+  maximumCellBindings,
+  maximumCellDisplayHeadLength,
+  maximumCellDisplayLength,
+  maximumCellSourceLength,
+  maximumPendingCellCalls,
+  type SnapshotBinding,
+  snapshotReviverSource,
+} from "./cell-protocol.js"
+import { BunRuntime } from "@effect/platform-bun"
+
+// ── bun evaluator ───────────────────────────────────────────────────────────
+
+/** Facts about the worker process, supplied by its entry. */
+export class CellWorkerEnvironment extends Context.Service<
+  CellWorkerEnvironment,
+  {
+    /** Base for `require` resolution; the host launched the worker here. */
+    readonly workingDirectory: string
+  }
+>()("@gent/extensions/src/cell-worker-boundary/CellWorkerEnvironment") {}
+
+/** The worker transport supplies this proxy. It never supplies Gent host services. */
+export class CellHost extends Context.Service<
+  CellHost,
+  {
+    readonly call: (
+      name: string,
+      input: Schema.Json,
+    ) => Effect.Effect<Schema.Json, CellEvaluationError>
+  }
+>()("@gent/extensions/src/cell-worker-boundary/CellHost") {}
+
+/** Only run model source inside a dedicated worker process. Cells evaluate in the
+ * worker's own realm, so the full Bun runtime, `require`, and dynamic `import` are
+ * available and the process is the isolation unit: one evaluator per process.
+ * The process owner enforces wall time, memory, cancellation, and host authority.
+ * On interruption it must discard the worker; this adapter cannot stop an await.
+ */
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/** Indirect eval runs the compiled cell at global scope; replMode declares bindings as global vars. */
+// oxlint-disable-next-line no-eval -- Evaluating model source in the worker realm is this adapter's purpose.
+const evaluateInRealm: (compiled: string) => unknown = globalThis.eval
+
+export const makeBunCellEvaluator = Effect.gen(function* () {
+  const host = yield* CellHost
+  const environment = yield* CellWorkerEnvironment
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<CellHost>())
+  const permit = yield* Semaphore.make(1)
+  // The node target keeps `require(...)` calls intact; the bun target rewrites them to import.meta.
+  // oxlint-disable-next-line gent/no-bun-outside-adapter -- This worker boundary owns the unmatched Bun transpiler API.
+  const transpiler = new Bun.Transpiler({ loader: "ts", target: "node", replMode: true })
+  // Display keeps a head and a bounded tail so the end of output (usually the error) survives.
+  const output = makeBoundedOutput({
+    limit: maximumCellDisplayLength,
+    headLimit: maximumCellDisplayHeadLength,
+    separator: "\n",
+  })
+  const append = output.append
+  const rendered = output.read
+  // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; inspect produces bounded display text.
+  const display = (value: unknown): string => {
+    if (Predicate.isString(value)) return value
+    return inspect(value, {
+      depth: 4,
+      maxArrayLength: 100,
+      maxStringLength: 8192,
+      customInspect: false,
+      getters: false,
+    })
+  }
+  const write = (...values: ReadonlyArray<unknown>) => {
+    append(values.map(display).join(" "))
+  }
+  // The cell console keeps every host console method; output methods write to the display.
+  const hostConsole = globalThis.console
+  const console: typeof hostConsole = {
+    ...hostConsole,
+    log: write,
+    info: write,
+    warn: write,
+    error: write,
+    debug: write,
+  }
+  const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
+    new CellEvaluationError({
+      phase,
+      message: display(cause).slice(0, maximumCellDisplayLength),
+      output: rendered(),
+    })
+  // The catalog is data the host already validated. Search and describe never leave the worker.
+  let catalog: ReadonlyArray<CellCatalogEntry> = []
+  const search = (query: string = "", offset: number = 0) => {
+    const needle = String(query).toLowerCase()
+    const matches = catalog.filter(
+      (entry) =>
+        entry.name.toLowerCase().includes(needle) ||
+        entry.description.toLowerCase().includes(needle),
+    )
+    const start = Math.max(0, Math.trunc(Number(offset)) || 0)
+    const page = matches.slice(start, start + catalogPageSize)
+    return {
+      tools: page.map((entry) => ({ name: entry.name, description: entry.description })),
+      total: matches.length,
+      nextOffset: start + page.length,
+    }
+  }
+  const describe = (name: string) => {
+    const entry = catalog.find((candidate) => candidate.name === String(name))
+    if (Predicate.isUndefined(entry)) {
+      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- This runs inside model code in the VM realm; a thrown Error is the cell's failure contract, like any host call rejection.
+      throw new Error(`Tool ${String(name)} is not selected for this turn`)
+    }
+    return { ...entry, guidelines: [...entry.guidelines] }
+  }
+  const proxy = {
+    search,
+    describe,
+    call: (name: string, input: Schema.Json) =>
+      runPromise(
+        Effect.all([
+          Schema.decodeEffect(Schema.String)(name),
+          Schema.decodeEffect(Schema.Json)(input),
+        ]).pipe(
+          Effect.mapError((cause) => failure("execute", cause)),
+          Effect.flatMap(([name, input]) => host.call(name, input)),
+        ),
+      ),
+  }
+  // The context namespace is host-served: every method is one host call under `context.`.
+  const contextCall = (operation: string, input: Schema.Json) =>
+    runPromise(
+      Schema.decodeEffect(Schema.Json)(input).pipe(
+        Effect.mapError((cause) => failure("execute", cause)),
+        Effect.flatMap((decoded) => host.call(`context.${operation}`, decoded)),
+      ),
+    )
+  const context = {
+    status: () => contextCall("status", {}),
+    history: (options: { offset?: number; limit?: number } = {}) =>
+      contextCall("history", { ...options }),
+    read: (id: string, options: { offset?: number; limit?: number } = {}) =>
+      contextCall("read", { id: String(id), ...options }),
+    compact: (instructions?: string) => {
+      if (Predicate.isUndefined(instructions)) return contextCall("compact", {})
+      return contextCall("compact", { instructions: String(instructions) })
+    },
+    newWindow: () => contextCall("newWindow", {}),
+  }
+  const reserved = new Set(["tools", "context", "console", "require"])
+  Object.defineProperty(globalThis, "tools", { value: proxy, writable: true, configurable: true })
+  Object.defineProperty(globalThis, "context", {
+    value: context,
+    writable: true,
+    configurable: true,
+  })
+  if (!Predicate.isFunction(Reflect.get(globalThis, "require"))) {
+    Object.defineProperty(globalThis, "require", {
+      value: createRequire(`${environment.workingDirectory}/`),
+      writable: true,
+      configurable: true,
+    })
+  }
+  // Bindings are the globals a cell adds after this evaluator starts. Eval-declared vars are configurable, so reset can delete them.
+  const baseline = new Set(Object.getOwnPropertyNames(globalThis))
+  const namespace = () => {
+    const bindings = new Map<string, unknown>()
+    for (const key of Object.getOwnPropertyNames(globalThis)) {
+      if (!baseline.has(key) && !reserved.has(key)) bindings.set(key, Reflect.get(globalThis, key))
+    }
+    return bindings
+  }
+  const bindingNames = () => [...namespace().keys()].sort().slice(0, maximumCellBindings)
+  const installConsole = (value: typeof hostConsole) =>
+    Effect.sync(() => {
+      Object.defineProperty(globalThis, "console", { value, writable: true, configurable: true })
+    })
+  // Only console output taken during the cell returns with it. Later writes go to the process streams.
+  const captureConsole = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.acquireUseRelease(
+      installConsole(console),
+      () => effect,
+      () => installConsole(hostConsole),
+    )
+
+  const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
+    output.reset()
+    if (source.length > maximumCellSourceLength) {
+      return yield* failure("source", "Cell source exceeds the length limit")
+    }
+    const compiled = yield* Effect.try({
+      try: () => transpiler.transformSync(source),
+      catch: (cause) => failure("compile", cause),
+    })
+    const result = yield* Effect.gen(function* () {
+      const started = yield* Effect.try({
+        try: (): unknown => evaluateInRealm(compiled),
+        catch: (cause) => failure("execute", cause),
+      })
+      if (!Predicate.isPromiseLike(started)) return started
+      return yield* Effect.tryPromise({
+        try: () => started,
+        catch: (cause) => failure("execute", cause),
+      })
+    }).pipe(captureConsole)
+    // An undefined result shows nothing, as IPython shows nothing for None; the
+    // console output the cell wrote is then the whole display.
+    if (Predicate.hasProperty(result, "value") && Predicate.isNotUndefined(result.value)) {
+      yield* Effect.try({
+        try: () => append(display(result.value)),
+        catch: (cause) => failure("execute", cause),
+      })
+    }
+    return CellEvaluation.make({
+      display: rendered(),
+      bindings: bindingNames(),
+      truncated: output.truncated(),
+    })
+  })
+
+  /** Replace the catalog that search and describe read. It is not part of the namespace. */
+  const setCatalog = (tools: ReadonlyArray<CellCatalogEntry>) =>
+    Effect.sync(() => {
+      catalog = tools
+    })
+
+  /** Encode the namespace in this realm; the codec names every value it cannot carry. */
+  const snapshot = Effect.sync(() => encodeSnapshot(namespace()))
+
+  /** Revive in the realm so restored values use its intrinsics. */
+  const restore = (bindings: ReadonlyArray<SnapshotBinding>) =>
+    Effect.try({
+      try: () => {
+        const revive = evaluateInRealm(snapshotReviverSource)
+        if (!Predicate.isFunction(revive)) return []
+        const names: string[] = []
+        for (const binding of bindings) {
+          if (reserved.has(binding.name) || baseline.has(binding.name)) continue
+          Object.defineProperty(globalThis, binding.name, {
+            value: revive(encodeJsonText(binding.value)),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          })
+          names.push(binding.name)
+        }
+        return names
+      },
+      catch: (cause) => failure("execute", cause),
+    })
+
+  return {
+    evaluate: (source: string) => Semaphore.withPermit(permit, evaluate(source)),
+    setCatalog: (tools: ReadonlyArray<CellCatalogEntry>) =>
+      Semaphore.withPermit(permit, setCatalog(tools)),
+    snapshot: Semaphore.withPermit(permit, snapshot),
+    restore: (bindings: ReadonlyArray<SnapshotBinding>) =>
+      Semaphore.withPermit(permit, restore(bindings)),
+    reset: Semaphore.withPermit(
+      permit,
+      Effect.sync(() => {
+        for (const name of namespace().keys()) Reflect.deleteProperty(globalThis, name)
+      }),
+    ),
+  }
+})
+
+// ── worker loop ─────────────────────────────────────────────────────────────
+
+export class CellWorkerTransport extends Context.Service<
+  CellWorkerTransport,
+  {
+    readonly requests: Stream.Stream<CellRequest, CellProtocolError>
+    readonly send: (response: CellResponse) => Effect.Effect<void, CellProtocolError>
+    /** Marks the end of a cell on the process output streams before its result frame. */
+    readonly endCellOutput: (outputToken: string) => Effect.Effect<void, CellProtocolError>
+  }
+>()("@gent/extensions/src/cell-worker-boundary/CellWorkerTransport") {}
+
+const isHostReply = Predicate.or(
+  Predicate.isTagged("HostSucceeded"),
+  Predicate.isTagged("HostFailed"),
+)
+
+/** Runs only inside the isolated child process. The parent owns process termination. */
+export const runCellWorker = Effect.scoped(
+  Effect.gen(function* () {
+    const transport = yield* CellWorkerTransport
+    const fatal = yield* Deferred.make<never, CellProtocolError>()
+    const pending = new Map<string, Deferred.Deferred<Schema.Json, CellEvaluationError>>()
+    let activeCell = Option.none<string>()
+    let operationSequence = 0
+    let cellCalls = 0
+    const callError = (message: string) =>
+      new CellEvaluationError({ phase: "execute", message, output: "" })
+
+    yield* Effect.addFinalizer(() =>
+      Effect.forEach(pending.values(), Deferred.interrupt, { discard: true }),
+    )
+
+    const kernel = yield* makeBunCellEvaluator.pipe(
+      Effect.provideService(CellHost, {
+        call: Effect.fn("CellWorker.call")(function* (name, input) {
+          if (Option.isNone(activeCell)) return yield* callError("No active cell")
+          if (pending.size >= maximumPendingCellCalls || cellCalls >= maximumCallsPerCell) {
+            return yield* callError("Cell host-call limit exceeded")
+          }
+          const cellId = activeCell.value
+          const operationId = String(++operationSequence)
+          cellCalls++
+          const reply = yield* Deferred.make<Schema.Json, CellEvaluationError>()
+          pending.set(operationId, reply)
+          return yield* transport
+            .send(CellResponse.cases.HostCall.make({ cellId, operationId, name, input }))
+            .pipe(
+              Effect.mapError((error) => callError(error.message)),
+              Effect.andThen(Deferred.await(reply)),
+              Effect.ensuring(Effect.sync(() => pending.delete(operationId))),
+            )
+        }),
+      }),
+    )
+
+    // Leaving the realm clean matters when several workers share one test process.
+    yield* Effect.addFinalizer(() => kernel.reset)
+
+    const receive = Effect.fn("CellWorker.receive")(function* (request: CellRequest) {
+      if (isHostReply(request)) {
+        const reply = Option.fromUndefinedOr(pending.get(request.operationId))
+        if (!Option.contains(activeCell, request.cellId) || Option.isNone(reply)) {
+          return yield* new CellProtocolError({ message: "Stale or unknown cell host reply" })
+        }
+        pending.delete(request.operationId)
+        if (request._tag === "HostSucceeded") {
+          yield* Deferred.succeed(reply.value, request.value)
+        } else {
+          yield* Deferred.fail(reply.value, callError(request.message))
+        }
+        return
+      }
+      if (Option.isSome(activeCell)) {
+        return yield* new CellProtocolError({ message: "A cell is already active" })
+      }
+      if (request._tag === "Reset") {
+        yield* kernel.reset
+        yield* transport.send(CellResponse.cases.Reset.make({ requestId: request.requestId }))
+        return
+      }
+      if (request._tag === "Snapshot") {
+        const snapshot = yield* kernel.snapshot
+        yield* transport.send(
+          CellResponse.cases.Snapshot.make({ requestId: request.requestId, snapshot }),
+        )
+        return
+      }
+      if (request._tag === "Restore") {
+        const bindings = yield* kernel
+          .restore(request.bindings)
+          .pipe(Effect.mapError((error) => new CellProtocolError({ message: error.message })))
+        yield* transport.send(
+          CellResponse.cases.Restored.make({ requestId: request.requestId, bindings }),
+        )
+        return
+      }
+      if (Predicate.isNotUndefined(request.catalog)) yield* kernel.setCatalog(request.catalog.tools)
+      activeCell = Option.some(request.cellId)
+      cellCalls = 0
+      yield* kernel.evaluate(request.source).pipe(
+        Effect.match({
+          onFailure: (error) => CellResponse.cases.Failed.make({ cellId: request.cellId, error }),
+          onSuccess: (result) =>
+            CellResponse.cases.Evaluated.make({ cellId: request.cellId, result }),
+        }),
+        Effect.tap(() => transport.endCellOutput(request.outputToken)),
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            // A script can end before its host calls settle: a rejected
+            // Promise.all leaves the others in flight. The cell ends when the
+            // last one does, so the host never sees an orphaned call.
+            while (pending.size > 0) {
+              yield* Effect.forEach(
+                Array.from(pending.values()),
+                (reply) => Effect.ignore(Deferred.await(reply)),
+                { discard: true },
+              )
+            }
+            activeCell = Option.none()
+            yield* transport.send(response)
+          }),
+        ),
+        Effect.catchCause((cause) => Deferred.failCause(fatal, cause)),
+        Effect.forkScoped,
+      )
+    })
+
+    yield* transport.send(CellResponse.cases.Ready.make({ version: 1 }))
+    yield* transport.requests.pipe(
+      Stream.runForEach(receive),
+      Effect.raceFirst(Deferred.await(fatal)),
+    )
+  }),
+)
+
+/* oxlint-disable effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun. */
+// ── process entry ───────────────────────────────────────────────────────────
+
+/** Frames use dedicated descriptors so cell code keeps stdout and stderr for itself.
+ * The host points the worker's stderr at its stdout, so both reach one ordered pipe. */
+const DescriptorTransport = Layer.effect(
+  CellWorkerTransport,
+  Effect.gen(function* () {
+    const outputPermit = yield* Semaphore.make(1)
+    const ioError = (cause: unknown) => new CellProtocolError({ message: String(cause) })
+    const requestBytes = Stream.fromReadableStream({
+      evaluate: () => Bun.file(cellRequestFd).stream(),
+      onError: ioError,
+    })
+    const responses = Bun.file(cellResponseFd)
+    // The callback fires once the stream handed the marker to the OS, so everything the
+    // cell wrote to the same stream before it is already in the pipe.
+    const writeMarker = (stream: NodeJS.WriteStream, marker: string) =>
+      Effect.callback<void, CellProtocolError>((resume) => {
+        stream.write(marker, (error) => {
+          if (Predicate.isNotNullish(error)) resume(Effect.fail(ioError(error)))
+          else resume(Effect.void)
+        })
+      })
+    const writeAll = (bytes: Uint8Array) =>
+      Effect.tryPromise({
+        try: () => Bun.write(responses, bytes),
+        catch: ioError,
+      }).pipe(Effect.asVoid)
+    return CellWorkerTransport.of({
+      requests: Stream.suspend(() => {
+        const reader = makeCellFrameReader()
+        return requestBytes.pipe(
+          Stream.mapEffect(reader.push),
+          Stream.flatMap(Stream.fromIterable),
+          Stream.mapEffect(decodeCellRequest),
+          Stream.concat(Stream.fromEffect(reader.end).pipe(Stream.drain)),
+        )
+      }),
+      // stderr is the same pipe as stdout, so one marker closes all cell output.
+      endCellOutput: Effect.fn("CellWorkerTransport.endCellOutput")((outputToken) =>
+        writeMarker(process.stdout, cellOutputBoundary(outputToken)),
+      ),
+      send: Effect.fn("CellWorkerTransport.send")((response) =>
+        Semaphore.withPermit(
+          outputPermit,
+          encodeCellResponse(response).pipe(Effect.flatMap(writeAll)),
+        ),
+      ),
+    })
+  }),
+)
+
+// The parent launches this entry with the request and response descriptors attached.
+// A test that imports the evaluator or the worker loop is not that parent, so the
+// entry only runs when this file is the process's own entry point.
+if (import.meta.main) {
+  BunRuntime.runMain(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const services = yield* Layer.build(
+          Layer.merge(
+            DescriptorTransport,
+            Layer.succeed(
+              CellWorkerEnvironment,
+              CellWorkerEnvironment.of({ workingDirectory: process.cwd() }),
+            ),
+          ),
+        )
+        yield* Effect.provideContext(runCellWorker, services)
+      }),
+    ),
+  )
+}

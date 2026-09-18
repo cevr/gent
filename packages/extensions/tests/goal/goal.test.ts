@@ -11,12 +11,14 @@ import { waitFor } from "@gent/core-internal/test-utils/fixtures"
 import { BranchId } from "@gent/core/extensions/api"
 import { e2ePreset } from "../helpers/test-preset"
 import {
+  continuationPrompt,
+  formatGoalUsage,
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
+  GoalSnapshot,
   type GoalState,
-} from "../../src/goal/index.js"
-import { GoalSnapshot, remainingTokens } from "../../src/goal/goal-protocol.js"
-import { continuationPrompt, formatGoalUsage } from "../../src/goal/goal-prompts.js"
+  remainingTokens,
+} from "../../src/goal.js"
 
 const sampleGoal: GoalState = {
   goalId: "g1",

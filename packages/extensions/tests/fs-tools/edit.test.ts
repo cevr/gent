@@ -8,7 +8,7 @@ import {
   normalizeWhitespace,
   findMatch,
   EditTool,
-} from "../../src/fs-tools/edit.js"
+} from "../../src/fs-tools.js"
 import { testToolContext } from "@gent/core-internal/test-utils/extension-harness"
 import { runToolWithCtx } from "@gent/core-internal/test-utils"
 describe("detectRedaction", () => {

@@ -75,7 +75,7 @@ updates this list in the same commit.
     `packages/core/src/runtime/agent/turn-resolve.ts`.
 13. **The cell runs in full Bun.** No sandbox, no interpreter; network reads,
     HTML parsing, and past-session queries happen in the cell. Receipt:
-    `packages/extensions/src/cell/`.
+    `packages/extensions/src/cell.ts`.
 14. **A child's completion arrives as a user message, never a tool result.**
     Receipt: `packages/core/src/runtime/agent/child-completion.ts`.
 15. **Platform edges stay explicit.** File, process, lock, and network access
@@ -95,7 +95,7 @@ updates this list in the same commit.
     A summary that cannot be produced degrades to truncation with a visible
     notice. Receipts: `packages/core/src/runtime/model-context-window.ts`,
     `packages/core/src/runtime/agent/turn-source.ts`,
-    `packages/extensions/src/compaction/model-compaction.ts`.
+    `packages/extensions/src/compaction.ts`.
 
 ### Known gaps
 
@@ -630,7 +630,7 @@ can replace the worker. Each kernel permits three replacement attempts by
 default, including failed starts. Close cancels active work and waits for its
 cleanup. The Gent policy bridge and other platform isolation remain unfinished.
 
-The core build compiles `runtime/code-cell/main.ts` into `dist/gent-cell`.
+The core build compiles `runtime/code-cell-worker-boundary.ts` into `dist/gent-cell`.
 Turbo builds that declared dependency before the TUI copies the worker into
 `bin/gent-cell` beside `bin/gent`. Core owns the worker build; the TUI only
 packages it. The worker embeds Bun and needs no external Bun executable. Its
@@ -684,7 +684,7 @@ the stored source for evaluation. Repeat claims return the saved tool result or
 evaluation. Results are immutable. Receipts cascade with their assistant message.
 Admission rejects a caller-owned SQL transaction so its claim commits before
 external effects start. Cell execution must remain outside SQL transactions.
-`runtime/code-cell/cell-execution.ts` joins this store to the real kernel. Each
+`runtime/code-cell.ts` joins this store to the real kernel. Each
 layer fixes one session and branch. It serializes admission, evaluation, result
 storage, and reset. It opens a worker only after a fresh claim. Saved results and
 incomplete claims do not start a worker. Initial startup failures consume the
@@ -696,7 +696,7 @@ Inner operation bindings and durable approvals use the stores described below.
 `runtime/agent/tools.ts` carries the transcript-owned call address
 and the turn's selected tool bindings.
 The shared turn dispatcher supplies it for each bound tool invocation, including
-explicit tool invocation. `runtime/code-cell/cell-dispatch.ts` uses that address
+explicit tool invocation. `runtime/code-cell.ts` uses that address
 and the current turn profile to enter branch-owned cell execution.
 It does not search messages or accept a call address from model input. It rejects
 an inner host operation that attempts to dispatch another outer cell. Missing
@@ -705,7 +705,7 @@ missing-service defect. The RPC test catches a nested-dispatch rejection inside
 the worker and verifies that the attempted source did not change retained state.
 The RPC lifetime test uses this adapter and checks two identical sources in one model
 response. Each source runs once and receives a distinct result receipt.
-`runtime/code-cell/cell-tool.ts` now declares the cell tool and is exercised by
+`runtime/code-cell.ts` now declares the cell tool and is exercised by
 this RPC test. It is not installed in the default profile yet. It returns saved
 JSON success data or fails with the public `ToolResultFailure` type. The normal
 tool runner preserves that failure's JSON data and still supplies transcript
@@ -744,7 +744,7 @@ The catalog is instruction plus data, not a tool. When the surface narrows to
 `cell`, `buildTurnPromptSections` adds a `cell-catalog` section that lists every
 selected host tool with its prompt snippet or description; the section is
 rebuilt each turn, so live composition changes reach the model as ordinary
-instruction changes. `runtime/code-cell/cell-catalog.ts` builds the data half
+instruction changes. `runtime/code-cell.ts` builds the data half
 from the same selected map: name, description, guidelines, and the actual Effect
 AI input schema, hashed over its encoding. `dispatchCell` hands it to the cell
 host; `cell-kernel.ts` sends it inside `Evaluate` only when the hash differs
@@ -768,7 +768,7 @@ policy removes `cell`, the replay dispatcher receives no outer cell binding and
 returns a failure without executing it. Already admitted cells still use saved
 operation recovery and never evaluate their source again.
 
-`runtime/code-cell/cell-tool-call.ts` adapts one already-bound host call to
+`runtime/code-cell.ts` adapts one already-bound host call to
 `ToolRunner.runBound`. It does not resolve a missing binding by name. The caller still owns the durable operation
 receipt. Execution returns the original tool result.
 A separate result conversion runs after persistence and maps failures to cell errors.
@@ -797,7 +797,7 @@ The cell host supplies this address from admitted operation storage and validate
 the recorded binding under its publication lease.
 The store does not itself run tools or restore a worker continuation.
 
-`runtime/code-cell/cell-tool-host.ts` joins fresh inner-operation admission to
+`runtime/code-cell.ts` joins fresh inner-operation admission to
 the tool adapter. It enters the existing live turn publication lease, captures
 the exact capability, and requires a source identity before admission. It gives
 the approval service the host-owned operation address. It saves the original
@@ -817,7 +817,7 @@ The branch phase is held in memory; queue storage persists the in-flight item,
 not the complete Running state. Recovery must use stored cell receipts rather
 than depend on a new field in that transient phase.
 
-`runtime/code-cell/cell-recovery.ts` builds the paired outer result after the
+`runtime/code-cell.ts` builds the paired outer result after the
 branch owner has stopped cell execution. It preserves undecided approvals,
 resumes only waiting operations with saved decisions, and reuses completed
 receipts. Started or Resuming operations remain unknown; recovery does not
@@ -848,7 +848,7 @@ Explicit platform/runtime seams:
 
 ### FileIndex (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools/file-index.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept and `ExtensionContext.Files` has no `listFiles`.
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept and `ExtensionContext.Files` has no `listFiles`.
 
 App entrypoints bind concrete Bun/OS behavior:
 

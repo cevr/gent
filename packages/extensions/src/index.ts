@@ -1,119 +1,56 @@
 import { Effect, Option, Schema } from "effect"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
-  defineResource,
+  type ExtensionHost,
   type GentExtension,
-  defineExtension,
-  ExtensionContext,
-  ExtensionHost,
-  ExtensionId,
-  tool,
+  LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
-import { BuiltinArtifactIdentity } from "./artifact-identity.js"
-import { CellExtension } from "./cell/cell-extension.js"
-import { CompactionExtension, ModelContextCompactorResource } from "./compaction/index.js"
-import { CellBranchTools } from "./cell/cell-storage.js"
-import { ExecToolsExtension } from "./exec-tools/index.js"
-import { DelegateExtension } from "./delegate/delegate-tool.js"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { CellBranchTools, CellExtension } from "./cell.js"
+import { CompactionExtension, ModelContextCompactorResource } from "./compaction.js"
+import { ExecToolsExtension } from "./exec-tools.js"
+import { DelegateExtension } from "./delegate.js"
 import { AgentsExtension } from "./agents.js"
-import { AgentsViewExtension } from "./agents-view/index.js"
-import { AnthropicExtension } from "./anthropic/index.js"
-import { OpenAIExtension } from "./openai/index.js"
-import { GoogleExtension, MistralExtension } from "./openai-compatible-driver.js"
-import { SkillsExtension } from "./skills/index.js"
-import { AcpAgentsExtension } from "./acp-agents/index.js"
+import { AgentsViewExtension } from "./agents-view.js"
+import { AnthropicExtension } from "./anthropic.js"
+import { OpenAIExtension } from "./openai.js"
+import { GoogleExtension, MistralExtension } from "./providers.js"
+import { SkillsExtension } from "./skills.js"
+import { AcpAgentsExtension } from "./acp-agents.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { HandoffExtension } from "./handoff.js"
-import { GoalExtension } from "./goal/index.js"
-import { WakeExtension } from "./wake/index.js"
-import { BtwExtension } from "./btw/index.js"
-import { ReadTool } from "./fs-tools/read.js"
-import { WriteTool } from "./fs-tools/write.js"
-import { EditTool } from "./fs-tools/edit.js"
-import { GrepTool } from "./fs-tools/grep.js"
-import { FileIndex, FileIndexLive } from "./fs-tools/file-index.js"
-import { WebSearchTool } from "./network-tools/websearch.js"
-import { ReadSessionTool } from "./session-tools/read-session.js"
-import { AskUserTool } from "./interaction-tools/ask-user.js"
-import { PromptTool } from "./interaction-tools/prompt.js"
+import { GoalExtension } from "./goal.js"
+import { WakeExtension } from "./wake.js"
+import { BtwExtension } from "./btw.js"
+import { FsToolsExtension } from "./fs-tools.js"
+import { NetworkToolsExtension } from "./network-tools.js"
+import { SessionToolsExtension } from "./session-tools.js"
+import { InteractionToolsExtension } from "./interaction-tools.js"
 
-const NAMING_INSTRUCTION = `
-## Session naming
-Call rename_session with a specific 3-5 word lowercase title once you understand what the user needs. If the conversation topic shifts significantly, rename again.`
+// ── artifact-identity ───────────────────────────────────────────────────────
 
-const RenameSessionParams = Schema.Struct({
-  name: Schema.String.annotate({
-    description: "Short session title, 3-5 lowercase words describing the current task",
-  }),
-})
+/**
+ * The compiled build replaces this symbol with a build-owned token before it
+ * bundles the builtin extensions. Source-mode execution has no trusted build
+ * boundary, so it remains unsupported for durable artifact replay.
+ */
+declare const __GENT_BUILTIN_ARTIFACT_ID__: unknown
 
-const RenameSessionResult = Schema.Struct({
-  renamed: Schema.Boolean,
-  name: Schema.optional(Schema.String),
-})
+const buildArtifactId = Option.flatMap(
+  Effect.runSync(
+    Effect.try({
+      try: () => Option.some(__GENT_BUILTIN_ARTIFACT_ID__),
+      catch: () => Option.none<unknown>(),
+    }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<unknown>()))),
+  ),
+  Schema.decodeUnknownOption(Schema.NonEmptyString),
+)
 
-const RenameSessionTool = tool({
-  id: "rename_session",
-  description:
-    "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",
-  params: RenameSessionParams,
-  output: RenameSessionResult,
-  execute: Effect.fn("RenameSessionTool.execute")(function* (
-    params: typeof RenameSessionParams.Type,
-  ) {
-    const ctx = yield* ExtensionContext
-    return yield* ctx.Session.renameCurrent(params.name)
-  }),
-})
+const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.map(
+  buildArtifactId,
+  (value) => LoadedArtifactIdentity.make(value),
+)
 
-export const FsToolsExtension = defineExtension({
-  id: "@gent/fs-tools",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "@gent/fs-tools/file-index",
-        tag: FileIndex,
-        scope: "process",
-        layer: FileIndexLive({ home: host.home }),
-      }),
-    )
-  }),
-})
-
-const NetworkToolsExtension = defineExtension({
-  id: "@gent/network-tools",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", WebSearchTool)
-  }),
-})
-
-export const SessionToolsExtension = defineExtension({
-  id: "@gent/session-tools",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", ReadSessionTool, RenameSessionTool)
-    yield* host.on("systemPrompt", (input) => {
-      if (input.interactive === false) {
-        return Effect.succeed(input.basePrompt)
-      }
-      return Effect.succeed(input.basePrompt + NAMING_INSTRUCTION)
-    })
-  }),
-})
-
-const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
-
-export const InteractionToolsExtension = defineExtension({
-  id: INTERACTION_TOOLS_EXTENSION_ID,
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", AskUserTool, PromptTool)
-  }),
-})
+// ── builtin composition ─────────────────────────────────────────────────────
 
 export {
   CompactionExtension,
@@ -129,6 +66,8 @@ export {
   WakeExtension,
   BtwExtension,
   AgentsViewExtension,
+  SessionToolsExtension,
+  FsToolsExtension,
 }
 
 /**

@@ -13,8 +13,7 @@ import { ref } from "@gent/core/extensions/api"
 import { textStep } from "@gent/core-internal/test-utils/sequence-steps"
 import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/rpc-harness"
-import { AgentsViewExtension } from "../../src/agents-view/index.js"
-import { AgentsViewRpc } from "../../src/agents-view/protocol.js"
+import { AgentsViewExtension, AgentsViewRpc } from "../../src/agents-view.js"
 import { e2ePreset } from "../helpers/test-preset"
 
 const ReplySchema = Schema.Struct({

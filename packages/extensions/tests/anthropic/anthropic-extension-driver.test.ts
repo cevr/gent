@@ -29,14 +29,17 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Layer, Match, Option, Ref, Schema, Stream, SynchronizedRef } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
-import { buildAnthropicModelDriver as buildAnthropicModelDriverLive } from "../../src/anthropic/index.js"
-import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/provider-credentials.js"
-import { EMPTY_BETA_CELL, type BetaCacheCell } from "../../src/anthropic/beta-cache.js"
-import { SYSTEM_IDENTITY_PREFIX } from "../../src/anthropic/oauth/anthropic-headers.js"
-import type { ClaudeCredentials } from "../../src/anthropic/oauth/credentials.js"
+import {
+  AnthropicPlatform,
+  type BetaCacheCell,
+  buildAnthropicModelDriver as buildAnthropicModelDriverLive,
+  type ClaudeCredentials,
+  EMPTY_BETA_CELL,
+  SYSTEM_IDENTITY_PREFIX,
+} from "../../src/anthropic.js"
+import { EMPTY_CREDENTIAL_CELL, type CredentialCacheCell } from "../../src/providers.js"
 import { type ProviderAuthInfo } from "@gent/core/extensions/api"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
-import { AnthropicPlatform } from "../../src/anthropic/platform-adapter.js"
 import { encodeExternalJson, externalWireNull } from "../helpers/external-wire.js"
 import {
   makeFakeFetchState,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test"
-import { isLongContextError } from "../../src/anthropic/oauth/anthropic-headers.js"
+import { isLongContextError } from "../../src/anthropic.js"
 
 describe("isLongContextError", () => {
   it("detects extra usage error", () => {
