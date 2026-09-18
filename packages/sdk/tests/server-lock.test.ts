@@ -15,7 +15,7 @@ import {
   validateServerLockEntry,
   serverLockIdentityOf,
   signalIfIdentityOwned,
-} from "../src/server-lock"
+} from "../src/server"
 
 const PlatformBaseLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
 const PlatformLayer = Layer.merge(

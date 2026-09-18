@@ -42,9 +42,9 @@ export {
   ServerLockEntry,
   signalIfIdentityOwned,
   validateServerLockEntry,
-} from "./server-lock.js"
+} from "./server.js"
 // Where gent keeps its durable state: the server writes it, the doctor reads it
-export { dataPaths, dataPathsIn } from "./data-paths.js"
+export { dataPaths, dataPathsIn } from "./server.js"
 // The log paths a client shares with its server, and the JSON line format both write
 export {
   buildLogPaths,
