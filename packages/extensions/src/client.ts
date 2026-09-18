@@ -1,4 +1,4 @@
-export { SkillsRpc } from "./skills/protocol.js"
+export { SkillsRpc } from "./skills.js"
 export { GOAL_EXTENSION_ID, GoalRpc, GoalSnapshot, remainingTokens } from "./goal.js"
 export {
   BTW_EXTENSION_ID,

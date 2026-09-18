@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Option } from "effect"
-import { Skill, formatSkillsForPrompt, parseSkillFile } from "../../src/skills/skills.js"
+import { Skill, formatSkillsForPrompt, parseSkillFile } from "../../src/skills.js"
 
 const makeSkill = (name: string, level: "local" | "global", description = `${name} skill`) =>
   new Skill({
