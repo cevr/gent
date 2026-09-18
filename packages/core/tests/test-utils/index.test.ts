@@ -1,12 +1,49 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { ExtensionId, SessionId } from "../../src/domain/ids"
+import type { Session } from "../../src/domain/message"
+import { createToolTestLayer, ensureStorageParents } from "../../src/test-utils/index"
+import { SessionStorage, type SessionStorageService } from "../../src/storage/storage"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
-import { ExtensionHost, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
-import { ExtensionId } from "../../src/domain/ids"
-import { createToolTestLayer } from "../../src/test-utils/index"
+import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
+
+// ── ensure-storage-parents.test ─────────────────────────────────────────────
+
+const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
+  Layer.succeed(SessionStorage, {
+    createSession: (session) =>
+      Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
+    getSession: (id) => Ref.get(sessions).pipe(Effect.map((map) => map.get(id))),
+    listSessions: Ref.get(sessions).pipe(Effect.map((map) => [...map.values()])),
+    updateSession: (session) =>
+      Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
+    deleteSession: (id) =>
+      Ref.modify(sessions, (map) => {
+        const next = new Map(map)
+        next.delete(id)
+        return [[id], next]
+      }),
+  } satisfies SessionStorageService)
+
+describe("ensureStorageParents", () => {
+  it.live("creates a session without requiring branch storage", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Ref.make<ReadonlyMap<SessionId, Session>>(new Map())
+      const sessionId = SessionId.make("session-only")
+
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      yield* ensureStorageParents({ sessionId }).pipe(Effect.provide(sessionOnlyLayer(sessions)))
+
+      const stored = yield* Ref.get(sessions)
+      expect(stored.has(sessionId)).toBe(true)
+    }),
+  )
+})
+
+// ── extension-tool-layer.test ───────────────────────────────────────────────
 
 class ResourceInstance extends Context.Service<ResourceInstance, { readonly id: number }>()(
-  "@gent/core/tests/test-utils/extension-tool-layer.test/ResourceInstance",
+  "@gent/core/tests/test-utils/index.test/ResourceInstance",
 ) {}
 
 describe("extension tool test layer", () => {

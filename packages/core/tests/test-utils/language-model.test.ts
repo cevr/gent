@@ -1,4 +1,4 @@
-import { describe, it, expect } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Fiber, Option, Schema, Stream } from "effect"
 import {
   LanguageModelLayers,
@@ -12,6 +12,8 @@ import { convertTools } from "../../src/runtime/tools"
 import { LanguageModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import { tool } from "@gent/core/extensions/api"
+
+// ── sequence-steps.test ─────────────────────────────────────────────────────
 
 const testToolkit = convertTools([
   tool({
@@ -262,6 +264,38 @@ describe("LanguageModelLayers.sequence", () => {
       expect(parts[0]?.type).toBe("tool-call")
       expect(parts[1]?.type).toBe("tool-call")
       expect(parts[2]?.type).toBe("finish")
+    }),
+  )
+})
+
+// ── ../debug/signal-provider.test ───────────────────────────────────────────
+
+const callSignalProvider = LanguageModel.streamText({ prompt: [] }).pipe(Stream.runCollect)
+
+describe("LanguageModelLayers.signal", () => {
+  it.scoped("waitForStreamStart resolves once LanguageModel stream is invoked", () =>
+    Effect.gen(function* () {
+      const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
+      // Drain in the background — gate stays closed but the model stream is called.
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      yield* Effect.forkScoped(Effect.provide(callSignalProvider, layer))
+      yield* controls.waitForStreamStart
+    }),
+  )
+
+  it.scoped("emitAll releases every gated chunk in order", () =>
+    Effect.gen(function* () {
+      const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      const collectFiber = yield* Effect.forkScoped(Effect.provide(callSignalProvider, layer))
+      yield* controls.waitForStreamStart
+      yield* controls.emitAll
+      const collected = yield* Fiber.join(collectFiber)
+
+      // One text-delta + one finish part for "hi.".
+      expect(collected.length).toBe(2)
+      expect(collected[0]?.type).toBe("text-delta")
+      expect(collected[1]?.type).toBe("finish")
     }),
   )
 })
