@@ -1,0 +1,94 @@
+# Architecture loop, third run: one file per concern (2026-09-18 →)
+
+Goal, verbatim from the session: reduce files as much as possible; one big
+file per concern (`session.ts`, `agent-loop.ts`), not `agent-x.ts` fragments;
+keep the loop simple and scannable; effect-native, actor model, lean core,
+fully extensible; compare against opencode-v2, pi, codex, prime-agent, exo and
+deepseek-harness. The second run (`architecture-loop-2026-09-17.md`) closed
+with no structural candidate left; this run changes the file layout, not the
+structure, then asks what else core can shed.
+
+Work happens on the rift `one-file-per-concern`; the folds ran in parallel on
+`fold-extensions`, `fold-tui`, `fold-small` and were merged here.
+
+## Method
+
+The fold tool (session scratchpad `fold.ts`, not committed) appends sources
+to a target in topological order under `// ── <concern> ───` banners, merges
+imports, drops sibling imports and self re-exports, rewrites deterministic
+keys (`@gent/<pkg>/src/<path>/<Name>` must follow the file path), rewrites
+importers across `packages/ apps/ examples/ testbeds/`, repoints backticked
+paths in the steering files, and trashes the sources. The dead-export guard
+then forces `export` off names only folded siblings used. Each fold was one
+commit through the hook gate, then a live gamut run (`bun run gamut up
+<preset>`, `wait`, `status`) that had to reproduce the baseline: one parent,
+one child, `12 pass, 3 fail`.
+
+Two tool lessons: TypeScript 7.0.2 hangs (no error) on `export { A }` naming
+a local declaration, so the tool drops self re-exports; and a rift `gent`
+binary shares `~/.gent/server.lock` with every other run unless the lock
+lives beside the database (fixed `269ea881`).
+
+## Source folds
+
+| Package    | Files before → after | Commits                                         |
+| ---------- | -------------------- | ----------------------------------------------- |
+| core       | 146 → 34             | `bcc6f4db` … `745bd0c6`, `197ce431`, `853a067c` |
+| extensions | 97 → 26              | on `fold-extensions`, merged `269ea881`         |
+| tui        | 144 → 30             | `fc924c69` … `ba4011a8`                         |
+| sdk        | 12 → 6               | `04ff6fa1`, `9082aecf`                          |
+| tooling    | 21 → 4               | `c1489627`                                      |
+| e2e        | 4 → 3                | `bb7544fe`                                      |
+| server     | 1 → 1                |                                                 |
+
+Total 425 → 104 source files (`git ls-tree` on `main` and this branch). Loop after the fold: `runtime/agent-loop.ts` 2,440,
+`runtime/turn.ts` 3,105, `runtime/tools.ts` 1,349, `runtime/child-agents.ts`
+832, `domain/agent-loop.ts` 541 (8,267 lines, from 8,392).
+
+Gate after the merge: 2,486 tests green (core 923, tui 695, extensions 551,
+tooling 259, sdk 58); `bun run test:e2e` 18/18. The independent review of
+the core fold found no P1/P2; the value-import graph is acyclic (the base
+had two cycles).
+
+## Fixes found by the folds
+
+| #   | Finding                                                                                                  | Status                                                                                       |
+| --- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| F1  | Two gamut runs shared one state file and one server lock; the second killed the first                    | done `a7cd691b`, `269ea881`; regression test proven red                                      |
+| F2  | Worker-entry lint suppressions covered the whole file                                                    | done `d7a8263c`: scoped to the process entry                                                 |
+| F3  | A detached suppression block survived in the language-model test layers                                  | done `58663025`                                                                              |
+| F4  | The child-session depth guard exempted all of `runtime/session.ts` and any file that named the admission | done `ad8ffcf6`: per-declaration check; probe reports `server.ts:591`, `child-agents.ts:399` |
+| F5  | ARCHITECTURE.md listed `toolCall`/`toolResult` hooks that do not exist                                   | done, this ledger's commit                                                                   |
+
+## Rejected
+
+| Candidate                                                       | Why                                                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Re-export `InteractionToolsExtension` from the extensions entry | No consumer; the dead-export guard would fail                                         |
+| Restore five pre-fold TUI service keys for external extensions  | `deterministicKeys` follows the path; `~/.gent/extensions` is empty; personal library |
+
+## Lean core (survey, session scratchpad `lean-core-survey.md`)
+
+Wakes, alarms and monitors are already extension-only: core holds one
+boolean `wake?: boolean` (opencode `resume`, pi `triggerTurn`), the kernel
+injection seam. Nothing to shed there. Ranked candidates, each its own
+commit with counsel and a gamut run:
+
+1. models.dev fetch + disk cache (`runtime/provider.ts`, ~200 lines) → a
+   catalog extension through `ModelDriverContribution.listModels`.
+2. Five facade verbs on `ExtensionSessionService`: `create`, `send` with a
+   session id, `steer`, `events`, `receipt`; RPC-acceptance test per verb.
+3. Child runner + completion delivery (`runtime/child-agents.ts` and the
+   child parts of agent/storage/event/facet, ~1,435 lines) → `@gent/delegate`.
+   Persisted formats stay: operation `agent.start`, message ids
+   `agent-start:<req>` and `child:<req>:complete`, the `AgentRun*` events.
+4. Model-attempt budget → a generic `RunSpec` override, with 3.
+5. `present` → interaction-tools (~20 lines), optional.
+
+Keep in core: governance, dedup, pubsub, interaction cold park, the auth
+store, the compaction seam, the extension host.
+
+## Test folds
+
+Mirror the source layout, one test file per concern; see
+`plans/test-fold-<package>.md` for each map. Rows added when merged.
