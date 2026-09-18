@@ -1,4 +1,4 @@
-import { describe, it, expect } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Clock,
   Deferred,
@@ -10,10 +10,22 @@ import {
   Option,
   Path,
   Ref,
-  Scope,
   Schema,
+  Scope,
   Stream,
 } from "effect"
+import {
+  BackgroundBashStorage,
+  BackgroundBashStorageError,
+  BackgroundBashSupervisorLive,
+  BashParams,
+  BashTool,
+  classifyBashCommand,
+  injectGitTrailers,
+  splitCdCommand,
+  stripBackground,
+} from "../src/exec-tools.js"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
   LanguageModelLayers,
   textStep,
@@ -26,16 +38,8 @@ import {
   testToolContext,
   type TestToolContext,
 } from "@gent/core-internal/test-utils/index"
-import { shippedPreset } from "../helpers/test-preset.js"
+import { shippedPreset } from "./helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import {
-  BackgroundBashStorage,
-  BackgroundBashStorageError,
-  BackgroundBashSupervisorLive,
-  BashParams,
-  BashTool,
-} from "../../src/exec-tools.js"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { SqliteStorage } from "@gent/core-internal/storage/storage"
@@ -44,6 +48,100 @@ import {
   maximumModelToolResultChars,
 } from "@gent/core-internal/runtime/model-context"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import { e2ePreset } from "./helpers/test-preset"
+import { isToolResultFor } from "./helpers/tool-event.js"
+
+// ── exec-tools/bash.test ────────────────────────────────────────────────────
+
+describe("splitCdCommand", () => {
+  test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {
+    const result = splitCdCommand("cd /foo && ls")
+    expect(result).toEqual(Option.some({ cwd: "/foo", command: "ls" }))
+  })
+
+  test("cd with quoted path && cmd → quoted path", () => {
+    const result = splitCdCommand('cd "/path with spaces" && ls -la')
+    expect(result).toEqual(Option.some({ cwd: "/path with spaces", command: "ls -la" }))
+  })
+
+  test("cd /foo; ls → semicolon separator", () => {
+    const result = splitCdCommand("cd /foo; ls")
+    expect(result).toEqual(Option.some({ cwd: "/foo", command: "ls" }))
+  })
+
+  test("plain command → None", () => {
+    expect(Option.isNone(splitCdCommand("ls -la"))).toBe(true)
+  })
+})
+
+describe("injectGitTrailers", () => {
+  test('git commit -m "msg" → injects --trailer', () => {
+    const result = injectGitTrailers('git commit -m "fix bug"', SessionId.make("sess-123"))
+    expect(result).toContain('--trailer "Session-Id: sess-123"')
+    expect(result).toContain("git commit")
+  })
+
+  test("git push → unchanged", () => {
+    const cmd = "git push origin main"
+    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+  })
+
+  test("already has --trailer → unchanged", () => {
+    const cmd = 'git commit --trailer "Foo: bar" -m "msg"'
+    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+  })
+})
+
+describe("stripBackground", () => {
+  test('"cmd &" → "cmd"', () => {
+    expect(stripBackground("cmd &")).toBe("cmd")
+  })
+
+  test('"cmd  &  " → "cmd"', () => {
+    expect(stripBackground("cmd  &  ")).toBe("cmd")
+  })
+
+  test('"cmd" → "cmd"', () => {
+    expect(stripBackground("cmd")).toBe("cmd")
+  })
+})
+
+describe("classifyBashCommand", () => {
+  test("a read-only command that names a secret file stays safe", () => {
+    expect(classifyBashCommand("cat ~/.aws/credentials").level).toBe("safe")
+    expect(classifyBashCommand("grep -n KEY .env").level).toBe("safe")
+  })
+
+  test("a write to a secret file is sensitive", () => {
+    expect(classifyBashCommand("cp ~/.aws/credentials /tmp/x").level).toBe("sensitive")
+  })
+
+  test("a read-only prefix does not exempt a later segment that writes a secret", () => {
+    for (const command of [
+      "cat README.md; cp ~/.aws/credentials /tmp/x",
+      "ls && cp ~/.aws/credentials /tmp/x",
+      "ls || mv .env /tmp/x",
+      "ls | xargs -I{} cp {} ~/.ssh/id_rsa",
+      "cat README.md\ncp ~/.aws/credentials /tmp/x",
+      "cat $(cp ~/.aws/credentials /tmp/x)",
+      "cat `cp ~/.aws/credentials /tmp/x`",
+      "cat <<EOF | sh\ncp ~/.aws/credentials /tmp/x\nEOF",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("sensitive")
+    }
+  })
+
+  test("a compound command of read-only segments stays safe", () => {
+    expect(classifyBashCommand("cat .env | grep KEY && ls -la secrets").level).toBe("safe")
+  })
+
+  test("destructive and external patterns win over the read-only exemption", () => {
+    expect(classifyBashCommand("cat x; rm -rf /").level).toBe("destructive")
+    expect(classifyBashCommand("ls && git push").level).toBe("external")
+  })
+})
+
+// ── exec-tools/bash-execution.test ──────────────────────────────────────────
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   const base = Layer.mergeAll(
@@ -749,5 +847,61 @@ describe("BashTool execution", () => {
         expect(all[0]?.content).toContain("replayed-output")
       }).pipe(withProcessTimeout),
     processTestTimeout,
+  )
+})
+
+// ── exec-tools/exec-tools-rpc.test ──────────────────────────────────────────
+
+/**
+ * Exec-tools RPC acceptance test — exercises the `bash` tool through a real
+ * agent turn (LLM emits the tool call, runtime dispatches it inside the
+ * per-request scope, BunChildProcessSpawner from BunServices spawns a real
+ * process). The existing `bash.test.ts` calls the executor directly via
+ * `runToolWithCtx`, which bypasses the scope boundary production uses.
+ *
+ * Uses `echo` (SAFE risk class) so no Interaction.approve gate fires.
+ *
+ * Maps W37 S6 C14 (audit L5-P1-2).
+ */
+
+describe("ExecToolsExtension (bash) via model turn", () => {
+  it.live(
+    "bash tool call routes through per-request scope and returns stdout",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("bash", { command: "echo rpc-harness-bash-marker" }),
+            textStep("ran"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolResultFor("bash")),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "run an echo",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+          if (succeeded?.event._tag === "ToolCallSucceeded") {
+            expect(succeeded.event.output).toContain("rpc-harness-bash-marker")
+          }
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
   )
 })

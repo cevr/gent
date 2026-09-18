@@ -1,17 +1,14 @@
-/**
- * The agents extension owns the persona sections and reads project
- * instructions from `AGENTS.md` (or `CLAUDE.md`) on every turn.
- */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, FileSystem, Stream } from "effect"
+import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
 import { compileSystemPrompt } from "@gent/core-internal/domain/capability.js"
-import { BunFileSystem } from "@effect/platform-bun"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textDeltaPart,
+  toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model.js"
 import {
@@ -27,6 +24,16 @@ import {
   readProjectInstructions,
 } from "../src/agents"
 import { e2ePreset } from "./helpers/test-preset.js"
+import { AgentsExtension } from "../src/agents.js"
+import { FsToolsExtension } from "../src/index.js"
+import { isToolEventFor } from "./helpers/tool-event.js"
+
+// ── agents.test ─────────────────────────────────────────────────────────────
+
+/**
+ * The agents extension owns the persona sections and reads project
+ * instructions from `AGENTS.md` (or `CLAUDE.md`) on every turn.
+ */
 
 const systemText = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -149,5 +156,125 @@ describe("project instructions", () => {
         prompts[1]!.indexOf("# Project Instructions"),
       )
     }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunFileSystem.layer)),
+  )
+})
+
+// ── fs-tools/fs-tools-model-turn.test ───────────────────────────────────────
+
+/**
+ * FS tools model-turn acceptance test — exercises a real model tool call
+ * through the extension layer, not the direct tool executor.
+ */
+
+describe("FsToolsExtension via model turn", () => {
+  const modelTurnTest = it.scopedLive.layer(BunServices.layer)
+
+  modelTurnTest(
+    "read tool call succeeds through a real agent turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const filePath = path.join(cwd, "fixture.txt")
+          yield* fs.writeFileString(filePath, "Hello from fs model turn\n")
+
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("read", { path: filePath }),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, FsToolsExtension],
+            cwd,
+          })
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolEventFor("read")),
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "Read fixture.txt",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          expect(events.some((event) => event.event._tag === "ToolCallStarted")).toBe(true)
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+          expect(succeeded?.event._tag).toBe("ToolCallSucceeded")
+          if (succeeded?.event._tag === "ToolCallSucceeded") {
+            expect(succeeded.event.output).toContain("Hello from fs model turn")
+          }
+          // Every tool event names the assistant message that holds its tool-call part.
+          const messages = yield* client.message.list({ branchId })
+          const assistant = messages.find(
+            (message) =>
+              message.role === "assistant" &&
+              message.parts.some(
+                (part) => part.type === "tool-call" && part.id === succeeded?.event.toolCallId,
+              ),
+          )
+          expect(assistant).toBeDefined()
+          expect(events.map((event) => event.event.assistantMessageId)).toEqual([
+            assistant?.id,
+            assistant?.id,
+          ])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  modelTurnTest(
+    "atomic write replaces a saved result through the real RPC tool path",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const filePath = path.join(cwd, "out.txt")
+          yield* fs.writeFileString(filePath, "previous result")
+          const content = "produced via real ExtensionFilesService"
+
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("write", { path: filePath, content, atomic: true }),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, FsToolsExtension],
+            cwd,
+          })
+          const toolEventFiber = yield* client.session
+            .events({ sessionId, branchId })
+            .pipe(
+              Stream.filter(isToolEventFor("write")),
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "Create the nested output file",
+          })
+
+          const events = Array.from(yield* Fiber.join(toolEventFiber))
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+
+          const written = yield* fs.readFileString(filePath)
+          expect(written).toBe(content)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })

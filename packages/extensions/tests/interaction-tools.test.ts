@@ -1,3 +1,229 @@
+import { describe, expect, it } from "effect-bun-test"
+import { Effect, Fiber, FileSystem, Schema, Stream } from "effect"
+import { narrowR } from "../../core/tests/helpers/effect"
+import { AskUserTool, PromptTool } from "../src/interaction-tools.js"
+import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import {
+  createRpcHarness,
+  runToolWithCtx,
+  testToolContext,
+} from "@gent/core-internal/test-utils/index"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  textStep,
+  toolCallStep,
+} from "@gent/core-internal/test-utils/language-model"
+import { BunFileSystem } from "@effect/platform-bun"
+import type { ApprovalDecision } from "@gent/core-internal/domain/interaction.js"
+import type { ExtensionContextService } from "@gent/core/extensions/api"
+import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset"
+import { isToolResultFor } from "./helpers/tool-event.js"
+
+// ── interaction-tools/ask-user.test ─────────────────────────────────────────
+
+const makeCtx = (
+  decision: Effect.Effect<{ readonly approved: boolean; readonly notes?: string }>,
+) => {
+  const interaction = {
+    approve: () => decision,
+    present: () => Effect.die("not wired"),
+  }
+  return {
+    ctx: testToolContext({
+      sessionId: SessionId.make("test-session"),
+      branchId: BranchId.make("test-branch"),
+      toolCallId: ToolCallId.make("test-call"),
+      cwd: "/tmp",
+      home: "/tmp",
+      Interaction: interaction,
+    }),
+    interaction,
+  } satisfies {
+    readonly ctx: ReturnType<typeof testToolContext>
+    readonly interaction: typeof interaction
+  }
+}
+
+describe("AskUser Tool", () => {
+  it.live("asks questions and returns answers", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "Option A" }))
+
+    return runToolWithCtx(
+      AskUserTool,
+      {
+        questions: [
+          {
+            question: "Which approach?",
+            header: "Approach",
+            options: [
+              { label: "Option A", description: "First option" },
+              { label: "Option B", description: "Second option" },
+            ],
+          },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers.length).toBe(1)
+        expect(result.answers[0]).toEqual(["Option A"])
+        expect(result.cancelled).toBeUndefined()
+      }),
+      narrowR,
+    )
+  })
+
+  it.live("decodes structured JSON answers from notes", () => {
+    const { ctx } = makeCtx(
+      Effect.succeed({ approved: true, notes: '[["Option A","Option B"],["Option C"]]' }),
+    )
+
+    return runToolWithCtx(
+      AskUserTool,
+      {
+        questions: [
+          { question: "Pick first set", options: [{ label: "Option A" }, { label: "Option B" }] },
+          { question: "Pick second", options: [{ label: "Option C" }] },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([["Option A", "Option B"], ["Option C"]])
+        expect(result.cancelled).toBeUndefined()
+      }),
+      narrowR,
+    )
+  })
+
+  it.live("falls back to wrapping raw notes when JSON is malformed", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "not-json {{{" }))
+
+    return runToolWithCtx(AskUserTool, { questions: [{ question: "Free-form?" }] }, ctx).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([["not-json {{{"]])
+      }),
+      narrowR,
+    )
+  })
+
+  it.live("cancel returns cancelled flag with empty answers", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: false }))
+
+    return runToolWithCtx(
+      AskUserTool,
+      {
+        questions: [
+          {
+            question: "Which approach?",
+            options: [{ label: "A" }, { label: "B" }],
+          },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.cancelled).toBe(true)
+        expect(result.answers).toEqual([])
+      }),
+      narrowR,
+    )
+  })
+})
+
+// ── interaction-tools/prompt.test ───────────────────────────────────────────
+
+const interactionDeciding = (
+  decision: ApprovalDecision,
+): ExtensionContextService["Interaction"] => ({
+  approve: () => Effect.succeed(decision),
+  present: () => Effect.die("interaction.present not wired"),
+})
+
+describe("Prompt Tool", () => {
+  it.scopedLive(
+    "review mode: writes the content under .gent/prompts and returns the decision",
+    () =>
+      narrowR(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("prompt-review")
+          const ctx = testToolContext({ cwd, Interaction: interactionDeciding({ approved: true }) })
+          const result = yield* runToolWithCtx(
+            PromptTool,
+            { mode: "review", content: "## Plan\n- Step 1", title: "Release Plan" },
+            ctx,
+          )
+          expect(result.mode).toBe("review")
+          if (result.mode !== "review") return
+          expect(result.decision).toBe("yes")
+          expect(result.path.startsWith(`${cwd}/.gent/prompts/release-plan-`)).toBe(true)
+          expect(yield* ctx.Files.read(result.path)).toBe("# Release Plan\n\n## Plan\n- Step 1")
+        }).pipe(Effect.provide(BunFileSystem.layer)),
+      ),
+  )
+
+  it.scopedLive("review mode: an edit decision stores the edited content", () =>
+    narrowR(
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("prompt-edit")
+        const ctx = testToolContext({
+          cwd,
+          Interaction: interactionDeciding({
+            approved: true,
+            notes: "edit",
+            editedContent: "revised",
+          }),
+        })
+        const result = yield* runToolWithCtx(PromptTool, { mode: "review", content: "draft" }, ctx)
+        expect(result.mode).toBe("review")
+        if (result.mode !== "review") return
+        expect(result.decision).toBe("edit")
+        expect(result.content).toBe("revised")
+        expect(yield* ctx.Files.read(result.path)).toBe("revised")
+      }).pipe(Effect.provide(BunFileSystem.layer)),
+    ),
+  )
+
+  it.live("confirm mode: a rejected approval is a no", () =>
+    narrowR(
+      runToolWithCtx(
+        PromptTool,
+        { mode: "confirm", content: "Proceed?" },
+        testToolContext({ Interaction: interactionDeciding({ approved: false }) }),
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.mode).toBe("confirm")
+          if (result.mode === "confirm") expect(result.decision).toBe("no")
+        }),
+      ),
+    ),
+  )
+
+  it.live("present mode: returns shown status", () =>
+    narrowR(
+      runToolWithCtx(
+        PromptTool,
+        { mode: "present", content: "Info" },
+        testToolContext({
+          Interaction: {
+            approve: () => Effect.die("interaction.approve not wired"),
+            present: () => Effect.void,
+          },
+        }),
+      ).pipe(
+        Effect.map((result) => {
+          expect(result.mode).toBe("present")
+          if (result.mode === "present") expect(result.status).toBe("shown")
+        }),
+      ),
+    ),
+  )
+})
+
+// ── interaction-tools/interaction-tools-rpc.test ────────────────────────────
+
 /**
  * Interaction-tools RPC acceptance test — exercises the `ask_user` and
  * `prompt` tools through real agent turns (LLM emits the tool call, runtime
@@ -11,18 +237,6 @@
  *
  * Maps W37 S6 C14 (audit L5-P1-2).
  */
-import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Schema, Stream } from "effect"
-import { BunFileSystem } from "@effect/platform-bun"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
-import {
-  LanguageModelLayers,
-  textStep,
-  toolCallStep,
-} from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/index"
-import { e2ePreset, shippedPreset } from "../helpers/test-preset"
-import { isToolResultFor } from "../helpers/tool-event.js"
 
 describe("InteractionToolsExtension via model turn", () => {
   it.scopedLive(
