@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { makeSideQuestionPane, SideQuestionPane } from "../../src/extensions/btw.client"
+import { BranchId, SessionId } from "@gent/core/extensions/api"
+import type { ForkViewType } from "@gent/extensions/client.js"
+import { ForkPane, makeForkPane } from "../../src/extensions/btw.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 
-// ── ../side-question-pane.test ──────────────────────────────────────────────
+// ── ../fork-pane.test ───────────────────────────────────────────────────────
 
 /** Casts queue here so the test drains them inside its own Effect. */
 const makeCastQueue = () => {
@@ -20,76 +22,119 @@ const makeCastQueue = () => {
   }
 }
 
-const acceptAsk = () => Effect.void
+const view = (turns: ForkViewType["turns"], replying: boolean): ForkViewType => ({
+  sessionId: SessionId.make("fork"),
+  branchId: BranchId.make("fork-branch"),
+  name: "btw: why?",
+  turns,
+  replying,
+})
 
-describe("side question pane", () => {
-  it.live("shows the pending question, streamed text, then the answer, and keeps turns", () =>
+/** A server whose fork holds one question and whose progress is whatever the test set last. */
+const makeServer = () => {
+  let current: Option.Option<ForkViewType> = Option.none()
+  const forked: Array<string> = []
+  const asked: Array<string> = []
+  return {
+    forked,
+    asked,
+    set: (next: Option.Option<ForkViewType>) => {
+      current = next
+    },
+    actions: {
+      fork: (question: string) =>
+        Effect.sync(() => {
+          forked.push(question)
+          current = Option.some(view([{ question, answer: "" }], true))
+        }),
+      ask: (question: string) =>
+        Effect.sync(() => {
+          asked.push(question)
+        }),
+      progress: Effect.sync(() => current),
+    },
+  }
+}
+
+describe("fork pane", () => {
+  it.live("the first ask forks, later asks go to the fork, and turns render as they land", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
-      const controller = makeSideQuestionPane(acceptAsk, queue.cast)
+      const server = makeServer()
+      const controller = makeForkPane(server.actions, queue.cast)
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
-          <SideQuestionPane open={true} onClose={() => {}} controller={controller} />
+          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
         )),
       )
-      expect(renderFrame(setup)).toContain("side question")
+      expect(renderFrame(setup)).toContain("btw · fork")
       controller.ask("why?")
-      yield* queue.drain
       expect(Option.isSome(controller.state().pending)).toBe(true)
+      yield* queue.drain
+      expect(server.forked).toEqual(["why?"])
+      expect(Option.isNone(controller.state().pending)).toBe(true)
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("thinking"), "thinking"),
       )
-      controller.sync({ question: "why?", text: "because", done: false })
+      // A second ask while the fork replies is dropped on the client.
+      controller.ask("too soon?")
+      yield* queue.drain
+      expect(server.asked).toEqual([])
+
+      controller.sync(Option.some(view([{ question: "why?", answer: "because" }], false)))
       yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "streamed text"),
-      )
-      controller.sync({ question: "why?", text: "because so", done: true, answer: "because so" })
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("because so"), "first answer"),
+        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "answer"),
       )
       controller.ask("and?")
       yield* queue.drain
-      controller.sync({ question: "and?", text: "", done: true, answer: "then that" })
+      expect(server.asked).toEqual(["and?"])
+      controller.sync(
+        Option.some(
+          view(
+            [
+              { question: "why?", answer: "because" },
+              { question: "and?", answer: "then that" },
+            ],
+            false,
+          ),
+        ),
+      )
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("then that"), "second answer"),
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("why?")
-      expect(frame).toContain("and?")
-      expect(Option.isNone(controller.state().pending)).toBe(true)
+      expect(frame).toContain("btw: why?")
+      expect(frame).toContain("^o open")
     }),
   )
 
-  it.live("a run that lands after escape reset the pane is discarded", () =>
+  it.live("a reply that lands after escape reset the pane is discarded", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
-      const controller = makeSideQuestionPane(acceptAsk, queue.cast)
+      const server = makeServer()
+      const controller = makeForkPane(server.actions, queue.cast)
       controller.ask("stale?")
       controller.reset()
       yield* queue.drain
-      controller.sync({ question: "stale?", text: "", done: true, answer: "late" })
-      expect(controller.state().turns.length).toBe(0)
+      expect(Option.isNone(controller.state().fork)).toBe(true)
       expect(Option.isNone(controller.state().pending)).toBe(true)
-      controller.ask("fresh?")
-      yield* queue.drain
-      // A run for another question belongs to an earlier pane and is ignored.
-      controller.sync({ question: "stale?", text: "", done: true, answer: "late" })
-      expect(controller.state().turns.length).toBe(0)
-      controller.sync({ question: "fresh?", text: "", done: true, answer: "now" })
-      expect(controller.state().turns.map((turn) => turn.answer)).toEqual(["now"])
     }),
   )
 
-  it.live("a refused ask leaves the error visible and the input ready", () =>
+  it.live("a refused fork leaves the error visible and the input ready", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
-      const controller = makeSideQuestionPane(
-        () => Effect.fail({ message: "model unavailable" }),
+      const controller = makeForkPane(
+        {
+          fork: () => Effect.fail({ message: "model unavailable" }),
+          ask: () => Effect.void,
+          progress: Effect.succeedNone,
+        },
         queue.cast,
       )
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
-          <SideQuestionPane open={true} onClose={() => {}} controller={controller} />
+          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
         )),
       )
       controller.ask("why?")
@@ -98,19 +143,7 @@ describe("side question pane", () => {
         waitForRenderedFrame(setup, (frame) => frame.includes("model unavailable"), "error"),
       )
       expect(Option.isNone(controller.state().pending)).toBe(true)
-      expect(controller.state().turns.length).toBe(0)
-    }),
-  )
-
-  it.live("a run that ends in an error shows the error", () =>
-    Effect.gen(function* () {
-      const queue = makeCastQueue()
-      const controller = makeSideQuestionPane(acceptAsk, queue.cast)
-      controller.ask("why?")
-      yield* queue.drain
-      controller.sync({ question: "why?", text: "", done: true, error: "child failed" })
-      expect(controller.state().error).toEqual(Option.some("child failed"))
-      expect(Option.isNone(controller.state().pending)).toBe(true)
+      expect(Option.isNone(controller.state().fork)).toBe(true)
     }),
   )
 })

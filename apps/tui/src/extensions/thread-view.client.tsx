@@ -117,7 +117,7 @@ export const sessionLabel = (session: Session): string =>
  *
  * The server decides membership: sessions carry the thread they belong to, so
  * a compaction handoff stays in the thread it continues and a delegate run or
- * a `/btw` side question sits in its own. Re-deriving that here from
+ * a `/btw` fork sits in its own. Re-deriving that here from
  * `parentSessionId` would be a second, weaker copy of the rule — and a wrong
  * one, because a spawn's own handoff shares no parent link with this thread's
  * root and a tree walk would drop it.

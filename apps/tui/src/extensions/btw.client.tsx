@@ -2,12 +2,7 @@
 import { Effect, Option } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
-import {
-  BTW_EXTENSION_ID,
-  BtwRpc,
-  type SideQuestionRunType,
-  type SideTurnType,
-} from "@gent/extensions/client.js"
+import { BTW_EXTENSION_ID, BtwRpc, type ForkViewType } from "@gent/extensions/client.js"
 import {
   clientCommandContribution,
   clientContributions,
@@ -25,109 +20,116 @@ import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 // ── builtins/btw.client ─────────────────────────────────────────────────────
 
 /**
- * `/btw` side-question pane.
+ * `/btw` fork pane.
  *
- * `/btw <question>` (alias `/side`) opens a pane above the composer and starts
- * the server's `BtwRpc.Ask` with the exchange so far. The ask returns at once;
- * streamed text and the final answer arrive through `BtwRpc.Progress` on each
- * state pulse from the btw extension. Follow-ups type into the pane's input;
- * `esc` closes and forgets the exchange.
+ * `/btw <question>` (alias `/side`) forks the branch into a parallel child
+ * session seeded with its context and opens a pane over it; `/btw` alone
+ * reopens the pane on the fork this branch opened last, or forks without
+ * asking. Follow-ups type into the pane's input. `^o` opens the fork as the
+ * shell's session; `esc` closes the pane and leaves the fork where it is.
  */
 
 const BTW_OVERLAY_ID = "btw"
 
-interface SideQuestionPaneState {
-  readonly turns: ReadonlyArray<SideTurnType>
+interface ForkPaneState {
+  readonly fork: Option.Option<ForkViewType>
+  /** A question on its way to the fork. */
   readonly pending: Option.Option<string>
-  /** Answer text streamed so far for the pending question. */
-  readonly partial: string
   readonly error: Option.Option<string>
 }
 
-const emptyPane: SideQuestionPaneState = {
-  turns: [],
+const emptyPane: ForkPaneState = {
+  fork: Option.none(),
   pending: Option.none(),
-  partial: "",
   error: Option.none(),
 }
 
-interface SideQuestionPaneController {
-  readonly state: () => SideQuestionPaneState
+interface ForkPaneController {
+  readonly state: () => ForkPaneState
+  /** Forks now when the branch has no open fork; otherwise asks the open fork. */
   readonly ask: (question: string) => void
-  /** Applies the server's view of the run: streamed text, the answer, or an error. */
-  readonly sync: (run: SideQuestionRunType) => void
+  /** Applies the server's view of the fork. */
+  readonly sync: (fork: Option.Option<ForkViewType>) => void
   readonly reset: () => void
 }
 
+interface ForkPaneActions {
+  readonly fork: (question: string) => Effect.Effect<void, { readonly message: string }, never>
+  readonly ask: (question: string) => Effect.Effect<void, { readonly message: string }, never>
+  readonly progress: Effect.Effect<Option.Option<ForkViewType>, { readonly message: string }, never>
+}
+
 /** Pane state plus the ask action; shared by the slash command and the overlay. */
-export const makeSideQuestionPane = (
-  ask: (input: {
-    question: string
-    previous: ReadonlyArray<SideTurnType>
-  }) => Effect.Effect<void, { readonly message: string }, never>,
+export const makeForkPane = (
+  actions: ForkPaneActions,
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
-): SideQuestionPaneController => {
-  const [state, setState] = createSignal<SideQuestionPaneState>(emptyPane)
-  // Each reset starts a new generation; a failure from an earlier one is discarded.
+): ForkPaneController => {
+  const [state, setState] = createSignal<ForkPaneState>(emptyPane)
+  // Each reset starts a new generation; a reply from an earlier one is discarded.
   let generation = 0
+  const settle = (asked: number, change: (current: ForkPaneState) => ForkPaneState) =>
+    Effect.sync(() => {
+      if (asked !== generation) return
+      setState(change)
+    })
+  const failed = (asked: number, message: string) =>
+    settle(asked, (current) => ({
+      ...current,
+      pending: Option.none(),
+      error: Option.some(message),
+    }))
   return {
     state,
     reset: () => {
       generation += 1
       setState(emptyPane)
     },
-    // A run for another question belongs to an earlier pane and is ignored.
-    sync: (run) => {
-      setState((current) => {
-        if (!Option.contains(current.pending, run.question)) return current
-        if (!run.done) return { ...current, partial: run.text }
-        const error = Option.fromUndefinedOr(run.error)
-        if (Option.isSome(error)) {
-          return { ...current, pending: Option.none(), partial: "", error }
-        }
-        const answer = Option.getOrElse(Option.fromUndefinedOr(run.answer), () => run.text)
-        return {
-          turns: [...current.turns, { question: run.question, answer }],
-          pending: Option.none(),
-          partial: "",
-          error: Option.none(),
-        }
-      })
+    sync: (fork) => {
+      setState((current) => ({ ...current, fork }))
     },
     ask: (raw) => {
       const question = raw.trim()
       const asked = generation
-      if (question.length === 0 || Option.isSome(state().pending)) return
-      setState((current) => ({
-        ...current,
+      const current = state()
+      const replying = Option.match(current.fork, {
+        onNone: () => false,
+        onSome: (view) => view.replying,
+      })
+      if (Option.isSome(current.pending) || replying) return
+      if (question.length === 0 && Option.isSome(current.fork)) return
+      setState((previous) => ({
+        ...previous,
         pending: Option.some(question),
-        partial: "",
         error: Option.none(),
       }))
+      const send = Option.match(current.fork, {
+        onNone: () => actions.fork(question),
+        onSome: () => actions.ask(question),
+      })
       cast(
-        ask({ question, previous: state().turns }).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              if (asked !== generation) return
-              setState((current) => ({
-                ...current,
-                pending: Option.none(),
-                partial: "",
-                error: Option.some(error.message),
-              }))
-            }),
+        send.pipe(
+          Effect.andThen(actions.progress),
+          // Sent: the fork's view carries the question from here on.
+          Effect.flatMap((fork) =>
+            settle(asked, (previous) => ({ ...previous, fork, pending: Option.none() })),
           ),
+          Effect.catch((error) => failed(asked, error.message)),
         ),
       )
     },
   }
 }
 
-export function SideQuestionPane(props: OverlayProps & { controller: SideQuestionPaneController }) {
+export function ForkPane(
+  props: OverlayProps & { controller: ForkPaneController; onOpen: () => void },
+) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [draft, setDraft] = createSignal("")
   const state = () => props.controller.state()
+  const fork = () => Option.getOrUndefined(state().fork)
+  const replying = () =>
+    Option.match(state().fork, { onNone: () => false, onSome: (view) => view.replying })
   const close = () => {
     props.controller.reset()
     props.onClose()
@@ -138,8 +140,14 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
         close()
         return true
       }
+      if (event.ctrl === true && event.name === "o" && Option.isSome(state().fork)) {
+        props.onOpen()
+        return true
+      }
     },
-    { when: () => props.open, capture: true },
+    // Not `capture`: a capturing scope stops every key, and the pane's input
+    // would never see the follow-up being typed.
+    { when: () => props.open },
   )
   const submit = () => {
     const question = draft()
@@ -150,39 +158,42 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
   const width = () => Math.min(dimensions().width - 4, 100)
   const height = () => Math.max(8, dimensions().height - 4)
   const left = () => Math.max(0, Math.floor((dimensions().width - width()) / 2))
+  const title = () =>
+    Option.match(state().fork, {
+      onNone: () => "btw · fork",
+      onSome: (view) => `btw · ${view.name}`,
+    })
 
   return (
     <Show when={props.open}>
-      <ChromePanel.Root
-        title="btw · side question"
-        width={width()}
-        height={height()}
-        left={left()}
-        top={2}
-      >
+      <ChromePanel.Root title={title()} width={width()} height={height()} left={left()} top={2}>
         <ChromePanel.Body>
-          <For each={state().turns}>
-            {(turn) => (
-              <box flexDirection="column" marginBottom={1}>
-                <text>
-                  <span style={{ fg: theme.primary, bold: true }}>{turn.question}</span>
-                </text>
-                <text style={{ fg: theme.text }}>{turn.answer}</text>
-              </box>
+          <Show when={fork()}>
+            {(view) => (
+              <For each={view().turns}>
+                {(turn) => (
+                  <box flexDirection="column" marginBottom={1}>
+                    <text>
+                      <span style={{ fg: theme.primary, bold: true }}>{turn.question}</span>
+                    </text>
+                    <Show
+                      when={turn.answer.length > 0}
+                      fallback={<text style={{ fg: theme.textMuted }}>thinking…</text>}
+                    >
+                      <text style={{ fg: theme.text }}>{turn.answer}</text>
+                    </Show>
+                  </box>
+                )}
+              </For>
             )}
-          </For>
+          </Show>
           <Show when={Option.getOrUndefined(state().pending)}>
             {(question) => (
               <box flexDirection="column" marginBottom={1}>
                 <text>
                   <span style={{ fg: theme.primary, bold: true }}>{question()}</span>
                 </text>
-                <Show
-                  when={state().partial.length > 0}
-                  fallback={<text style={{ fg: theme.textMuted }}>thinking…</text>}
-                >
-                  <text style={{ fg: theme.text }}>{state().partial}</text>
-                </Show>
+                <text style={{ fg: theme.textMuted }}>forking…</text>
               </box>
             )}
           </Show>
@@ -192,10 +203,10 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
         </ChromePanel.Body>
         <ChromePanel.Section>
           <box flexDirection="row">
-            <text style={{ fg: theme.textMuted }}>follow-up: </text>
+            <text style={{ fg: theme.textMuted }}>ask: </text>
             <box flexGrow={1}>
               <input
-                focused={props.open && Option.isNone(state().pending)}
+                focused={props.open && Option.isNone(state().pending) && !replying()}
                 value={draft()}
                 onInput={setDraft}
                 onSubmit={submit}
@@ -205,7 +216,9 @@ export function SideQuestionPane(props: OverlayProps & { controller: SideQuestio
             </box>
           </box>
         </ChromePanel.Section>
-        <ChromePanel.Footer>not added to the session · enter ask · esc close</ChromePanel.Footer>
+        <ChromePanel.Footer>
+          a parallel session from here · enter ask · ^o open · esc close
+        </ChromePanel.Footer>
       </ChromePanel.Root>
     </Show>
   )
@@ -216,46 +229,76 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
-    const controller = makeSideQuestionPane(
-      (input) =>
-        transport.request(ref(BtwRpc.Ask), input).pipe(
-          Effect.asVoid,
-          Effect.mapError((error) => ({ message: String(error) })),
-        ),
+    const asMessage = <A, E>(effect: Effect.Effect<A, E, never>) =>
+      effect.pipe(Effect.mapError((error) => ({ message: String(error) })))
+    const progress = asMessage(
+      transport
+        .request(ref(BtwRpc.Progress), {})
+        .pipe(Effect.map((result) => Option.fromUndefinedOr(result.fork))),
+    )
+    const controller = makeForkPane(
+      {
+        fork: (question) =>
+          asMessage(transport.request(ref(BtwRpc.Fork), { question })).pipe(Effect.asVoid),
+        ask: (question) =>
+          asMessage(transport.request(ref(BtwRpc.Ask), { question })).pipe(Effect.asVoid),
+        progress,
+      },
       shell.cast,
     )
-    // Each pulse from the btw extension means the run changed; read it and apply it.
+    const [open, setOpen] = createSignal(false)
+    const refresh = () => shell.cast(progress.pipe(Effect.map(controller.sync), Effect.ignore))
+    // Each pulse from the btw extension means the fork's view changed; read it and apply it.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
         if (pulse.extensionId !== BTW_EXTENSION_ID) return
-        if (Option.isNone(controller.state().pending)) return
-        shell.cast(
-          transport.request(ref(BtwRpc.Progress), {}).pipe(
-            Effect.map((progress) => {
-              Option.map(Option.fromUndefinedOr(progress.run), controller.sync)
-            }),
-            Effect.ignore,
-          ),
-        )
+        if (!open()) return
+        refresh()
       }),
     )
+    const show = () => {
+      setOpen(true)
+      shell.openOverlay(BTW_OVERLAY_ID)
+      refresh()
+    }
     return clientContributions(
       clientCommandContribution({
         id: "btw",
-        title: "Side question",
-        description: "Ask about the conversation without adding to it",
+        title: "Fork here",
+        description: "A parallel session with everything up to now; ask it on the side",
         category: "Session",
         slash: "btw",
         aliases: ["side"],
-        onSelect: () => shell.openOverlay(BTW_OVERLAY_ID),
+        onSelect: show,
         onSlash: (args) => {
-          shell.openOverlay(BTW_OVERLAY_ID)
-          controller.ask(args)
+          show()
+          if (args.trim().length > 0) controller.ask(args)
         },
       }),
       overlayContribution({
         id: BTW_OVERLAY_ID,
-        component: (props) => <SideQuestionPane {...props} controller={controller} />,
+        component: (props) => (
+          <ForkPane
+            {...props}
+            onClose={() => {
+              setOpen(false)
+              props.onClose()
+            }}
+            controller={controller}
+            onOpen={() => {
+              Option.map(controller.state().fork, (fork) => {
+                setOpen(false)
+                controller.reset()
+                props.onClose()
+                shell.switchSession({
+                  sessionId: fork.sessionId,
+                  branchId: fork.branchId,
+                  name: fork.name,
+                })
+              })
+            }}
+          />
+        ),
       }),
     )
   }),

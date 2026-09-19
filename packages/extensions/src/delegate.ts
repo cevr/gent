@@ -259,12 +259,6 @@ const childMessages = (target: { readonly sessionId: SessionId; readonly branchI
 
 const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
 
-/** The history override for a `create`: an inheriting child forks the parent branch. */
-const historyBranch = (inherit: boolean, branchId: BranchId) => {
-  if (inherit) return { historyBranchId: branchId }
-  return {}
-}
-
 /** Children never spend the parent's patience on a broken model. */
 const childRunSpec = (runSpec: Option.Option<RunSpec>): RunSpec => {
   const base = Option.getOrElse(runSpec, () => makeRunSpec({}))
@@ -447,7 +441,7 @@ interface AdmitParams {
   /** The tool call that owns the child. The same id admits the same child once. */
   readonly requestId?: RequestId
   readonly toolCallId?: ToolCallId
-  /** `history`, `visibility`, `overrides`, `parentToolCallId`. */
+  /** `visibility`, `overrides`, `parentToolCallId`. */
   readonly runSpec?: RunSpec
   /** Sees the child's events from its first step. Best effort: the answer can return before trailing events are observed. */
   readonly observe?: (event: AgentEvent) => Effect.Effect<void>
@@ -462,7 +456,6 @@ interface AdmitParams {
 const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
   const ctx = yield* ExtensionContext
   const isPrivate = params.runSpec?.visibility === "private"
-  const inherit = params.runSpec?.history === "inherit"
   const admitted = yield* registry
     .modify((entries) =>
       Effect.gen(function* () {
@@ -492,8 +485,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           name: childName(params.prompt),
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
-          // An inheriting child forks the parent branch's history; otherwise it starts clean.
-          ...historyBranch(inherit, ctx.branchId),
           ...Record.filter({ requestId: params.requestId }, Predicate.isNotUndefined),
         })
         const requestId = Option.getOrElse(requested, () =>
@@ -678,15 +669,15 @@ const awaitChild = Effect.fn("Delegate.wait")(function* (requestId: RequestId) {
 
 interface RunChildParams {
   readonly prompt: string
-  /** `history`, `visibility`, `overrides`, `parentToolCallId`. */
+  /** `visibility`, `overrides`, `parentToolCallId`. */
   readonly runSpec?: RunSpec
   readonly observe?: (event: AgentEvent) => Effect.Effect<void>
 }
 
 /**
  * One child under the current branch, admitted and awaited here. The model
- * never waits on a child; this is for `btw` and `read_session`, whose caller
- * needs the answer in hand. A private run leaves no trace.
+ * never waits on a child; this is for `read_session`, whose caller needs the
+ * answer in hand. A private run leaves no trace.
  */
 export const runChild = Effect.fn("Delegate.runChild")(function* (params: RunChildParams) {
   const run = Effect.gen(function* () {

@@ -1,227 +1,385 @@
-import { Cause, Context, Effect, Layer, Option, Ref, Schema } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
 import {
+  BranchId,
   defineExtension,
   defineRequests,
   defineResource,
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
-  makeRunSpec,
+  type Message,
   request,
+  SessionId,
 } from "@gent/core/extensions/api"
-import { runChild } from "./delegate.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
 export const BTW_EXTENSION_ID = ExtensionId.make("@gent/btw")
 
-const MAXIMUM_SIDE_QUESTION_CHARS = 8000
+const MAXIMUM_QUESTION_CHARS = 8000
+const FORK_NAME_CHARS = 60
 
-/** One completed exchange in a side conversation; replayed on follow-ups. */
-export const SideTurn = Schema.Struct({
+/** One exchange on the fork; `answer` is the streamed text while the fork is replying. */
+const ForkTurn = Schema.Struct({
   question: Schema.String,
   answer: Schema.String,
 })
-export type SideTurn = typeof SideTurn.Type
+type ForkTurn = typeof ForkTurn.Type
 
-const SideQuestionInput = Schema.Struct({
-  question: Schema.String,
-  previous: Schema.Array(SideTurn),
-})
-type SideQuestionInput = typeof SideQuestionInput.Type
-
-/**
- * The side question most recently started on this branch. `text` grows while
- * the child streams; `done` flips once `answer` or `error` is final.
- */
-export const SideQuestionRun = Schema.Struct({
-  question: Schema.String,
-  text: Schema.String,
-  done: Schema.Boolean,
-  answer: Schema.optional(Schema.String),
+/** The fork most recently opened from this branch, as the pane shows it. */
+export const ForkView = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  name: Schema.String,
+  turns: Schema.Array(ForkTurn),
+  /** The fork's loop holds a turn; a follow-up waits for it. */
+  replying: Schema.Boolean,
   error: Schema.optional(Schema.String),
 })
-export type SideQuestionRun = typeof SideQuestionRun.Type
+export type ForkView = typeof ForkView.Type
 
-export const SideQuestionProgress = Schema.Struct({
-  run: Schema.optional(SideQuestionRun),
+export const ForkProgress = Schema.Struct({
+  fork: Schema.optional(ForkView),
 })
-export type SideQuestionProgress = typeof SideQuestionProgress.Type
+export type ForkProgress = typeof ForkProgress.Type
 
-/** Asking returns at once; the answer arrives through `btw.progress` on state pulses. */
-const SideQuestionOutput = Schema.Struct({
-  started: Schema.Boolean,
+const ForkInput = Schema.Struct({
+  /** The first question; empty forks now and asks nothing. */
+  question: Schema.String,
 })
-type SideQuestionOutput = typeof SideQuestionOutput.Type
+type ForkInput = typeof ForkInput.Type
+
+const ForkOutput = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+type ForkOutput = typeof ForkOutput.Type
+
+const AskInput = Schema.Struct({
+  question: Schema.String,
+})
+type AskInput = typeof AskInput.Type
 
 // ── extension ───────────────────────────────────────────────────────────────
 
 /**
- * `/btw` side questions. Each ask runs a private child of the current
- * agent on a copy of this branch's history, with tools off and low
- * reasoning. Nothing from the side conversation lands on the branch; the
- * client replays earlier side turns inside the next prompt.
+ * `/btw` forks the branch. The fork is a child session seeded with this
+ * branch's context window, run by the session's own agent with its tools; a
+ * parallel session, not a side channel. Nothing the fork does lands on this
+ * branch. The pane reads it through `btw.progress`; opening it as the shell's
+ * session is the client's `switchSession`, because the fork already is one.
  *
- * The ask request returns at once. The run itself lives in a process-scoped
- * resource so it never holds the branch's request permit; the client reads
- * streamed text and the final answer through `btw.progress` on state pulses.
+ * The fork itself is durable. What this process keeps is the pane's view of
+ * it: which fork the branch opened last, and the reply streaming now.
  */
 
-class SideQuestionError extends Schema.TaggedError<SideQuestionError>()("SideQuestionError", {
+class ForkError extends Schema.TaggedError<ForkError>()("ForkError", {
   message: Schema.String,
 }) {}
 
-// ── Background runs ──
+// ── Open forks ──
 
-interface SideQuestionRunsService {
-  readonly get: (branchId: string) => Effect.Effect<Option.Option<SideQuestionRun>>
-  readonly set: (branchId: string, run: SideQuestionRun) => Effect.Effect<void>
-  readonly update: (
-    branchId: string,
-    change: (run: SideQuestionRun) => SideQuestionRun,
-  ) => Effect.Effect<void>
-  /** Runs the effect on the resource's own scope so the request can return. */
-  readonly fork: (effect: Effect.Effect<void>) => Effect.Effect<void>
+interface OpenFork {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly name: string
+  /** Messages the fork copied in; the pane shows what came after. */
+  readonly inherited: number
+  readonly partial: string
+  readonly replying: boolean
+  readonly error: Option.Option<string>
+  /** Follows the fork's stream; ends with the fork it follows. */
+  readonly follower: Option.Option<Fiber.Fiber<void>>
 }
 
-/** One run per branch. The process resource owns the fibers and closes them on shutdown. */
-class SideQuestionRuns extends Context.Service<SideQuestionRuns, SideQuestionRunsService>()(
-  "@gent/extensions/src/btw/SideQuestionRuns",
+interface OpenForksService {
+  readonly get: (branchId: string) => Effect.Effect<Option.Option<OpenFork>>
+  /** Replaces the branch's open fork; the one it replaces stops being followed. */
+  readonly set: (branchId: string, fork: OpenFork) => Effect.Effect<void>
+  readonly update: (branchId: string, change: (fork: OpenFork) => OpenFork) => Effect.Effect<void>
+  /** Runs the effect on the resource's own scope so the request can return. */
+  readonly spawn: (effect: Effect.Effect<void>) => Effect.Effect<Fiber.Fiber<void>>
+}
+
+/** One open fork per branch. The process resource owns the follower fibers and closes them on shutdown. */
+class OpenForks extends Context.Service<OpenForks, OpenForksService>()(
+  "@gent/extensions/src/btw/OpenForks",
 ) {}
 
-const SideQuestionRunsLive: Layer.Layer<SideQuestionRuns> = Layer.effect(
-  SideQuestionRuns,
+const OpenForksLive: Layer.Layer<OpenForks> = Layer.effect(
+  OpenForks,
   Effect.gen(function* () {
     const scope = yield* Effect.scope
-    const runs = yield* Ref.make<ReadonlyMap<string, SideQuestionRun>>(new Map())
-    return SideQuestionRuns.of({
+    const forks = yield* Ref.make<ReadonlyMap<string, OpenFork>>(new Map())
+    return OpenForks.of({
       get: (branchId) =>
-        Ref.get(runs).pipe(Effect.map((all) => Option.fromNullishOr(all.get(branchId)))),
-      set: (branchId, run) =>
-        Ref.update(runs, (all) => {
-          const next = new Map(all)
-          next.set(branchId, run)
-          return next
-        }),
+        Ref.get(forks).pipe(Effect.map((all) => Option.fromNullishOr(all.get(branchId)))),
+      set: (branchId, fork) =>
+        Ref.modify(
+          forks,
+          (all): readonly [Option.Option<OpenFork>, ReadonlyMap<string, OpenFork>] => {
+            const next = new Map(all)
+            next.set(branchId, fork)
+            return [Option.fromNullishOr(all.get(branchId)), next]
+          },
+        ).pipe(
+          Effect.flatMap((previous) =>
+            Option.match(
+              Option.flatMap(previous, (fork) => fork.follower),
+              {
+                onNone: () => Effect.void,
+                onSome: Fiber.interrupt,
+              },
+            ),
+          ),
+        ),
       update: (branchId, change) =>
-        Ref.update(runs, (all) => {
+        Ref.update(forks, (all) => {
           const current = Option.fromNullishOr(all.get(branchId))
           if (Option.isNone(current)) return all
           const next = new Map(all)
           next.set(branchId, change(current.value))
           return next
         }),
-      fork: (effect) => Effect.forkIn(effect, scope).pipe(Effect.asVoid),
+      spawn: (effect) => Effect.forkIn(effect, scope),
     })
   }),
 )
 
-const SideQuestionRunsResource = defineResource({
-  id: "@gent/btw/runs",
+const OpenForksResource = defineResource({
+  id: "@gent/btw/forks",
   scope: "process",
-  tag: SideQuestionRuns,
-  layer: SideQuestionRunsLive,
+  tag: OpenForks,
+  layer: OpenForksLive,
 })
 
-// ── Prompt ──
+// ── View ──
 
-export const SIDE_QUESTION_INSTRUCTION =
-  "Answer this side question using only the conversation context above. Do not use tools and do not run code. The user may send follow-up side questions; none of this side conversation is added to the main session."
+const textOf = (message: Message): string =>
+  message.parts
+    .flatMap((part) => {
+      if (part.type === "text") return [part.text]
+      return []
+    })
+    .join("")
 
-const replayTurns = (previous: ReadonlyArray<SideTurn>) =>
-  previous
-    .map((turn) => `<side_question>\n${turn.question}\n</side_question>\n\n${turn.answer}`)
-    .join("\n\n")
+/** A user turn the pane asked, not a message the runtime wrote for the model. */
+const isAskedTurn = (message: Message): boolean =>
+  message.role === "user" && Predicate.isUndefined(message.metadata?.customType)
 
-/** The child sees the branch history, then one user message carrying the side exchange. */
-export const sideQuestionPrompt = (input: SideQuestionInput): string => {
-  const current = `<side_question>\n${input.question}\n</side_question>`
-  if (input.previous.length === 0) {
-    return `<side_question>\n${SIDE_QUESTION_INSTRUCTION}\n\n${input.question}\n</side_question>`
+/** Pairs each asked question with the assistant text that followed it. */
+const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyArray<ForkTurn> => {
+  const turns: Array<ForkTurn> = []
+  for (const message of messages) {
+    if (isAskedTurn(message)) {
+      turns.push({ question: textOf(message), answer: "" })
+      continue
+    }
+    const last = turns.at(-1)
+    if (message.role !== "assistant" || Predicate.isUndefined(last)) continue
+    turns[turns.length - 1] = { ...last, answer: last.answer + textOf(message) }
   }
-  return `${SIDE_QUESTION_INSTRUCTION}\n\nEarlier side questions and answers in this exchange:\n\n${replayTurns(input.previous)}\n\n${current}`
+  const last = turns.at(-1)
+  if (partial.length > 0 && Predicate.isNotUndefined(last) && last.answer.length === 0) {
+    turns[turns.length - 1] = { ...last, answer: partial }
+  }
+  return turns
 }
+
+const forkName = (question: string): string => {
+  const chars = [...question.trim()]
+  if (chars.length === 0) return "btw"
+  if (chars.length <= FORK_NAME_CHARS) return `btw: ${chars.join("")}`
+  return `btw: ${chars.slice(0, FORK_NAME_CHARS).join("")}…`
+}
+
+const checkQuestion = (raw: string) =>
+  Effect.gen(function* () {
+    const question = raw.trim()
+    if ([...question].length > MAXIMUM_QUESTION_CHARS) {
+      return yield* new ForkError({
+        message: `Question exceeds ${MAXIMUM_QUESTION_CHARS} characters`,
+      })
+    }
+    return question
+  })
 
 // ── Requests ──
 
+/**
+ * Follows the fork's live stream into the pane's view. The reply text is
+ * kept only until its message is durable; the view reads finished turns
+ * from the fork's history.
+ */
+const followFork = (parentBranchId: string, fork: { sessionId: SessionId; branchId: BranchId }) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const forks = yield* OpenForks
+    const pulse = ctx.State.changed().pipe(Effect.ignore)
+    // A newer fork on the same branch has its own follower; this one never writes over it.
+    const apply = (change: (current: OpenFork) => OpenFork) =>
+      forks
+        .update(parentBranchId, (current) => {
+          if (current.sessionId !== fork.sessionId) return current
+          return change(current)
+        })
+        .pipe(Effect.andThen(pulse))
+    yield* ctx.Session.events(fork).pipe(
+      Stream.runForEach((event) => {
+        switch (event._tag) {
+          case "StreamStarted":
+            return apply((current) => ({ ...current, replying: true, error: Option.none() }))
+          case "StreamChunk":
+            return apply((current) => ({ ...current, partial: current.partial + event.chunk }))
+          case "TurnCompleted":
+            return apply((current) => ({ ...current, partial: "", replying: false }))
+          case "ErrorOccurred":
+            return apply((current) => ({
+              ...current,
+              partial: "",
+              replying: false,
+              error: Option.some(event.error),
+            }))
+          default:
+            return Effect.void
+        }
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("btw.follow.failed").pipe(
+          Effect.annotateLogs({ sessionId: fork.sessionId, error: String(cause) }),
+        ),
+      ),
+    )
+  })
+
+/** Admits the question on the fork's loop and marks the fork replying until its receipt arrives. */
+const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const forks = yield* OpenForks
+    yield* forks.update(parentBranchId, (current) => {
+      if (current.sessionId !== fork.sessionId) return current
+      return { ...current, replying: true, error: Option.none() }
+    })
+    yield* ctx.Session.send({
+      sessionId: fork.sessionId,
+      branchId: fork.branchId,
+      content: question,
+      completion: "admission",
+    }).pipe(
+      Effect.mapError(
+        (error) => new ForkError({ message: `Cannot ask the fork: ${error.message}` }),
+      ),
+    )
+  })
+
 export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
+  Fork: request({
+    id: "btw.fork",
+    description:
+      "Fork this branch into a parallel child session seeded with its context; an empty question forks without asking",
+    input: ForkInput,
+    output: ForkOutput,
+    execute: Effect.fn("BtwRpc.Fork")(function* (input: ForkInput) {
+      const question = yield* checkQuestion(input.question)
+      const ctx = yield* ExtensionContext
+      const forks = yield* OpenForks
+      const parentBranchId = String(ctx.branchId)
+      const created = yield* ctx.Session.create({
+        name: forkName(question),
+        parentSessionId: ctx.sessionId,
+        parentBranchId: ctx.branchId,
+        historyBranchId: ctx.branchId,
+      }).pipe(
+        Effect.mapError((error) => new ForkError({ message: `Cannot fork: ${error.message}` })),
+      )
+      const detail = yield* ctx.Session.getDetail(created.sessionId).pipe(
+        Effect.mapError(
+          (error) => new ForkError({ message: `Cannot read the fork: ${error.message}` }),
+        ),
+      )
+      const inherited = detail.branches
+        .filter((entry) => entry.branch.id === created.branchId)
+        .reduce((count, entry) => count + entry.messages.length, 0)
+      const fork: OpenFork = {
+        sessionId: created.sessionId,
+        branchId: created.branchId,
+        name: forkName(question),
+        inherited,
+        partial: "",
+        replying: false,
+        error: Option.none(),
+        follower: Option.none(),
+      }
+      yield* forks.set(parentBranchId, fork)
+      // The follower outlives this request; it carries the context it needs.
+      const follower = yield* forks.spawn(
+        followFork(parentBranchId, created).pipe(
+          Effect.provideService(ExtensionContext, ctx),
+          Effect.provideService(OpenForks, forks),
+        ),
+      )
+      yield* forks.update(parentBranchId, (current) => {
+        if (current.sessionId !== fork.sessionId) return current
+        return { ...current, follower: Option.some(follower) }
+      })
+      if (question.length > 0) yield* sendToFork(parentBranchId, fork, question)
+      yield* ctx.State.changed().pipe(Effect.ignore)
+      return { sessionId: created.sessionId, branchId: created.branchId }
+    }),
+  }),
   Ask: request({
     id: "btw.ask",
     description:
-      "Start a side question over the branch history without touching the branch; read the answer through btw.progress",
-    input: SideQuestionInput,
-    output: SideQuestionOutput,
-    execute: Effect.fn("BtwRpc.Ask")(function* (input: SideQuestionInput) {
-      const question = input.question.trim()
-      if (question.length === 0) {
-        return yield* new SideQuestionError({ message: "Side question is empty" })
-      }
-      if ([...question].length > MAXIMUM_SIDE_QUESTION_CHARS) {
-        return yield* new SideQuestionError({
-          message: `Side question exceeds ${MAXIMUM_SIDE_QUESTION_CHARS} characters`,
-        })
-      }
+      "Ask the fork opened from this branch a follow-up; it waits for a reply in progress",
+    input: AskInput,
+    output: Schema.Struct({ asked: Schema.Boolean }),
+    execute: Effect.fn("BtwRpc.Ask")(function* (input: AskInput) {
+      const question = yield* checkQuestion(input.question)
+      if (question.length === 0) return yield* new ForkError({ message: "Question is empty" })
       const ctx = yield* ExtensionContext
-      const runs = yield* SideQuestionRuns
-      const branchId = String(ctx.branchId)
-      const current = yield* runs.get(branchId)
-      if (Option.isSome(current) && !current.value.done) {
-        return yield* new SideQuestionError({ message: "A side question is already in flight" })
+      const forks = yield* OpenForks
+      const fork = yield* forks.get(String(ctx.branchId))
+      if (Option.isNone(fork)) return yield* new ForkError({ message: "No fork is open here" })
+      if (fork.value.replying) {
+        return yield* new ForkError({ message: "The fork is still replying" })
       }
-      yield* runs.set(branchId, { question, text: "", done: false })
-      // The pulse tells the client to read progress; failures there never touch the run.
-      const pulse = ctx.State.changed().pipe(Effect.ignore)
-      yield* pulse
-      const finish = (change: (run: SideQuestionRun) => SideQuestionRun) =>
-        runs.update(branchId, change).pipe(Effect.andThen(pulse))
-      // Services are captured here: the run continues after this request's scope closes.
-      const work = runChild({
-        prompt: sideQuestionPrompt({ question, previous: input.previous }),
-        runSpec: makeRunSpec({
-          history: "inherit",
-          visibility: "private",
-          overrides: {
-            allowedTools: [],
-            deniedTools: ["cell"],
-            reasoningEffort: "none",
-            systemPromptAddendum: SIDE_QUESTION_INSTRUCTION,
-          },
-        }),
-        observe: (event) => {
-          if (event._tag !== "StreamChunk") return Effect.void
-          return runs
-            .update(branchId, (run) => ({ ...run, text: run.text + event.chunk }))
-            .pipe(Effect.andThen(pulse))
-        },
-      }).pipe(
-        Effect.flatMap((result) =>
-          finish((run) => {
-            if (result._tag === "Error") return { ...run, done: true, error: result.error }
-            return { ...run, done: true, answer: result.text }
-          }),
-        ),
-        Effect.catchCause((cause) =>
-          finish((run) => ({ ...run, done: true, error: Cause.pretty(cause) })),
-        ),
-        // The context is captured here: the run outlives this request's scope.
-        Effect.provideService(ExtensionContext, ctx),
-      )
-      yield* runs.fork(work)
-      return { started: true }
+      yield* sendToFork(String(ctx.branchId), fork.value, question)
+      return { asked: true }
     }),
   }),
   Progress: request({
     id: "btw.progress",
-    description: "The side question most recently started on this branch, with streamed text",
+    description:
+      "The fork opened from this branch: its turns after the fork point and the reply streaming now",
     input: Schema.Struct({}),
-    output: SideQuestionProgress,
+    output: ForkProgress,
     execute: Effect.fn("BtwRpc.Progress")(function* () {
       const ctx = yield* ExtensionContext
-      const runs = yield* SideQuestionRuns
-      return Option.match(yield* runs.get(String(ctx.branchId)), {
-        onNone: (): SideQuestionProgress => ({}),
-        onSome: (run): SideQuestionProgress => ({ run }),
-      })
+      const forks = yield* OpenForks
+      const fork = yield* forks.get(String(ctx.branchId))
+      if (Option.isNone(fork)) return {}
+      const detail = yield* ctx.Session.getDetail(fork.value.sessionId).pipe(
+        Effect.mapError(
+          (error) => new ForkError({ message: `Cannot read the fork: ${error.message}` }),
+        ),
+      )
+      const messages = detail.branches
+        .filter((entry) => entry.branch.id === fork.value.branchId)
+        .flatMap((entry) => entry.messages)
+        .slice(fork.value.inherited)
+      const view: ForkView = {
+        sessionId: fork.value.sessionId,
+        branchId: fork.value.branchId,
+        name: fork.value.name,
+        turns: forkTurns(messages, fork.value.partial),
+        replying: fork.value.replying,
+        ...Option.match(fork.value.error, {
+          onNone: () => ({}),
+          onSome: (error) => ({ error }),
+        }),
+      }
+      return { fork: view }
     }),
   }),
 })
@@ -230,7 +388,7 @@ export const BtwExtension = defineExtension({
   id: BTW_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("resource", SideQuestionRunsResource)
-    yield* host.register("request", BtwRpc.Ask, BtwRpc.Progress)
+    yield* host.register("resource", OpenForksResource)
+    yield* host.register("request", BtwRpc.Fork, BtwRpc.Ask, BtwRpc.Progress)
   }),
 })
