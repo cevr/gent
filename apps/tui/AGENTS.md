@@ -174,7 +174,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/goal`                              | `builtins.tsx`           | Goal widget                           |
 | `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter               |
 | `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane and tray                  |
-| `@gent/btw`                               | `btw.client.tsx`         | Side-question overlay                 |
+| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                      |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                        |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray                       |
 

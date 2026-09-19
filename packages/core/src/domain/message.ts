@@ -328,7 +328,7 @@ export class Session extends Schema.Class<Session>("Session")({
    * The thread this session belongs to, named by the session that started it.
    *
    * A compaction handoff inherits its parent's thread, so work that outgrew one
-   * context window stays one thread. A delegate run or a `/btw` side question
+   * context window stays one thread. A delegate run or a `/btw` fork
    * starts its own, so it never pollutes the thread it was launched from.
    * Storage fills it in on create; only a caller continuing existing work
    * passes one.

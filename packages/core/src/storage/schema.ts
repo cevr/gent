@@ -781,8 +781,8 @@ const makeStorageMigratorLive = (
  * Give every session the thread it belongs to.
  *
  * `parent_session_id` was carrying two meanings: "continued from" for a
- * compaction handoff, and "spawned by" for a delegate run or a `/btw` side
- * question. Reading a thread from it needs the spawn receipt to tell the two
+ * compaction handoff, and "spawned by" for a delegate run or a `/btw`
+ * fork. Reading a thread from it needs the spawn receipt to tell the two
  * apart, and that still fails from inside a spawn — the spawn climbs into its
  * parent's tree and is then filtered out of it. One column, written when the
  * writer already knows which kind of child it is making, answers both.

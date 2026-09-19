@@ -203,7 +203,6 @@ describe("run spec construction", () => {
   test("threads each provided field through", () => {
     const tcid = ToolCallId.make("tc-1")
     const spec = makeRunSpec({
-      history: "inherit",
       visibility: "private",
       overrides: {
         modelId: ModelId.make("custom/model"),
@@ -214,7 +213,6 @@ describe("run spec construction", () => {
       },
       parentToolCallId: tcid,
     })
-    expect(spec.history).toBe("inherit")
     expect(spec.visibility).toBe("private")
     expect(spec.overrides?.modelId).toBe(ModelId.make("custom/model"))
     expect(spec.overrides?.allowedTools).toEqual(["bash"])

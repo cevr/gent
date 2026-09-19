@@ -891,7 +891,7 @@ interface RelationshipStorageService {
    * A thread is the work itself, not one session's parent line: a session that
    * handed off twice has two children and both continue it. Sessions carry the
    * thread they belong to, so this is one indexed read — a delegate run or a
-   * `/btw` side question started its own thread when it was created and is
+   * `/btw` fork started its own thread when it was created and is
    * simply not in this one.
    */
   readonly getThreadSessions: (

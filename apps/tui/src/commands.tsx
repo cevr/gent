@@ -405,7 +405,7 @@ type SessionNode = {
  * continuing it.
  *
  * A compaction handoff inherits the parent's thread. A delegate run or a `/btw`
- * side question is admitted under a parent but opens a thread of its own, so it
+ * fork is admitted under a parent but opens a thread of its own, so it
  * is the session whose thread is itself while still having a parent. The reader
  * sees which rows are side work before opening one.
  */

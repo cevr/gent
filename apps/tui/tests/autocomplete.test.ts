@@ -637,7 +637,7 @@ const commandsRanking: ReadonlyArray<AutocompleteItem> = [
   { id: "think", label: "/think", description: "Pick the reasoning level for this session" },
   { id: "model", label: "/model", description: "Pick the model for this session" },
   { id: "auth", label: "/auth", description: "Manage API Keys" },
-  { id: "btw", label: "/btw", description: "Side question" },
+  { id: "btw", label: "/btw", description: "Fork here" },
   { id: "driver", label: "/driver", description: "Driver override" },
   { id: "thread", label: "/thread", description: "Thread over sessions" },
   { id: "agents", label: "/agents", description: "Agents" },

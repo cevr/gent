@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import {
@@ -8,19 +8,16 @@ import {
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
 import { createRpcHarness } from "@gent/core-internal/test-utils/index"
+import { BranchId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
-import {
-  BTW_EXTENSION_ID,
-  SIDE_QUESTION_INSTRUCTION,
-  SideQuestionProgress,
-  sideQuestionPrompt,
-} from "../src/btw.js"
+import { BTW_EXTENSION_ID, ForkProgress } from "../src/btw.js"
 
-// ── btw/side-question.test ──────────────────────────────────────────────────
+// ── btw/fork.test ───────────────────────────────────────────────────────────
 
 /**
- * `/btw` answers from a copy of the branch history and leaves the branch
- * untouched. Follow-ups replay the earlier side turns inside the prompt.
+ * `/btw` forks the branch into a parallel child session that carries the
+ * branch's context, runs with the session's agent and tools, and never
+ * writes back. The pane reads it through `btw.progress`.
  */
 
 const promptTexts = (options: ProviderOptions): ReadonlyArray<string> =>
@@ -34,56 +31,62 @@ const promptTexts = (options: ProviderOptions): ReadonlyArray<string> =>
 const lastText = (options: ProviderOptions): string =>
   Option.getOrElse(Option.fromUndefinedOr(promptTexts(options).at(-1)), () => "")
 
-/** Starts the side question and waits for the background run to finish. */
-const askAndWait = (params: {
-  readonly client: Effect.Success<ReturnType<typeof createRpcHarness>>["client"]
-  readonly sessionId: Effect.Success<ReturnType<typeof createRpcHarness>>["sessionId"]
-  readonly branchId: Effect.Success<ReturnType<typeof createRpcHarness>>["branchId"]
-  readonly question: string
-  readonly previous: ReadonlyArray<{ readonly question: string; readonly answer: string }>
-}) =>
-  Effect.gen(function* () {
-    const target = { sessionId: params.sessionId, branchId: params.branchId }
-    const started = yield* params.client.extension.request({
-      ...target,
-      extensionId: BTW_EXTENSION_ID,
-      capabilityId: "btw.ask",
-      input: { question: params.question, previous: params.previous },
-    })
-    expect(started).toEqual({ started: true })
-    const progress = yield* waitFor(
-      params.client.extension
+type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
+
+const ForkHandle = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
+
+const btw = (harness: Harness) => {
+  const target = { sessionId: harness.sessionId, branchId: harness.branchId }
+  const progress = harness.client.extension
+    .request({ ...target, extensionId: BTW_EXTENSION_ID, capabilityId: "btw.progress", input: {} })
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ForkProgress)))
+  return {
+    fork: (question: string) =>
+      harness.client.extension
         .request({
           ...target,
           extensionId: BTW_EXTENSION_ID,
-          capabilityId: "btw.progress",
-          input: {},
+          capabilityId: "btw.fork",
+          input: { question },
         })
-        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(SideQuestionProgress))),
-      (current) => current.run?.done === true,
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ForkHandle))),
+    ask: (question: string) =>
+      harness.client.extension.request({
+        ...target,
+        extensionId: BTW_EXTENSION_ID,
+        capabilityId: "btw.ask",
+        input: { question },
+      }),
+    progress,
+    /** The fork's view once its reply is durable. */
+    replied: (turns: number) =>
+      waitFor(
+        progress,
+        (current) =>
+          current.fork?.replying === false &&
+          current.fork.turns.length === turns &&
+          current.fork.turns.every((turn) => turn.answer.length > 0),
+        5_000,
+        `fork replied ${turns}`,
+      ).pipe(Effect.map((current) => Option.fromUndefinedOr(current.fork))),
+  }
+}
+
+const firstTurn = (harness: Harness, content: string) =>
+  Effect.gen(function* () {
+    const target = { sessionId: harness.sessionId, branchId: harness.branchId }
+    yield* harness.client.message.send({ ...target, content })
+    yield* waitFor(
+      harness.client.session.getSnapshot(target),
+      (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
       5_000,
-      "side question done",
+      "first turn idle",
     )
-    return Option.fromUndefinedOr(progress.run)
   })
 
-describe("side questions", () => {
-  it.live("the first prompt carries the instruction and follow-ups replay earlier turns", () =>
-    Effect.sync(() => {
-      const first = sideQuestionPrompt({ question: "Why?", previous: [] })
-      expect(first).toContain(SIDE_QUESTION_INSTRUCTION)
-      expect(first).toContain("<side_question>")
-      const followUp = sideQuestionPrompt({
-        question: "And then?",
-        previous: [{ question: "Why?", answer: "Because." }],
-      })
-      expect(followUp).toContain("Because.")
-      expect(followUp.indexOf("Why?")).toBeLessThan(followUp.indexOf("And then?"))
-    }),
-  )
-
+describe("btw forks", () => {
   it.live(
-    "answers from the branch history without adding messages to the branch",
+    "the fork answers from the branch's context with tools on and leaves the branch untouched",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -92,67 +95,53 @@ describe("side questions", () => {
             {
               ...textStep("pelican"),
               assertRequest: (request) => {
-                expect(request.reasoning).toBe("none")
+                expect(request.reasoning).not.toBe("none")
               },
               assertOptions: (options) => {
-                expect(options.tools.map((tool) => tool.name)).toEqual([])
+                expect(options.tools.length).toBeGreaterThan(0)
                 const texts = promptTexts(options)
                 expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
-                expect(lastText(options)).toContain("What is the codeword?")
-                expect(lastText(options)).toContain(SIDE_QUESTION_INSTRUCTION)
+                expect(lastText(options)).toBe("What is the codeword?")
               },
             },
             {
               ...textStep("seven letters"),
               assertOptions: (options) => {
-                const text = lastText(options)
-                expect(text).toContain("What is the codeword?")
-                expect(text).toContain("pelican")
-                expect(text).toContain("How long is it?")
+                const texts = promptTexts(options)
+                expect(texts).toContain("What is the codeword?")
+                expect(texts).toContain("pelican")
+                expect(lastText(options)).toBe("How long is it?")
               },
             },
           ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-          })
-          const parentEvents: Array<string> = []
-          yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.runForEach((envelope) =>
-              Effect.sync(() => parentEvents.push(envelope.event._tag)),
-            ),
-            Effect.forkScoped,
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const { client, sessionId, branchId } = harness
+          const pane = btw(harness)
+          yield* firstTurn(harness, "The codeword is pelican")
+
+          const handle = yield* pane.fork("What is the codeword?")
+          expect(handle.sessionId).not.toBe(sessionId)
+          const first = yield* pane.replied(1)
+          expect(Option.map(first, (fork) => fork.turns)).toEqual(
+            Option.some([{ question: "What is the codeword?", answer: "pelican" }]),
           )
-          yield* client.message.send({ sessionId, branchId, content: "The codeword is pelican" })
-          yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
-            5_000,
-            "first turn idle",
+          expect(Option.map(first, (fork) => fork.name)).toEqual(
+            Option.some("btw: What is the codeword?"),
           )
 
-          const first = yield* askAndWait({
-            client,
-            sessionId,
-            branchId,
-            question: "What is the codeword?",
-            previous: [],
-          })
-          expect(Option.map(first, (run) => run.answer)).toEqual(Option.some("pelican"))
+          expect(yield* pane.ask("How long is it?")).toEqual({ asked: true })
+          const second = yield* pane.replied(2)
+          expect(Option.map(second, (fork) => fork.turns.at(-1))).toEqual(
+            Option.some({ question: "How long is it?", answer: "seven letters" }),
+          )
 
-          const second = yield* askAndWait({
-            client,
-            sessionId,
-            branchId,
-            question: "How long is it?",
-            previous: [{ question: "What is the codeword?", answer: "pelican" }],
-          })
-          expect(Option.map(second, (run) => run.answer)).toEqual(Option.some("seven letters"))
-
+          // The fork is a session of its own, under this one, with the context copied in.
+          const forkDetail = yield* client.session.getSnapshot(handle)
+          expect(forkDetail.messages.length).toBe(6)
+          const forkSession = yield* client.session.get({ sessionId: handle.sessionId })
+          expect(forkSession?.parentSessionId).toBe(sessionId)
           const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
           expect(snapshot.messages.length).toBe(2)
-          // A private run leaves no child-run provenance on the parent branch.
-          expect(parentEvents.filter((tag) => tag.startsWith("AgentRun"))).toEqual([])
           yield* controls.assertDone
         }).pipe(Effect.timeout("8 seconds")),
       ),
@@ -160,108 +149,83 @@ describe("side questions", () => {
   )
 
   it.live(
-    "the answer streams into the progress request while the child is still replying",
+    "the reply streams into progress while the fork is still replying",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(
             "First sentence. Second sentence.",
           )
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const pane = btw(harness)
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: "Hello there",
           })
-          const progress = () =>
-            client.extension
-              .request({
-                sessionId,
-                branchId,
-                extensionId: BTW_EXTENSION_ID,
-                capabilityId: "btw.progress",
-                input: {},
-              })
-              .pipe(Effect.flatMap(Schema.decodeUnknownEffect(SideQuestionProgress)))
-          yield* client.message.send({ sessionId, branchId, content: "Hello there" })
           yield* controls.waitForStreamStart
           yield* controls.emitAll
           yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
+            harness.client.session.getSnapshot({
+              sessionId: harness.sessionId,
+              branchId: harness.branchId,
+            }),
             (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
             5_000,
             "first turn idle",
           )
-          expect(yield* progress()).toEqual({})
+          expect(yield* pane.progress).toEqual({})
 
-          const started = yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: BTW_EXTENSION_ID,
-            capabilityId: "btw.ask",
-            input: { question: "Say two sentences.", previous: [] },
-          })
-          expect(started).toEqual({ started: true })
-          // A second ask is refused while the first still runs.
-          const refused = yield* Effect.exit(
-            client.extension.request({
-              sessionId,
-              branchId,
-              extensionId: BTW_EXTENSION_ID,
-              capabilityId: "btw.ask",
-              input: { question: "Another?", previous: [] },
-            }),
-          )
+          yield* pane.fork("Say two sentences.")
+          // A follow-up is refused while the fork replies.
+          const refused = yield* Effect.exit(pane.ask("Another?"))
           expect(Exit.isFailure(refused)).toBe(true)
           if (Exit.isFailure(refused)) {
-            expect(Cause.pretty(refused.cause)).toContain("already in flight")
+            expect(Cause.pretty(refused.cause)).toContain("still replying")
           }
-          // Release one chunk only; progress shows it before the answer exists.
+          yield* controls.waitForStreamStart
           yield* controls.emitNext
           const partial = yield* waitFor(
-            progress(),
-            (current) => (current.run?.text.length ?? 0) > 0,
+            pane.progress,
+            (current) => (current.fork?.turns.at(-1)?.answer.length ?? 0) > 0,
             5_000,
             "first chunk visible",
           )
-          expect(partial.run).toEqual({
-            question: "Say two sentences.",
-            text: "First sentence. ",
-            done: false,
-          })
+          expect(partial.fork?.replying).toBe(true)
+          expect(partial.fork?.turns).toEqual([
+            { question: "Say two sentences.", answer: "First sentence. " },
+          ])
           yield* controls.emitAll
-          const finished = yield* waitFor(
-            progress(),
-            (current) => current.run?.done === true,
-            5_000,
-            "side question done",
+          const finished = yield* pane.replied(1)
+          expect(Option.map(finished, (fork) => fork.turns.at(-1)?.answer)).toEqual(
+            Option.some("First sentence. Second sentence. "),
           )
-          expect(finished.run?.answer).toBe("First sentence. Second sentence. ")
-          expect(finished.run?.error).toBeUndefined()
+          expect(Option.flatMap(finished, (fork) => Option.fromUndefinedOr(fork.error))).toEqual(
+            Option.none(),
+          )
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
   )
 
-  it.live("an empty side question is refused before any model call", () =>
+  it.live("an empty question forks without a model call; a new fork replaces the last", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-        })
-        const exit = yield* Effect.exit(
-          client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: BTW_EXTENSION_ID,
-            capabilityId: "btw.ask",
-            input: { question: "   ", previous: [] },
-          }),
-        )
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit))
-          expect(Cause.pretty(exit.cause)).toContain("Side question is empty")
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const pane = btw(harness)
+        const first = yield* pane.fork("   ")
+        const shown = yield* pane.progress
+        expect(shown.fork?.sessionId).toBe(first.sessionId)
+        expect(shown.fork?.turns).toEqual([])
+        expect(shown.fork?.replying).toBe(false)
+        expect(shown.fork?.name).toBe("btw")
+        const second = yield* pane.fork("")
+        expect(second.sessionId).not.toBe(first.sessionId)
+        expect((yield* pane.progress).fork?.sessionId).toBe(second.sessionId)
         expect(yield* controls.callCount).toBe(0)
+        const asked = yield* Effect.exit(pane.ask("  "))
+        expect(Exit.isFailure(asked)).toBe(true)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

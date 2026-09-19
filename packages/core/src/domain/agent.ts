@@ -298,7 +298,6 @@ export const effectiveModelDriver = (
 // ── RunSpec — per-run dispatch configuration ──
 //
 // Separates per-run concerns from agent identity:
-//   - `history`       — whether the child starts from the caller's branch history
 //   - `visibility`    — whether the child leaves a trace on the parent
 //   - `overrides`     — per-turn model/tool/prompt overrides
 //   - `parentToolCallId` — links a child run to the tool call that spawned it
@@ -317,20 +316,14 @@ export const AgentRunOverridesSchema = Schema.Struct({
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
-/** Whether a run starts from a copy of the caller's branch history or from nothing. */
-const AgentRunHistory = Schema.Literals(["none", "inherit"])
-type AgentRunHistory = typeof AgentRunHistory.Type
-
 /**
  * `private` keeps a run off the parent's event stream, and its session is
- * deleted when the run ends. Side questions and one-shot extractions rely on it.
+ * deleted when the run ends. One-shot extractions rely on it.
  */
 const AgentRunVisibility = Schema.Literals(["parent", "private"])
 type AgentRunVisibility = typeof AgentRunVisibility.Type
 
 export const RunSpecSchema = Schema.Struct({
-  /** `inherit` copies the parent branch's visible messages into the child before its prompt. */
-  history: Schema.optional(AgentRunHistory),
   visibility: Schema.optional(AgentRunVisibility),
   overrides: Schema.optional(AgentRunOverridesSchema),
   parentToolCallId: Schema.optional(ToolCallId),
@@ -345,7 +338,7 @@ export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input
  * Maximum session nesting depth. Derived from the persisted parent chain; root
  * depth is 0, and a parent at depth 3 cannot get another child. Enforced in one
  * place, `admitChildSessionDepth` (`runtime/session-depth.ts`), which both
- * child writers call: `admitChildSession` (delegate/btw/read-session spawns)
+ * child writers call: `admitChildSession` (delegate and read-session spawns)
  * and `SessionMutations.createSession` (`session.create` with a
  * `parentSessionId`, the compaction handoff).
  */

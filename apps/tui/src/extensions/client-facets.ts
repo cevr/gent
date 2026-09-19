@@ -211,7 +211,7 @@ export interface ClientTransportDefinition {
    * The sessions of one thread, oldest first.
    *
    * Sessions carry the thread they belong to, so a compaction handoff stays in
-   * the thread it continues while a delegate run or a `/btw` side question sits
+   * the thread it continues while a delegate run or a `/btw` fork sits
    * in its own. Membership is the server's answer; nothing here re-derives it.
    */
   readonly threadSessions: (
