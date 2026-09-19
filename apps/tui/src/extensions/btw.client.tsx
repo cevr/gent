@@ -145,7 +145,9 @@ export function ForkPane(
         return true
       }
     },
-    { when: () => props.open, capture: true },
+    // Not `capture`: a capturing scope stops every key, and the pane's input
+    // would never see the follow-up being typed.
+    { when: () => props.open },
   )
   const submit = () => {
     const question = draft()
