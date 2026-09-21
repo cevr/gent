@@ -1,11 +1,25 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Exit, FileSystem, Layer, Option, Ref, Schema } from "effect"
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
 import {
+  finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  textDeltaPart,
   textStep,
+  toolCallPart,
   toolCallStep,
   waitFor,
 } from "@gent/core-internal/test-utils/language-model"
@@ -20,12 +34,16 @@ import {
   CancelTool,
   dueAtOf,
   monitorMessage,
+  nextDueAt,
   rearmPendingAlarms,
+  WAKE_EXTENSION_ID,
   WAKE_MESSAGE_TYPE,
   WakeAlarms,
   WakeAlarmsLive,
   WakeEntry,
   wakeMessage,
+  WakePending,
+  WakeRpc,
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
@@ -44,6 +62,9 @@ import {
  */
 
 const encodeAlarms = Schema.encodeSync(Schema.fromJsonString(Schema.Array(WakeEntry)))
+
+const replyStream = (text: string) =>
+  Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
 
 interface MessageLike {
   readonly role: string
@@ -103,7 +124,85 @@ describe("wake", () => {
       expect(monitorMessage(monitor, "timed-out", 9, "")).toBe(
         "Monitor m1 timed out after 9 checks of `true` without matching. merge it",
       )
+      // The next tick is the first one still ahead; missed ticks fold into the fire that happened.
+      expect(nextDueAt(1_000, 10, 1_000)).toBe(11_000)
+      expect(nextDueAt(1_000, 10, 35_000)).toBe(41_000)
     }),
+  )
+
+  it.live(
+    "a notify alarm leaves a notice the user sees at once and the next turn reads, without starting one",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const systemPrompts: Array<string> = []
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            for (const message of options.prompt.content) {
+              if (message.role === "system") systemPrompts.push(message.content)
+            }
+            calls += 1
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "wake",
+                    { afterSeconds: 0.2, mode: "notify", note: "stand up" },
+                    { toolCallId: ToolCallId.make("notify-1") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            if (calls === 2) return Effect.succeed(replyStream("reminder set"))
+            return Effect.succeed(replyStream("read the notice with your prompt"))
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          const list = () =>
+            client.extension
+              .request({
+                sessionId,
+                branchId,
+                extensionId: WAKE_EXTENSION_ID,
+                capabilityId: WakeRpc.List.id,
+                input: {},
+              })
+              .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
+          yield* client.message.send({ sessionId, branchId, content: "remind me" })
+          // The fire leaves a notice; the loop stays idle and no turn or wake row follows.
+          // The fired alarm leaves the file once its notice is in; wait for that settled shape.
+          const noticed = yield* waitFor(
+            list(),
+            (pending) => pending.entries.length === 1 && pending.entries[0]?._tag === "notice",
+            5_000,
+            "the notice is listed alone",
+          )
+          expect(noticed.entries).toMatchObject([{ _tag: "notice", note: "stand up" }])
+          const idle = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(idle.runtime._tag).toBe("Idle")
+          expect(hasWake(idle.messages)).toBe(false)
+          // The tool-call step and the reply: nothing after the fire.
+          expect(idle.messages.filter((m) => m.role === "assistant").length).toBe(2)
+          yield* client.message.send({ sessionId, branchId, content: "what did I miss?" })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              answered(current.messages, "read the notice with your prompt"),
+            8_000,
+            "the next turn ran",
+          )
+          // The notice reached the model as a prompt section and left the list.
+          expect(hasWake(idle.messages)).toBe(false)
+          expect(systemPrompts.at(-1)).toContain("# Notices")
+          expect(systemPrompts.at(-1)).toContain("stand up")
+          expect((yield* list()).entries).toEqual([])
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
   )
 
   it.live(
@@ -343,6 +442,18 @@ const settled = (
 /** The real clock, beside the `TestClock` the alarms run on. */
 const wallClock = Clock.Clock.defaultValue()
 
+/** Waits on the wall clock, never the virtual one, for work a `TestClock.adjust` already released. Exhaustion fails loudly. */
+const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, label: string) =>
+  Effect.gen(function* () {
+    const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
+      if (done(yield* read)) return
+      // gent/no-sleep: allow the wait is for real file I/O, which only the wall clock paces
+      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+    }
+    expect(`still waiting: ${label}`).toBe(label)
+  })
+
 const readFile = (home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -376,6 +487,44 @@ describe("wake store", () => {
       Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),
     ),
+  )
+
+  it.scopedLive(
+    "a repeating alarm fires on each tick, stores the next one, and stops on cancel",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-repeat-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const ctx = contextWith(home, queued)
+        const handle = yield* runToolWithCtx(
+          WakeTool,
+          { afterSeconds: 1, everySeconds: 2, note: "stretch" },
+          ctx,
+        )
+        expect(handle.everySeconds).toBe(2)
+        const alarms = yield* WakeAlarms
+        const firedCount = Effect.map(Ref.get(queued), (all) => all.length)
+        yield* TestClock.adjust("1 second")
+        yield* eventually(firedCount, (count) => count === 1, "first fire")
+        // The stored due time moved to the next tick and the timer is still up.
+        yield* eventually(
+          readFile(home).pipe(Effect.orDie),
+          (file) => file.includes(`"dueAt":3000`),
+          "next tick",
+        )
+        expect(yield* alarms.pending).toEqual([handle.wakeId])
+        yield* TestClock.adjust("2 seconds")
+        yield* eventually(firedCount, (count) => count === 2, "second fire")
+        const cancelled = yield* runToolWithCtx(CancelTool, { wakeId: handle.wakeId }, ctx)
+        expect(cancelled.cancelled).toEqual([handle.wakeId])
+        yield* settled(alarms.pending)
+        expect(yield* readFile(home)).toBe("[]")
+        yield* TestClock.adjust("4 seconds")
+        expect(yield* firedCount).toBe(2)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
   )
 
   it.scopedLive("a stored past-due alarm fires on re-arm; a ticking one is not doubled", () =>
