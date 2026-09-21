@@ -38,7 +38,13 @@ import {
 import { createE2ELayer } from "../../src/test-utils/index"
 import { extractText, Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
+import {
+  Branch,
+  dateFromMillis,
+  Message,
+  Session,
+  type SteerCommand,
+} from "../../src/domain/message"
 import {
   BranchStorage,
   MessageStorage,
@@ -70,7 +76,6 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   ModelId,
   type ReasoningEffort,
-  type SteerCommand,
 } from "../../src/domain/agent"
 import {
   type EventEnvelope,

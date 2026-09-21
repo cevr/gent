@@ -9,10 +9,9 @@ import {
   type ModelId as ModelIdType,
   type ReasoningEffort as ReasoningEffortType,
   RunSpecSchema,
-  SteerCommand,
 } from "./agent.js"
 import type { AgentEvent } from "./event.js"
-import { Message, MessageMetadata, QueueSnapshot } from "./message.js"
+import { Message, MessageMetadata, QueueSnapshot, SteerCommand } from "./message.js"
 import {
   ActorCommandId,
   BranchId,

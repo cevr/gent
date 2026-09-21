@@ -45,6 +45,7 @@ import {
   Message,
   messageSingleText,
   Session,
+  SteerCommand,
 } from "@gent/core-internal/domain/message.js"
 import {
   CellBranchTools,
@@ -90,7 +91,6 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
-  SteerCommand,
 } from "@gent/core-internal/domain/agent.js"
 import {
   LoadedArtifactIdentity,

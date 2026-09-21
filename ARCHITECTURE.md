@@ -311,8 +311,17 @@ Shape:
   Prime-agent does not cascade a turn abort; opencode does, and the gamut
   testbed's six children editing files after an Escape decided it.
 - `delegate.cancel` interrupts the child's turn through the facade; a finished
-  child is a no-op. `delegate.send` steers a running child on its branch, read
-  at its next step; a finished child refuses the message.
+  child is a no-op.
+- Every session can message another: `session.send` (`@gent/session-tools`)
+  takes a session id or `parent` and steers an `Interject` with `wake` onto
+  the receiver's active branch, carrying `customType: "session-message"` and
+  `details.from` (sender id, name, relation). A running receiver reads it at
+  its next step; an idle one wakes and answers in a turn of its own. This is
+  the child-to-parent channel (a blocked child asks instead of guessing) and
+  the parent-to-child correction in one verb; there is no separate
+  `delegate.send`. Delivery is not bound to the delegate registry, so a
+  message to a finished child wakes it for another turn and no second
+  completion follows.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
@@ -430,8 +439,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   receipt and the hook: the delegate reconciles its registry on the parent's
   next turn and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
-- The delegate ships four ordinary tools: `delegate.start`, `delegate.send`,
-  `delegate.cancel`, `delegate.list`. `delegate.start` accepts RunSpec
+- The delegate ships three ordinary tools: `delegate.start`,
+  `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. `delegate.start` accepts RunSpec
   overrides for model, reasoning, tool selection, and added instructions, and
   always denies the child the delegation tools: fan-out is the caller's
   decision, and a project prompt that addresses "the orchestrator" reaches

@@ -14,6 +14,7 @@ import {
   Option,
   Path,
   Predicate,
+  Record,
   Ref,
   Result,
   Schema,
@@ -2292,6 +2293,7 @@ const buildAgentLoopActorHandlers = (config: {
             role: "user",
             parts: [Prompt.textPart({ text: command.message })],
             createdAt: yield* DateTime.nowAsDate,
+            ...Record.filter({ metadata: command.metadata }, Predicate.isNotUndefined),
           })
           const item: QueuedTurnItem = {
             message: interjectMessage,

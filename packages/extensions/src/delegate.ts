@@ -60,7 +60,6 @@ import { makeBranchStateStore } from "./branch-state-store.js"
  */
 const CHILD_DENIED_TOOLS: ReadonlyArray<string> = [
   "delegate.start",
-  "delegate.send",
   "delegate.cancel",
   "delegate.list",
 ]
@@ -77,7 +76,8 @@ export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
  */
 const delegateAgent = AgentDefinition.make({
   name: DELEGATE_AGENT_NAME,
-  description: "The default subagent: runs one delegated task and cannot delegate further",
+  description:
+    "The default subagent: runs one delegated task and cannot delegate further. It asks its parent with session.send when blocked.",
   deniedTools: CHILD_DENIED_TOOLS,
 })
 
@@ -875,44 +875,6 @@ export const StartChild = tool({
   }),
 })
 
-const SendToChild = tool({
-  id: "delegate.send",
-  description:
-    "Put a message into a running child's turn: a correction, a new fact, a narrower scope. The child reads it at its next step. A finished child takes no messages.",
-  params: Schema.Struct({
-    requestId: RequestId,
-    message: Schema.String.annotate({ description: "The text the child reads." }),
-  }),
-  output: ChildObservation,
-  execute: Effect.fn("SendToChild.execute")(function* (params) {
-    const ctx = yield* ExtensionContext
-    const entry = yield* ownedChild(params.requestId)
-    if (params.message.trim().length === 0 || Predicate.isUndefined(ctx.toolCallId)) {
-      return yield* new DelegateError({
-        message: "delegate.send needs a message and a host-owned tool call",
-      })
-    }
-    if (Predicate.isNotUndefined(entry.completed)) {
-      return yield* new DelegateError({
-        message:
-          "The child already finished and takes no more messages. Read its output, or start a new child.",
-      })
-    }
-    yield* ctx.Session.steer({
-      _tag: "Interject",
-      sessionId: entry.sessionId,
-      branchId: entry.branchId,
-      requestId: RequestId.make(`delegate-send:${ctx.toolCallId}`),
-      message: params.message,
-      // The child can finish between the check above and the actor taking
-      // this command. An idle branch only queues steering, so without the
-      // wake the message would sit unread forever.
-      wake: true,
-    }).pipe(asDelegateError("Cannot message the child"))
-    return observationOf(entry)
-  }),
-})
-
 export const CancelChild = tool({
   id: "delegate.cancel",
   description:
@@ -1024,7 +986,7 @@ export const DelegateExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
-    yield* host.register("tool", StartChild, SendToChild, CancelChild, ListChildren)
+    yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("request", DelegateRpc.Children)
     // Every turn end is read twice: as a child's receipt for its parent, and
     // as a parent's interrupt for its children.
