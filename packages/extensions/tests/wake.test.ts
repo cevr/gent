@@ -9,6 +9,7 @@ import {
   Option,
   Ref,
   Schema,
+  Semaphore,
   Stream,
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
@@ -47,7 +48,8 @@ import {
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BranchId, RequestId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { SteerCommand } from "@gent/core-internal/domain/message"
 import {
   ExtensionContext,
   type ExtensionContextService,
@@ -373,6 +375,116 @@ describe("wake", () => {
   )
 })
 
+describe("notices", () => {
+  it.live(
+    "a notice stays in every step's prompt and survives an interrupted turn; an answered turn clears it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const systemPrompts: Array<string> = []
+          const streaming = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            for (const message of options.prompt.content) {
+              if (message.role === "system") systemPrompts.push(message.content)
+            }
+            calls += 1
+            // Turn 1: set the notify alarm, then reply.
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "wake",
+                    { afterSeconds: 0.2, mode: "notify", note: "stand up" },
+                    { toolCallId: ToolCallId.make("notify-1") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            if (calls === 2) return Effect.succeed(replyStream("reminder set"))
+            // Turn 2: held open, then interrupted.
+            if (calls === 3) {
+              return Deferred.succeed(streaming, void 0).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(replyStream("never read")),
+              )
+            }
+            // Turn 3: a tool step, then a reply; both steps must carry the notice.
+            if (calls === 4) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "wake",
+                    { afterSeconds: 3600, note: "much later" },
+                    { toolCallId: ToolCallId.make("later-1") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            return Effect.succeed(replyStream("read the notice twice"))
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          const list = () =>
+            client.extension
+              .request({
+                sessionId,
+                branchId,
+                extensionId: WAKE_EXTENSION_ID,
+                capabilityId: WakeRpc.List.id,
+                input: {},
+              })
+              .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
+          const notices = () =>
+            Effect.map(list(), (pending) =>
+              pending.entries.filter((entry) => entry._tag === "notice"),
+            )
+          yield* client.message.send({ sessionId, branchId, content: "remind me" })
+          yield* waitFor(notices(), (found) => found.length === 1, 5_000, "the notice is listed")
+          yield* client.message.send({ sessionId, branchId, content: "hold on" })
+          yield* Deferred.await(streaming)
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Interrupt",
+              sessionId,
+              branchId,
+              requestId: RequestId.make("interrupt-holding-turn"),
+            }),
+          })
+          yield* Deferred.succeed(release, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && calls === 3,
+            5_000,
+            "the held turn ended",
+          )
+          // The interrupted turn read the notice but did not answer; it stays.
+          expect(systemPrompts.at(-1)).toContain("stand up")
+          expect((yield* notices()).length).toBe(1)
+          yield* client.message.send({ sessionId, branchId, content: "what did I miss?" })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              answered(current.messages, "read the notice twice"),
+            8_000,
+            "the answered turn ran",
+          )
+          expect(systemPrompts.length).toBe(5)
+          expect(systemPrompts[3]).toContain("stand up")
+          expect(systemPrompts[4]).toContain("stand up")
+          yield* waitFor(notices(), (found) => found.length === 0, 5_000, "the notice is cleared")
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+})
+
 // ── wake/wake-store.test ────────────────────────────────────────────────────
 
 /**
@@ -382,12 +494,30 @@ describe("wake", () => {
 
 const branchId = BranchId.make("wake-branch")
 
+/** The store's read-modify-write cycles serialize under the host's file lock; the bare test lock is a pass-through, so a timer and a cancel would interleave. */
+const lockingFileLock = (): ExtensionContextService["FileLock"] => {
+  const locks = new Map<string, Semaphore.Semaphore>()
+  return {
+    withLock: (path, effect) => {
+      const lock = Option.fromNullishOr(locks.get(path)).pipe(
+        Option.getOrElse(() => {
+          const created = Semaphore.makeUnsafe(1)
+          locks.set(path, created)
+          return created
+        }),
+      )
+      return lock.withPermits(1)(effect)
+    },
+  }
+}
+
 const contextWith = (
   home: string,
   queued: Ref.Ref<ReadonlyArray<string>>,
   fired: Option.Option<Deferred.Deferred<boolean>> = Option.none(),
 ) =>
   testToolContext({
+    FileLock: lockingFileLock(),
     sessionId: SessionId.make("wake-session"),
     branchId,
     toolCallId: ToolCallId.make("tc-wake"),
@@ -521,6 +651,52 @@ describe("wake store", () => {
         expect(yield* readFile(home)).toBe("[]")
         yield* TestClock.adjust("4 seconds")
         expect(yield* firedCount).toBe(2)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
+  )
+
+  it.scopedLive(
+    "an interrupted timer leaves its row for the next re-arm; a settled fire removes it",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-interrupt-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const ctx = contextWith(home, queued)
+        const once = yield* runToolWithCtx(WakeTool, { afterSeconds: 5, note: "once" }, ctx)
+        const repeat = yield* runToolWithCtx(
+          WakeTool,
+          { afterSeconds: 1, everySeconds: 2, note: "again" },
+          ctx,
+        )
+        const alarms = yield* WakeAlarms
+        const firedCount = Effect.map(Ref.get(queued), (all) => all.length)
+        yield* TestClock.adjust("1 second")
+        yield* eventually(firedCount, (count) => count === 1, "the repeat fired once")
+        yield* eventually(
+          readFile(home).pipe(Effect.orDie),
+          (file) => file.includes(`"dueAt":3000`),
+          "the repeat stored its next tick",
+        )
+        // A branch close or a shutdown interrupts the timers; the rows must stay.
+        expect(yield* alarms.cancel(repeat.wakeId)).toBe(true)
+        expect(yield* alarms.cancel(once.wakeId)).toBe(true)
+        yield* settled(alarms.pending)
+        const file = yield* readFile(home)
+        expect(file).toContain(once.wakeId)
+        expect(file).toContain(repeat.wakeId)
+        expect(file).toContain(`"dueAt":3000`)
+        // Re-armed, the one-shot fires and is the only row that leaves.
+        const armed = yield* rearmPendingAlarms().pipe(
+          Effect.provideService(ExtensionContext, testLeafContext(ctx)),
+        )
+        expect(armed).toBe(2)
+        yield* TestClock.adjust("4 seconds")
+        yield* eventually(firedCount, (count) => count === 3, "the one-shot and the repeat fired")
+        yield* settled(alarms.pending, Option.some(once.wakeId))
+        expect(yield* readFile(home)).not.toContain(once.wakeId)
+        expect(yield* readFile(home)).toContain(repeat.wakeId)
       }).pipe(
         Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),

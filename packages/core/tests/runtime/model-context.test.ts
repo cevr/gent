@@ -690,6 +690,8 @@ describe("model context window", () => {
     expect(settled[1]).toBe(history[1])
     const answered = history.slice(0, 3)
     expect(settledMessages(answered)).toEqual(answered)
+    // A window cut between a call and its result leaves an orphan result; it goes too.
+    expect(settledMessages(history.slice(2, 4)).map((entry) => String(entry.id))).toEqual(["a2"])
   })
 
   test("a marker whose anchor is gone is ignored so nothing is lost", () => {

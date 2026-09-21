@@ -275,19 +275,27 @@ export const messagesInCurrentWindow = (
 }
 
 /**
- * Drops every tool call that has no result in the run, and any message that is
- * left with no parts. A copy taken while a step is in flight would otherwise
- * carry a call the model must not see without its result.
+ * Drops every tool call that has no result in the run, every result whose
+ * call is not in the run, and any message left with no parts. A copy taken
+ * while a step is in flight would otherwise carry a call the model must not
+ * see without its result; a window cut between a call and its result would
+ * carry the orphan result.
  */
 export const settledMessages = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
+  const called = new Set<string>()
   const answered = new Set<string>()
   for (const message of messages) {
     for (const part of message.parts) {
+      if (part.type === "tool-call") called.add(part.id)
       if (part.type === "tool-result") answered.add(part.id)
     }
   }
   return messages.flatMap((message) => {
-    const parts = message.parts.filter((part) => part.type !== "tool-call" || answered.has(part.id))
+    const parts = message.parts.filter((part) => {
+      if (part.type === "tool-call") return answered.has(part.id)
+      if (part.type === "tool-result") return called.has(part.id)
+      return true
+    })
     if (parts.length === message.parts.length) return [message]
     if (parts.length === 0) return []
     return [messageWithParts(message, parts)]

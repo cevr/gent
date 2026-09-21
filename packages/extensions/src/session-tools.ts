@@ -268,7 +268,11 @@ const sessionMessageText = (input: {
     Option.map((value) => ` "${value}"`),
     Option.getOrElse(() => ""),
   )
-  return `Message from your ${input.from.relation}${name} (session ${input.from.sessionId}):\n\n${input.message}`
+  const who = Option.liftPredicate(input.from.relation, (relation) => relation !== "session").pipe(
+    Option.map((relation) => `your ${relation}`),
+    Option.getOrElse(() => "another session"),
+  )
+  return `Message from ${who}${name} (session ${input.from.sessionId}):\n\n${input.message}`
 }
 
 const SendSessionTool = tool({
