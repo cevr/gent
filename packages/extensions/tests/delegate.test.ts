@@ -680,6 +680,48 @@ const sessionMessages = <
     ),
   )
 
+describe("a forked child", () => {
+  it.live(
+    "starts from the parent's context window, minus the start call still in flight",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const parentContext = "PARENT-CONTEXT: the answer is 42"
+          let childPrompt: Option.Option<Prompt.Prompt> = Option.none()
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts.at(-1) === childTask) {
+              childPrompt = Option.some(options.prompt)
+              return Effect.succeed(reply("42, read from the fork"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: childTask, context: "fork" }, "fork-child"),
+              )
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, parentContext)
+          const snapshot = yield* afterCompletion(harness)
+          expect(messageTexts(snapshot.messages)).toContain("read it")
+          const seen = Option.getOrThrow(childPrompt)
+          // The child read the parent's user message, then its own task.
+          expect(promptTexts(seen)).toEqual([parentContext, childTask])
+          // The start call had no result when the copy was taken, so the child never sees it.
+          expect(promptToolCallIds(seen)).toEqual([])
+          const child = yield* childOf(harness)
+          const childSnapshot = yield* harness.client.session.getSnapshot(child)
+          expect(messageTexts(childSnapshot.messages)).toContain(parentContext)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
 describe("session.send", () => {
   it.live("a parent's message reaches a running child's next model step", () =>
     Effect.scoped(

@@ -442,6 +442,12 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - The delegate ships three ordinary tools: `delegate.start`,
   `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. `delegate.start` accepts RunSpec
   overrides for model, reasoning, tool selection, and added instructions, and
+  a `context` of `fresh` (the child sees only its todo) or `fork` (the child is
+  created with `historyBranchId` = the caller's branch, so it starts from the
+  caller's current context window). A history copy is settled first: a tool
+  call with no result in the source, such as the `delegate.start` call that is
+  making the fork, is left out with its step, or the child's first projection
+  would reject the incomplete call group. It
   always denies the child the delegation tools: fan-out is the caller's
   decision, and a project prompt that addresses "the orchestrator" reaches
   children too. Parents read child output through `read_session` on the

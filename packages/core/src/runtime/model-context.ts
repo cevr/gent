@@ -16,6 +16,7 @@ import {
   headTailChars,
   Message,
   MessageRole,
+  messageWithParts,
   type RuntimeUserMessageType,
 } from "../domain/message.js"
 import {
@@ -271,6 +272,26 @@ export const messagesInCurrentWindow = (
     return [marker, ...messages.slice(anchor).filter((message) => message.id !== marker.id)]
   }
   return messages
+}
+
+/**
+ * Drops every tool call that has no result in the run, and any message that is
+ * left with no parts. A copy taken while a step is in flight would otherwise
+ * carry a call the model must not see without its result.
+ */
+export const settledMessages = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
+  const answered = new Set<string>()
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-result") answered.add(part.id)
+    }
+  }
+  return messages.flatMap((message) => {
+    const parts = message.parts.filter((part) => part.type !== "tool-call" || answered.has(part.id))
+    if (parts.length === message.parts.length) return [message]
+    if (parts.length === 0) return []
+    return [messageWithParts(message, parts)]
+  })
 }
 
 /** The id of the handoff marker leading a window, when the window starts with a summary. */

@@ -311,6 +311,14 @@ export const copyMessageToBranch = (
   return Message.cases.regular.make(fields)
 }
 
+/** The same message with other parts. */
+export const messageWithParts = (message: Message, parts: ReadonlyArray<MessagePart>): Message => {
+  const fields = { ...messageFields(message), parts }
+  if (message._tag === "interjection")
+    return Message.cases.interjection.make({ ...fields, role: "user" })
+  return Message.cases.regular.make(fields)
+}
+
 /** Assistant answer pieces in production order. Other roles produce none. */
 const messageSegments = (
   message: Message,

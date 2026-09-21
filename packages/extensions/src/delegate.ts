@@ -438,6 +438,8 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
 
 interface AdmitParams {
   readonly prompt: string
+  /** Seeds the child with this branch's current context window before its first turn. */
+  readonly historyBranchId?: BranchId
   /** The tool call that owns the child. The same id admits the same child once. */
   readonly requestId?: RequestId
   readonly toolCallId?: ToolCallId
@@ -485,7 +487,10 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           name: childName(params.prompt),
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
-          ...Record.filter({ requestId: params.requestId }, Predicate.isNotUndefined),
+          ...Record.filter(
+            { requestId: params.requestId, historyBranchId: params.historyBranchId },
+            Predicate.isNotUndefined,
+          ),
         })
         const requestId = Option.getOrElse(requested, () =>
           RequestId.make(`run:${child.sessionId}`),
@@ -839,8 +844,15 @@ const childOverrides = (overrides: (typeof StartParams.Type)["overrides"]) => ({
 
 const StartParams = Schema.Struct({
   todo: Schema.String.annotate({
-    description: "The whole task. The child has no conversation history.",
+    description:
+      "The whole task. With context `fresh` the child has no conversation history; with `fork` it starts from your current context window.",
   }),
+  context: Schema.optionalKey(
+    Schema.Literals(["fresh", "fork"]).annotate({
+      description:
+        "`fresh` (default): the child sees only the todo. `fork`: the child also sees every message you see now, and can continue your work as it stands.",
+    }),
+  ),
   overrides: RunSpecSchema.fields.overrides,
 })
 
@@ -851,7 +863,7 @@ export const StartChild = tool({
   promptSnippet: "Start a child agent on a task",
   promptGuidelines: [
     "Use for independent work that benefits from a fresh context or parallelism. Do NOT delegate simple reads, searches, or single-file edits — do those directly.",
-    "Each todo must be self-contained — children have no conversation history.",
+    'Each todo must be self-contained — a fresh child has no conversation history. Use context: "fork" when the child needs what you already read or decided; the copy is what you see now, so a long context is a costly seed.',
     "Start every independent child from one cell, then end your turn. Do not poll, set an alarm, or set a monitor for a child: each result wakes you as a message, and several may arrive over several turns. Chain dependent work by starting the next child from the turn that read the earlier result.",
     "Interrupting your turn stops every child you started and had not heard from.",
     "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and read_session reads a finished child's transcript.",
@@ -867,6 +879,13 @@ export const StartChild = tool({
     }
     const { entry } = yield* admitChild({
       prompt: params.todo,
+      ...Option.match(
+        Option.liftPredicate(params.context, (context) => context === "fork"),
+        {
+          onNone: () => ({}),
+          onSome: () => ({ historyBranchId: ctx.branchId }),
+        },
+      ),
       requestId: RequestId.make(ctx.toolCallId),
       toolCallId: ctx.toolCallId,
       runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
