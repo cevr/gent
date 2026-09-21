@@ -37,13 +37,23 @@ export const WAKE_EXTENSION_ID = ExtensionId.make("@gent/wake")
 /** `metadata.customType` on the user-role message an entry queues when it fires. */
 export const WAKE_MESSAGE_TYPE = "wake"
 
+/** `wake` starts a turn when the entry fires; `notify` leaves a notice the user sees at once and the model reads on its next turn. */
+const WakeMode = Schema.Literals(["wake", "notify"])
+type WakeMode = typeof WakeMode.Type
+
 /**
- * One pending wake. An alarm fires at a time; a monitor runs a command on an
- * interval and fires when it succeeds, its output matches `until`, or the
- * deadline passes.
+ * One pending wake. An alarm fires at a time, and again every `everySeconds`
+ * when it repeats; a monitor runs a command on an interval and fires when it
+ * succeeds, its output matches `until`, or the deadline passes.
  */
 export const WakeEntry = Schema.TaggedUnion({
-  alarm: { wakeId: Schema.String, dueAt: Schema.Finite, note: Schema.String },
+  alarm: {
+    wakeId: Schema.String,
+    dueAt: Schema.Finite,
+    everySeconds: Schema.optionalKey(Schema.Finite),
+    mode: Schema.optionalKey(WakeMode),
+    note: Schema.String,
+  },
   monitor: {
     wakeId: Schema.String,
     command: Schema.String,
@@ -51,10 +61,23 @@ export const WakeEntry = Schema.TaggedUnion({
     everySeconds: Schema.Finite,
     until: Schema.optionalKey(Schema.String),
     deadline: Schema.Finite,
+    mode: Schema.optionalKey(WakeMode),
+    note: Schema.String,
+  },
+  /** A `notify` fire nobody has read yet. The next turn's projection consumes it; `wake.cancel` dismisses it. */
+  notice: {
+    wakeId: Schema.String,
+    outcome: Schema.Literals(["fired", "matched", "timed-out"]),
+    firedAt: Schema.Finite,
+    content: Schema.String,
     note: Schema.String,
   },
 })
 export type WakeEntry = typeof WakeEntry.Type
+type PendingWakeEntry = Exclude<WakeEntry, { readonly _tag: "notice" }>
+
+const modeOf = (entry: PendingWakeEntry): WakeMode =>
+  Option.getOrElse(Option.fromUndefinedOr(entry.mode), () => "wake")
 
 /** What the tray shows: the entries still pending on the current branch, and the clock they count against. */
 export const WakePending = Schema.Struct({
@@ -67,6 +90,8 @@ export type WakePending = typeof WakePending.Type
 export const WakeDetails = Schema.Struct({
   outcome: Schema.Literals(["fired", "matched", "timed-out"]),
   note: Schema.String,
+  /** Epoch milliseconds; keys the queued line so a repeat's fires never merge. Rows written before repeats existed have none. */
+  firedAt: Schema.optionalKey(Schema.Finite),
 })
 export type WakeDetails = typeof WakeDetails.Type
 
@@ -83,12 +108,18 @@ export type WakeDetails = typeof WakeDetails.Type
  * branch-scoped resource; the entries themselves live in one file per branch
  * under `~/.gent/wakes`, so the next turn after a restart re-arms what is
  * still pending and fires at once what came due while the process was down.
+ * A repeating alarm advances its stored due time on every fire; ticks missed
+ * while the process was down collapse into one fire. In `notify` mode a fire
+ * starts no turn: it leaves a `notice` entry in the same file, the tray shows
+ * it at once, and the next turn's projection reads every notice into a prompt
+ * section and clears them.
  */
 
 const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_MONITOR_EVERY_SECONDS = 30
 const DEFAULT_MONITOR_TIMEOUT_SECONDS = 30 * 60
 const MINIMUM_MONITOR_EVERY_SECONDS = 0.1
+const MINIMUM_REPEAT_EVERY_SECONDS = 0.1
 const MONITOR_OUTPUT_TAIL_CHARS = 2_000
 
 class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
@@ -191,21 +222,79 @@ export const monitorMessage = (
   return `${head} ${entry.note}\n\nLast output:\n${output}`
 }
 
-/** The user-role line a fired entry queues; `wake: true` starts a turn on an idle loop. */
-const queueWake = (wakeId: string, content: string, details: WakeDetails) =>
+/**
+ * What a fire leaves behind. In `wake` mode a user-role line is queued with
+ * `wake: true`, which starts a turn on an idle loop. In `notify` mode a notice
+ * is stored beside the pending entries and the tray is pulsed; no turn starts.
+ */
+const queueWake = (
+  entry: PendingWakeEntry,
+  content: string,
+  details: WakeDetails & { readonly firedAt: number },
+) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
+    if (modeOf(entry) === "notify") {
+      const notice = WakeEntry.cases.notice.make({
+        wakeId: entry.wakeId,
+        outcome: details.outcome,
+        firedAt: details.firedAt,
+        content,
+        note: entry.note,
+      })
+      yield* modifyWakeEntries((current) => [...current, notice])
+      return yield* ctx.State.changed()
+    }
     yield* ctx.Session.queueFollowUp({
-      sourceId: `wake:${wakeId}`,
+      sourceId: `wake:${entry.wakeId}:${details.firedAt}`,
       content,
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },
       wake: true,
     })
   })
 
-const alarmWork = (
+/**
+ * Every notice as one prompt section; none gives no section. The projection
+ * runs on every step, so the section stays for the whole turn, and nothing is
+ * cleared here: a turn that fails or is interrupted keeps its notices.
+ */
+const noticeSections = Effect.fn("WakeTool.notices")(function* () {
+  const notices = (yield* readWakeEntries()).flatMap((entry) => {
+    if (entry._tag === "notice") return [entry]
+    return []
+  })
+  if (notices.length === 0) return []
+  return [
+    {
+      id: "wake-notices",
+      priority: 85,
+      content: `# Notices\n\nThese fired while you were idle; nothing has answered them yet.\n\n${notices.map((notice) => `- ${notice.content}`).join("\n")}`,
+    },
+  ]
+})
+
+/** Drops the notices an answered turn read: those that fired before it started. A later one shows again next turn. */
+const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (turnStartedAt: number) {
+  let cleared = 0
+  yield* modifyWakeEntries((current) => {
+    const kept = current.filter((entry) => entry._tag !== "notice" || entry.firedAt > turnStartedAt)
+    cleared = current.length - kept.length
+    return kept
+  })
+  return cleared
+})
+
+/** The first tick of a repeating alarm that is still ahead of `now`; every missed tick folds into the fire that just happened. */
+export const nextDueAt = (dueAt: number, everySeconds: number, now: number): number => {
+  // A stored row is not re-validated on re-arm, so the floor is applied here too.
+  const every = Math.max(everySeconds, MINIMUM_REPEAT_EVERY_SECONDS) * 1000
+  const missed = Math.max(0, Math.floor((now - dueAt) / every))
+  return dueAt + (missed + 1) * every
+}
+
+const alarmWork: (
   entry: Extract<WakeEntry, { readonly _tag: "alarm" }>,
-): Effect.Effect<void, ExtensionServiceError, ExtensionContext> =>
+) => Effect.Effect<void, ExtensionServiceError | WakeError, ExtensionContext> = (entry) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis
     yield* Effect.logInfo("wake.armed").pipe(
@@ -213,7 +302,18 @@ const alarmWork = (
     )
     yield* Effect.sleep(Duration.millis(Math.max(0, entry.dueAt - now)))
     yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
-    yield* queueWake(entry.wakeId, wakeMessage(entry), { outcome: "fired", note: entry.note })
+    const firedAt = yield* Clock.currentTimeMillis
+    yield* queueWake(entry, wakeMessage(entry), { outcome: "fired", note: entry.note, firedAt })
+    if (Predicate.isUndefined(entry.everySeconds)) return
+    // The next tick is stored before the timer sleeps again, so a restart in between re-arms it.
+    const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
+    yield* modifyWakeEntries((current) =>
+      current.map((candidate) => {
+        if (candidate.wakeId === entry.wakeId) return next
+        return candidate
+      }),
+    )
+    yield* alarmWork(next)
   })
 
 const matches = (
@@ -226,7 +326,7 @@ const matches = (
 
 const monitorWork = (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
-): Effect.Effect<void, ExtensionServiceError, ExtensionContext> =>
+): Effect.Effect<void, ExtensionServiceError | WakeError, ExtensionContext> =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* Effect.logInfo("wake.monitor.armed").pipe(
@@ -247,19 +347,19 @@ const monitorWork = (
         yield* Effect.logInfo("wake.monitor.matched").pipe(
           Effect.annotateLogs({ wakeId: entry.wakeId, checks }),
         )
-        return yield* queueWake(
-          entry.wakeId,
-          monitorMessage(entry, "matched", checks, lastOutput),
-          { outcome: "matched", note: entry.note },
-        )
+        return yield* queueWake(entry, monitorMessage(entry, "matched", checks, lastOutput), {
+          outcome: "matched",
+          note: entry.note,
+          firedAt: yield* Clock.currentTimeMillis,
+        })
       }
       const now = yield* Clock.currentTimeMillis
       if (now >= entry.deadline) {
-        return yield* queueWake(
-          entry.wakeId,
-          monitorMessage(entry, "timed-out", checks, lastOutput),
-          { outcome: "timed-out", note: entry.note },
-        )
+        return yield* queueWake(entry, monitorMessage(entry, "timed-out", checks, lastOutput), {
+          outcome: "timed-out",
+          note: entry.note,
+          firedAt: now,
+        })
       }
       yield* Effect.sleep(
         Duration.millis(Math.min(entry.everySeconds * 1000, entry.deadline - now)),
@@ -267,7 +367,7 @@ const monitorWork = (
     }
   })
 
-const workFor = Match.type<WakeEntry>().pipe(
+const workFor = Match.type<PendingWakeEntry>().pipe(
   Match.tagsExhaustive({
     alarm: (entry) => alarmWork(entry),
     monitor: (entry) => monitorWork(entry),
@@ -275,26 +375,32 @@ const workFor = Match.type<WakeEntry>().pipe(
 )
 
 /**
- * Starts the timer for one stored entry. Firing queues the wake message and
- * drops the entry from the file; an id already running is left alone.
+ * Starts the timer for one stored entry. A settled fire (or a fire that
+ * failed) drops the entry from the file; an interrupt does not, so a branch
+ * close or a shutdown leaves the row for the next re-arm, and a cancel cleans
+ * the file itself. A repeating alarm never settles; only a cancel ends it. An
+ * id already running is left alone.
  */
 const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
+  if (entry._tag === "notice") return false
   const ctx = yield* ExtensionContext
   const alarms = yield* WakeAlarms
   const work = workFor(entry)
+  // A notice the fire left under the same id stays; only the pending entry goes.
   const forget = modifyWakeEntries((current) =>
-    current.filter((candidate) => candidate.wakeId !== entry.wakeId),
+    current.filter((candidate) => candidate._tag === "notice" || candidate.wakeId !== entry.wakeId),
   ).pipe(Effect.ignore)
   return yield* alarms.schedule(
     entry.wakeId,
     work.pipe(
+      Effect.andThen(forget),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void
         return Effect.logWarning("wake.fire.failed").pipe(
           Effect.annotateLogs({ wakeId: entry.wakeId, cause: Cause.pretty(cause) }),
+          Effect.andThen(forget),
         )
       }),
-      Effect.ensuring(forget),
       Effect.provideService(ExtensionContext, ctx),
     ),
   )
@@ -311,7 +417,7 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
   return armed
 })
 
-const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: WakeEntry) {
+const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingWakeEntry) {
   yield* modifyWakeEntries((current) => [...current, entry])
   yield* armEntry(entry)
 })
@@ -325,7 +431,7 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
     return current.filter(keep)
   })
   // A stored entry may have no timer yet (before the first turn re-arms it); an
-  // interrupted timer would drop the entry itself, but the file is already clean.
+  // interrupted timer leaves the file alone, which is why it is cleaned here first.
   yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
   return removed
 })
@@ -339,6 +445,18 @@ const WakeParams = Schema.Struct({
   at: Schema.optionalKey(
     Schema.String.annotate({ description: "ISO 8601 time at which the alarm fires." }),
   ),
+  everySeconds: Schema.optionalKey(
+    Schema.Finite.annotate({
+      description:
+        "Repeat every this many seconds after the first fire, until wake.cancel. Omit for one fire.",
+    }),
+  ),
+  mode: Schema.optionalKey(
+    WakeMode.annotate({
+      description:
+        "`wake` (default): the fire starts a turn. `notify`: the fire is queued for your next turn and shown to the user, without starting one.",
+    }),
+  ),
   note: Schema.String.annotate({
     description: "What to check when the alarm fires. Arrives verbatim in the wake message.",
   }),
@@ -347,6 +465,8 @@ const WakeParams = Schema.Struct({
 const WakeResult = Schema.Struct({
   wakeId: Schema.String,
   dueAt: Schema.String,
+  everySeconds: Schema.optionalKey(Schema.Finite),
+  mode: WakeMode,
   note: Schema.String,
 })
 
@@ -387,6 +507,8 @@ export const WakeTool = tool({
     "When you are waiting on something outside the session, set a wake with a note saying what to check, answer, and stop; do not poll in a loop",
     "The note is all the wake message carries, so name the command or URL to check and what result means done",
     "Pick afterSeconds from how fast the thing actually changes: one check after a CI run's usual length beats many short ones",
+    "everySeconds makes the alarm repeat; each fire starts a turn, so cancel it with wake.cancel as soon as the work it checks on is done",
+    'mode: "notify" is for a reminder the user should see now and you should read next time you run; it never starts a turn',
   ],
   params: WakeParams,
   output: WakeResult,
@@ -394,13 +516,30 @@ export const WakeTool = tool({
     const ctx = yield* ExtensionContext
     const now = yield* Clock.currentTimeMillis
     const dueAt = yield* dueAtOf(params, now)
+    const everySeconds = Option.fromUndefinedOr(params.everySeconds)
+    if (Option.isSome(everySeconds) && everySeconds.value < MINIMUM_REPEAT_EVERY_SECONDS) {
+      return yield* new WakeError({
+        message: `everySeconds must be at least ${MINIMUM_REPEAT_EVERY_SECONDS}`,
+      })
+    }
+    if (Option.isSome(everySeconds) && everySeconds.value * 1000 > MAXIMUM_WAKE_DELAY_MS) {
+      return yield* new WakeError({ message: "A repeat can be at most 24 hours apart" })
+    }
+    // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.alarm.make({
       wakeId: yield* ctx.Process.randomId,
       dueAt,
       note: params.note,
+      ...omitUndefined({ everySeconds: params.everySeconds, mode: params.mode }),
     })
     yield* storeAndArm(entry)
-    return { wakeId: entry.wakeId, dueAt: isoOf(dueAt), note: entry.note }
+    return {
+      wakeId: entry.wakeId,
+      dueAt: isoOf(dueAt),
+      mode: modeOf(entry),
+      note: entry.note,
+      ...omitUndefined({ everySeconds: entry.everySeconds }),
+    }
   }),
 })
 
@@ -425,6 +564,12 @@ const MonitorParams = Schema.Struct({
       description: "Give up after this long and wake anyway. Default 1800, at most 86400.",
     }),
   ),
+  mode: Schema.optionalKey(
+    WakeMode.annotate({
+      description:
+        "`wake` (default): the match starts a turn. `notify`: the match is queued for your next turn and shown to the user, without starting one.",
+    }),
+  ),
   note: Schema.String.annotate({
     description: "What to do when the monitor wakes you. Arrives verbatim in the wake message.",
   }),
@@ -434,6 +579,7 @@ const MonitorResult = Schema.Struct({
   wakeId: Schema.String,
   everySeconds: Schema.Finite,
   deadline: Schema.String,
+  mode: WakeMode,
   note: Schema.String,
 })
 
@@ -491,10 +637,16 @@ const MonitorTool = tool({
       everySeconds,
       deadline,
       note: params.note,
-      ...omitUndefined({ until: params.until }),
+      ...omitUndefined({ until: params.until, mode: params.mode }),
     })
     yield* storeAndArm(entry)
-    return { wakeId: entry.wakeId, everySeconds, deadline: isoOf(deadline), note: entry.note }
+    return {
+      wakeId: entry.wakeId,
+      everySeconds,
+      deadline: isoOf(deadline),
+      mode: modeOf(entry),
+      note: entry.note,
+    }
   }),
 })
 
@@ -513,7 +665,7 @@ export const CancelTool = tool({
   id: "wake.cancel",
   readonly: true,
   description:
-    "Cancel a pending alarm or monitor by wakeId, or every pending one on this branch when no id is given. Use it when the thing you were waiting for is already done.",
+    "Cancel a pending alarm or monitor by wakeId, or every pending one on this branch when no id is given. Use it when the thing you were waiting for is already done. A notice still shown to the user is dismissed the same way.",
   promptSnippet: "Cancel a pending alarm or monitor",
   params: CancelParams,
   output: CancelResult,
@@ -534,7 +686,8 @@ export const CancelTool = tool({
 export const WakeRpc = defineRequests(WAKE_EXTENSION_ID, {
   List: request({
     id: "wake.list",
-    description: "The alarms and monitors still pending on the current branch",
+    description:
+      "The alarms and monitors still pending on the current branch, and the notices not yet read",
     input: Schema.Struct({}),
     output: WakePending,
     execute: Effect.fn("WakeRpc.List")(function* () {
@@ -556,13 +709,31 @@ export const WakeExtension = defineExtension({
     // The branch resource starts without a session facade, so the first turn
     // after a restart is where stored entries get their timers back.
     yield* host.on("turnProjection", () =>
-      rearmPendingAlarms().pipe(
+      Effect.gen(function* () {
+        yield* rearmPendingAlarms()
+        return { promptSections: yield* noticeSections() }
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("wake.rearm.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+            Effect.as({}),
           ),
         ),
-        Effect.as({}),
+      ),
+    )
+    // A turn that answered has read every notice its steps were shown.
+    yield* host.on("turnAfter", (input) =>
+      Effect.gen(function* () {
+        if (input.interrupted || input.streamFailed) return
+        const now = yield* Clock.currentTimeMillis
+        const cleared = yield* clearReadNotices(now - input.durationMs)
+        if (cleared > 0) yield* (yield* ExtensionContext).State.changed()
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("wake.notices.clear.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
       ),
     )
     yield* host.register(

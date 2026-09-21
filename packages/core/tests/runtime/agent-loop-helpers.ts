@@ -10,7 +10,6 @@ import {
   ExternalDriverRef,
   ModelId,
   type RunSpec,
-  type SteerCommand,
 } from "../../src/domain/agent"
 import {
   AgentLoop as AgentLoopActor,
@@ -32,7 +31,12 @@ import {
   LanguageModelLayers,
   type LanguageModelStreamPart,
 } from "../../src/test-utils/language-model"
-import { dateFromMillis, Message, type QueueSnapshot } from "../../src/domain/message"
+import {
+  dateFromMillis,
+  Message,
+  type QueueSnapshot,
+  type SteerCommand,
+} from "../../src/domain/message"
 import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"

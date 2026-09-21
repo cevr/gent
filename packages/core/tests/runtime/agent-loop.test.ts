@@ -56,7 +56,6 @@ import {
   ModelId,
   ProviderId,
   type RunSpec,
-  type SteerCommand,
 } from "../../src/domain/agent"
 import {
   createE2ELayer,
@@ -93,6 +92,7 @@ import {
   messagePartsToolCallParts,
   type QueuedTurnItem,
   Session,
+  type SteerCommand,
 } from "../../src/domain/message"
 import {
   defineExtension,

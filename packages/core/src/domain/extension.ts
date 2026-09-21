@@ -17,7 +17,6 @@ import {
   type AgentName,
   type RunSpec,
   type SessionDepthLimitError,
-  type SteerCommand,
 } from "./agent.js"
 import {
   getToolId,
@@ -47,7 +46,7 @@ import {
 import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
-import type { Branch, Message, MessageMetadata, Session } from "./message.js"
+import type { Branch, Message, MessageMetadata, Session, SteerCommand } from "./message.js"
 import type { InvalidStateError, NotFoundError, StorageError } from "./errors.js"
 import type { SessionRuntimeError } from "../runtime/session.js"
 import type {

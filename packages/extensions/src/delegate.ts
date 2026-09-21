@@ -60,7 +60,6 @@ import { makeBranchStateStore } from "./branch-state-store.js"
  */
 const CHILD_DENIED_TOOLS: ReadonlyArray<string> = [
   "delegate.start",
-  "delegate.send",
   "delegate.cancel",
   "delegate.list",
 ]
@@ -77,7 +76,8 @@ export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
  */
 const delegateAgent = AgentDefinition.make({
   name: DELEGATE_AGENT_NAME,
-  description: "The default subagent: runs one delegated task and cannot delegate further",
+  description:
+    "The default subagent: runs one delegated task and cannot delegate further. It asks its parent with session.send when blocked.",
   deniedTools: CHILD_DENIED_TOOLS,
 })
 
@@ -438,6 +438,8 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
 
 interface AdmitParams {
   readonly prompt: string
+  /** Seeds the child with this branch's current context window before its first turn. */
+  readonly historyBranchId?: BranchId
   /** The tool call that owns the child. The same id admits the same child once. */
   readonly requestId?: RequestId
   readonly toolCallId?: ToolCallId
@@ -485,7 +487,10 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           name: childName(params.prompt),
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
-          ...Record.filter({ requestId: params.requestId }, Predicate.isNotUndefined),
+          ...Record.filter(
+            { requestId: params.requestId, historyBranchId: params.historyBranchId },
+            Predicate.isNotUndefined,
+          ),
         })
         const requestId = Option.getOrElse(requested, () =>
           RequestId.make(`run:${child.sessionId}`),
@@ -839,8 +844,15 @@ const childOverrides = (overrides: (typeof StartParams.Type)["overrides"]) => ({
 
 const StartParams = Schema.Struct({
   todo: Schema.String.annotate({
-    description: "The whole task. The child has no conversation history.",
+    description:
+      "The whole task. With context `fresh` the child has no conversation history; with `fork` it starts from your current context window.",
   }),
+  context: Schema.optionalKey(
+    Schema.Literals(["fresh", "fork"]).annotate({
+      description:
+        "`fresh` (default): the child sees only the todo. `fork`: the child also sees every message you see now, and can continue your work as it stands.",
+    }),
+  ),
   overrides: RunSpecSchema.fields.overrides,
 })
 
@@ -851,7 +863,7 @@ export const StartChild = tool({
   promptSnippet: "Start a child agent on a task",
   promptGuidelines: [
     "Use for independent work that benefits from a fresh context or parallelism. Do NOT delegate simple reads, searches, or single-file edits — do those directly.",
-    "Each todo must be self-contained — children have no conversation history.",
+    'Each todo must be self-contained — a fresh child has no conversation history. Use context: "fork" when the child needs what you already read or decided; the copy is what you see now, so a long context is a costly seed.',
     "Start every independent child from one cell, then end your turn. Do not poll, set an alarm, or set a monitor for a child: each result wakes you as a message, and several may arrive over several turns. Chain dependent work by starting the next child from the turn that read the earlier result.",
     "Interrupting your turn stops every child you started and had not heard from.",
     "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and read_session reads a finished child's transcript.",
@@ -867,49 +879,18 @@ export const StartChild = tool({
     }
     const { entry } = yield* admitChild({
       prompt: params.todo,
+      ...Option.match(
+        Option.liftPredicate(params.context, (context) => context === "fork"),
+        {
+          onNone: () => ({}),
+          onSome: () => ({ historyBranchId: ctx.branchId }),
+        },
+      ),
       requestId: RequestId.make(ctx.toolCallId),
       toolCallId: ctx.toolCallId,
       runSpec: makeRunSpec({ overrides: childOverrides(params.overrides) }),
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
-  }),
-})
-
-const SendToChild = tool({
-  id: "delegate.send",
-  description:
-    "Put a message into a running child's turn: a correction, a new fact, a narrower scope. The child reads it at its next step. A finished child takes no messages.",
-  params: Schema.Struct({
-    requestId: RequestId,
-    message: Schema.String.annotate({ description: "The text the child reads." }),
-  }),
-  output: ChildObservation,
-  execute: Effect.fn("SendToChild.execute")(function* (params) {
-    const ctx = yield* ExtensionContext
-    const entry = yield* ownedChild(params.requestId)
-    if (params.message.trim().length === 0 || Predicate.isUndefined(ctx.toolCallId)) {
-      return yield* new DelegateError({
-        message: "delegate.send needs a message and a host-owned tool call",
-      })
-    }
-    if (Predicate.isNotUndefined(entry.completed)) {
-      return yield* new DelegateError({
-        message:
-          "The child already finished and takes no more messages. Read its output, or start a new child.",
-      })
-    }
-    yield* ctx.Session.steer({
-      _tag: "Interject",
-      sessionId: entry.sessionId,
-      branchId: entry.branchId,
-      requestId: RequestId.make(`delegate-send:${ctx.toolCallId}`),
-      message: params.message,
-      // The child can finish between the check above and the actor taking
-      // this command. An idle branch only queues steering, so without the
-      // wake the message would sit unread forever.
-      wake: true,
-    }).pipe(asDelegateError("Cannot message the child"))
-    return observationOf(entry)
   }),
 })
 
@@ -1024,7 +1005,7 @@ export const DelegateExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
-    yield* host.register("tool", StartChild, SendToChild, CancelChild, ListChildren)
+    yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("request", DelegateRpc.Children)
     // Every turn end is read twice: as a child's receipt for its parent, and
     // as a parent's interrupt for its children.

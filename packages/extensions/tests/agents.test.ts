@@ -66,7 +66,7 @@ describe("agents extension", () => {
       expect(basePromptSections.every((section) => section.priority < 60)).toBe(true)
       const compiled = compileSystemPrompt(basePromptSections)
       expect(compiled).toContain("You are Gent, a general purpose agent.")
-      expect(compiled).toContain("A child inherits your agent and model")
+      expect(compiled).toContain("Sessions talk with session.send")
       expect(compiled).toContain("Never revert changes you did not make.")
       expect(String(main.name)).toBe("main")
     }),

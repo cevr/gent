@@ -311,8 +311,17 @@ Shape:
   Prime-agent does not cascade a turn abort; opencode does, and the gamut
   testbed's six children editing files after an Escape decided it.
 - `delegate.cancel` interrupts the child's turn through the facade; a finished
-  child is a no-op. `delegate.send` steers a running child on its branch, read
-  at its next step; a finished child refuses the message.
+  child is a no-op.
+- Every session can message another: `session.send` (`@gent/session-tools`)
+  takes a session id or `parent` and steers an `Interject` with `wake` onto
+  the receiver's active branch, carrying `customType: "session-message"` and
+  `details.from` (sender id, name, relation). A running receiver reads it at
+  its next step; an idle one wakes and answers in a turn of its own. This is
+  the child-to-parent channel (a blocked child asks instead of guessing) and
+  the parent-to-child correction in one verb; there is no separate
+  `delegate.send`. Delivery is not bound to the delegate registry, so a
+  message to a finished child wakes it for another turn and no second
+  completion follows.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
@@ -430,12 +439,18 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   receipt and the hook: the delegate reconciles its registry on the parent's
   next turn and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
-- The delegate ships four ordinary tools: `delegate.start`, `delegate.send`,
-  `delegate.cancel`, `delegate.list`. `delegate.start` accepts RunSpec
+- The delegate ships three ordinary tools: `delegate.start`,
+  `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. `delegate.start` accepts RunSpec
   overrides for model, reasoning, tool selection, and added instructions, and
-  always denies the child the delegation tools: fan-out is the caller's
-  decision, and a project prompt that addresses "the orchestrator" reaches
-  children too. Parents read child output through `read_session` on the
+  a `context` of `fresh` (the child sees only its todo) or `fork` (the child is
+  created with `historyBranchId` = the caller's branch, so it starts from the
+  caller's current context window). A history copy is settled first: a tool
+  call with no result in the source, such as the `delegate.start` call that is
+  making the fork, is left out with its step, and a result whose call the
+  window cut away is left out too, or the child's first projection would
+  reject the group. `delegate.start` always denies the child the delegation
+  tools: fan-out is the caller's decision, and a project prompt that
+  addresses "the orchestrator" reaches children too. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
 - The TUI child view reads the delegate's registry via `DelegateRpc.Children`,
@@ -448,7 +463,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   root depth; a parent at the depth limit cannot spawn.
 - Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared. Helper runs such as `read_session` goal extraction pass `visibility: "private"`.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from. The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource); `^o` opens the fork as the shell's session, which is `switchSession`, because the fork already is one. The open fork per branch is process state; the fork itself is durable and listed with every other child session.
-- Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time; `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note }`; `fired` is an alarm, `matched`/`timed-out` a monitor) with `wake: true`; firing removes the entry. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from `wake.list`. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
+- Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from `wake.list` with their cadence and `(notify)` when the fire starts no turn. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
 - Foreground runs persist a child session/branch and can be revisited with `read_session`. Private runs leave no session behind; they return text/usage/tool-call metadata only.
 - `TurnCompleted` carries the turn's token totals, summed over its model

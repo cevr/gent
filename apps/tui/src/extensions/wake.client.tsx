@@ -55,22 +55,55 @@ interface WakeTrayLine {
 /** fx-style marks: a clock face for an alarm, a fisheye for a monitor, a bare dot for the overflow line. */
 const ALARM_GLYPH = "◷"
 const MONITOR_GLYPH = "◉"
+const NOTICE_GLYPH = "◆"
+
+/** The kind word says what the fire does: `(notify)` leaves a notice instead of starting a turn. */
+const kindOf = (entry: { readonly mode?: "wake" | "notify" }, kind: string): string => {
+  if (entry.mode === "notify") return `${kind} (notify)`
+  return kind
+}
+
+/** `2m ago`, or `just now` under a second. */
+const formatAgo = (millis: number): string => {
+  const remaining = formatRemaining(millis)
+  if (remaining === "now") return "just now"
+  return `${remaining} ago`
+}
 
 const entryLine = (entry: WakeEntryType, now: number, width: number): WakeTrayLine =>
   Match.type<WakeEntryType>().pipe(
     Match.tagsExhaustive({
-      alarm: (alarm): WakeTrayLine => ({
-        glyph: ALARM_GLYPH,
-        text: truncate(`alarm in ${formatRemaining(alarm.dueAt - now)} · ${alarm.note}`, width),
-      }),
+      alarm: (alarm): WakeTrayLine => {
+        const cadence = Option.match(Option.fromUndefinedOr(alarm.everySeconds), {
+          onNone: () => "",
+          onSome: (seconds) => ` · every ${formatRemaining(seconds * 1000)}`,
+        })
+        return {
+          glyph: ALARM_GLYPH,
+          text: truncate(
+            `${kindOf(alarm, "alarm")} in ${formatRemaining(alarm.dueAt - now)}${cadence} · ${alarm.note}`,
+            width,
+          ),
+        }
+      },
       monitor: (monitor): WakeTrayLine => {
         const every = formatRemaining(monitor.everySeconds * 1000)
         const left = formatRemaining(monitor.deadline - now)
         return {
           glyph: MONITOR_GLYPH,
-          text: truncate(`monitor every ${every} · ${left} left · ${monitor.note}`, width),
+          text: truncate(
+            `${kindOf(monitor, "monitor")} every ${every} · ${left} left · ${monitor.note}`,
+            width,
+          ),
         }
       },
+      notice: (notice): WakeTrayLine => ({
+        glyph: NOTICE_GLYPH,
+        text: truncate(
+          `${notice.outcome} ${formatAgo(now - notice.firedAt)} · ${notice.note}`,
+          width,
+        ),
+      }),
     }),
   )(entry)
 
@@ -80,9 +113,11 @@ export const wakeTrayLines = (
   now: number,
   width: number,
 ): ReadonlyArray<WakeTrayLine> => {
+  // A notice already fired, so it sorts ahead of everything still pending.
   const dueOf = (entry: WakeEntryType): number => {
     if (entry._tag === "alarm") return entry.dueAt
-    return entry.deadline
+    if (entry._tag === "monitor") return entry.deadline
+    return entry.firedAt - Number.MAX_SAFE_INTEGER
   }
   const sorted = [...pending.entries].sort((a, b) => dueOf(a) - dueOf(b))
   const shown = sorted.slice(0, TRAY_MAX_ROWS)

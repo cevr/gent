@@ -8,7 +8,6 @@ import {
   ReasoningEffort,
   RunSpecSchema,
   SessionDepthLimitError,
-  SteerCommand,
 } from "../domain/agent.js"
 import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
 import { StorageError } from "../storage/storage.js"
@@ -38,6 +37,7 @@ import {
   ProjectedMessage,
   QueueSnapshot,
   Session,
+  SteerCommand,
 } from "../domain/message.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../domain/agent-loop.js"
 import {

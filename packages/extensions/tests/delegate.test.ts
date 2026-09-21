@@ -33,7 +33,8 @@ import {
 import { type BranchId, RequestId, ToolCallId } from "@gent/core-internal/domain/ids"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
-import { ModelId, SteerCommand } from "@gent/core-internal/domain/agent"
+import { ModelId } from "@gent/core-internal/domain/agent"
+import { SteerCommand } from "@gent/core-internal/domain/message"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
 // ── delegate/harness ────────────────────────────────────────────────────────
@@ -635,18 +636,94 @@ describe("starts over the pending cap", () => {
   )
 })
 
-// ── delegate/send ───────────────────────────────────────────────────────────
+// ── session.send ────────────────────────────────────────────────────────────
 
 /**
- * The orchestrator can correct a child that is still working: `delegate.send`
- * puts a message into the child's running turn, and the child's next model
- * step reads it. A finished child takes no more messages.
+ * Every session can message another. A parent corrects a child that is still
+ * working: the message joins the child's running turn and its next model step
+ * reads it. A child asks its parent: the parent wakes and answers. A finished
+ * child is idle, so a later message wakes it for another turn.
  */
 
 const correction = "CORRECTION: only look at src/store"
+const question = "QUESTION: which store, sqlite or memory?"
 
-describe("delegate.send", () => {
-  it.live("a message sent to a running child reaches the child's next model step", () =>
+/** The child session the parent's `delegate.start` result named, once the prompt carries it. */
+const startedSessionId = (prompt: Prompt.Prompt): Option.Option<string> =>
+  Option.fromUndefinedOr(
+    prompt.content
+      .flatMap((message) => {
+        if (message.role !== "tool") return []
+        return message.content
+      })
+      .flatMap((part) => {
+        if (part.type !== "tool-result" || part.name !== "delegate.start") return []
+        const decoded = Schema.decodeUnknownOption(Schema.Struct({ sessionId: Schema.String }))(
+          part.result,
+        )
+        return Option.match(decoded, { onNone: () => [], onSome: (value) => [value.sessionId] })
+      })[0],
+  )
+
+/** Messages another session sent: the envelope names the sender. A joined one reads `steering`, a waking one keeps its own type. */
+const sessionMessages = <
+  M extends {
+    readonly parts: ReadonlyArray<Prompt.Part>
+    readonly metadata?: { readonly customType?: string; readonly details?: unknown }
+  },
+>(
+  messages: ReadonlyArray<M>,
+) =>
+  messages.filter((message) =>
+    Schema.is(Schema.Struct({ from: Schema.Struct({ relation: Schema.String }) }))(
+      message.metadata?.details,
+    ),
+  )
+
+describe("a forked child", () => {
+  it.live(
+    "starts from the parent's context window, minus the start call still in flight",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const parentContext = "PARENT-CONTEXT: the answer is 42"
+          let childPrompt: Option.Option<Prompt.Prompt> = Option.none()
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts.at(-1) === childTask) {
+              childPrompt = Option.some(options.prompt)
+              return Effect.succeed(reply("42, read from the fork"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: childTask, context: "fork" }, "fork-child"),
+              )
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, parentContext)
+          const snapshot = yield* afterCompletion(harness)
+          expect(messageTexts(snapshot.messages)).toContain("read it")
+          const seen = Option.getOrThrow(childPrompt)
+          // The child read the parent's user message, then its own task.
+          expect(promptTexts(seen)).toEqual([parentContext, childTask])
+          // The start call had no result when the copy was taken, so the child never sees it.
+          expect(promptToolCallIds(seen)).toEqual([])
+          const child = yield* childOf(harness)
+          const childSnapshot = yield* harness.client.session.getSnapshot(child)
+          expect(messageTexts(childSnapshot.messages)).toContain(parentContext)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
+describe("session.send", () => {
+  it.live("a parent's message reaches a running child's next model step", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const childStarted = yield* Deferred.make<void>()
@@ -656,7 +733,7 @@ describe("delegate.send", () => {
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
           if (texts[0] === childTask) {
-            if (texts.includes(correction)) {
+            if (texts.some((text) => text.includes(correction))) {
               return Deferred.succeed(childSawCorrection, void 0).pipe(
                 Effect.as(reply("narrowed to src/store")),
               )
@@ -672,10 +749,9 @@ describe("delegate.send", () => {
             return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
           }
           if (parentCalls === 2) {
+            const to = Option.getOrThrow(startedSessionId(options.prompt))
             return Deferred.await(childStarted).pipe(
-              Effect.as(
-                toolStep("delegate.send", { requestId: "bg-child", message: correction }, "send-1"),
-              ),
+              Effect.as(toolStep("session.send", { to, message: correction }, "send-1")),
             )
           }
           return Deferred.succeed(delivered, void 0).pipe(Effect.as(reply("ack")))
@@ -693,20 +769,87 @@ describe("delegate.send", () => {
           3_000,
           "the child's completion carried its corrected answer",
         )
-        expect(resultsOf("delegate.send", snapshot.messages)[0]).toMatchObject({
+        expect(resultsOf("session.send", snapshot.messages)[0]).toMatchObject({
           isFailure: false,
-          result: { _tag: "Pending" },
+          result: { relation: "child" },
+        })
+        const child = yield* childOf(harness)
+        const childSnapshot = yield* client.session.getSnapshot(child)
+        const [received] = sessionMessages(childSnapshot.messages)
+        expect(received?.metadata?.details).toMatchObject({
+          from: { sessionId, relation: "parent" },
+        })
+        expect(messageTexts([received!])[0]).toContain("Message from your parent")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("a child's question wakes its idle parent, who answers in a turn of its own", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let parentCalls = 0
+        let childCalls = 0
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          const texts = promptTexts(options.prompt)
+          if (texts[0] === childTask) {
+            childCalls += 1
+            if (childCalls === 1) {
+              return Effect.succeed(
+                toolStep("session.send", { to: "parent", message: question }, "ask-parent"),
+              )
+            }
+            return Effect.succeed(reply("pong"))
+          }
+          parentCalls += 1
+          if (parentCalls === 1) {
+            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
+          }
+          if (texts.some((text) => text.includes(question))) {
+            return Effect.succeed(reply("ANSWER: sqlite"))
+          }
+          return Effect.succeed(reply("ack"))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { client, sessionId, branchId } = harness
+        yield* sendPrompt(harness, "split the work")
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) =>
+            messageTexts(current.messages).some((text) => text.includes("ANSWER: sqlite")),
+          3_000,
+          "the parent answered the child's question",
+        )
+        const [asked] = sessionMessages(snapshot.messages)
+        expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
+        expect(messageTexts([asked!])[0]).toContain("Message from your child")
+        // The question was a turn of its own: the parent's last user text before the answer.
+        const texts = messageTexts(snapshot.messages)
+        expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(
+          texts.indexOf("ANSWER: sqlite"),
+        )
+        const child = yield* childOf(harness)
+        const childSnapshot = yield* client.session.getSnapshot(child)
+        expect(resultsOf("session.send", childSnapshot.messages)[0]).toMatchObject({
+          isFailure: false,
+          result: { sessionId, relation: "parent" },
         })
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
-  it.live("a finished child refuses the message as a tool result", () =>
+
+  it.live("a message to a finished child wakes it for another turn", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let parentCalls = 0
+        let childCalls = 0
+        const childAnsweredTwice = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
-          if (texts[0] === childTask) return Effect.succeed(reply("done"))
+          if (texts[0] === childTask) {
+            childCalls += 1
+            if (childCalls === 1) return Effect.succeed(reply("done"))
+            return Deferred.succeed(childAnsweredTwice, void 0).pipe(Effect.as(reply("done again")))
+          }
           parentCalls += 1
           if (parentCalls === 1) {
             return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-done"))
@@ -716,8 +859,9 @@ describe("delegate.send", () => {
             texts.some((text) => text.includes("requestId bg-done")) &&
             !promptToolCallIds(options.prompt).includes("send-late")
           ) {
+            const to = Option.getOrThrow(startedSessionId(options.prompt))
             return Effect.succeed(
-              toolStep("delegate.send", { requestId: "bg-done", message: correction }, "send-late"),
+              toolStep("session.send", { to, message: correction }, "send-late"),
             )
           }
           return Effect.succeed(reply("ack"))
@@ -725,15 +869,46 @@ describe("delegate.send", () => {
         const harness = yield* harnessWithHome(providerLayer)
         const { client, sessionId, branchId } = harness
         yield* sendPrompt(harness, "split the work")
+        yield* Deferred.await(childAnsweredTwice)
         const snapshot = yield* waitFor(
           client.session.getSnapshot({ sessionId, branchId }),
-          (current) => resultsOf("delegate.send", current.messages).length === 1,
+          (current) => resultsOf("session.send", current.messages).length === 1,
           3_000,
           "the late send returned a result",
         )
-        expect(resultsOf("delegate.send", snapshot.messages)[0]).toMatchObject({
+        expect(resultsOf("session.send", snapshot.messages)[0]).toMatchObject({
+          isFailure: false,
+          result: { relation: "child" },
+        })
+        // One completion per start: the child's second turn wakes nobody.
+        expect(completionMessages(snapshot.messages).length).toBe(1)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("a session with no parent cannot address `parent`", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          if (promptToolCallIds(options.prompt).includes("no-parent")) {
+            return Effect.succeed(reply("ok"))
+          }
+          return Effect.succeed(
+            toolStep("session.send", { to: "parent", message: "hello?" }, "no-parent"),
+          )
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { client, sessionId, branchId } = harness
+        yield* sendPrompt(harness, "ask upward")
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => resultsOf("session.send", current.messages).length === 1,
+          3_000,
+          "the send returned a result",
+        )
+        expect(resultsOf("session.send", snapshot.messages)[0]).toMatchObject({
           isFailure: true,
-          result: { error: expect.stringContaining("already finished") },
+          result: { error: expect.stringContaining("no parent") },
         })
       }).pipe(Effect.timeout("4 seconds")),
     ),

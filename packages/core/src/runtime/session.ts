@@ -35,11 +35,7 @@ import {
   type TurnRecordStorage,
 } from "../storage/storage.js"
 import { omitUndefined } from "../domain/guards.js"
-import {
-  DEFAULT_MAX_AGENT_RUN_DEPTH,
-  SessionDepthLimitError,
-  type SteerCommand as SteerCommandType,
-} from "../domain/agent.js"
+import { DEFAULT_MAX_AGENT_RUN_DEPTH, SessionDepthLimitError } from "../domain/agent.js"
 import { NotFoundError } from "../domain/errors.js"
 import {
   ActorCommandId,
@@ -53,7 +49,7 @@ import { Actor } from "effect-encore"
 import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
-import type { QueueSnapshot } from "../domain/message.js"
+import type { QueueSnapshot, SteerCommand as SteerCommandType } from "../domain/message.js"
 import type { PromptSection } from "../domain/capability.js"
 import {
   AgentLoop as AgentLoopActor,

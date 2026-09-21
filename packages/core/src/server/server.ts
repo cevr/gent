@@ -149,7 +149,7 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { PromptSection } from "../domain/capability.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
-import { messagesInCurrentWindow } from "../runtime/model-context.js"
+import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
 
 // ── connection-tracker ──────────────────────────────────────────────────────
@@ -608,9 +608,10 @@ const makeSessionMutationsService: Effect.Effect<
         yield* branchStorage.createBranch(branch)
         // An inheriting session starts from what the source's model sees now:
         // the current context window, with hidden rows out, as in that
-        // branch's own turn. The rows get fresh ids, so a copied window
-        // marker's anchor never resolves; that is harmless, because the copy
-        // already is the window.
+        // branch's own turn. A tool call still running in the source (a fork
+        // made from inside `delegate.start`) is left out with its step. The
+        // rows get fresh ids, so a copied window marker's anchor never
+        // resolves; that is harmless, because the copy already is the window.
         if (!Predicate.isUndefined(input.historyBranchId)) {
           const source = yield* branchStorage.getBranch(input.historyBranchId)
           if (Predicate.isUndefined(source)) {
@@ -618,8 +619,8 @@ const makeSessionMutationsService: Effect.Effect<
               message: `History branch not found: ${input.historyBranchId}`,
             })
           }
-          const history = messagesInCurrentWindow(
-            yield* messageStorage.listMessages(input.historyBranchId),
+          const history = settledMessages(
+            messagesInCurrentWindow(yield* messageStorage.listMessages(input.historyBranchId)),
           )
           for (const message of history) {
             if (message.metadata?.hidden === true) continue

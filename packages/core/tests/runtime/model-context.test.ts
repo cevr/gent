@@ -41,6 +41,7 @@ import {
   toPrompt,
   toPromptMessages,
   windowDetails,
+  settledMessages,
   windowMarkerMessage,
 } from "../../src/runtime/model-context"
 import { describe, expect, it } from "effect-bun-test"
@@ -644,6 +645,53 @@ describe("model context window", () => {
     const projection = Result.getOrThrow(projectModelContext(windowed, budget))
     expect(projection.messages.map((entry) => String(entry.id))).toEqual([String(marker.id), "u3"])
     expect(projection.omittedMessageIds.map(String)).toEqual(["u2", "a2"])
+  })
+
+  test("a copy taken mid-step leaves the running tool call out with its step", () => {
+    const tool = (id: string, parts: ReadonlyArray<MessagePart>, ordinal: number) =>
+      Message.cases.regular.make({
+        id: MessageId.make(id),
+        sessionId: sessionIdModelContextWindow,
+        branchId: branchIdModelContextWindow,
+        role: "tool",
+        parts: [...parts],
+        createdAt: dateFromMillis(1_000 + ordinal),
+      })
+    const assistant = (id: string, parts: ReadonlyArray<MessagePart>, ordinal: number) =>
+      Message.cases.regular.make({
+        id: MessageId.make(id),
+        sessionId: sessionIdModelContextWindow,
+        branchId: branchIdModelContextWindow,
+        role: "assistant",
+        parts: [...parts],
+        createdAt: dateFromMillis(1_000 + ordinal),
+      })
+    const call = (id: string) =>
+      Prompt.toolCallPart({ id, name: "read", params: { path: id }, providerExecuted: false })
+    const result = (id: string) =>
+      Prompt.toolResultPart({
+        id,
+        name: "read",
+        isFailure: false,
+        providerExecuted: false,
+        result: "ok",
+      })
+    const history = [
+      messageModelContextWindow("u1", "user", 1),
+      assistant("a1", [Prompt.textPart({ text: "reading" }), call("c1")], 2),
+      tool("t1", [result("c1")], 3),
+      assistant("a2", [Prompt.textPart({ text: "forking" }), call("c2")], 4),
+      assistant("a3", [call("c3")], 5),
+    ]
+    const settled = settledMessages(history)
+    expect(settled.map((entry) => String(entry.id))).toEqual(["u1", "a1", "t1", "a2"])
+    expect(settled[3]?.parts).toEqual([Prompt.textPart({ text: "forking" })])
+    // Messages that lose nothing are the same objects; a run with every call answered is unchanged.
+    expect(settled[1]).toBe(history[1])
+    const answered = history.slice(0, 3)
+    expect(settledMessages(answered)).toEqual(answered)
+    // A window cut between a call and its result leaves an orphan result; it goes too.
+    expect(settledMessages(history.slice(2, 4)).map((entry) => String(entry.id))).toEqual(["a2"])
   })
 
   test("a marker whose anchor is gone is ignored so nothing is lost", () => {

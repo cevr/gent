@@ -1,6 +1,6 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, SessionId, ToolCallId } from "./ids.js"
+import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import {
   AgentName,
   type AgentRunToolCall,
@@ -171,6 +171,48 @@ export const MessageMetadata = Schema.Struct({
 })
 export type MessageMetadata = typeof MessageMetadata.Type
 
+// Steer Command — RPC payload that targets a session/branch loop.
+// Lives beside the message vocabulary: an Interject carries the envelope of
+// the interjection it persists, and `agent.ts` is upstream of this file.
+
+const SteerTargetFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+  requestId: RequestId,
+}
+
+export const SteerCommand = Schema.Union([
+  Schema.TaggedStruct("Cancel", {
+    ...SteerTargetFields,
+    messageId: Schema.optional(MessageId),
+  }),
+  Schema.TaggedStruct("Interrupt", {
+    ...SteerTargetFields,
+    messageId: Schema.optional(MessageId),
+  }),
+  Schema.TaggedStruct("Interject", {
+    ...SteerTargetFields,
+    message: Schema.String,
+    /**
+     * Envelope on the persisted interjection: who wrote it and why. An item
+     * that joins a running turn is stamped `steering` and keeps only its
+     * `details`; one that wakes an idle branch keeps the whole envelope.
+     */
+    metadata: Schema.optional(MessageMetadata),
+    agent: Schema.optional(AgentName),
+    /**
+     * Start a turn when the branch is idle, instead of waiting in the queue.
+     *
+     * Steering exists to reach a turn that is already running, so an idle
+     * branch parks it by default and a reader can still see it through
+     * `queue.get`. A caller that wants an answer now — a queued question
+     * being answered, a child reporting back — says so here.
+     */
+    wake: Schema.optional(Schema.Boolean),
+  }),
+])
+export type SteerCommand = typeof SteerCommand.Type
+
 // Message
 
 const MessageFields = {
@@ -264,6 +306,14 @@ export const copyMessageToBranch = (
     sessionId: params.sessionId ?? message.sessionId,
     branchId: params.branchId,
   }
+  if (message._tag === "interjection")
+    return Message.cases.interjection.make({ ...fields, role: "user" })
+  return Message.cases.regular.make(fields)
+}
+
+/** The same message with other parts. */
+export const messageWithParts = (message: Message, parts: ReadonlyArray<MessagePart>): Message => {
+  const fields = { ...messageFields(message), parts }
   if (message._tag === "interjection")
     return Message.cases.interjection.make({ ...fields, role: "user" })
   return Message.cases.regular.make(fields)

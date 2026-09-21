@@ -57,6 +57,40 @@ describe("wakeTrayLines", () => {
       const lines = wakeTrayLines(many, 0, 80)
       expect(lines.length).toBe(4)
       expect(lines[3]?.text).toBe("+2 more pending")
+      const repeating: WakePendingType = {
+        now: 0,
+        entries: [
+          {
+            _tag: "alarm",
+            wakeId: "r",
+            dueAt: 60_000,
+            everySeconds: 300,
+            mode: "notify",
+            note: "stretch",
+          },
+        ],
+      }
+      expect(wakeTrayLines(repeating, 0, 80)).toEqual([
+        { glyph: "◷", text: "alarm (notify) in 1m 00s · every 5m 00s · stretch" },
+      ])
+      const noticed: WakePendingType = {
+        now: 120_000,
+        entries: [
+          { _tag: "alarm", wakeId: "a", dueAt: 130_000, note: "later" },
+          {
+            _tag: "notice",
+            wakeId: "n",
+            outcome: "fired",
+            firedAt: 0,
+            content: "Alarm n fired.",
+            note: "stand up",
+          },
+        ],
+      }
+      expect(wakeTrayLines(noticed, 120_000, 80)).toEqual([
+        { glyph: "◆", text: "fired 2m 00s ago · stand up" },
+        { glyph: "◷", text: "alarm in 10s · later" },
+      ])
       expect(wakeTrayLines(pending, 1_000_000, 20)[0]?.text).toBe("alarm in 1m 35s · c…")
     }),
   )

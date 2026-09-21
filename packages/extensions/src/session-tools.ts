@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 import {
   type Branch,
   defineExtension,
@@ -8,6 +8,7 @@ import {
   makeRunSpec,
   type Message,
   messagePartsDisplayText,
+  RequestId,
   SessionId,
   tool,
 } from "@gent/core/extensions/api"
@@ -200,13 +201,155 @@ const RenameSessionTool = tool({
   }),
 })
 
+// ── session.send ────────────────────────────────────────────────────────────
+
+/**
+ * One message from this session to another. Every session has it: a parent
+ * corrects a child, a child asks its parent, two siblings hand off a fact.
+ * The text lands on the target's active branch as an interjection. A running
+ * turn reads it at its next step; an idle branch wakes and answers it.
+ */
+
+class SendSessionError extends Schema.TaggedError<SendSessionError>()("SendSessionError", {
+  message: Schema.String,
+}) {}
+
+const SESSION_MESSAGE_TYPE = "session-message"
+
+/** The sender, as the receiving client sees it. */
+const SessionMessageDetails = Schema.Struct({
+  from: Schema.Struct({
+    sessionId: SessionId,
+    name: Schema.optional(Schema.String),
+    /** How the sender stands to the receiver. */
+    relation: Schema.Literals(["parent", "child", "session"]),
+  }),
+})
+type SessionMessageDetails = typeof SessionMessageDetails.Type
+
+const SendSessionParams = Schema.Struct({
+  to: Schema.String.annotate({
+    description: "A session id, or `parent` for the session that started this one.",
+  }),
+  message: Schema.String.annotate({ description: "The text the other session reads." }),
+})
+
+const SendSessionResult = Schema.Struct({
+  sessionId: SessionId,
+  /** What the receiver is to the sender. */
+  relation: Schema.Literals(["parent", "child", "session"]),
+})
+
+const relationOf = (
+  sender: { readonly id: SessionId; readonly parentSessionId?: SessionId },
+  receiver: { readonly id: SessionId; readonly parentSessionId?: SessionId },
+): "parent" | "child" | "session" => {
+  if (sender.parentSessionId === receiver.id) return "parent"
+  if (receiver.parentSessionId === sender.id) return "child"
+  return "session"
+}
+
+const inverse = (relation: "parent" | "child" | "session"): "parent" | "child" | "session" => {
+  if (relation === "parent") return "child"
+  if (relation === "child") return "parent"
+  return "session"
+}
+
+/** The header the model reads: who wrote it, and what they are to the reader. */
+const sessionMessageText = (input: {
+  readonly from: {
+    readonly sessionId: SessionId
+    readonly name?: string
+    readonly relation: string
+  }
+  readonly message: string
+}): string => {
+  const name = Option.fromUndefinedOr(input.from.name).pipe(
+    Option.map((value) => ` "${value}"`),
+    Option.getOrElse(() => ""),
+  )
+  const who = Option.liftPredicate(input.from.relation, (relation) => relation !== "session").pipe(
+    Option.map((relation) => `your ${relation}`),
+    Option.getOrElse(() => "another session"),
+  )
+  return `Message from ${who}${name} (session ${input.from.sessionId}):\n\n${input.message}`
+}
+
+const SendSessionTool = tool({
+  id: "session.send",
+  description:
+    "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list or read_session. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
+  params: SendSessionParams,
+  output: SendSessionResult,
+  execute: Effect.fn("SendSessionTool.execute")(function* (params: typeof SendSessionParams.Type) {
+    const ctx = yield* ExtensionContext
+    const message = params.message.trim()
+    if (message.length === 0 || Predicate.isUndefined(ctx.toolCallId)) {
+      return yield* new SendSessionError({
+        message: "session.send needs a message and a host-owned tool call",
+      })
+    }
+    const sender = yield* ctx.Session.getSession().pipe(
+      Effect.mapError(
+        (e) => new SendSessionError({ message: `Cannot read this session: ${e.message}` }),
+      ),
+    )
+    if (Predicate.isUndefined(sender)) {
+      return yield* new SendSessionError({ message: "This session no longer exists" })
+    }
+    if (params.to === "parent" && Predicate.isUndefined(sender.parentSessionId)) {
+      return yield* new SendSessionError({ message: "This session has no parent" })
+    }
+    const targetId = Option.fromUndefinedOr(sender.parentSessionId).pipe(
+      Option.filter(() => params.to === "parent"),
+      Option.getOrElse(() => SessionId.make(params.to)),
+    )
+    if (targetId === sender.id) {
+      return yield* new SendSessionError({
+        message: "A session cannot message itself; the text is already in your context",
+      })
+    }
+    const receiver = yield* ctx.Session.getSession(targetId).pipe(
+      Effect.mapError(
+        (e) => new SendSessionError({ message: `Cannot read the session: ${e.message}` }),
+      ),
+    )
+    if (Predicate.isUndefined(receiver) || Predicate.isUndefined(receiver.activeBranchId)) {
+      return yield* new SendSessionError({ message: `No session ${targetId}` })
+    }
+    const relation = relationOf(sender, receiver)
+    const from = {
+      sessionId: sender.id,
+      ...Option.match(Option.fromUndefinedOr(sender.name), {
+        onNone: () => ({}),
+        onSome: (name) => ({ name }),
+      }),
+      relation: inverse(relation),
+    }
+    const details: SessionMessageDetails = { from }
+    yield* ctx.Session.steer({
+      _tag: "Interject",
+      sessionId: receiver.id,
+      branchId: receiver.activeBranchId,
+      requestId: RequestId.make(`session-send:${ctx.toolCallId}`),
+      message: sessionMessageText({ from, message }),
+      metadata: { customType: SESSION_MESSAGE_TYPE, extensionId: "@gent/session-tools", details },
+      // The receiver may be idle; a parked message nobody reads is a lost question.
+      wake: true,
+    }).pipe(
+      Effect.mapError((e) => new SendSessionError({ message: `Cannot deliver: ${e.message}` })),
+    )
+    return { sessionId: receiver.id, relation }
+  }),
+})
+
 // ── extension ───────────────────────────────────────────────────────────────
 
 export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", ReadSessionTool, RenameSessionTool)
+    yield* host.register("tool", ReadSessionTool, RenameSessionTool, SendSessionTool)
     yield* host.on("systemPrompt", (input) => {
       if (input.interactive === false) {
         return Effect.succeed(input.basePrompt)
