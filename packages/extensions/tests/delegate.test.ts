@@ -781,6 +781,7 @@ describe("session.send", () => {
           from: { sessionId, relation: "parent" },
         })
         expect(messageTexts([received!])[0]).toContain("Message from your parent")
+        expect(messageTexts([received!])[0]).not.toContain("not its completion")
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -823,6 +824,8 @@ describe("session.send", () => {
         const [asked] = sessionMessages(snapshot.messages)
         expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
         expect(messageTexts([asked!])[0]).toContain("Message from your child")
+        // A question mid-turn must not read as the child being done.
+        expect(messageTexts([asked!])[0]).toContain("This is not its completion")
         // The question was a turn of its own: the parent's last user text before the answer.
         const texts = messageTexts(snapshot.messages)
         expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(

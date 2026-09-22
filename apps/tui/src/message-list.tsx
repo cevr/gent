@@ -236,6 +236,17 @@ const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
 /** A message from another session names its sender on a line of its own. */
 const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
 
+/** The sender line fits the id: an auto-named child carries its whole task in the name. */
+const SENDER_NAME_MAX_CHARS = 32
+
+const shortName = (name: string): string => {
+  const flat = name.replace(/\s+/g, " ").trim()
+  return Option.liftPredicate(flat, (value) => value.length > SENDER_NAME_MAX_CHARS).pipe(
+    Option.map((value) => `${value.slice(0, SENDER_NAME_MAX_CHARS - 1).trimEnd()}…`),
+    Option.getOrElse(() => flat),
+  )
+}
+
 /** One sent message as the reader sees it: who wrote it, then the text. */
 interface SessionMessageView {
   readonly sender: string
@@ -256,7 +267,7 @@ const sessionMessageView = (
     Option.getOrElse(() => "session"),
   )
   const name = Option.fromUndefinedOr(from.name).pipe(
-    Option.map((value) => ` "${value}"`),
+    Option.map((value) => ` "${shortName(value)}"`),
     Option.getOrElse(() => ""),
   )
   const header = sessionMessageText({ from, message: "" })

@@ -272,7 +272,15 @@ export const sessionMessageText = (input: {
     Option.map((relation) => `your ${relation}`),
     Option.getOrElse(() => "another session"),
   )
-  return `Message from ${who}${name} (session ${input.from.sessionId}):\n\n${input.message}`
+  // A child's message arrives mid-turn; its completion is a separate message.
+  const status = Option.liftPredicate(input.from.relation, (relation) => relation === "child").pipe(
+    Option.map(
+      () =>
+        "\nYour child is still running. This is not its completion; that arrives as a separate message.",
+    ),
+    Option.getOrElse(() => ""),
+  )
+  return `Message from ${who}${name} (session ${input.from.sessionId}):${status}\n\n${input.message}`
 }
 
 const SendSessionTool = tool({

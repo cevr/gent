@@ -29,6 +29,7 @@ import {
   ToolCallId,
 } from "@gent/core/protocol"
 import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message"
+import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client.js"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
@@ -965,8 +966,7 @@ describe("FX transcript treatment", () => {
       )
       const frame = renderFrame(shown)
       // A blank line in the name or the body leaves the header strip whole.
-      expect(frame).toContain("» from your parent")
-      expect(frame).toContain('refactor" · 0199aabb')
+      expect(frame).toContain('» from your parent "auth refactor" · 0199aabb')
       expect(frame).toContain("Use the v2 token route.")
       expect(frame).toContain("Then rerun the suite.")
       expect(frame).not.toContain("Message from your parent")
@@ -983,6 +983,45 @@ describe("FX transcript treatment", () => {
         )),
       )
       expect(renderFrame(expanded)).toContain("Message from your parent")
+    }),
+  )
+
+  it.live("a long child name is cut so the id stays on the sender line", () =>
+    Effect.gen(function* () {
+      const from = {
+        sessionId: SessionId.make("01a0ca0cb3e7"),
+        name: "delegate: Use session.send with to: parent and the message hello",
+        relation: "child",
+      } satisfies SessionMessageDetails["from"]
+      const sent: ListMessage = {
+        ...userMessage(
+          "interjection-message",
+          "sent-2",
+          sessionMessageText({ from, message: "hello from the child" }),
+          "steer",
+        ),
+        pendingMode: absent,
+        metadata: {
+          customType: "session-message",
+          extensionId: "@gent/session-tools",
+          details: { from },
+        },
+      }
+      const shown = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[sent]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      const frame = renderFrame(shown)
+      expect(frame).toContain('» from your child "delegate: Use session.send with…" · 01a0ca0c')
+      expect(frame).toContain("hello from the child")
+      // The status line is for the model; the row already says who is writing.
+      expect(frame).not.toContain("not its completion")
     }),
   )
 
