@@ -32,7 +32,6 @@ import {
   runAutocompleteContributions,
 } from "../../src/extensions/loader-boundary"
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
-import type { HeadlessToolRenderer } from "../../src/headless"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -70,10 +69,6 @@ const renderer =
   (label: string): ToolRenderer =>
   (_props: ToolRendererProps) =>
     label
-const headless =
-  (label: string): HeadlessToolRenderer =>
-  () =>
-    Option.some(label)
 
 const widget =
   (label: string): WidgetComponent =>
@@ -131,35 +126,6 @@ describe("resolveTuiExtensions", () => {
     expect(Option.isSome(bashRenderer)).toBe(true)
     if (Option.isNone(bashRenderer)) return
     expect(bashRenderer.value(toolProps)).toBe("project")
-  })
-
-  test("headless renderer surfaces use the same renderer scope precedence", () => {
-    const resolved = resolveTuiExtensions([
-      make(
-        "builtin-tools",
-        "builtin",
-        rendererContribution(["bash"], renderer("builtin"), { headless: headless("builtin") }),
-      ),
-      make(
-        "project-tools",
-        "project",
-        rendererContribution(["bash"], renderer("project"), { headless: headless("project") }),
-      ),
-    ])
-
-    const resolvedRenderer = Option.getOrElse(
-      Option.fromNullishOr(resolved.headlessRenderers.get("bash")),
-      () => headless("missing"),
-    )
-    expect(
-      resolvedRenderer({
-        toolName: "bash",
-        status: "running",
-        input: Option.none(),
-        output: Option.none(),
-        summary: Option.none(),
-      }),
-    ).toEqual(Option.some("project"))
   })
 
   test("widgets stay user-ordered by priority after scope resolution", () => {

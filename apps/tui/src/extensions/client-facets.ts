@@ -24,7 +24,6 @@ import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gen
 import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
-import type { HeadlessToolRenderer } from "../headless"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 
@@ -778,7 +777,6 @@ type AutocompleteItemsEffect = Effect.Effect<
 interface RendererContribution {
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
-  readonly headless?: HeadlessToolRenderer
 }
 
 interface WidgetContribution {
@@ -912,8 +910,7 @@ export const clientContributions = (
 export const rendererContribution = (
   toolNames: ReadonlyArray<string>,
   component: ToolRenderer,
-  options?: { readonly headless?: HeadlessToolRenderer },
-): ClientContributions => ({ renderers: [{ toolNames, component, ...options }] })
+): ClientContributions => ({ renderers: [{ toolNames, component }] })
 
 export const widgetContribution = (opts: {
   readonly id: string

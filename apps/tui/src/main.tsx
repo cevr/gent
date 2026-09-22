@@ -46,12 +46,9 @@ import { TerminalDimensionsProvider } from "./terminal"
 import { ComposerDraftsProvider, SessionShellProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
-import { ExtensionUIProvider, makeClientRuntime } from "./extensions/host"
-import { DEFAULT_HEADLESS_TOOL_RENDERERS, runHeadless } from "./headless"
+import { ExtensionUIProvider } from "./extensions/host"
+import { runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
-import { builtinClientModules } from "./extensions/builtins"
-import { loadExtensionUi } from "./extensions/loader-boundary"
-import type { ClientRuntime } from "./extensions/client-facets.js"
 import {
   CliStartupError,
   doctor,
@@ -107,8 +104,6 @@ const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
 const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
-  cwd: string,
-  home: string,
   agent: Option.Option<AgentName>,
   runSpec: Option.Option<RunSpec>,
 ) => {
@@ -124,29 +119,8 @@ const runHeadlessTurn = (
   }
 
   const resolvedBranchId = branchId.value
-  const clientRuntime: ClientRuntime = makeClientRuntime({
-    transport: {
-      client: bundle.client,
-      runtime: bundle.runtime,
-      currentSession: () => ({ sessionId: state.session.id, branchId: resolvedBranchId }),
-      onExtensionStateChanged: () => () => {},
-      onSessionEvent: () => () => {},
-    },
-    workspace: { cwd, home },
-    shell: { cast: bundle.runtime.cast },
-  })
 
   return Effect.gen(function* () {
-    const toolRenderers = yield* Effect.promise(() =>
-      loadExtensionUi(clientRuntime, {
-        builtins: builtinClientModules,
-        home,
-        cwd,
-      }).finally(() => clientRuntime.dispose()),
-    ).pipe(
-      Effect.map((resolved) => resolved.headlessRenderers),
-      Effect.catchEager(() => Effect.succeed(DEFAULT_HEADLESS_TOOL_RENDERERS)),
-    )
     yield* bundle.runtime.lifecycle.waitForReady.pipe(
       Effect.timeoutOption("15 seconds"),
       Effect.flatMap((ready) =>
@@ -169,7 +143,6 @@ const runHeadlessTurn = (
       state.prompt,
       Option.getOrUndefined(agent),
       Option.getOrUndefined(runSpec),
-      toolRenderers,
     ).pipe(Effect.withSpan("Headless.run"))
   })
 }
@@ -348,7 +321,7 @@ const runGent = ({
           ),
       })
 
-      yield* runHeadlessTurn(bundle, state, cwd, home, requestedAgent, decodedRunSpec)
+      yield* runHeadlessTurn(bundle, state, requestedAgent, decodedRunSpec)
       return
     }
 

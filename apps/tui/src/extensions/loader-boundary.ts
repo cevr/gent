@@ -23,7 +23,6 @@ import {
   type WidgetComponent,
 } from "./client-facets.js"
 import type { ToolRenderer } from "../tool-renderers"
-import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
 
 // ── extension discovery ─────────────────────────────────────────────────────
@@ -157,7 +156,6 @@ export interface ResolvedBorderLabel {
 
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
-  readonly headlessRenderers: Map<string, HeadlessToolRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
   readonly overlays: Map<string, OverlayComponent>
@@ -215,29 +213,6 @@ const resolveRenderers = (
         const key = name.toLowerCase()
         if (collides(scopeEntryFor(scopes, key), ext, "renderer", name, failures)) continue
         renderers.set(key, contribution.component)
-        scopes.set(key, { scope: ext.scope, source: ext.filePath })
-      }
-    }
-  }
-
-  return renderers
-}
-
-const resolveHeadlessRenderers = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-  failures: Array<ClientExtensionFailure>,
-): Map<string, HeadlessToolRenderer> => {
-  const renderers = new Map<string, HeadlessToolRenderer>()
-  const scopes = new Map<string, ScopeEntry>()
-
-  for (const ext of sorted) {
-    for (const contribution of itemsOrEmpty(ext.contributions.renderers)) {
-      const headless = Option.fromNullishOr(contribution.headless)
-      if (Option.isNone(headless)) continue
-      for (const name of contribution.toolNames) {
-        const key = name.toLowerCase()
-        if (collides(scopeEntryFor(scopes, key), ext, "headless renderer", name, failures)) continue
-        renderers.set(key, headless.value)
         scopes.set(key, { scope: ext.scope, source: ext.filePath })
       }
     }
@@ -477,7 +452,6 @@ export const resolveTuiExtensions = (
   })
   return {
     renderers: resolveRenderers(sorted, failures),
-    headlessRenderers: resolveHeadlessRenderers(sorted, failures),
     widgets: resolveWidgets(sorted, failures),
     commands: resolveCommands(sorted, failures),
     overlays: resolveOverlays(sorted, failures),

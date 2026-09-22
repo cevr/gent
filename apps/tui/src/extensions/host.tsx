@@ -126,7 +126,6 @@ interface ExtensionUIContextValue {
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   renderers: new Map(),
-  headlessRenderers: new Map(),
   widgets: [],
   commands: [],
   overlays: new Map(),

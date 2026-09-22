@@ -694,7 +694,7 @@ const builtinTools = defineClientExtension("@gent/tools", {
   setup: Effect.succeed(
     clientContributions(
       ...BUILTIN_TOOL_RENDERERS.map((entry) =>
-        rendererContribution(entry.toolNames, entry.component, { headless: entry.headless }),
+        rendererContribution(entry.toolNames, entry.component),
       ),
     ),
   ),

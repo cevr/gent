@@ -22,11 +22,6 @@ import {
   truncatePath,
 } from "./utils"
 import { formatHeadTail, headTail } from "@gent/core-internal/domain/message.js"
-import {
-  BashHeadlessToolRenderer,
-  CellHeadlessToolRenderer,
-  type HeadlessToolRenderer,
-} from "./headless"
 
 // ── renderer types ──────────────────────────────────────────────────────────
 
@@ -1414,15 +1409,14 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
 interface BuiltinToolRendererEntry {
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
-  readonly headless?: HeadlessToolRenderer
 }
 
 /** Builtin tool renderers consumed by the `@gent/tools` client extension. */
 export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["read"], component: ReadToolRenderer },
   { toolNames: ["edit"], component: EditToolRenderer },
-  { toolNames: ["bash"], component: BashToolRenderer, headless: BashHeadlessToolRenderer },
-  { toolNames: ["cell"], component: CellToolRenderer, headless: CellHeadlessToolRenderer },
+  { toolNames: ["bash"], component: BashToolRenderer },
+  { toolNames: ["cell"], component: CellToolRenderer },
   { toolNames: ["write"], component: WriteToolRenderer },
   { toolNames: ["grep"], component: GrepToolRenderer },
   { toolNames: ["delegate.start"], component: SubagentToolRenderer },
