@@ -64,12 +64,10 @@ export {
   AgentRunToolCallSchema,
 } from "../domain/agent.js"
 export {
-  type AnyExtensionHook,
   type GentExtension,
   LoadedArtifactIdentity,
   type SystemPromptInput,
   type TurnAfterInput,
-  hook,
 } from "../domain/extension.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { DEFAULT_RETRY_POLICY, ProviderAuthError, TurnError } from "../domain/driver.js"

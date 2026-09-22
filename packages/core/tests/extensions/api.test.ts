@@ -292,7 +292,7 @@ describe("defineExtension", () => {
       ])
     }))
 
-  test("setup sees cwd, home, and source from the host", () =>
+  test("setup sees cwd and home from the host", () =>
     Effect.gen(function* () {
       let captured: Option.Option<ExtensionHostService> = Option.none()
       const ext = defineExtension({
@@ -304,13 +304,11 @@ describe("defineExtension", () => {
       yield* collectTestContributions(ext.setup, {
         cwd: "/work/project",
         home: "/work/home",
-        source: "/work/project/.gent/extensions/captures-host.ts",
       })
       expect(Option.isSome(captured)).toBe(true)
       if (Option.isNone(captured)) return
       expect(captured.value.cwd).toBe("/work/project")
       expect(captured.value.home).toBe("/work/home")
-      expect(captured.value.source).toBe("/work/project/.gent/extensions/captures-host.ts")
       expect("spawner" in captured.value).toBe(false)
       expect("parentEnv" in captured.value.host).toBe(false)
       expect("signalPid" in captured.value.host).toBe(false)

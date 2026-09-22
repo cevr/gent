@@ -1237,7 +1237,6 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   const manifest = discovered.extension.manifest
   const collector = makeCollectingExtensionHost({
     cwd,
-    source: discovered.sourcePath,
     home,
     host,
   })

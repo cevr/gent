@@ -563,7 +563,6 @@ type RegistrationValue<D extends RegistrationDomain> = ElementOf<
 
 export interface ExtensionHostService {
   readonly cwd: string
-  readonly source: string
   readonly home: string
   readonly host: Pick<
     ExtensionHostPlatform,
@@ -588,7 +587,6 @@ export class ExtensionHost extends Context.Service<ExtensionHost, ExtensionHostS
 
 interface CollectingHostFacts {
   readonly cwd: string
-  readonly source: string
   readonly home: string
   readonly host: ExtensionHostPlatform
 }
@@ -625,7 +623,6 @@ export const makeCollectingExtensionHost = (
   }
   const service: ExtensionHostService = {
     cwd: facts.cwd,
-    source: facts.source,
     home: facts.home,
     host: {
       osInfo: facts.host.osInfo,

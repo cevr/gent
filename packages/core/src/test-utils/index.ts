@@ -523,16 +523,14 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
 /** Facts the test extension host reports to `setup` Effects. */
 interface TestExtensionHostFacts {
   readonly cwd: string
-  readonly source: string
   readonly home: string
   readonly host: ExtensionHostPlatform
 }
 
 export const testHostFacts = (
-  overrides?: Partial<Pick<TestExtensionHostFacts, "cwd" | "source" | "home">>,
+  overrides?: Partial<Pick<TestExtensionHostFacts, "cwd" | "home">>,
 ): TestExtensionHostFacts => ({
   cwd: overrides?.cwd ?? "/tmp",
-  source: overrides?.source ?? "test",
   home: overrides?.home ?? "/tmp",
   host: testExtensionHostPlatform(overrides?.home),
 })

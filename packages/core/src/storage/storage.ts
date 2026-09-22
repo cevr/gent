@@ -64,7 +64,6 @@ import {
 import { GentPlatform } from "../runtime/gent-platform.js"
 import {
   AgentEvent,
-  type AgentEventTag,
   EventEnvelope,
   EventId,
   getEventBranchId,
@@ -559,14 +558,11 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 const LatestEventIdRow = Schema.Struct({ id: Schema.Finite })
 const decodeLatestEventIdRow = Schema.decodeUnknownEffect(LatestEventIdRow)
 
-const EventJsonRow = Schema.Struct({ id: EventId, event_json: Schema.String })
-const decodeEventJsonRow = Schema.decodeUnknownEffect(EventJsonRow)
-
-type EventDecodeOperation = "listEvents" | "getLatestEvent" | "listToolResultWindow"
+type EventDecodeOperation = "listEvents" | "listToolResultWindow"
 
 export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
   eventId: EventId,
-  operation: Schema.Literals(["listEvents", "getLatestEvent", "listToolResultWindow"]),
+  operation: Schema.Literals(["listEvents", "listToolResultWindow"]),
   error: Schema.String,
 }) {}
 
@@ -658,13 +654,6 @@ interface EventStorageService {
     branchId?: BranchId
     // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
   }) => Effect.Effect<number | undefined, StorageError>
-  readonly getLatestEvent: (params: {
-    sessionId: SessionId
-    branchId: BranchId
-    tags: ReadonlyArray<AgentEventTag>
-    messageId?: MessageId
-    // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching event exists.
-  }) => Effect.Effect<AgentEvent | undefined, EventStorageError>
   /**
    * Events between one assistant message and the next assistant boundary.
    *
@@ -783,33 +772,6 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             return row.id
           },
           Effect.mapError(storageError("Failed to get latest event id")),
-        ),
-
-        getLatestEvent: Effect.fn("EventStorage.getLatestEvent")(
-          function* ({ sessionId, branchId, tags, messageId }) {
-            // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no matching tag exists.
-            if (tags.length === 0) return undefined
-            const workspaceId = yield* CurrentWorkspaceId
-            const rawRows = yield* sql`SELECT e.id, e.event_json
-              FROM events e
-              JOIN sessions s ON s.id = e.session_id
-              WHERE e.session_id = ${sessionId}
-                AND s.workspace_id = ${workspaceId}
-                AND (e.branch_id = ${branchId} OR e.branch_id IS NULL)
-                AND e.event_tag IN ${sql.in(tags)}
-                AND (${toSqlNull(messageId)} IS NULL
-                  OR json_extract(e.event_json, '$.messageId') = ${toSqlNull(messageId)})
-              ORDER BY e.id DESC LIMIT 1`
-            // oxlint-disable-next-line effect/noNullish -- Event history lookup uses undefined when no row exists.
-            if (Predicate.isUndefined(rawRows[0])) return undefined
-            const row = yield* decodeEventJsonRow(rawRows[0])
-            return yield* decodePersistedEvent({
-              eventId: row.id,
-              eventJson: row.event_json,
-              operation: "getLatestEvent",
-            })
-          },
-          Effect.mapError(mapEventStorageError("Failed to get latest event")),
         ),
 
         listToolResultWindow: Effect.fn("EventStorage.listToolResultWindow")(

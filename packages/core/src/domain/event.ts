@@ -317,9 +317,6 @@ export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChange
 export const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 export type StreamSynchronized = typeof AgentEvent.cases.StreamSynchronized.Type
 
-/** Union of all `_tag` literal strings across `AgentEvent` variants. */
-export type AgentEventTag = Schema.Schema.Type<typeof AgentEvent>["_tag"]
-
 // ============================================================================
 // Interaction types — shared between server and client
 // ============================================================================

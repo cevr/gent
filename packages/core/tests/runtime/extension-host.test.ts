@@ -38,7 +38,6 @@ import {
   ExtensionHost,
   type GentExtension,
   getToolId,
-  hook,
   request,
   type RequestCapability,
   tool,
@@ -131,6 +130,7 @@ import {
   SessionMutations,
   type ExtensionHostContext,
   type ExtensionLoadError,
+  hook,
   LoadedArtifactIdentity,
   registerContributions,
   type SystemPromptInput,
@@ -2465,11 +2465,10 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
 
   // Raw hand-rolled `{ manifest, setup }` (no `defineExtension`) must yield
   // the `ExtensionHost` Tag to read setup facts. There is no ctx-as-param escape.
-  it.live("setup sees cwd, home, and source from the host", () =>
+  it.live("setup sees cwd and home from the host", () =>
     Effect.gen(function* () {
       const captured = yield* Effect.sync(() => ({
         cwd: "",
-        source: "",
         home: "",
         hasReadAuthority: false,
       }))
@@ -2478,7 +2477,6 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
           captured.cwd = host.cwd
-          captured.source = host.source
           captured.home = host.home
           captured.hasReadAuthority =
             "readFileString" in host.host || "writeFileString" in host.host
@@ -2497,7 +2495,6 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
 
       // Loader-built narrowed shape is observable from raw setup
       expect(captured.cwd).toBe("/tmp/project-cwd")
-      expect(captured.source).toBe("/tmp/raw-setup.ts")
       expect(captured.home).toBe("/tmp/home-dir")
       // Public host facts strip read/write authority; only narrowed facts remain
       expect(captured.hasReadAuthority).toBe(false)

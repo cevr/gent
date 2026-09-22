@@ -1649,51 +1649,6 @@ describe("Message Metadata", () => {
 
 // ── sqlite-event-storage.test ───────────────────────────────────────────────
 
-describe("Events", () => {
-  it.live("getLatestEvent returns latest event by tag", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const events = yield* EventStorage
-      const session = new Session({
-        id: SessionId.make("event-session"),
-        createdAt: FIXED_NOW,
-        updatedAt: FIXED_NOW,
-      })
-      const branch = new Branch({
-        id: BranchId.make("event-branch"),
-        sessionId: SessionId.make("event-session"),
-        createdAt: FIXED_NOW,
-      })
-      yield* sessions.createSession(session)
-      yield* branches.createBranch(branch)
-      yield* events.appendEvent(
-        ErrorOccurred.make({
-          sessionId: session.id,
-          branchId: branch.id,
-          error: "first",
-        }),
-      )
-      yield* events.appendEvent(
-        ErrorOccurred.make({
-          sessionId: session.id,
-          branchId: branch.id,
-          error: "second",
-        }),
-      )
-      const latest = yield* events.getLatestEvent({
-        sessionId: session.id,
-        branchId: branch.id,
-        tags: ["ErrorOccurred"],
-      })
-      expect(latest?._tag).toBe("ErrorOccurred")
-      if (latest && latest._tag === "ErrorOccurred") {
-        expect(latest.error).toBe("second")
-      }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
-})
-
 describe("Event decoding", () => {
   const layer = SqliteStorage.TestWithSql(() => Layer.empty, {})
   it.live("listEvents skips an event whose tag was retired and keeps the rest", () =>
@@ -1749,40 +1704,6 @@ describe("Event decoding", () => {
         expect(error).toBeInstanceOf(EventDecodeError)
         expect(error.operation).toBe("listEvents")
       }).pipe(Effect.provide(layer)),
-  )
-  it.live("getLatestEvent fails with a tagged decode error for undecodable events", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const events = yield* EventStorage
-      const sql = yield* SqlClient.SqlClient
-      const sessionId = SessionId.make("unknown-event-latest")
-      const branchId = BranchId.make("unknown-event-latest-b")
-      const unknownEventJson =
-        '{"_tag":"__test_unknown__","sessionId":"unknown-event-latest","branchId":"unknown-event-latest-b"}'
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "unknown-event-latest",
-          createdAt: FIXED_NOW,
-          updatedAt: FIXED_NOW,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
-      yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${unknownEventJson}, ${FIXED_NOW_MILLIS})`
-      const error = yield* events
-        .getLatestEvent({
-          sessionId,
-          branchId,
-          tags: ["SessionStarted"],
-        })
-        .pipe(Effect.flip)
-      expect(error._tag).toBe("EventDecodeError")
-      if (error._tag !== "EventDecodeError") return
-      expect(error).toBeInstanceOf(EventDecodeError)
-      expect(error.eventId).toBeDefined()
-      expect(error.operation).toBe("getLatestEvent")
-    }).pipe(Effect.provide(layer)),
   )
 })
 

@@ -5245,24 +5245,12 @@ describe("streaming", () => {
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         )
       })
-      const delayedEventStorage = Layer.effect(
-        EventStorage,
-        Effect.gen(function* () {
-          const eventStorage = yield* EventStorage
-          return EventStorage.of({
-            ...eventStorage,
-            getLatestEvent: (input) =>
-              eventStorage.getLatestEvent(input).pipe(Effect.delay("5 millis")),
-          })
-        }),
-      )
       const baseStorageLayer = SqliteStorage.TestWithSql(
         noBranchTools.storage,
         noBranchTools.migrations,
       )
-      const slowStorage = Layer.provideMerge(delayedEventStorage, baseStorageLayer)
       const deps = Layer.mergeAll(
-        slowStorage,
+        baseStorageLayer,
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
