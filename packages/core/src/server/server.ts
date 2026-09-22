@@ -1552,7 +1552,7 @@ export interface DependenciesConfig {
   state: StateLocation
   disabledExtensions?: ReadonlyArray<string>
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
-  failOnExtensionFailure?: boolean
+  failOnExtensionFailure: boolean
   /** Language model layer override. When set, replaces the auth-backed live resolver.
    *  Must be a fully-provided layer (no requirements, no errors). */
   languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>

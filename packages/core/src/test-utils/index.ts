@@ -279,6 +279,8 @@ export interface ToolTestLayerConfig {
   readonly tools?: ReadonlyArray<ToolCapability>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
+  /** Keep running when an extension fails to load. Only for tests about that failure path. */
+  readonly allowFailedExtensions?: boolean
 }
 
 /**
@@ -293,6 +295,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) =>
     state: StateLocation.cases.Memory.make({}),
     languageModelLayerOverride: LanguageModelLayers.debug(),
     extensions: [testAgentsExtension(config.agents, config.tools), ...(config.extensions ?? [])],
+    failOnExtensionFailure: config.allowFailedExtensions !== true,
     branchTools: config.branchTools ?? noBranchTools,
     overrides: {
       ...testOverrides(),

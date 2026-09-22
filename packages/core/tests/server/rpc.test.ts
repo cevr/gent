@@ -1708,6 +1708,7 @@ describe("extension command RPCs", () => {
             Effect.map(Effect.scope, (scope) =>
               SessionProfileCache.Live({
                 home,
+                failOnExtensionFailure: true,
                 platform: "test",
                 extensions: [ext],
               }).pipe(

@@ -41,8 +41,12 @@ const sharedLayer = Layer.mergeAll(
 // Build a fresh production cache in the test's owning scope.
 const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
   inputs: RuntimeProfileInputs,
+  // Only a test about a failing extension turns this off.
+  failOnExtensionFailure = true,
 ) {
-  const context = yield* Layer.build(SessionProfileCache.Live(inputs))
+  const context = yield* Layer.build(
+    SessionProfileCache.Live({ ...inputs, failOnExtensionFailure }),
+  )
   const cache = Context.get(context, SessionProfileCache)
   const profile = yield* cache.resolve(inputs.cwd)
   return { ...profile, profile }
@@ -228,7 +232,8 @@ describe("live Profile", () => {
           }),
         )
 
-        const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs)))
+        // The collision is the subject, so the build keeps going past it.
+        const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs, false)))
         expect(runtimeExit._tag).toBe("Success")
         if (runtimeExit._tag === "Success") {
           expect(runtimeExit.value.profile.baseSections).toContainEqual({

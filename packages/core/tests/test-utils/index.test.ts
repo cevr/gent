@@ -109,6 +109,8 @@ describe("extension tool test layer", () => {
       Effect.provide(
         createToolTestLayer({
           agents: [],
+          // The collision is the subject, so the layer keeps both failures to inspect.
+          allowFailedExtensions: true,
           extensions: ["ext-a", "ext-b"].map((id) =>
             defineExtension({
               id,

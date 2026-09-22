@@ -340,6 +340,8 @@ const makeCacheLayer = (params: {
   readonly cwd: string
   readonly home: string
   readonly extensions: ReadonlyArray<GentExtension>
+  /** Only for a test about a failing extension. */
+  readonly allowFailedExtensions?: boolean
 }) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: params.cwd,
@@ -350,6 +352,7 @@ const makeCacheLayer = (params: {
     Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
   )
   return SessionProfileCache.Live({
+    failOnExtensionFailure: params.allowFailedExtensions !== true,
     home: params.home,
     platform: "darwin",
     extensions: params.extensions,
@@ -454,7 +457,14 @@ describe("session profile resolution", () => {
         expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [healthy, broken] })),
+        Effect.provide(
+          makeCacheLayer({
+            cwd: launch,
+            home,
+            extensions: [healthy, broken],
+            allowFailedExtensions: true,
+          }),
+        ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
@@ -589,6 +599,7 @@ describe("resolveTurnProfile", () => {
         Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
       )
       const sessionProfileCacheLive = SessionProfileCache.Live({
+        failOnExtensionFailure: true,
         home,
         platform: "darwin",
         extensions: [],
@@ -1471,6 +1482,8 @@ describe("extension activation isolation", () => {
       const home = yield* fs.makeTempDirectoryScoped()
       const context = yield* Layer.build(
         SessionProfileCache.Live({
+          // Failure isolation is the subject here, so the build keeps going.
+          failOnExtensionFailure: false,
           home,
           platform: "test",
           extensions: [
@@ -1552,6 +1565,8 @@ describe("extension activation isolation", () => {
       })
       const context = yield* Layer.build(
         SessionProfileCache.Live({
+          // Failure isolation is the subject here, so the build keeps going.
+          failOnExtensionFailure: false,
           home,
           platform: "test",
           extensions: [healthy, broken],

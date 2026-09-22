@@ -1796,7 +1796,7 @@ interface SessionProfileCacheConfig {
    * server down; test roots turn this on, because there a failed extension is
    * an authoring bug that otherwise shows up as an unrelated timeout.
    */
-  readonly failOnExtensionFailure?: boolean
+  readonly failOnExtensionFailure: boolean
 }
 
 /** One line per failed extension: which one, in which phase, and why. */
@@ -1960,7 +1960,7 @@ export class SessionProfileCache extends Context.Service<
                 ...declarations.extensionDeclarations.failed,
                 ...started.failed,
               ])
-              if (config.failOnExtensionFailure === true && resolved.failedExtensions.length > 0) {
+              if (config.failOnExtensionFailure && resolved.failedExtensions.length > 0) {
                 return yield* Effect.die(describeFailedExtensions(resolved.failedExtensions))
               }
               return yield* buildSessionProfile({
