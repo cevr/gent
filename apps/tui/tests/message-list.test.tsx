@@ -935,6 +935,53 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a message from another session names its sender above the text", () =>
+    Effect.gen(function* () {
+      const sent: ListMessage = {
+        ...userMessage(
+          "interjection-message",
+          "sent-1",
+          'Message from your parent "auth refactor" (session 0199aabbccdd):\n\nUse the v2 token route.',
+          "steer",
+        ),
+        pendingMode: absent,
+        metadata: {
+          customType: "session-message",
+          extensionId: "@gent/session-tools",
+          details: {
+            from: { sessionId: "0199aabbccdd", name: "auth refactor", relation: "parent" },
+          },
+        },
+      }
+      const shown = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[sent]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      const frame = renderFrame(shown)
+      expect(frame).toContain('» from your parent "auth refactor" · 0199aabb')
+      expect(frame).toContain("Use the v2 token route.")
+      expect(frame).not.toContain("Message from your parent")
+      const expanded = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[sent]}
+            disclosure="collapsed"
+            fullDetail={true}
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      expect(renderFrame(expanded)).toContain("Message from your parent")
+    }),
+  )
+
   it.live("keeps multiline user text visible in a narrow transcript", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
