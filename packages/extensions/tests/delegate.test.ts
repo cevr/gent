@@ -13,7 +13,7 @@ import {
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { ConfigService, RuntimeEnvironment, UserConfig } from "@gent/core-internal/runtime/config"
-import { DELEGATE_AGENT_NAME, DelegateEntry, StartChild } from "../src/delegate.js"
+import { childTaskText, DELEGATE_AGENT_NAME, DelegateEntry, StartChild } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
@@ -180,7 +180,7 @@ const startThenEnd = (childReply: string, childGate: Effect.Effect<void> = Effec
   let parentCalls = 0
   return LanguageModelLayers.testStream((options) => {
     const texts = promptTexts(options.prompt)
-    if (texts[0] === childTask) return childGate.pipe(Effect.as(reply(childReply)))
+    if (texts[0]?.endsWith(childTask) === true) return childGate.pipe(Effect.as(reply(childReply)))
     parentCalls += 1
     if (parentCalls === 1) {
       return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
@@ -270,7 +270,7 @@ describe("a child's completion", () => {
         const childTools = yield* Deferred.make<ReadonlyArray<string>>()
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
-          if (texts[0] === childTask) {
+          if (texts[0]?.endsWith(childTask) === true) {
             return Deferred.succeed(
               childTools,
               options.tools.map((tool) => tool.name),
@@ -334,7 +334,8 @@ describe("a parent interrupt", () => {
             const texts = promptTexts(options.prompt)
             // The child's stream opens and stalls: it is mid-turn when the
             // parent is interrupted.
-            if (texts[0] === childTask) return Effect.succeed(stalled("working", childStreaming))
+            if (texts[0]?.endsWith(childTask) === true)
+              return Effect.succeed(stalled("working", childStreaming))
             parentCalls += 1
             if (parentCalls === 1) {
               return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
@@ -404,7 +405,7 @@ describe("a start nobody waits for", () => {
           let parentCalls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
-            if (texts[0] === childTask) return Effect.succeed(reply("pong"))
+            if (texts[0]?.endsWith(childTask) === true) return Effect.succeed(reply("pong"))
             parentCalls += 1
             if (parentCalls === 1) {
               return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "bg-child"))
@@ -692,7 +693,7 @@ describe("a forked child", () => {
           let parentCalls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
-            if (texts.at(-1) === childTask) {
+            if (texts.at(-1)?.endsWith(childTask) === true) {
               childPrompt = Option.some(options.prompt)
               return Effect.succeed(reply("42, read from the fork"))
             }
@@ -710,8 +711,14 @@ describe("a forked child", () => {
           const snapshot = yield* afterCompletion(harness)
           expect(messageTexts(snapshot.messages)).toContain("read it")
           const seen = Option.getOrThrow(childPrompt)
-          // The child read the parent's user message, then its own task.
-          expect(promptTexts(seen)).toEqual([parentContext, childTask])
+          // The child read the parent's user message, then its own task, which names its source.
+          expect(promptTexts(seen)).toEqual([
+            parentContext,
+            childTaskText(harness.sessionId, childTask),
+          ])
+          expect(promptTexts(seen)[1]).toStartWith(
+            `Task from your parent session ${harness.sessionId}.`,
+          )
           // The start call had no result when the copy was taken, so the child never sees it.
           expect(promptToolCallIds(seen)).toEqual([])
           const child = yield* childOf(harness)
@@ -733,7 +740,7 @@ describe("session.send", () => {
         let parentCalls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
-          if (texts[0] === childTask) {
+          if (texts[0]?.endsWith(childTask) === true) {
             if (texts.some((text) => text.includes(correction))) {
               return Deferred.succeed(childSawCorrection, void 0).pipe(
                 Effect.as(reply("narrowed to src/store")),
@@ -793,7 +800,7 @@ describe("session.send", () => {
         let childCalls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
-          if (texts[0] === childTask) {
+          if (texts[0]?.endsWith(childTask) === true) {
             childCalls += 1
             if (childCalls === 1) {
               return Effect.succeed(
@@ -849,7 +856,7 @@ describe("session.send", () => {
         const childAnsweredTwice = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
-          if (texts[0] === childTask) {
+          if (texts[0]?.endsWith(childTask) === true) {
             childCalls += 1
             if (childCalls === 1) return Effect.succeed(reply("done"))
             return Deferred.succeed(childAnsweredTwice, void 0).pipe(Effect.as(reply("done again")))

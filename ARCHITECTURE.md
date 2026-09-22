@@ -445,7 +445,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   next turn and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
 - The delegate ships three ordinary tools: `delegate.start`,
-  `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. `delegate.start` accepts RunSpec
+  `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. A child's first message opens with `Task from your parent session <id>.` and says where its final reply goes, so the child does not take a bare instruction for an injection. `delegate.start` accepts RunSpec
   overrides for model, reasoning, tool selection, and added instructions, and
   a `context` of `fresh` (the child sees only its todo) or `fork` (the child is
   created with `historyBranchId` = the caller's branch, so it starts from the

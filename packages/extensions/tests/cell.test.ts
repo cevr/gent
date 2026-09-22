@@ -2537,7 +2537,7 @@ describe("child cell", () => {
         let parentCalls = 0
         let childCalls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
-          if (firstText(options.prompt) === childTask) {
+          if (firstText(options.prompt)?.endsWith(childTask) === true) {
             childCalls += 1
             if (childCalls === 1) {
               return step([
