@@ -12,6 +12,8 @@ import {
   clientContributions,
   type ClientContributions,
   type ClientEffect,
+  type ClientRuntime,
+  type ClientRuntimeServices,
   ClientSetupError,
   type ClientShellTransportDefinition,
   ClientTransport,
@@ -28,6 +30,7 @@ import {
 import {
   loadTuiExtensions as _loadTuiExtensions,
   type LoadedTuiExtension,
+  type ResolvedTuiExtensions,
   resolveTuiExtensions,
   runAutocompleteContributions,
 } from "../../src/extensions/loader-boundary"
@@ -1029,12 +1032,14 @@ const testRuntime = makeClientRuntime({
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
   shell: { cast: castTestShellEffect },
 })
+/** Run the loader on a client runtime, the stub one unless the test gives its own. */
 const loadTuiExtensions = (
-  opts: Omit<Parameters<typeof _loadTuiExtensions>[0], "runtime"> & {
-    runtime?: Parameters<typeof _loadTuiExtensions>[0]["runtime"]
-  },
-): ReturnType<typeof _loadTuiExtensions> =>
-  _loadTuiExtensions({ ...opts, runtime: opts.runtime ?? testRuntime })
+  opts: Parameters<typeof _loadTuiExtensions>[0] & { readonly runtime?: ClientRuntime },
+): Promise<ResolvedTuiExtensions> =>
+  runRuntimeEffectBoundary<ResolvedTuiExtensions, never, ClientRuntimeServices>(
+    opts.runtime ?? testRuntime,
+    _loadTuiExtensions(opts),
+  )
 const TEST_DIR = join(import.meta.dir, "../../.tmp-ext-integration")
 const encodeTrustGrant = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),

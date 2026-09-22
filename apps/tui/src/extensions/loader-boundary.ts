@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import { Cause, Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
 import {
   type ExtensionScope,
   isClientEntrypoint,
@@ -14,13 +14,14 @@ import {
   type AutocompleteContribution,
   type AutocompleteItem,
   type BorderLabelItem,
+  type BorderLabelPosition,
   type ClientContributions,
   type ClientRuntime,
   type ClientRuntimeServices,
-  ClientSetupError,
   type InteractionRendererComponent,
   type OverlayComponent,
   type WidgetComponent,
+  type WidgetSlot,
 } from "./client-facets.js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -123,6 +124,12 @@ const discoverTuiExtensions = (opts: {
  * Precedence: project > user > builtin. Inside one scope, extensions resolve in
  * id order; when two claim one key, the first keeps it and the later
  * contribution is dropped and recorded in `failures`. Nothing else is lost.
+ *
+ * Keyed buckets (renderers by tool name, widgets and overlays by id,
+ * interaction renderers by metadata type, commands by id) go through
+ * `resolveKeyed`. A command's keybind and slash then go to its highest-scope
+ * claimant, and `stripSuperseded` removes them from the earlier owner. Border
+ * labels and autocomplete sources are collected in scope order.
  */
 
 /** A client extension, or one of its contributions, that did not load. */
@@ -131,8 +138,6 @@ export interface ClientExtensionFailure {
   readonly id: string
   readonly reason: string
 }
-
-export type { ExtensionScope }
 
 export interface LoadedTuiExtension {
   readonly id: string
@@ -143,13 +148,13 @@ export interface LoadedTuiExtension {
 
 export interface ResolvedWidget {
   readonly id: string
-  readonly slot: "below-messages" | "above-input" | "below-input"
+  readonly slot: WidgetSlot
   readonly priority: number
   readonly component: WidgetComponent
 }
 
 export interface ResolvedBorderLabel {
-  readonly position: "top-left" | "top-right" | "bottom-left" | "bottom-right"
+  readonly position: BorderLabelPosition
   readonly priority: number
   readonly produce: () => ReadonlyArray<BorderLabelItem>
 }
@@ -166,7 +171,8 @@ export interface ResolvedTuiExtensions {
   readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
 
-interface ScopeEntry {
+/** Who holds a key: the extension scope and file that claimed it. */
+interface Claim {
   readonly scope: ExtensionScope
   readonly source: string
 }
@@ -175,264 +181,126 @@ interface ScopeEntry {
 const itemsOrEmpty = <A>(items: ReadonlyArray<A> | undefined): ReadonlyArray<A> =>
   Option.getOrElse(Option.fromNullishOr(items), () => [])
 
-const scopeEntryFor = <K>(scopes: Map<K, ScopeEntry>, key: K): Option.Option<ScopeEntry> =>
-  Option.fromNullishOr(scopes.get(key))
-
 /**
  * Whether `ext` claims a key another extension already holds in the same
  * scope. A collision is recorded against the later extension.
  */
 const collides = (
-  prev: Option.Option<ScopeEntry>,
+  held: Option.Option<Claim>,
   ext: LoadedTuiExtension,
   label: string,
   key: string,
   failures: Array<ClientExtensionFailure>,
 ): boolean => {
-  if (Option.isNone(prev) || prev.value.scope !== ext.scope) return false
-  if (prev.value.source === ext.filePath) return false
+  if (Option.isNone(held) || held.value.scope !== ext.scope) return false
+  if (held.value.source === ext.filePath) return false
   failures.push({
     id: ext.id,
-    reason: `${label} "${key}" is already claimed by "${prev.value.source}" in scope "${ext.scope}"`,
+    reason: `${label} "${key}" is already claimed by "${held.value.source}" in scope "${ext.scope}"`,
   })
   return true
 }
 
-// ── Per-bucket resolvers ──
+/** One key an extension claims: the map key, the value, and the name to report. */
+interface KeyedEntry<K, V> {
+  readonly key: K
+  readonly value: V
+  readonly name: string
+}
 
-const resolveRenderers = (
+/**
+ * Resolve one keyed bucket. A higher scope replaces the holder of a key; a
+ * same-scope claim is dropped and recorded.
+ */
+const resolveKeyed = <K, V>(
   sorted: ReadonlyArray<LoadedTuiExtension>,
   failures: Array<ClientExtensionFailure>,
-): Map<string, ToolRenderer> => {
-  const renderers = new Map<string, ToolRenderer>()
-  const scopes = new Map<string, ScopeEntry>()
-
+  label: string,
+  entriesOf: (contributions: ClientContributions) => ReadonlyArray<KeyedEntry<K, V>>,
+): Map<K, V> => {
+  const values = new Map<K, V>()
+  const claims = new Map<K, Claim>()
   for (const ext of sorted) {
-    for (const contribution of itemsOrEmpty(ext.contributions.renderers)) {
-      for (const name of contribution.toolNames) {
-        const key = name.toLowerCase()
-        if (collides(scopeEntryFor(scopes, key), ext, "renderer", name, failures)) continue
-        renderers.set(key, contribution.component)
-        scopes.set(key, { scope: ext.scope, source: ext.filePath })
-      }
+    for (const entry of entriesOf(ext.contributions)) {
+      const held = Option.fromNullishOr(claims.get(entry.key))
+      if (collides(held, ext, label, entry.name, failures)) continue
+      values.set(entry.key, entry.value)
+      claims.set(entry.key, { scope: ext.scope, source: ext.filePath })
     }
   }
-
-  return renderers
+  return values
 }
 
-const resolveWidgets = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
+type CommandAffordance = "keybind" | "slash"
+
+interface AffordanceHolder {
+  readonly commandId: string
+  readonly claim: Claim
+}
+
+/**
+ * Give `entry` its `field` (keybind or slash) and strip it from the command
+ * that held it before. Returns false, recording a failure, when a command of
+ * the same scope already holds it.
+ */
+const stripSuperseded = (
+  field: CommandAffordance,
+  entry: Command,
+  ext: LoadedTuiExtension,
+  kept: Map<string, Command>,
+  holders: Map<string, AffordanceHolder>,
   failures: Array<ClientExtensionFailure>,
-): ReadonlyArray<ResolvedWidget> => {
-  const widgetMap = new Map<string, ResolvedWidget>()
-  const scopes = new Map<string, ScopeEntry>()
-
-  for (const ext of sorted) {
-    for (const contribution of itemsOrEmpty(ext.contributions.widgets)) {
-      if (
-        collides(scopeEntryFor(scopes, contribution.id), ext, "widget", contribution.id, failures)
-      )
-        continue
-      widgetMap.set(contribution.id, {
-        id: contribution.id,
-        slot: contribution.slot,
-        priority: Option.getOrElse(Option.fromNullishOr(contribution.priority), () => 100),
-        component: contribution.component,
-      })
-      scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
-    }
-  }
-
-  return [...widgetMap.values()].sort((a, b) => a.priority - b.priority)
-}
-
-interface CommandResolutionState {
-  readonly commandMap: Map<string, Command>
-  readonly idScopes: Map<string, ScopeEntry>
-  readonly keybindScopes: Map<string, ScopeEntry>
-  readonly slashScopes: Map<string, ScopeEntry>
-  readonly keybindOwner: Map<string, string>
-  readonly slashOwner: Map<string, string>
-  readonly failures: Array<ClientExtensionFailure>
-}
-
-const claimCommandKeybind = (
-  entry: Command,
-  ext: LoadedTuiExtension,
-  state: CommandResolutionState,
-): void => {
-  const keybind = Option.fromNullishOr(entry.keybind)
-  if (Option.isNone(keybind)) return
-  const key = keybind.value.toLowerCase()
-  const previousOwner = Option.fromNullishOr(state.keybindOwner.get(key))
-  if (Option.isSome(previousOwner)) {
-    const previousCommand = Option.fromNullishOr(state.commandMap.get(previousOwner.value))
-    if (Option.isSome(previousCommand)) {
-      state.commandMap.set(previousOwner.value, {
-        ...previousCommand.value,
-        keybind: Option.getOrUndefined(Option.none()),
-      })
-    }
-  }
-  state.keybindScopes.set(key, { scope: ext.scope, source: ext.filePath })
-  state.keybindOwner.set(key, entry.id)
-}
-
-const claimCommandSlash = (
-  entry: Command,
-  ext: LoadedTuiExtension,
-  state: CommandResolutionState,
-): void => {
-  const slash = Option.fromNullishOr(entry.slash)
-  if (Option.isNone(slash)) return
-  const key = slash.value.toLowerCase()
-  const previousOwner = Option.fromNullishOr(state.slashOwner.get(key))
-  if (Option.isSome(previousOwner)) {
-    const previousCommand = Option.fromNullishOr(state.commandMap.get(previousOwner.value))
-    if (Option.isSome(previousCommand)) {
-      state.commandMap.set(previousOwner.value, {
-        ...previousCommand.value,
-        slash: Option.getOrUndefined(Option.none()),
-      })
-    }
-  }
-  state.slashScopes.set(key, { scope: ext.scope, source: ext.filePath })
-  state.slashOwner.set(key, entry.id)
-}
-
-/** A command that collides on its id, keybind or slash is dropped whole. */
-const commandCollides = (
-  entry: Command,
-  ext: LoadedTuiExtension,
-  state: CommandResolutionState,
 ): boolean => {
-  if (collides(scopeEntryFor(state.idScopes, entry.id), ext, "command", entry.id, state.failures))
-    return true
-  const keybind = Option.fromNullishOr(entry.keybind)
-  if (
-    Option.isSome(keybind) &&
-    collides(
-      scopeEntryFor(state.keybindScopes, keybind.value.toLowerCase()),
-      ext,
-      "keybind",
-      keybind.value,
-      state.failures,
-    )
-  )
-    return true
-  const slash = Option.fromNullishOr(entry.slash)
-  return (
-    Option.isSome(slash) &&
-    collides(
-      scopeEntryFor(state.slashScopes, slash.value.toLowerCase()),
-      ext,
-      "slash",
-      slash.value,
-      state.failures,
-    )
-  )
+  const value = Option.fromNullishOr(entry[field])
+  if (Option.isNone(value)) return true
+  const key = value.value.toLowerCase()
+  const held = Option.fromNullishOr(holders.get(key))
+  const heldClaim = Option.map(held, (holder) => holder.claim)
+  if (collides(heldClaim, ext, field, value.value, failures)) return false
+  if (Option.isSome(held)) {
+    const previous = Option.fromNullishOr(kept.get(held.value.commandId))
+    if (Option.isSome(previous)) {
+      kept.set(held.value.commandId, {
+        ...previous.value,
+        [field]: Option.getOrUndefined(Option.none()),
+      })
+    }
+  }
+  holders.set(key, { commandId: entry.id, claim: { scope: ext.scope, source: ext.filePath } })
+  return true
 }
 
 const resolveCommands = (
   sorted: ReadonlyArray<LoadedTuiExtension>,
   failures: Array<ClientExtensionFailure>,
 ): ReadonlyArray<Command> => {
-  const state: CommandResolutionState = {
-    commandMap: new Map<string, Command>(),
-    idScopes: new Map<string, ScopeEntry>(),
-    keybindScopes: new Map<string, ScopeEntry>(),
-    slashScopes: new Map<string, ScopeEntry>(),
-    keybindOwner: new Map<string, string>(),
-    slashOwner: new Map<string, string>(),
-    failures,
-  }
-
+  const winners = resolveKeyed(sorted, failures, "command", (contributions) =>
+    itemsOrEmpty(contributions.commands).map((entry) => ({
+      key: entry.id,
+      value: entry,
+      name: entry.id,
+    })),
+  )
+  const kept = new Map<string, Command>()
+  const keybinds = new Map<string, AffordanceHolder>()
+  const slashes = new Map<string, AffordanceHolder>()
   for (const ext of sorted) {
     for (const entry of itemsOrEmpty(ext.contributions.commands)) {
-      if (commandCollides(entry, ext, state)) continue
-      claimCommandKeybind(entry, ext, state)
-      claimCommandSlash(entry, ext, state)
-      state.commandMap.set(entry.id, entry)
-      state.idScopes.set(entry.id, { scope: ext.scope, source: ext.filePath })
+      if (winners.get(entry.id) !== entry) continue
+      if (!stripSuperseded("keybind", entry, ext, kept, keybinds, failures)) continue
+      if (!stripSuperseded("slash", entry, ext, kept, slashes, failures)) continue
+      kept.set(entry.id, entry)
     }
   }
-
-  return [...state.commandMap.values()]
+  return [...kept.values()]
 }
 
-const resolveOverlays = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-  failures: Array<ClientExtensionFailure>,
-): Map<string, OverlayComponent> => {
-  const overlays = new Map<string, OverlayComponent>()
-  const scopes = new Map<string, ScopeEntry>()
+const byPriority = <A extends { readonly priority: number }>(items: ReadonlyArray<A>) =>
+  [...items].sort((a, b) => a.priority - b.priority)
 
-  for (const ext of sorted) {
-    for (const contribution of itemsOrEmpty(ext.contributions.overlays)) {
-      if (
-        collides(scopeEntryFor(scopes, contribution.id), ext, "overlay", contribution.id, failures)
-      )
-        continue
-      overlays.set(contribution.id, contribution.component)
-      scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
-    }
-  }
-
-  return overlays
-}
-
-const resolveInteractionRenderers = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-  failures: Array<ClientExtensionFailure>,
-  // eslint-disable-next-line effect/noNullish -- the default renderer uses an undefined map key.
-): Map<string | undefined, InteractionRendererComponent> => {
-  // eslint-disable-next-line effect/noNullish -- the default renderer uses an undefined map key.
-  const renderers = new Map<string | undefined, InteractionRendererComponent>()
-  // eslint-disable-next-line effect/noNullish -- the default renderer uses an undefined map key.
-  const scopes = new Map<string | undefined, ScopeEntry>()
-
-  for (const ext of sorted) {
-    for (const contribution of itemsOrEmpty(ext.contributions.interactionRenderers)) {
-      const key = Option.fromNullishOr(contribution.metadataType)
-      const label = Option.getOrElse(key, () => "(default)")
-      const mapKey = Option.getOrUndefined(key)
-      if (collides(scopeEntryFor(scopes, mapKey), ext, "interaction renderer", label, failures))
-        continue
-      renderers.set(mapKey, contribution.component)
-      scopes.set(mapKey, { scope: ext.scope, source: ext.filePath })
-    }
-  }
-
-  return renderers
-}
-
-const resolveBorderLabels = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-): ReadonlyArray<ResolvedBorderLabel> => {
-  const out: ResolvedBorderLabel[] = []
-  for (const ext of sorted) {
-    for (const contribution of itemsOrEmpty(ext.contributions.borderLabels)) {
-      out.push({
-        position: contribution.position,
-        priority: Option.getOrElse(Option.fromNullishOr(contribution.priority), () => 100),
-        produce: contribution.produce,
-      })
-    }
-  }
-  out.sort((a, b) => a.priority - b.priority)
-  return out
-}
-
-const resolveAutocomplete = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-): ReadonlyArray<AutocompleteContribution> => {
-  const out: AutocompleteContribution[] = []
-  for (const ext of sorted) {
-    out.push(...itemsOrEmpty(ext.contributions.autocomplete))
-  }
-  return out
-}
+// eslint-disable-next-line effect/noNullish -- contribution priority is optional.
+const priorityOrDefault = (priority: number | undefined) =>
+  Option.getOrElse(Option.fromNullishOr(priority), () => 100)
 
 /**
  * Resolve all TUI extension contributions with scope precedence. Higher scope
@@ -450,14 +318,60 @@ export const resolveTuiExtensions = (
     if (scopeDiff !== 0) return scopeDiff
     return a.id.localeCompare(b.id)
   })
+  const collected = <A>(
+    // eslint-disable-next-line effect/noNullish -- extension contribution buckets may be omitted.
+    bucket: (contributions: ClientContributions) => ReadonlyArray<A> | undefined,
+  ) => sorted.flatMap((ext) => itemsOrEmpty(bucket(ext.contributions)))
+
+  const renderers = resolveKeyed(sorted, failures, "renderer", (contributions) =>
+    itemsOrEmpty(contributions.renderers).flatMap((contribution) =>
+      contribution.toolNames.map((name) => ({
+        key: name.toLowerCase(),
+        value: contribution.component,
+        name,
+      })),
+    ),
+  )
+  const widgets = resolveKeyed(sorted, failures, "widget", (contributions) =>
+    itemsOrEmpty(contributions.widgets).map((contribution) => ({
+      key: contribution.id,
+      value: { ...contribution, priority: priorityOrDefault(contribution.priority) },
+      name: contribution.id,
+    })),
+  )
+  const commands = resolveCommands(sorted, failures)
+  const overlays = resolveKeyed(sorted, failures, "overlay", (contributions) =>
+    itemsOrEmpty(contributions.overlays).map((contribution) => ({
+      key: contribution.id,
+      value: contribution.component,
+      name: contribution.id,
+    })),
+  )
+  const interactionRenderers = resolveKeyed(
+    sorted,
+    failures,
+    "interaction renderer",
+    (contributions) =>
+      itemsOrEmpty(contributions.interactionRenderers).map((contribution) => ({
+        key: contribution.metadataType,
+        value: contribution.component,
+        name: Option.getOrElse(Option.fromNullishOr(contribution.metadataType), () => "(default)"),
+      })),
+  )
   return {
-    renderers: resolveRenderers(sorted, failures),
-    widgets: resolveWidgets(sorted, failures),
-    commands: resolveCommands(sorted, failures),
-    overlays: resolveOverlays(sorted, failures),
-    interactionRenderers: resolveInteractionRenderers(sorted, failures),
-    borderLabels: resolveBorderLabels(sorted),
-    autocompleteItems: resolveAutocomplete(sorted),
+    renderers,
+    widgets: byPriority([...widgets.values()]),
+    commands,
+    overlays,
+    interactionRenderers,
+    borderLabels: byPriority(
+      collected((contributions) => contributions.borderLabels).map((contribution) => ({
+        position: contribution.position,
+        priority: priorityOrDefault(contribution.priority),
+        produce: contribution.produce,
+      })),
+    ),
+    autocompleteItems: collected((contributions) => contributions.autocomplete),
     failures,
   }
 }
@@ -465,20 +379,19 @@ export const resolveTuiExtensions = (
 // ── extension loading ───────────────────────────────────────────────────────
 
 /**
- * TUI extension loader — discover → import → resolve pipeline.
+ * TUI extension loader — discover → import → set up → resolve, as one Effect
+ * over the client runtime's services.
  *
  * Builtins are passed as pre-imported modules (static imports at the call site)
  * so Bun's bundler includes them in compiled binaries. User/project extensions
- * are discovered via filesystem scan and dynamic import().
- *
- * `*-boundary.ts` per the `no-runpromise-outside-boundary` lint rule:
- * `runtime.runPromise` calls live inside this file because the loader runs
- * each extension's Effect-typed setup at the boundary between the JS module
- * world and the Effect runtime.
+ * are discovered via filesystem scan and dynamic import(). A module that does
+ * not import, has the wrong shape, or whose setup fails becomes a failure;
+ * the rest still load.
  */
 
+/** The shape problem with a dynamically imported module, if any. */
 // eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
-const getClientModuleError = (value: unknown): Option.Option<string> => {
+const clientModuleProblem = (value: unknown): Option.Option<string> => {
   if (!Predicate.isObject(value)) return Option.some("module must export an object")
   const id = Reflect.get(value, "id")
   if (!Predicate.isString(id)) return Option.some("missing id")
@@ -489,7 +402,7 @@ const getClientModuleError = (value: unknown): Option.Option<string> => {
 
 // eslint-disable-next-line effect/noUnknownParameters -- dynamic imports are parsed at this module boundary.
 const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
-  Option.isNone(getClientModuleError(value))
+  Option.isNone(clientModuleProblem(value))
 
 class TuiExtensionImportError extends Schema.TaggedError<TuiExtensionImportError>()(
   "TuiExtensionImportError",
@@ -499,57 +412,28 @@ class TuiExtensionImportError extends Schema.TaggedError<TuiExtensionImportError
   },
 ) {}
 
-/**
- * Run an extension's Effect-typed setup against the per-provider runtime.
- * The runtime carries every TUI service the setup may yield (FileSystem,
- * Path, ClientTransport, ClientWorkspace, ClientShell);
- * `runtime.runPromise` enforces dependency satisfaction dynamically.
- */
-const invokeSetup = (
-  ext: AnyExtensionClientModule,
-  runtime: ClientRuntime,
-): Promise<ClientContributions> => runtime.runPromise(ext.setup)
-
-const discoverExtensionsWithRuntime = (
-  runtime: ClientRuntime,
-  params: { userDir: string; projectDir: string },
-): Promise<ReadonlyArray<DiscoveredTuiExtension>> =>
-  runtime.runPromise(
-    discoverTuiExtensions({ userDir: params.userDir, projectDir: params.projectDir }),
-  )
-
 interface ImportedExtension {
   readonly module: AnyExtensionClientModule
   readonly scope: ExtensionScope
   readonly filePath: string
 }
 
-const setupLoadedExtension = (params: {
-  readonly module: AnyExtensionClientModule
-  readonly scope: LoadedTuiExtension["scope"]
-  readonly filePath: string
-  readonly runtime: ClientRuntime
-}): Effect.Effect<LoadedTuiExtension, ClientExtensionFailure> =>
-  Effect.tryPromise({
-    try: () =>
-      invokeSetup(params.module, params.runtime).then((contributions) => ({
-        id: params.module.id,
-        scope: params.scope,
-        filePath: params.filePath,
-        contributions,
-      })),
-    catch: (cause) =>
-      new ClientSetupError({
-        extensionId: params.module.id,
-        message: `Setup failed for ${params.module.id}`,
-        cause,
-      }),
-  }).pipe(
-    Effect.catch((error: ClientSetupError) =>
+/** Run one extension's setup; any failure or defect becomes a recorded failure. */
+const setupExtension = (
+  ext: ImportedExtension,
+): Effect.Effect<LoadedTuiExtension, ClientExtensionFailure, ClientRuntimeServices> =>
+  ext.module.setup.pipe(
+    Effect.map((contributions) => ({
+      id: ext.module.id,
+      scope: ext.scope,
+      filePath: ext.filePath,
+      contributions,
+    })),
+    Effect.catchCause((cause) =>
       Effect.logWarning("tui-ext.setup.failed").pipe(
-        Effect.annotateLogs({ filePath: params.filePath, error: String(error.cause) }),
+        Effect.annotateLogs({ filePath: ext.filePath, error: Cause.pretty(cause) }),
         Effect.andThen(
-          Effect.fail({ id: params.module.id, reason: `setup failed: ${String(error.cause)}` }),
+          Effect.fail({ id: ext.module.id, reason: `setup failed: ${Cause.squash(cause)}` }),
         ),
       ),
     ),
@@ -574,15 +458,12 @@ const importExtension = (
         }),
     })
     const candidate = Option.getOrElse(Option.fromNullishOr(mod.default), () => mod)
-
-    const error = getClientModuleError(candidate)
-    if (Option.isSome(error) || !isExtensionClientModule(candidate)) {
+    if (!isExtensionClientModule(candidate)) {
       return yield* Effect.fail({
         id: entry.filePath,
-        reason: Option.getOrElse(error, () => "invalid module shape"),
+        reason: Option.getOrElse(clientModuleProblem(candidate), () => "invalid module shape"),
       })
     }
-
     return { module: candidate, scope: entry.scope, filePath: entry.filePath }
   }).pipe(
     Effect.catchTag("TuiExtensionImportError", (err) =>
@@ -596,81 +477,42 @@ const importExtension = (
   )
 
 /**
- * Load all TUI extensions: discover files, import modules, resolve with scope precedence.
+ * Load all TUI extensions: discover files, import modules, run setups, resolve
+ * with scope precedence.
  *
  * @param opts.builtins — pre-imported builtin modules (static imports for bundler reachability)
  * @param opts.disabled — extension ids to skip (applies to builtins and discovered alike).
- *   Discovered extensions are imported to read their id, but setup() is skipped when disabled.
- *
- * Discovery uses `FileSystem` and `Path` from the runtime — the loader does
- * NOT take `fs`/`path` parameters. Any runtime that satisfies
- * `FileSystem | Path | <other services>` works.
+ *   Discovered extensions are imported to read their id, but setup is skipped when disabled.
  */
 export const loadTuiExtensions = (opts: {
   readonly builtins?: ReadonlyArray<AnyExtensionClientModule>
   readonly userDir: string
   readonly projectDir: string
   readonly disabled?: ReadonlyArray<string>
-  /** ManagedRuntime that satisfies the union of services any Effect-typed
-   *  setup may yield, plus `FileSystem | Path` for discovery. The TUI
-   *  shell builds this with the full client-services Layer. */
-  readonly runtime: ClientRuntime
-}): Promise<ResolvedTuiExtensions> =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const disabledSet = new Set(Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []))
-
-      // Discovery runs through the runtime so `FileSystem`/`Path` come from the
-      // same Layer that powers Effect-typed extension setups. This is the only
-      // place outside `invokeSetup` that crosses the runtime boundary.
-      const discovered = yield* Effect.promise(() =>
-        discoverExtensionsWithRuntime(opts.runtime, {
-          userDir: opts.userDir,
-          projectDir: opts.projectDir,
-        }),
-      )
-
-      // Import user/project modules, then filter by disabled before calling setup()
-      const [importFailures, imported] = yield* Effect.partition(discovered, importExtension)
-      const enabled = imported.filter((r) => !disabledSet.has(r.module.id))
-
-      // Builtins: pre-imported, just filter disabled and call setup()
-      const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => [])
-        .filter((ext) => !disabledSet.has(ext.id))
-        .map((ext): ImportedExtension => ({
-          module: ext,
-          scope: "builtin",
-          filePath: `builtin:${ext.id}`,
-        }))
-
-      const [setupFailures, loaded] = yield* Effect.partition([...builtins, ...enabled], (ext) =>
-        setupLoadedExtension({ ...ext, runtime: opts.runtime }),
-      )
-
-      const resolved = resolveTuiExtensions(loaded, [...importFailures, ...setupFailures])
-
-      if (resolved.autocompleteItems.length > 0) {
-        const prefixes = resolved.autocompleteItems.map((c) => c.prefix).join(", ")
-        yield* Effect.log(`[tui-ext] autocomplete contributions: ${prefixes}`)
-      }
-
-      return resolved
-    }),
-  )
+}): Effect.Effect<ResolvedTuiExtensions, never, ClientRuntimeServices> =>
+  Effect.gen(function* () {
+    const disabled = new Set(Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []))
+    const discovered = yield* discoverTuiExtensions(opts)
+    const [importFailures, imported] = yield* Effect.partition(discovered, importExtension)
+    const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).map(
+      (module): ImportedExtension => ({
+        module,
+        scope: "builtin",
+        filePath: `builtin:${module.id}`,
+      }),
+    )
+    const enabled = [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id))
+    const [setupFailures, loaded] = yield* Effect.partition(enabled, setupExtension)
+    return resolveTuiExtensions(loaded, [...importFailures, ...setupFailures])
+  })
 
 // ── extension context ───────────────────────────────────────────────────────
 
 /**
- * Boundary helper for extension UI loading.
- *
- * Solid's `onMount` callback runs in the Promise lane (sync setup -> async
- * effect callback). When that callback needs to await host-owned Effect
- * helpers, we exit Effect-land via `clientRuntime.runPromise(...)` here.
- *
- * Each export names a specific external seam. There is no generic
- * `runAnyEffect(runtime, effect)` trampoline.
+ * The one boundary where extension loading leaves Effect: `onMount` in
+ * `ExtensionUIProvider` awaits it. It reads the disabled list and runs
+ * `loadTuiExtensions` on the provider's client runtime.
  */
-
 export const loadExtensionUi = (
   clientRuntime: ClientRuntime,
   params: {
@@ -681,16 +523,13 @@ export const loadExtensionUi = (
 ): Promise<ResolvedTuiExtensions> =>
   clientRuntime.runPromise(
     Effect.gen(function* () {
-      const disabledSet = yield* readDisabledExtensions({ home: params.home, cwd: params.cwd })
-      return yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: params.builtins,
-          userDir: `${params.home}/.gent/extensions`,
-          projectDir: `${params.cwd}/.gent/extensions`,
-          disabled: [...disabledSet],
-          runtime: clientRuntime,
-        }),
-      )
+      const disabled = yield* readDisabledExtensions({ home: params.home, cwd: params.cwd })
+      return yield* loadTuiExtensions({
+        builtins: params.builtins,
+        userDir: `${params.home}/.gent/extensions`,
+        projectDir: `${params.cwd}/.gent/extensions`,
+        disabled: [...disabled],
+      })
     }),
   )
 
