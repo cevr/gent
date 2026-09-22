@@ -245,7 +245,12 @@ The production server uses one live profile owner:
   build into a child of the server scope, and `buildProfileCatalog` stages the
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
-  live. There is no reconciler, publication, or admission lease.
+  live. There is no reconciler, publication, or admission lease. Test roots
+  (`createE2ELayer`) set `failOnExtensionFailure`, so a failed extension is a
+  defect that names it; `allowFailedExtensions: true` keeps a failure-path
+  test running. The harness loads every `extensionInputs`/`extensions` entry
+  at builtin scope; a scope test builds its profile from `LoadedExtension`s
+  and passes it as `sessionProfileCacheLayer`.
 - `server/server.ts` selects the launch profile from that cache.
 
 Turn profiles carry the process identity that built them. A process-local tool

@@ -623,6 +623,8 @@ export interface E2ELayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extension inputs for setup */
   readonly extensionInputs: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+  /** Keep running when an extension fails to load. Only for tests about that failure path. */
+  readonly allowFailedExtensions?: boolean
   /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** Approval service override. Default auto-approves for E2E tests. */
@@ -749,6 +751,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       }),
       languageModelLayerOverride: config.providerLayer,
       extensions: extensionInputsForConfig(config),
+      // A broken extension fails the test with its reason, not a later timeout.
+      failOnExtensionFailure: config.allowFailedExtensions !== true,
       branchTools: config.branchTools ?? noBranchTools,
       overrides: {
         modelRegistryLayer: ModelRegistry.Test(),
