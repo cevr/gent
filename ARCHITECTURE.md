@@ -977,7 +977,7 @@ One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 
-- **Resource** — `defineResource({ id, scope, layer, start?, stop? })`. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `runtime/extensions/resource-host/`.
+- **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `runtime/extensions/resource-host/`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
 - **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (an addressed user message with the loop `completion` modes; the own branch refuses and points at `queueFollowUp`), `steer`, `events` (replay, then the `StreamSynchronized` marker, then live), `delete` (cascade), and `queueFollowUp` with `sessionId`. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; `SessionRuntime` and the loop's `sessionControl` both call them, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
 - **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter", handler)` registers the three runtime hooks; each kind is typed by `ExtensionHookSignatures`. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; the turn projection is an input to `resolveTurnProjection`. Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries the turn's token usage. See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
@@ -985,14 +985,10 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 Other notes:
 
-- Lifecycle effects live on Resources as `start` / `stop`. A failed start
-  rejects publication and closes newly acquired resources. First activation
-  leaves no cache entry. A failed replacement after retirement leaves no
-  active publication; it does not restore retired authority. Validation failure
-  before retirement preserves the previous publication. A missing optional
-  provider suspends affected extensions through the resource plan.
-  Scheduler failures remain extension health diagnostics. The graph host
-  owns resource stop order and scoped cleanup.
+- A Resource layer that fails to build rejects its extension: the profile
+  reports it failed at the `startup` phase, closes what that layer acquired,
+  and keeps its siblings live. Release runs in reverse build order when the
+  profile scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
 - Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent
   for one turn and nothing else. A branch holds no agent of its own, so there

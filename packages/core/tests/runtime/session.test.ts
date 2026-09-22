@@ -1095,7 +1095,6 @@ describe("branch-scoped resources", () => {
             defineResource({
               id: "@gent/tests/branch-resource/counter",
               scope: "branch",
-              tag: BranchCounter,
               layer: Layer.effect(
                 BranchCounter,
                 Effect.acquireRelease(

@@ -149,7 +149,6 @@ const OpenForksLive: Layer.Layer<OpenForks> = Layer.effect(
 const OpenForksResource = defineResource({
   id: "@gent/btw/forks",
   scope: "process",
-  tag: OpenForks,
   layer: OpenForksLive,
 })
 

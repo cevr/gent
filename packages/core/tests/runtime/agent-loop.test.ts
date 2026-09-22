@@ -6268,7 +6268,6 @@ describe("tool binding replay", () => {
               "resource",
               defineResource({
                 id: "test/replay-policy-resource",
-                tag: ReplayResource,
                 scope: "process",
                 layer: Layer.succeed(ReplayResource, ReplayResource.of({ value: "live" })),
               }),

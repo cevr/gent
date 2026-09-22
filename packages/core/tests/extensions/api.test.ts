@@ -200,10 +200,14 @@ describe("defineExtension", () => {
       expect(resources).toHaveLength(1)
     }))
 
-  test("Resource.start and Resource.stop run at scope build/teardown via buildResourceLayer in declaration / reverse order", () =>
+  test("resource layers acquire at scope build and release at teardown in declaration / reverse order", () =>
     Effect.gen(function* () {
       const log: string[] = []
       const append = (s: string) => Effect.sync(() => log.push(s))
+      const lifecycle = (n: number) =>
+        Layer.effectDiscard(
+          Effect.acquireRelease(append(`startup-${n}`), () => append(`shutdown-${n}`)),
+        )
       const ext = defineExtension({
         id: "lifecycle",
         setup: Effect.gen(function* () {
@@ -214,9 +218,7 @@ describe("defineExtension", () => {
             defineResource({
               id: "test/define-extension/lifecycle/resource-1",
               scope: "process",
-              layer: Layer.empty,
-              start: append("startup-1"),
-              stop: append("shutdown-1"),
+              layer: lifecycle(1),
             }) as never,
           )
           yield* host.register(
@@ -225,9 +227,7 @@ describe("defineExtension", () => {
             defineResource({
               id: "test/define-extension/lifecycle/resource-2",
               scope: "process",
-              layer: Layer.empty,
-              start: append("startup-2"),
-              stop: append("shutdown-2"),
+              layer: lifecycle(2),
             }) as never,
           )
         }),
@@ -240,9 +240,6 @@ describe("defineExtension", () => {
         contributions,
       } satisfies LoadedExtension
       yield* Effect.scoped(Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid))
-      // Strict ordering — no sorting. Codex  review flagged that the
-      // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
-      // is now sequenced through one Effect, so this is deterministic.
       expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
     }))
 

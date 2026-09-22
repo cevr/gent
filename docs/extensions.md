@@ -3,7 +3,7 @@
 ## Overview
 
 Extensions add leaf capabilities to gent: tools for the LLM, typed RPCs between
-extensions, scoped resources, lifecycle hooks, agents, and LLM drivers.
+extensions, scoped resources, runtime hooks, agents, and LLM drivers.
 
 Single entry point: `defineExtension({ id, setup })`. `setup` is an Effect
 that yields `ExtensionHost` and registers values built with small factories:
@@ -56,7 +56,7 @@ You need at most 7 concepts to write a complete extension:
 | 2   | `ExtensionHost`   | Setup-time host: `register`, `on`, cwd/home facts   |
 | 3   | `tool`            | LLM-callable tool (params + execute)                |
 | 4   | `request`         | Extension-to-extension typed RPC                    |
-| 5   | `defineResource`  | Scoped service/lifecycle/schedule declaration       |
+| 5   | `defineResource`  | Scoped service layer with a stable id               |
 | 6   | `defineAgent`     | Spawnable subagent                                  |
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
@@ -331,13 +331,11 @@ export default defineExtension({
       "resource",
       defineResource({
         id: "my-service-ext/service",
-        tag: MyService,
         scope: "process",
         layer: MyService.Live,
       }),
       defineResource({
         id: "my-service-ext/counter-state",
-        tag: CounterState,
         scope: "process",
         layer: Layer.effect(CounterState, Ref.make(0)),
       }),

@@ -2330,11 +2330,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.",
   },
   {
-    file: "packages/core/src/runtime/extension-host.ts",
-    scope: "next-line",
-    text: "anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.",
-  },
-  {
     file: "packages/extensions/src/openai.ts",
     scope: "next-line",
     text: "strictEffectProvide:off OAuth token endpoint at extension boundary",

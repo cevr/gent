@@ -412,7 +412,6 @@ export const SkillsExtension = defineExtension({
       "resource",
       defineResource({
         id: "@gent/skills/service",
-        tag: Skills,
         scope: "branch",
         layer: Skills.Live({ cwd: host.cwd, home: host.home }),
       }),

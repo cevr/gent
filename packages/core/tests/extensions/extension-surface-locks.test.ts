@@ -631,7 +631,7 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("extension hooks and lifecycle hooks reject Promise handlers", () => {
+  test("extension hooks and resource layers reject Promise values", () => {
     // gent/no-sleep: allow source a `Promise<void>` value purely for type-level assignability check below
     const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
@@ -643,18 +643,10 @@ describe("Effect-purity locks (compile-time)", () => {
       }),
     })
     defineResource({
-      id: "test/extension-surface-locks/start-promise",
+      id: "test/extension-surface-locks/layer-promise",
       scope: "process",
-      layer: Layer.empty,
-      // @ts-expect-error — Promise must not be assignable to Effect Resource.start
-      start: promiseVoid,
-    })
-    defineResource({
-      id: "test/extension-surface-locks/stop-promise",
-      scope: "process",
-      layer: Layer.empty,
-      // @ts-expect-error — Promise must not be assignable to Effect Resource.stop
-      stop: promiseVoid,
+      // @ts-expect-error — Promise must not be assignable to a Resource layer
+      layer: promiseVoid,
     })
     expect(true).toBe(true)
   })
@@ -684,8 +676,6 @@ describe("Effect-purity locks (compile-time)", () => {
             layer: Layer.succeed(ReadOnlyService, {
               read: Effect.succeed(""),
             } satisfies ReadOnlyApi),
-            start: Effect.void,
-            stop: Effect.void,
           }),
         )
       }),

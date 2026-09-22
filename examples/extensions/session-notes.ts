@@ -75,7 +75,6 @@ export default defineExtension({
       "resource",
       defineResource({
         id: "example/session-notes/state",
-        tag: SessionNotesState,
         scope: "process",
         layer: Layer.effect(SessionNotesState, Ref.make<NotesState>({ notes: [] })),
       }),

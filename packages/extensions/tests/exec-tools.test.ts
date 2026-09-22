@@ -15,6 +15,7 @@ import {
   Stream,
 } from "effect"
 import {
+  BackgroundBashLayer,
   BackgroundBashStorage,
   BackgroundBashStorageError,
   BackgroundBashSupervisorLive,
@@ -150,10 +151,7 @@ const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
     Path.layer,
     BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
-  return BackgroundBashSupervisorLive.pipe(
-    Layer.provideMerge(BackgroundBashStorage.Live),
-    Layer.provideMerge(base),
-  )
+  return BackgroundBashLayer.pipe(Layer.provideMerge(base))
 }
 
 const makeProcessLayerWithFailingMarkFailed = <A, E>(storageLayer: Layer.Layer<A, E>) => {
@@ -770,13 +768,7 @@ describe("BashTool execution", () => {
         expect(started.exitCode).toBe(0)
         yield* Scope.close(scope, Exit.void)
 
-        yield* Effect.gen(function* () {
-          const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted
-        })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
-
+        // The second process layer marks the job interrupted as it builds.
         const retried = yield* runToolWithCtx(
           BashTool,
           { command: "printf should-not-run", run_in_background: true },

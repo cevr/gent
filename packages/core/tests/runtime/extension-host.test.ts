@@ -326,13 +326,15 @@ class SessionProfileStartProbe extends Context.Service<
   { readonly value: string }
 >()("@gent/core/tests/runtime/extension-host.test/SessionProfileStartProbe") {}
 
-/** A process resource whose only behavior is its `start` effect. */
+/** A process resource whose layer runs `start` as it builds. */
 const startResource = (id: string, start: Effect.Effect<void>) =>
   defineResource({
     id,
     scope: "process",
-    layer: Layer.succeed(SessionProfileStartProbe, SessionProfileStartProbe.of({ value: id })),
-    start,
+    layer: Layer.effect(
+      SessionProfileStartProbe,
+      Effect.as(start, SessionProfileStartProbe.of({ value: id })),
+    ),
   })
 
 const makeCacheLayer = (params: {
@@ -376,11 +378,13 @@ const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = 
         defineResource({
           id: `${id}/marker`,
           scope: "process",
-          layer: Layer.succeed(
+          layer: Layer.effect(
             SessionProfileResourceMarker,
-            SessionProfileResourceMarker.of({ value }),
+            Effect.as(
+              Effect.addFinalizer(() => stop),
+              SessionProfileResourceMarker.of({ value }),
+            ),
           ),
-          stop,
         }),
       )
     }),
@@ -1479,7 +1483,7 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 
-  it.scopedLive("a failed resource start suspends only its extension and keeps siblings live", () =>
+  it.scopedLive("a failed resource layer suspends only its extension and keeps siblings live", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
@@ -1515,8 +1519,7 @@ describe("extension activation isolation", () => {
             defineResource({
               id: "test/broken",
               scope: "process",
-              layer: Layer.empty,
-              start: Effect.die("resource start boom"),
+              layer: Layer.effectDiscard(Effect.die("resource layer boom")),
             }) as never,
           )
         }),
@@ -1538,7 +1541,7 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions).toMatchObject([
         { manifest: { id: ExtensionId.make("broken") }, phase: "startup" },
       ])
-      expect(profile.resolved.failedExtensions[0]?.error).toContain("resource start boom")
+      expect(profile.resolved.failedExtensions[0]?.error).toContain("resource layer boom")
       // The healthy resource stays acquired until the server scope closes.
       expect(released).toBe(0)
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
@@ -3369,13 +3372,11 @@ describe("defineResource", () => {
   test("emits a contribution with the declared scope", () => {
     const r = defineResource({
       id: "test/resource-host/declared-scope",
-      tag: TestServiceA,
       scope: "process",
       layer: layerA,
     })
     expect(String(r.id)).toBe("test/resource-host/declared-scope")
     expect(r.scope).toBe("process")
-    expect(r.tag).toBe(TestServiceA)
   })
 
   test("rejects an empty resource id", () => {
@@ -3427,116 +3428,62 @@ describe("buildResourceLayer", () => {
   )
 })
 
-// ── lifecycle correctness (Resource.start / Resource.stop) ──
-//
-// Codex  review flagged two BLOCK findings that these tests lock down:
-//
-//   - BLOCK 1: a failed `start` must fail the Resource layer instead of
-//     leaving dependent extension contributions active.
-//   - BLOCK 2: lifecycle teardown order must be reverse-of-start, not
-//     racing parallel finalizers.
-//     (Pre-fix `Layer.mergeAll` of per-Resource lifecycle layers raced.)
+// ── resource layer lifecycle ──
 
 describe("buildResourceLayer lifecycle", () => {
-  it.live(
-    "starts run in declaration order, stops run in reverse start order at scope teardown",
-    () =>
-      Effect.gen(function* () {
-        const log: string[] = []
-        const append = (s: string) => Effect.sync(() => log.push(s))
-        const ext = makeStubExtension("ext", [
-          defineResource({
-            id: "test/resource-host/lifecycle/start-stop-1",
-            scope: "process",
-            layer: layerA,
-            start: append("start-1"),
-            stop: append("stop-1"),
-          }),
-          defineResource({
-            id: "test/resource-host/lifecycle/start-stop-2",
-            scope: "process",
-            layer: layerB,
-            start: append("start-2"),
-            stop: append("stop-2"),
-          }),
-        ])
-        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-        // After teardown: starts in declaration order, stops in reverse.
-        expect(log).toEqual(["start-1", "start-2", "stop-2", "stop-1"])
-      }),
+  const lifecycleLog = () => {
+    const log: string[] = []
+    const append = (s: string) => Effect.sync(() => log.push(s))
+    const tracked = <I>(layer: Layer.Layer<I>, name: string) =>
+      Layer.provideMerge(
+        layer,
+        Layer.effectDiscard(
+          Effect.acquireRelease(append(`start-${name}`), () => append(`stop-${name}`)),
+        ),
+      )
+    return { log, tracked }
+  }
+
+  it.live("layers build in declaration order and release in reverse at scope teardown", () =>
+    Effect.gen(function* () {
+      const { log, tracked } = lifecycleLog()
+      const ext = makeStubExtension("ext", [
+        defineResource({
+          id: "test/resource-host/lifecycle/order-1",
+          scope: "process",
+          layer: tracked(layerA, "1"),
+        }),
+        defineResource({
+          id: "test/resource-host/lifecycle/order-2",
+          scope: "process",
+          layer: tracked(layerB, "2"),
+        }),
+      ])
+      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
+      expect(log).toEqual(["start-1", "start-2", "stop-2", "stop-1"])
+    }),
   )
 
-  it.live("failed start fails the layer and stops previously started Resources", () =>
+  it.live("a failed layer fails the build and releases the layers built before it", () =>
     Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
+      const { log, tracked } = lifecycleLog()
       const ext = makeStubExtension("ext", [
         defineResource({
           id: "test/resource-host/lifecycle/failure/good",
           scope: "process",
-          layer: layerA,
-          start: append("start-good-1"),
-          stop: append("stop-good-1"),
+          layer: tracked(layerA, "good"),
         }),
         defineResource({
           id: "test/resource-host/lifecycle/failure/bad",
           scope: "process",
-          layer: layerB,
-          // Intentional failure — must not bring down the layer build.
-          start: Effect.die(new Error("boom")),
-          // Must NOT run, because start failed.
-          stop: append("stop-should-not-run"),
+          layer: Layer.effect(TestServiceB, Effect.die(new Error("boom"))),
         }),
       ])
       const exit = yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process"))).pipe(
         Effect.exit,
       )
       expect(exit._tag).toBe("Failure")
-      // Good start ran, its stop ran on failure teardown; failed Resource's
-      // stop never registered, so it never appears in the log.
-      expect(log).toEqual(["start-good-1", "stop-good-1"])
-    }),
-  )
-
-  it.live("Resource with stop but no start still registers finalizer", () =>
-    Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
-      const ext = makeStubExtension("ext", [
-        defineResource({
-          id: "test/resource-host/lifecycle/stop-only",
-          scope: "process",
-          layer: layerA,
-          stop: append("stop-only"),
-        }),
-      ])
-      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-      expect(log).toEqual(["stop-only"])
-    }),
-  )
-
-  it.live("stop failure is swallowed and does not mask sibling stops", () =>
-    Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
-      const ext = makeStubExtension("ext", [
-        defineResource({
-          id: "test/resource-host/lifecycle/stop-failure/good",
-          scope: "process",
-          layer: layerA,
-          stop: append("stop-1"),
-        }),
-        defineResource({
-          id: "test/resource-host/lifecycle/stop-failure/bad",
-          scope: "process",
-          layer: layerB,
-          // Failing stop must not prevent stop-1 from running.
-          stop: Effect.die(new Error("stop boom")),
-        }),
-      ])
-      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-      // stop-2 (the failing one) is reverse-first; stop-1 still ran.
-      expect(log).toEqual(["stop-1"])
+      expect(log).toEqual(["start-good", "stop-good"])
     }),
   )
 })

@@ -215,7 +215,7 @@ const sealErasedEffect = <A, E>(
  * Variant for hosts that need the raw `Exit` to apply local failure policy
  * (`continue` / `isolate` / `halt`, lifecycle finalizer behavior, etc.).
  */
-export const exitErasedEffect = <A>(
+const exitErasedEffect = <A>(
   effect: () => Effect.Effect<A, unknown, unknown>,
 ): Effect.Effect<Exit.Exit<A, unknown>> => {
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
@@ -939,11 +939,8 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
 // ── resource-layer ──────────────────────────────────────────────────────────
 
 /**
- * Resource service/lifecycle assembly.
- *
- * Owns heterogeneous Resource layer erasure and lifecycle finalizer policy.
- * Schedule reconciliation owns its own protocol; this module owns only service
- * layers plus start/stop.
+ * Resource layer assembly: merges every Resource layer of one scope behind the
+ * heterogeneous erasure membrane. Start work and disposal live in each layer.
  *
  * @module
  */
@@ -952,11 +949,6 @@ interface ResourceEntry {
   readonly extensionId: ExtensionId
   readonly resource: AnyResourceContribution
 }
-
-class ResourceStartError extends Schema.TaggedError<ResourceStartError>()("ResourceStartError", {
-  extensionId: Schema.String,
-  cause: Schema.String,
-}) {}
 
 const collectResourceEntries = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -968,38 +960,6 @@ const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-const buildLifecycleLayer = (
-  entries: ReadonlyArray<ResourceEntry>,
-): Layer.Layer<never, ResourceStartError> =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      for (const entry of entries) {
-        const start = entry.resource.start
-        if (!Predicate.isUndefined(start)) {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
-          const exit = yield* exitErasedEffect(() => start)
-          if (Exit.isFailure(exit)) {
-            yield* Effect.logError("resource.start.failed").pipe(
-              Effect.annotateLogs({
-                extensionId: entry.extensionId,
-                cause: Cause.pretty(exit.cause),
-              }),
-            )
-            return yield* new ResourceStartError({
-              extensionId: entry.extensionId,
-              cause: Cause.pretty(exit.cause),
-            })
-          }
-        }
-        const stop = entry.resource.stop
-        if (!Predicate.isUndefined(stop)) {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
-          yield* Effect.addFinalizer(() => exitErasedEffect(() => stop).pipe(Effect.asVoid))
-        }
-      }
-    }),
-  )
-
 export const buildResourceLayer = (
   extensions: ReadonlyArray<LoadedExtension>,
   scope: ResourceScope = "process",
@@ -1007,19 +967,12 @@ export const buildResourceLayer = (
   const entries = collectResourceEntries(extensions, scope)
   if (entries.length === 0) return emptyErasedResourceLayer
 
-  const serviceLayers = entries.reduce<ErasedResourceLayer>(
+  return entries.reduce<ErasedResourceLayer>(
     (acc, { resource }) =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
       Layer.merge(acc, eraseResourceLayer(resource.layer)),
     emptyErasedResourceLayer,
   )
-  const hasLifecycle = entries.some(
-    ({ resource }) =>
-      !Predicate.isUndefined(resource.start) || !Predicate.isUndefined(resource.stop),
-  )
-  if (!hasLifecycle) return serviceLayers
-
-  return eraseResourceLayer(Layer.provideMerge(buildLifecycleLayer(entries), serviceLayers))
 }
 
 // ── host-platform ───────────────────────────────────────────────────────────
@@ -1604,8 +1557,7 @@ export interface SessionProfile {
  * acquired.
  *
  * Extension setup is trusted code and can perform its own ordinary effects.
- * This boundary only guarantees that it does not build Resource layers,
- * invoke Resource start/stop hooks.
+ * This boundary only guarantees that it does not build Resource layers.
  */
 interface RuntimeProfileDeclarations {
   readonly extensionDeclarations: ExtensionActivationResult

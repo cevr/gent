@@ -95,7 +95,6 @@ const dynamicExtension = defineExtension({
       "resource",
       defineResource({
         id: "test/runtime-profile/fake-provider",
-        tag: FakeProvider,
         scope: "process",
         layer: fakeProviderLive,
       }),
@@ -114,7 +113,7 @@ const dynamicExtension = defineExtension({
 describe("live Profile", () => {
   const test = it.live.layer(BunServices.layer)
 
-  test("loads declarations without lifecycle work before boot activation", () =>
+  test("loads declarations without building resource layers before boot activation", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -143,14 +142,6 @@ describe("live Profile", () => {
                     (probe) => Effect.sync(() => events.push(["release", probe.instance])),
                   ),
                 ),
-                start: Effect.gen(function* () {
-                  const probe = yield* ScopedProbe
-                  events.push(["start", probe.instance])
-                }),
-                stop: Effect.gen(function* () {
-                  const probe = yield* ScopedProbe
-                  events.push(["stop", probe.instance])
-                }),
               }) as never,
             )
           }),
@@ -211,14 +202,12 @@ describe("live Profile", () => {
         }
         expect(events).toEqual([
           ["acquire", 1],
-          ["start", 1],
-          ["stop", 1],
           ["release", 1],
         ])
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("live Profile starts process resources once and skips duplicate lifecycle hooks", () =>
+  test("live Profile builds a process resource layer once", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let starts = 0
@@ -232,10 +221,11 @@ describe("live Profile", () => {
               defineResource({
                 id: "test/runtime-profile/start-once",
                 scope: "process",
-                layer: Layer.empty,
-                start: Effect.sync(() => {
-                  starts += 1
-                }),
+                layer: Layer.effectDiscard(
+                  Effect.sync(() => {
+                    starts += 1
+                  }),
+                ),
               }) as never,
             )
           }),
@@ -277,19 +267,10 @@ describe("live Profile", () => {
                   (probe) => Effect.sync(() => events.push(["release", probe.instance])),
                 ),
               ),
-              start: Effect.gen(function* () {
-                const probe = yield* ScopedProbe
-                events.push(["start", probe.instance])
-              }),
-              stop: Effect.gen(function* () {
-                const probe = yield* ScopedProbe
-                events.push(["stop", probe.instance])
-              }),
             }) as never,
             // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
             defineResource({
               id: "test/runtime-profile/resource-identity/pure",
-              tag: PureProbe,
               scope: "process",
               layer: Layer.succeed(PureProbe, { value: "pure" } satisfies PureProbeApi),
             }) as never,
@@ -346,7 +327,6 @@ describe("live Profile", () => {
             ])
             expect(events).toEqual([
               ["acquire", 1],
-              ["start", 1],
               ["capability", 1],
             ])
           }),
@@ -356,9 +336,7 @@ describe("live Profile", () => {
       expect(exit._tag).toBe("Success")
       expect(events).toEqual([
         ["acquire", 1],
-        ["start", 1],
         ["capability", 1],
-        ["stop", 1],
         ["release", 1],
       ])
     }).pipe(Effect.provide(sharedLayer)))
@@ -376,14 +354,14 @@ describe("live Profile", () => {
               // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
               defineResource({
                 id: "test/runtime-profile/precedence/activated",
-                tag: PrecedenceProbe,
                 scope: "process",
-                layer: Layer.succeed(PrecedenceProbe, {
-                  value: "activated",
-                } satisfies PrecedenceProbeApi),
-                start: Effect.sync(() => {
-                  starts += 1
-                }),
+                layer: Layer.effect(
+                  PrecedenceProbe,
+                  Effect.sync(() => {
+                    starts += 1
+                    return { value: "activated" } satisfies PrecedenceProbeApi
+                  }),
+                ),
               }) as never,
             )
           }),
@@ -397,7 +375,6 @@ describe("live Profile", () => {
               // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
               defineResource({
                 id: "test/runtime-profile/precedence/pure",
-                tag: PrecedenceProbe,
                 scope: "process",
                 layer: Layer.succeed(PrecedenceProbe, {
                   value: "pure",

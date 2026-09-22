@@ -954,7 +954,6 @@ export const FsToolsExtension = defineExtension({
       "resource",
       defineResource({
         id: "@gent/fs-tools/file-index",
-        tag: FileIndex,
         scope: "process",
         layer: FileIndexLive({ home: host.home }),
       }),

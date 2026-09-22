@@ -1612,7 +1612,6 @@ describe("extension command RPCs", () => {
           resources: [
             defineResource({
               id: "test/extension-commands-rpc/profile-token",
-              tag: ProfileToken,
               scope: "process",
               layer: Layer.succeed(
                 ProfileToken,
@@ -1677,7 +1676,6 @@ describe("extension command RPCs", () => {
             "resource",
             defineResource({
               id: "test/extension-commands-rpc/live-profile-token",
-              tag: ProfileToken,
               scope: "process",
               layer: Layer.succeed(
                 ProfileToken,

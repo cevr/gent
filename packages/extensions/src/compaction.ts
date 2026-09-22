@@ -337,7 +337,6 @@ const COMPACTION_EXTENSION_ID = ExtensionId.make("@gent/compaction")
 export const ModelContextCompactorResource = defineResource({
   id: "@gent/compaction/model-context-compactor",
   scope: "process",
-  tag: ModelContextCompactor,
   layer: ModelContextCompactorLive,
 })
 

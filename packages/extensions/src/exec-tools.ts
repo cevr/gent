@@ -778,7 +778,17 @@ export const BashTool = tool({
 
 const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
-const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
+// A job still marked running belongs to a process that is gone: mark it
+// interrupted before the supervisor takes new work.
+const ReconcileInterruptedJobs = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const storage = yield* BackgroundBashStorage
+    yield* storage.reconcileInterrupted
+  }),
+)
+
+export const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
+  Layer.provideMerge(ReconcileInterruptedJobs),
   Layer.provideMerge(BackgroundBashStorage.Live),
 )
 
@@ -793,10 +803,6 @@ export const ExecToolsExtension = defineExtension({
         id: "@gent/exec-tools/background-bash",
         scope: "process",
         layer: BackgroundBashLayer,
-        start: Effect.gen(function* () {
-          const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted
-        }),
       }),
     )
   }),

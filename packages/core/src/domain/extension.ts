@@ -121,42 +121,19 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
  * One Resource carries:
  *
  * - `id` — stable identity, reported when the resource fails to build.
- * - `tag` + `layer` — the canonical Layer providing one or more services.
- *   The `R` channel must include `ScopeOf<S>` so the typed scope brand
- *   gates instantiation.
  * - `scope` — the lifetime, declared at the type level via the literal.
- * - `start` / `stop` — optional startup + shutdown effects.
- *   `stop` is `Effect<void, never, A>` per Effect finalizer contract — it
- *   may not fail (failures are not propagated through scope teardown).
- * - `runtime` — explicit runtime slots for long-lived behavior that reacts
- *   to turns/messages or enriches tool results without going through a
- *   string-keyed middleware registry.
+ * - `layer` — the Layer providing one or more services. The `R` channel must
+ *   include `ScopeOf<S>` so the typed scope brand gates instantiation. Work
+ *   that must run when the resource starts goes in the layer build; disposal
+ *   is a finalizer in that build. A layer that fails rejects its extension.
  *
- * Authors typically create a Resource through the smart constructor
- * `defineResource(...)`. The `tag` is the canonical entry into the service
- * the Resource provides; consumers depend on the tag, not on Resource.
+ * Consumers yield the service Tags the layer provides; they never see the
+ * Resource.
  */
-interface ResourceContribution<A, S extends ResourceScope, R = never, E = never, StartR = never> {
+interface ResourceContribution<A, S extends ResourceScope, R = never, E = never> {
   readonly id: ResourceId
-  /**
-   * Optional canonical service tag. When present, consumers may depend on the
-   * tag without knowing about Resource. The `start`/`stop` effects get `A`
-   * in their R channel so they can read the owned service.
-   *
-   * When absent, the Resource is a pure layer contribution (the `layer` may
-   * provide multiple services via `Layer.merge(...)`), and the lifecycle
-   * effects have `A = never` in their R channel.
-   *
-   * Effect v4 `Context.Service<Identity, Service>` produces a tag whose
-   * identity (`A`) and service interface differ; this is why we use the
-   * 2-parameter `Context.Key<I, S>` shape instead of the 1-parameter
-   * `Context.Tag<A>` shape.
-   */
-  readonly tag?: Context.Key<A, unknown>
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
-  readonly start?: Effect.Effect<void, E, A | R | StartR>
-  readonly stop?: Effect.Effect<void, never, A>
 }
 
 /**
@@ -165,40 +142,16 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never,
  * route each Resource to the appropriate engine.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any, any>
-
-interface ResourceIdentitySpec {
-  /** Stable resource identity. */
-  readonly id: string
-}
+export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
 
 // ── Smart constructor ──
 
-/**
- * Spec type accepted by {@link defineResource}. Uses `NoInfer` on the
- * `tag` field so the identity `A` is inferred from `layer` only — passing
- * a tag for a different service identity is then a type error rather
- * than a silent unification of `A` to a union supertype.
- */
-interface ResourceSpec<
-  A,
-  S extends ResourceScope,
-  R = never,
-  E = never,
-  StartR = never,
-> extends ResourceIdentitySpec {
-  readonly tag?: Context.Key<NoInfer<A>, unknown>
+/** Spec type accepted by {@link defineResource}. */
+interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
+  /** Stable resource identity. */
+  readonly id: string
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
-  /**
-   * `StartR` is the additional services `start` may yield beyond the
-   * resource's own service `A` and the layer's `R`. Useful when the
-   * lifecycle action needs runtime services provided by sibling base
-   * layers without forcing the resource's layer
-   * itself to depend on them.
-   */
-  readonly start?: Effect.Effect<void, E, NoInfer<A> | R | StartR>
-  readonly stop?: Effect.Effect<void, never, NoInfer<A>>
 }
 
 /**
@@ -206,17 +159,14 @@ interface ResourceSpec<
  *
  * The factory infers the generics from the inputs (so authors don't write
  * `<MyService, "process", never, never>`) and brands the resource id.
- *
- * Identity `A` is inferred from `layer`. The `tag` field, if present, is
- * typed as `Context.Key<NoInfer<A>, unknown>` — it must match the layer's
- * identity exactly. Passing a tag for a different service is a type error.
  */
-export const defineResource = <A, S extends ResourceScope, R = never, E = never, StartR = never>(
-  spec: ResourceSpec<A, S, R, E, StartR>,
-): ResourceContribution<A, S, R, E, StartR> => {
-  const { id, ...resource } = spec
-  return { ...resource, id: ResourceId.make(id) }
-}
+export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
+  spec: ResourceSpec<A, S, R, E>,
+): ResourceContribution<A, S, R, E> => ({
+  id: ResourceId.make(spec.id),
+  scope: spec.scope,
+  layer: spec.layer,
+})
 
 // ── contribution ────────────────────────────────────────────────────────────
 
@@ -275,16 +225,6 @@ export interface ExtensionContributions {
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }
-
-// ── Smart constructors ──
-//
-// Capabilities are authored through the typed factories in
-// `domain/capability/{tool,request}.ts`. The Resource primitive is authored
-// through `defineResource({...})` directly — leaves widen to
-// `AnyResourceContribution` by structural assignability when the `layer`'s
-// `A` is concrete (not `never`). Lifecycle-only resources should
-// encode disposal as a `Layer.scoped` finalizer over a marker tag rather than
-// `{ layer: Layer.empty, stop: ... }`.
 
 // ── extension ───────────────────────────────────────────────────────────────
 

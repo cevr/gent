@@ -822,7 +822,6 @@ export const WakeExtension = defineExtension({
       "resource",
       defineResource({
         id: "@gent/wake/alarms",
-        tag: WakeAlarms,
         scope: "branch",
         layer: WakeAlarmsLive,
       }),
