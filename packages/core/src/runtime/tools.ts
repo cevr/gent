@@ -84,12 +84,8 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
  * The loop, the turn executor and the branch's tools all need this one bit,
  * but they need different halves of it: the worker interrupts a turn and
  * begins the next one, while a running turn and the tools it dispatches only
- * ask. A shared `Ref.Ref<boolean>` gave every one of them both halves and left
- * the meaning of `true` and `false` to be re-derived at each call site.
- *
- * Naming the two transitions keeps that meaning in one place: `interrupt`
- * stops the turn now running, and `beginTurn` declares that a fresh turn
- * starts uninterrupted.
+ * ask. `interrupt` stops the turn now running, and `beginTurn` declares that a
+ * fresh turn starts uninterrupted.
  *
  * @module
  */

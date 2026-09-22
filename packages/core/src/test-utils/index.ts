@@ -224,9 +224,9 @@ export const testExtensionHostContext = (
 
 /**
  * What every test composition root shares: a `/tmp` environment, the stub
- * service layers, a deterministic server identity, an agents/tools
- * extension, and a stub agent runner. The roots in `in-process-layer`,
- * `e2e-layer`, and `extension-harness` are deltas over these.
+ * service layers, a deterministic server identity, and an agents/tools
+ * extension. The roots below (extension harness, E2E layer, in-process layer)
+ * are deltas over these.
  */
 
 export const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
@@ -608,8 +608,6 @@ export function ensureStorageParents(input: {
  * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
  * prod-shaped event publisher, real ToolRunner.Live, and direct session-loop
  * follow-ups — so QueueFollowUp actually drives multi-turn loops.
- *
- * Import from @gent/core-internal/test-utils/e2e-layer
  */
 
 export interface E2ELayerConfig {
@@ -777,8 +775,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 /**
  * In-process integration layer: the E2E root with the stub tool runner and
  * the scripted debug model. Use with `Gent.test()`.
- *
- * Import from @gent/core-internal/test-utils/in-process-layer.js
  */
 
 interface InProcessLayerConfig {

@@ -2109,20 +2109,16 @@ describe("runtime slots", () => {
 // ── ../extensions/host-facet-survivors.test ─────────────────────────────────
 
 /**
- * Host facet survivor regression suite.
- *
- * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.Session.listBranches` remains as the one non-trivial host-wired
- * behavior with no other direct test coverage. The RPC suites exercise the
- * durable mutation surface from the public RPC angle; this test pins the
- * host-facet shape from the extension angle.
+ * `ctx.Session.listBranches` is a host-wired facet verb with no other direct
+ * coverage. The RPC suites exercise the durable mutation surface from the
+ * public RPC angle; this test pins the facet from the extension angle.
  */
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
 
-describe("host facet survivors after C9.5 prune", () => {
+describe("host session facet", () => {
   it.live("ctx.Session.listBranches returns branches for the current session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

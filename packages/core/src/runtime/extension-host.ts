@@ -227,9 +227,8 @@ const exitErasedEffect = <A>(
 export type ErasedResourceLayer = Layer.Layer<any, never, never>
 
 /**
- * Resource-host call sites keep the old narrower return type (`Layer.Layer<any>`)
- * so resource layers do not leak their heterogeneous error or requirement
- * channels into tests.
+ * Resource layers erase to `Layer.Layer<any>` so their heterogeneous error and
+ * requirement channels do not leak into callers.
  */
 export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The resource membrane intentionally erases heterogeneous service output and requirements.
@@ -1096,8 +1095,7 @@ const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   return Option.isSome(decoded) && Effect.isEffect(decoded.value.setup)
 }
 
-/** Extract GentExtension from a module export. Paired-package wrapping is gone;
- *  only raw `GentExtension` values are valid now. */
+/** Extract a `GentExtension` from a module export; any other value is not one. */
 // oxlint-disable-next-line effect/noUnknownParameters -- Runtime module exports enter as untyped values.
 const resolveToGentExtension = (value: unknown): Option.Option<LoadedUserExtension> => {
   if (isGentExtension(value)) return Option.some(value)

@@ -178,12 +178,11 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * smart constructors, no `filterByKind`.
  *
  * Capabilities are authored through the typed factories `tool({...})` and
- * `request({...})` at `domain/capability/{tool,request}.ts`. Slash commands
- * are requests carrying a `slash:` presentation block.
+ * `request({...})` in `domain/capability.ts`. Slash commands are requests
+ * carrying a `slash:` presentation block.
  *
- * Resources are authored through `defineResource({...})` from
- * `./resource.ts`. Each leaf carries an
- * explicit stable resource identity and graph metadata; the leaf is widened
+ * Resources are authored through `defineResource({ id, scope, layer })` in
+ * this file. Each leaf carries a stable resource identity; the leaf is widened
  * by structural assignability at the bucket boundary.
  *
  * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
@@ -390,7 +389,7 @@ export interface TurnAfterInput {
 // ── Lifecycle hooks ──
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
-// turn seams. Authored on `defineExtension({ hooks })`.
+// turn seams. Registered with `host.on(kind, handler)` inside `setup`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
 // still fire.
 
@@ -520,11 +519,11 @@ export interface GentExtension<R = ExtensionSetupServices> {
 /**
  * `ExtensionHost` — the one service an extension's `setup` yields.
  *
- * It carries the setup-time facts (cwd, source, home, host facts, process
- * helpers) and the two registration primitives:
+ * It carries the setup-time facts (cwd, home, host facts, process helpers)
+ * and the two registration primitives:
  *
  * - `register(domain, ...values)` adds typed leaves to one registration
- *   domain: tools, requests, agents, resources, jobs, model or external drivers.
+ *   domain: tools, requests, agents, resources, model or external drivers.
  * - `on(kind, handler)` adds one runtime hook.
  *
  * The loader provides the service around `GentExtension.setup`, collects the

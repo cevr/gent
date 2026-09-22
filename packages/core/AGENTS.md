@@ -3,7 +3,6 @@
 ## Type Exports
 
 - `MessagePart`, `TextPart`, etc. - Import from here, never redeclare locally
-- `ToolDefinition` - `Params` must extend `Schema.Schema.AnyNoContext` (no context for sync decode)
 
 ## Schema Patterns
 
@@ -17,15 +16,15 @@
 - Server-facing code uses `SessionRuntime` only. `AgentLoop` is a runtime-internal implementation detail.
 - Server-facing orchestration flows through typed `SessionRuntime` methods: `sendUserMessage`, `steer`, `respondInteraction`, `queueFollowUp`, `dequeueFollowUp`, `requestExtension`, `drainQueuedMessages`, `getQueuedMessages`, `getState`, `watchState`, and `terminateSession`.
 - Do not reintroduce a generic runtime command union or public dispatch bridge.
-- Profile tests use `SessionProfileCache.Live` and enter `publication.run` for resource effects. Do not rebuild the removed activation pipeline in test helpers. Resource assembly follows resolved extension order, not input order.
-- Tool adapters use `runtime/agent/tool-binding-resolution.ts` for replay identity checks. Keep result persistence and approval behavior in the adapter. A local identity cannot replace a missing durable binding row. See `../../ARCHITECTURE.md`.
+- Profile tests use `SessionProfileCache.Live`. Resource layers build in resolved extension order, not input order.
+- Tool adapters use the tool-binding resolution section of `runtime/tools.ts` for replay identity checks. Keep result persistence and approval behavior in the adapter. A local identity cannot replace a missing durable binding row. See `../../ARCHITECTURE.md`.
 
 ## Extension Boundary
 
-- Author with `tool(...)`, `request(...)`, `defineResource(...)`, `hook.*(...)`, and `AgentDefinition.make(...)`
+- Author with `tool(...)`, `request(...)`, `defineResource(...)`, `host.on(kind, handler)`, and `AgentDefinition.make(...)`
 - Slash command presentation lives on `request({ slash: { ... } })` — there is no separate `action(...)` factory
 - Do not reintroduce `query(...)`, `mutation(...)`, `action(...)`, generic `_kind` contribution unions, or flat `Contribution[]`
-- Prompt shaping, policy, and turn lifecycle behavior belong to `hook.turnProjection` and explicit runtime slots, not generic middleware APIs
+- Prompt shaping, policy, and turn lifecycle behavior belong to the `turnProjection` hook and explicit runtime slots, not generic middleware APIs
 
 ## Provider Boundary
 

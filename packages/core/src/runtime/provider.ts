@@ -47,9 +47,8 @@ import * as AiError from "effect/unstable/ai/AiError"
 // ── auth ────────────────────────────────────────────────────────────────────
 
 /**
- * `domain/auth` — single module owning every auth concept gent uses.
- *
- * The auth method, the store, its persistence, and the guard all live here.
+ * Every auth concept gent uses: the auth method, the store, its persistence,
+ * and the guard.
  * Persistence is delegated to `KeyValueStore.layerFileSystem(...)` +
  * `toSchemaStore`: the directory inherits whatever protection the user's home
  * directory already has, which matches how every other gent state file

@@ -687,13 +687,9 @@ export const collectExternalTurnResponse = <R>(params: {
  * model steps and are read once, at the end, to fill `TurnCompleted`. The
  * accumulator therefore outlives no turn: the next one starts from zero.
  *
- * A bare `Ref<TurnMetrics>` at loop scope left that fact to a hand-written
- * `Ref.set(..., emptyTurnMetrics())` at the top of `runTurn`, and the fold —
- * which totals to add, which counts make the total unreportable — sat inline
- * at the one call site that knew it. Naming the operations keeps both in one
- * place, the way `turn-interruption.ts` does for the interrupt latch:
  * `beginTurn` is the reset, and a writer says what its step observed rather
- * than how to merge it.
+ * than how to merge it; the fold (which totals to add, which counts make the
+ * total unreportable) lives here.
  *
  * @module
  */
@@ -1213,14 +1209,10 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  // `ConfigService` is a hard requirement of the actor behavior deps.
-  // Making it optional here let test layers omit it and silently fall
-  // through to the default driver, hiding wiring bugs.
+  // `ConfigService` is required, so a root that omits it fails at wiring.
   const configService = yield* ConfigService
-  // Read overrides from the session's cwd. Without per-session
-  // resolution, a multi-cwd server's project overrides would all
-  // come from the launch cwd. `get(undefined)` falls back to the
-  // launch-cwd cached config.
+  // Overrides come from the session's cwd, so a multi-cwd server reads each
+  // project's own config. `get(undefined)` reads the launch-cwd config.
   const sessionConfig = yield* configService.get(hostCtx.cwd)
   // Config `agents[name]` reshapes the definition; the run's own overrides win.
   const effectiveAgent = applyAgentOverrides(
@@ -1790,7 +1782,7 @@ const computeStreamEndedCost: (params: {
   return Option.some(calculateCost(params.usage.value, pricing))
 })
 
-// ── agent-loop.turn-execution ───────────────────────────────────────────────
+// ── turn-execution ──────────────────────────────────────────────────────────
 
 /**
  * What one model step produced, classified once from the collected response.

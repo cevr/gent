@@ -2066,16 +2066,17 @@ describe("Concurrent writes", () => {
 /**
  * The thread a session belongs to.
  *
- * A thread is the work, not one session's parent line. A compaction handoff
- * continues the work and stays in the thread; a delegate run or a `/btw` side
- * question is its own work and starts its own thread.
+ * A thread is the work, not one session's parent line. Storage keeps a thread
+ * passed on create and roots a new one at a session created without one.
+ * `SessionMutations.createSession` passes none, so a delegate run or a `/btw`
+ * fork starts its own thread; rows that an earlier handoff writer stored can
+ * still share their parent's thread.
  */
 
 /**
- * Create a session the way one of the two child writers would.
- *
- * `threadId` is what separates them: a compaction handoff passes the parent's
- * thread, a spawn passes nothing and storage roots a new thread at the session.
+ * Create a session with an optional parent and thread. A stored handoff row
+ * carries its parent's thread; a spawn carries none, so storage roots a new
+ * thread at the session.
  */
 const makeSession = (
   id: string,

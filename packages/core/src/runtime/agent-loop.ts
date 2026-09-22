@@ -207,12 +207,8 @@ export class AgentLoopSessionGovernance extends Context.Service<
  *
  * One module owns admission, follow-up batching, steering, the durable
  * checkpoint, the wake decision, and the question "does this loop still hold
- * that message". Before this module those six concerns were split across the
- * actor, the behavior, the pure state algebra, and the turn executor, and the
- * queue representation — `steering`, `followUp`, `inFlight` — was read
- * directly by all four. Both peers that implement durable steering give it a
- * module of its own: opencode `packages/core/src/session/inbox.ts` and codex
- * `codex-rs/core/src/session/input_queue.rs`.
+ * that message". No other module reads the queue representation —
+ * `steering`, `followUp`, `inFlight`.
  *
  * ## The interface
  *
@@ -916,7 +912,7 @@ export const makeLoopInbox = (
     } satisfies LoopInbox
   })
 
-// ── agent-loop.worker ───────────────────────────────────────────────────────
+// ── worker ──────────────────────────────────────────────────────────────────
 
 type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
@@ -1582,7 +1578,7 @@ const makeAgentLoopBehavior = (
     } satisfies AgentLoopBehavior
   })
 
-// ── agent-loop.actor ────────────────────────────────────────────────────────
+// ── actor ───────────────────────────────────────────────────────────────────
 
 /**
  * `AgentLoop` as `Actor.fromEntity`.
@@ -2444,8 +2440,8 @@ export const AgentLoopLiveActor = (config: {
       Effect.map((build) =>
         Actor.toLayer(AgentLoop, build, {
           // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
-          // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
-          // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
+          // `concurrency: "unbounded"` keeps short ops (RespondInteraction,
+          // Steer) from waiting on unrelated mailbox handlers.
           concurrency: "unbounded",
         }),
       ),
