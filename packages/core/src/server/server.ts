@@ -122,7 +122,6 @@ import { ProviderAuthError } from "../domain/driver.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import {
   ApprovalService,
-  DriverRegistry,
   ExtensionRegistry,
   type ExtensionRegistryService,
   resolveExistingSessionBranch,
@@ -1042,12 +1041,12 @@ const invalidateExternalDriversFor = (
   next: Option.Option<DriverRef>,
 ) =>
   Effect.gen(function* () {
-    const registry = yield* DriverRegistry
+    const { externalDrivers } = (yield* ExtensionRegistry).getResolved()
     const ids = new Set<string>()
     if (Option.isSome(prev) && prev.value._tag === "External") ids.add(prev.value.id)
     if (Option.isSome(next) && next.value._tag === "External") ids.add(next.value.id)
     for (const id of ids) {
-      const driver = yield* registry.getExternal(id)
+      const driver = externalDrivers.get(id)
       if (!Predicate.isUndefined(driver)) yield* driver.invalidate
     }
   })
@@ -1118,7 +1117,6 @@ const RpcHandlers = GentRpcs.toLayer(
     // yielded inside returned handler Effects would otherwise become deferred
     // request-time defects instead of layer-build failures.
     yield* RuntimeEnvironment
-    yield* DriverRegistry
 
     // `message.send` has no durable operation row; the runtime keys its actor
     // command on `requestId`. This cache collapses concurrent same-requestId
@@ -1293,10 +1291,10 @@ const RpcHandlers = GentRpcs.toLayer(
       "driver.list": () =>
         Effect.gen(function* () {
           const config = yield* configService.get()
-          const driverRegistry = yield* DriverRegistry
-          const models = yield* driverRegistry.listModels
-          const externals = yield* driverRegistry.listExternal
-          const agents = [...extensionRegistry.getResolved().agents.values()]
+          const resolved = extensionRegistry.getResolved()
+          const models = [...resolved.modelDrivers.values()]
+          const externals = [...resolved.externalDrivers.values()]
+          const agents = [...resolved.agents.values()]
           const drivers = [
             ...models.map((driver) =>
               DriverInfo.cases.Model.make({
@@ -1322,9 +1320,9 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
-          const driverRegistry = yield* DriverRegistry
+          const resolved = extensionRegistry.getResolved()
           if (driver._tag === "Model" && !Predicate.isUndefined(driver.id)) {
-            const found = yield* driverRegistry.getModel(driver.id)
+            const found = resolved.modelDrivers.get(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
                 message: `Unknown model driver "${driver.id}"`,
@@ -1332,7 +1330,7 @@ const RpcHandlers = GentRpcs.toLayer(
             }
           }
           if (driver._tag === "External") {
-            const found = yield* driverRegistry.getExternal(driver.id)
+            const found = resolved.externalDrivers.get(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
                 message: `Unknown external driver "${driver.id}"`,
@@ -1668,7 +1666,6 @@ export const createDependencies = (config: DependenciesConfig) => {
         // runtime for extension consumers.
         return Layer.mergeAll(
           Layer.succeed(ExtensionRegistry, profile.registryService),
-          Layer.succeed(DriverRegistry, profile.driverRegistryService),
           Layer.succeedContext(profile.layerContext),
         )
       }),

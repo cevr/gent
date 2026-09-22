@@ -79,7 +79,6 @@ import {
 import {
   ApprovalService,
   buildResourceLayer,
-  DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
   type SessionProfile,
@@ -148,7 +147,7 @@ describe("RPC contract schemas", () => {
  * acceptance tests.
  *
  * Drives the full transport boundary (Gent.test → RpcServer → handler →
- * ConfigService + DriverRegistry) so the tests catch wiring bugs the
+ * ConfigService + ExtensionRegistry) so the tests catch wiring bugs the
  * unit tests on `ConfigService.setDriverOverride` don't cover.
  */
 
@@ -1094,13 +1093,7 @@ describe("extension command RPCs", () => {
       const layerContext = yield* Layer.build(
         Layer.provideMerge(
           buildResourceLayer(resolved.extensions, "process"),
-          Layer.mergeAll(
-            ExtensionRegistry.fromResolved(resolved),
-            DriverRegistry.fromResolved({
-              modelDrivers: resolved.modelDrivers,
-              externalDrivers: resolved.externalDrivers,
-            }),
-          ),
+          ExtensionRegistry.fromResolved(resolved),
         ),
       )
       return {
@@ -1108,7 +1101,6 @@ describe("extension command RPCs", () => {
         resolved,
         layerContext,
         registryService: Context.get(layerContext, ExtensionRegistry),
-        driverRegistryService: Context.get(layerContext, DriverRegistry),
         baseSections: [],
         generationId: ProcessGenerationId.make("test"),
       } satisfies SessionProfile

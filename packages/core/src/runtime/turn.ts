@@ -60,8 +60,6 @@ import {
 import type { ExtensionHostContext, TurnProjection } from "../domain/extension.js"
 import {
   CurrentExtensionHostContext,
-  DriverRegistry,
-  type DriverRegistryService,
   ExtensionRegistry,
   type ExtensionRegistryService,
   provideCurrentCapabilityContext,
@@ -268,7 +266,6 @@ const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(mes
 
 export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService
-  readonly turnDriverRegistry: DriverRegistryService
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
   readonly turnCapabilityContext?: Context.Context<never>
@@ -294,7 +291,6 @@ export const runAgentLoopTurnProfile =
       Effect.provideContext(turnCapabilityContext),
       Effect.provideService(CurrentAgentLoopTurnProfile, profile),
       Effect.provideService(ExtensionRegistry, profile.turnExtensionRegistry),
-      Effect.provideService(DriverRegistry, profile.turnDriverRegistry),
       provideCurrentCapabilityContext(profile.turnCapabilityContext),
       provideCurrentHostCtx(profile.turnHostCtx),
     )
@@ -1258,7 +1254,9 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection(turnCtx)
+  const projEval = yield* extensionRegistry
+    .getResolved()
+    .extensionHooks.resolveTurnProjection(turnCtx)
   const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
     toolPolicy: p,
   }))
@@ -1298,7 +1296,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     extensionSections,
   )
   const turnPrompt = compileSystemPrompt(sections)
-  const systemPrompt = yield* extensionRegistry.extensionHooks.resolveSystemPrompt({
+  const systemPrompt = yield* extensionRegistry.getResolved().extensionHooks.resolveSystemPrompt({
     basePrompt: turnPrompt,
     agent: dispatchAgent,
     interactive: params.interactive,
@@ -1406,7 +1404,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     EventPublisher | EventStorage | MessageStorage | ToolCallBindingStorage
   >
 }) {
-  const driverRegistry = yield* DriverRegistry
+  const extensionRegistry = yield* ExtensionRegistry
+  const drivers = extensionRegistry.getResolved()
   const hostCtx = yield* CurrentExtensionHostContext
   const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
     Effect.gen(function* () {
@@ -1446,8 +1445,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         model: resolved.modelId,
       })
     }
-    const externalDriver = yield* driverRegistry.getExternal(resolvedDriver.id)
-    const executor = Option.fromUndefinedOr(externalDriver).pipe(
+    const executor = Option.fromUndefinedOr(drivers.externalDrivers.get(resolvedDriver.id)).pipe(
       Option.flatMap((value) => Option.fromUndefinedOr(value.executor)),
     )
     if (Option.isNone(executor)) {
@@ -1553,7 +1551,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         model: resolved.modelId,
       })
     }
-    return yield* modelResolver.resolve(request)
+    return yield* modelResolver
+      .resolve(request)
+      .pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
   })
   const { driverId, contextModelId } = resolved.modelDriver
   const modelRequest: ResolveModelRequest = {
@@ -1563,11 +1563,10 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       reasoning: resolved.reasoning,
       cacheKey: params.sessionId,
     },
-    driverRegistry,
     driverId: Option.getOrUndefined(driverId),
   }
 
-  const retryPolicy = yield* driverRetryPolicy(driverRegistry, driverId)
+  const retryPolicy = yield* driverRetryPolicy(driverId)
 
   const modelRegistry = yield* ModelRegistry
   const modelOption = yield* modelRegistry.get(contextModelId)
@@ -2506,7 +2505,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* eventPublisher.deliver(envelope)
 
       yield* Effect.logDebug("finalize.turn-after.start")
-      yield* extensionRegistry.extensionHooks.emitTurnAfter({
+      yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         durationMs: Number(turnDurationMs),

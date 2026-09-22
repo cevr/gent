@@ -164,9 +164,6 @@ describe("tool execution", () => {
       const registryLayer = Layer.succeed(
         ExtensionRegistry,
         ExtensionRegistry.of({
-          get extensionHooks() {
-            return current.extensionHooks
-          },
           getResolved: () => current,
         }),
       )

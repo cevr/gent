@@ -94,7 +94,7 @@ export const ReasoningEffort = Schema.Literals([
 export type ReasoningEffort = typeof ReasoningEffort.Type
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
-// Agent driver — discriminated reference into `DriverRegistry`.
+// Agent driver — discriminated reference into the resolved extension drivers.
 //
 // Optional: when omitted, the loop resolves a model driver from the agent's
 // model id (`provider/model` parses out the driver id). Specify

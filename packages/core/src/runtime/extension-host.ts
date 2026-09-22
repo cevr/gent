@@ -504,7 +504,8 @@ interface SlashCommand {
 // Resolved snapshot — the immutable compiled state
 
 interface ResolvedExtensions {
-  readonly modelCapabilities: ReadonlyMap<string, ToolCapability>
+  /** Winning model tool per name, with the extension that registered it. */
+  readonly modelCapabilities: ReadonlyMap<string, RegisteredToolEntry>
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
@@ -774,10 +775,10 @@ export const resolveExtensions = (
   const capabilityWinners = compileCapabilityWinners(sorted)
   const capabilityEntries = compileCapabilityEntries(sorted)
   const rpcRegistry = compileRpcRegistry(capabilityEntries)
-  const modelCapabilities = new Map<string, ToolCapability>()
+  const modelCapabilities = new Map<string, RegisteredToolEntry>()
   for (const [id, entry] of capabilityWinners) {
     if (entry.kind !== "tool") continue
-    modelCapabilities.set(id, entry.capability)
+    modelCapabilities.set(id, entry)
   }
 
   const agents = compileBucket(
@@ -820,10 +821,12 @@ export const resolveExtensions = (
 
 // Extension Registry Service
 
+/**
+ * The resolved extensions one profile runs with: tools, requests, agents,
+ * model and external drivers, and hooks. A turn reads the registry of its own
+ * profile, so a cwd-scoped extension's drivers and tools reach only its turns.
+ */
 export interface ExtensionRegistryService {
-  readonly extensionHooks: CompiledExtensionHooks
-
-  // Raw resolved data — needed for rebuilding extension services in child runtimes
   readonly getResolved: () => ResolvedExtensions
 }
 
@@ -835,7 +838,6 @@ export class ExtensionRegistry extends Context.Service<
     Layer.succeed(
       ExtensionRegistry,
       ExtensionRegistry.of({
-        extensionHooks: resolved.extensionHooks,
         getResolved: () => resolved,
       }),
     )
@@ -844,97 +846,37 @@ export class ExtensionRegistry extends Context.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-// ── driver-registry ─────────────────────────────────────────────────────────
-
-/**
- * DriverRegistry — unified lookup over both model and external drivers.
- *
- * Replaces the dual-path dispatch through `ExtensionRegistry.getProvider` +
- * `ExtensionRegistry.getTurnExecutor` with one capability-shaped registry
- * keyed by `DriverRef`. The agent loop reads `agent.driver: DriverRef` and
- * routes through this single seam regardless of whether the underlying
- * implementation is a model provider or an external turn executor —
- * `composability-not-flags`.
- *
- * The contributing extensions still register through their respective
- * contribution kinds (`model-driver` or `external-driver`); this registry
- * is the read side. Auth flow integration (OAuth + API key resolution)
- * stays with model resolution because it belongs to model drivers
- * specifically.
- *
- * @module
- */
+// ── model-catalog ───────────────────────────────────────────────────────────
 
 const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
 
-// ── Resolved driver state (one map per kind, lookup by id) ──
-
-interface ResolvedDrivers {
-  readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
-  readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
-}
-
-// ── Service interface ──
-
-export interface DriverRegistryService {
-  /** Resolve a model driver by id (the `provider` segment of `provider/model`). */
-  // oxlint-disable-next-line effect/noNullish -- Driver lookup preserves an absent-driver result at this internal boundary.
-  readonly getModel: (id: string) => Effect.Effect<ModelDriverContribution | undefined>
-  /** Resolve an external driver by id (the runner id, e.g. `acp-claude-code`). */
-  // oxlint-disable-next-line effect/noNullish -- Driver lookup preserves an absent-driver result at this internal boundary.
-  readonly getExternal: (id: string) => Effect.Effect<ExternalDriverContribution | undefined>
-  /** All registered model drivers in registration order. */
-  readonly listModels: Effect.Effect<ReadonlyArray<ModelDriverContribution>>
-  /** All registered external drivers in registration order. */
-  readonly listExternal: Effect.Effect<ReadonlyArray<ExternalDriverContribution>>
-  /** Concatenate every model driver's own catalog. Core fetches nothing itself. */
-  readonly listModelCatalog: (
-    resolveAuth?: (
-      driverId: string,
-      // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
-    ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
-  ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
-}
-
-export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegistryService>()(
-  "@gent/core/src/runtime/extension-host/DriverRegistry",
+/** Concatenate every model driver's own catalog. Core fetches nothing itself. */
+export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(function* (
+  modelDrivers: ReadonlyMap<string, ModelDriverContribution>,
+  resolveAuth?: (
+    driverId: string,
+    // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
+  ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
 ) {
-  static fromResolved = (resolved: ResolvedDrivers): Layer.Layer<DriverRegistry> =>
-    Layer.succeed(
-      DriverRegistry,
-      DriverRegistry.of({
-        getModel: (id) => Effect.succeed(resolved.modelDrivers.get(id)),
-        getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
-        listModels: Effect.succeed([...resolved.modelDrivers.values()]),
-        listExternal: Effect.succeed([...resolved.externalDrivers.values()]),
-        listModelCatalog: Effect.fn("DriverRegistry.listModelCatalog")(function* (
-          resolveAuth?: (
-            driverId: string,
-            // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
-          ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
-        ) {
-          const catalog: Array<Model> = []
-          for (const driver of resolved.modelDrivers.values()) {
-            if (Predicate.isUndefined(driver.listModels)) continue
-            let auth = Option.none<ProviderAuthInfo>()
-            if (!Predicate.isUndefined(resolveAuth)) {
-              auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
-            }
-            const driverCatalog = yield* driver.listModels(Option.getOrUndefined(auth))
-            const decoded = decodeModelCatalog(driverCatalog)
-            if (decoded._tag === "None") {
-              return yield* new DriverError({
-                driver: DriverFailureId.make(driver.id),
-                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-              })
-            }
-            catalog.push(...decoded.value)
-          }
-          return catalog
-        }),
-      }),
-    )
-}
+  const catalog: Array<Model> = []
+  for (const driver of modelDrivers.values()) {
+    if (Predicate.isUndefined(driver.listModels)) continue
+    let auth = Option.none<ProviderAuthInfo>()
+    if (!Predicate.isUndefined(resolveAuth)) {
+      auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
+    }
+    const driverCatalog = yield* driver.listModels(Option.getOrUndefined(auth))
+    const decoded = decodeModelCatalog(driverCatalog)
+    if (decoded._tag === "None") {
+      return yield* new DriverError({
+        driver: DriverFailureId.make(driver.id),
+        reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+      })
+    }
+    catalog.push(...decoded.value)
+  }
+  return catalog
+})
 
 // ── resource-layer ──────────────────────────────────────────────────────────
 
@@ -1542,7 +1484,6 @@ export interface SessionProfile {
   readonly resolved: ResolvedExtensions
   readonly layerContext: RuntimeProfileServiceContext
   readonly registryService: ExtensionRegistryService
-  readonly driverRegistryService: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
   /**
    * Identity of the process that built this profile. A process-local tool
@@ -1664,20 +1605,14 @@ const buildSessionProfile = (params: {
     const resourceLayer: Layer.Layer<any, never, never> = Layer.succeedContext(
       params.resourceContext,
     )
-    const baseLayers = Layer.mergeAll(
-      ExtensionRegistry.fromResolved(params.resolved),
-      DriverRegistry.fromResolved({
-        modelDrivers: params.resolved.modelDrivers,
-        externalDrivers: params.resolved.externalDrivers,
-      }),
+    const layerContext = yield* Layer.build(
+      Layer.provideMerge(resourceLayer, ExtensionRegistry.fromResolved(params.resolved)),
     )
-    const layerContext = yield* Layer.build(Layer.provideMerge(resourceLayer, baseLayers))
     return {
       cwd: params.cwd,
       resolved: params.resolved,
       layerContext,
       registryService: Context.get(layerContext, ExtensionRegistry),
-      driverRegistryService: Context.get(layerContext, DriverRegistry),
       baseSections: params.coreSections,
       generationId: params.generationId,
     } satisfies SessionProfile
@@ -1933,22 +1868,13 @@ export class SessionProfileCache extends Context.Service<
             if (Option.isSome(existing)) return existing.value
             const resolved = resolveExtensions([])
             const layerContext = Effect.runSync(
-              Layer.build(
-                Layer.mergeAll(
-                  ExtensionRegistry.fromResolved(resolved),
-                  DriverRegistry.fromResolved({
-                    modelDrivers: resolved.modelDrivers,
-                    externalDrivers: resolved.externalDrivers,
-                  }),
-                ),
-              ).pipe(Effect.scoped),
+              Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),
             )
             const profile: SessionProfile = {
               cwd,
               resolved,
               layerContext,
               registryService: Context.get(layerContext, ExtensionRegistry),
-              driverRegistryService: Context.get(layerContext, DriverRegistry),
               baseSections: [],
               generationId: ProcessGenerationId.make("test"),
             }
@@ -2525,7 +2451,6 @@ export const makeExtensionHostContextProvider = (
 // ── session-runtime-context ─────────────────────────────────────────────────
 
 export interface TurnProfileDefaults {
-  readonly driverRegistry: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 
@@ -2569,14 +2494,12 @@ export const resolveTurnProfile = (params: {
     if (Option.isNone(profile)) {
       return {
         turnExtensionRegistry: hostProvider.defaultExtensionRegistry,
-        turnDriverRegistry: params.defaults.driverRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
       }
     }
     return {
       turnExtensionRegistry: profile.value.registryService,
-      turnDriverRegistry: profile.value.driverRegistryService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
       turnCapabilityContext: profile.value.layerContext,

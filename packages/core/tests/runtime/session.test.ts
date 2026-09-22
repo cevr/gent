@@ -64,7 +64,6 @@ import {
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   ApprovalService,
-  DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
   SessionProfileCache,
@@ -143,10 +142,6 @@ const makeRuntimeLayer = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
     eventStoreLayer,
     recorderLayer,
     ToolRunner.Test(),
@@ -187,10 +182,6 @@ const makeLiveToolRuntimeLayer = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
     eventStoreLayer,
     recorderLayer,
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),

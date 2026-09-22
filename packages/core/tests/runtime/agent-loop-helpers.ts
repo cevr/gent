@@ -20,7 +20,6 @@ import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
-  DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
 } from "../../src/runtime/extension-host"
@@ -85,13 +84,7 @@ export const makeExtRegistry = (
       },
     },
   ])
-  return Layer.merge(
-    ExtensionRegistry.fromResolved(resolved),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolved.modelDrivers,
-      externalDrivers: resolved.externalDrivers,
-    }),
-  )
+  return ExtensionRegistry.fromResolved(resolved)
 }
 export const makeMessage = (sessionId: SessionId, branchId: BranchId, text: string) =>
   Message.cases.regular.make({
@@ -498,13 +491,7 @@ export const makeExternalLayerWithEvents = (
       },
     },
   ])
-  const registryLayer = Layer.merge(
-    ExtensionRegistry.fromResolved(resolved),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolved.modelDrivers,
-      externalDrivers: resolved.externalDrivers,
-    }),
-  )
+  const registryLayer = ExtensionRegistry.fromResolved(resolved)
   const providerLayer = LanguageModelLayers.testStream(() =>
     Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
   )

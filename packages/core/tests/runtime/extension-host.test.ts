@@ -50,9 +50,9 @@ import {
   CurrentExtensionHostContext,
   type DiscoveredExtension,
   discoverExtensions,
-  DriverRegistry,
   ExtensionHostContextProvider,
   ExtensionRegistry,
+  listModelCatalog,
   makeExtensionHostContextProvider,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
@@ -164,7 +164,7 @@ const resolved = resolveExtensions([])
 const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: { extensionHooks: resolved.extensionHooks, getResolved: () => resolved },
+    extensionRegistry: { getResolved: () => resolved },
   })
   return provider.forRun({ sessionId, branchId })
 })
@@ -573,10 +573,6 @@ describe("session profile resolution", () => {
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
-const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
-  modelDrivers: new Map(),
-  externalDrivers: new Map(),
-})
 describe("resolveTurnProfile", () => {
   it.scopedLive("uses the stored session cwd to resolve the profile-scoped host context", () =>
     Effect.gen(function* () {
@@ -619,7 +615,6 @@ describe("resolveTurnProfile", () => {
         BunServices.layer,
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
         emptyRegistryLayer,
-        emptyDriverRegistryLayer,
         runtimeEnvironmentLive,
         sessionProfileCacheLive,
       )
@@ -644,10 +639,7 @@ describe("resolveTurnProfile", () => {
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
           profileCache,
-          defaults: {
-            driverRegistry: yield* DriverRegistry,
-            baseSections: [],
-          },
+          defaults: { baseSections: [] },
         }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -661,14 +653,7 @@ describe("resolveTurnProfile", () => {
         home: "/tmp/runtime-context-home",
         platform: "test",
       })
-      const driverRegistryContext = yield* Layer.build(
-        DriverRegistry.fromResolved({
-          modelDrivers: new Map(),
-          externalDrivers: new Map(),
-        }),
-      ).pipe(Effect.scoped)
       const defaults: TurnProfileDefaults = {
-        driverRegistry: Context.get(driverRegistryContext, DriverRegistry),
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
@@ -705,7 +690,6 @@ describe("resolveTurnProfile", () => {
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
-        emptyDriverRegistryLayer,
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
@@ -723,10 +707,7 @@ describe("resolveTurnProfile", () => {
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            defaults: {
-              driverRegistry: yield* DriverRegistry,
-              baseSections: [],
-            },
+            defaults: { baseSections: [] },
           }).pipe(
             Effect.provideService(ExtensionHostContextProvider, hostProvider),
             Effect.provideService(SessionStorage, failingSessionStorage),
@@ -740,27 +721,24 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.live("prefers the profile-backed driver registry over fallback defaults", () =>
+  it.live("prefers the profile registry and its drivers over fallback defaults", () =>
     Effect.gen(function* () {
-      const defaultDriverRegistryLayer = DriverRegistry.fromResolved({
-        modelDrivers: new Map(),
-        externalDrivers: new Map(),
-      })
-      const profileDriverRegistryLayer = DriverRegistry.fromResolved({
-        modelDrivers: new Map(),
-        externalDrivers: new Map<string, ExternalDriverContribution>([
-          [
-            "profile-driver",
-            {
-              id: "profile-driver",
-              executor: {
-                executeTurn: () => Stream.die("unused in test"),
+      const profileResolved = resolveExtensions([
+        {
+          manifest: { id: ExtensionId.make("profile-driver-ext") },
+          scope: "project",
+          sourcePath: "/test/profile-driver-ext",
+          contributions: {
+            externalDrivers: [
+              {
+                id: "profile-driver",
+                executor: { executeTurn: () => Stream.die("unused in test") },
+                invalidate: Effect.void,
               },
-              invalidate: Effect.void,
-            },
-          ],
-        ]),
-      })
+            ],
+          },
+        },
+      ])
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
@@ -769,17 +747,11 @@ describe("resolveTurnProfile", () => {
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
-        defaultDriverRegistryLayer,
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const defaultDriverRegistry = yield* DriverRegistry
-        const profileDriverRegistry = yield* Layer.build(profileDriverRegistryLayer).pipe(
-          Effect.map((ctx) => Context.get(ctx, DriverRegistry)),
-          Effect.scoped,
-        )
         const now = dateFromMillis(1_767_225_600_000)
         yield* sessionStorage.createSession(
           new Session({
@@ -791,10 +763,9 @@ describe("resolveTurnProfile", () => {
         )
         const fakeProfile: SessionProfile = {
           cwd: "/tmp/profile-driver-scope",
-          resolved: resolveExtensions([]),
+          resolved: profileResolved,
           layerContext: Context.makeUnsafe(new Map<string, unknown>()),
-          registryService: extensionRegistry,
-          driverRegistryService: profileDriverRegistry,
+          registryService: { getResolved: () => profileResolved },
           baseSections: [],
           generationId: ProcessGenerationId.make("test"),
         }
@@ -809,16 +780,12 @@ describe("resolveTurnProfile", () => {
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
           profileCache: fakeProfileCache,
-          defaults: {
-            driverRegistry: defaultDriverRegistry,
-            baseSections: [],
-          },
+          defaults: { baseSections: [] },
         }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
-        const fromProfile = yield* resolved.turnDriverRegistry.getExternal("profile-driver")
-        const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
+        const drivers = resolved.turnExtensionRegistry.getResolved().externalDrivers
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
-        expect(fromProfile?.id).toBe("profile-driver")
-        expect(fromDefault).toBeUndefined()
+        expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
+        expect(extensionRegistry.getResolved().externalDrivers.has("profile-driver")).toBe(false)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
@@ -828,13 +795,11 @@ describe("resolveTurnProfile", () => {
 // ── ../drivers/driver-registry.test ─────────────────────────────────────────
 
 /**
- * DriverRegistry — unit tests for the unified driver lookup.
- *
- * Covers both categories (model + external) under one registry, scope precedence
- * across categories, and listModelCatalog concatenation. Pinned at this seam
- * because every agent turn dispatches through
- * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence
- * silently breaks per-cwd extension resolution.
+ * Driver resolution — both categories (model + external) resolve into the
+ * extension registry with scope precedence, and listModelCatalog concatenates
+ * every driver's catalog. Every agent turn dispatches through
+ * `agent.driver: DriverRef → ExtensionRegistry`, so a scope-precedence
+ * regression breaks per-cwd extension resolution.
  */
 const noopInvalidate = Effect.void
 const stubResolution = (): Effect.Effect<ProviderResolution> =>
@@ -888,78 +853,47 @@ const makeExt = (
     contributions,
   }
 }
-const buildRegistry = (extensions: ReadonlyArray<LoadedExtension>) => {
-  const resolved = resolveExtensions(extensions)
-  return DriverRegistry.fromResolved({
-    modelDrivers: resolved.modelDrivers,
-    externalDrivers: resolved.externalDrivers,
+describe("driver resolution", () => {
+  test("getModel resolves a registered model driver", () => {
+    const resolved = resolveExtensions([
+      makeExt("anthropic-ext", "builtin", { modelDrivers: [makeModel("anthropic")] }),
+    ])
+    const result = resolved.modelDrivers.get("anthropic")
+    expect(result?.id).toBe("anthropic")
   })
-}
-describe("DriverRegistry", () => {
-  it.live("getModel resolves a registered model driver", () =>
-    Effect.gen(function* () {
-      const layer = buildRegistry([
-        makeExt("anthropic-ext", "builtin", { modelDrivers: [makeModel("anthropic")] }),
-      ])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getModel("anthropic")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result?.id).toBe("anthropic")
-    }),
-  )
-  it.live("getExternal resolves a registered external driver", () =>
-    Effect.gen(function* () {
-      const exec = makeExecutor("hello")
-      const layer = buildRegistry([
-        makeExt("acp-ext", "builtin", {
-          externalDrivers: [{ id: "acp-claude-code", executor: exec, invalidate: noopInvalidate }],
-        }),
-      ])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getExternal("acp-claude-code")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result?.id).toBe("acp-claude-code")
-      expect(result?.executor).toBe(exec)
-    }),
-  )
-  it.live("project scope shadows builtin for same model driver id", () =>
-    Effect.gen(function* () {
-      const layer = buildRegistry([
-        makeExt("ext-builtin", "builtin", { modelDrivers: [makeModel("openai", "Builtin")] }),
-        makeExt("ext-project", "project", { modelDrivers: [makeModel("openai", "Project")] }),
-      ])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getModel("openai")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result?.name).toBe("Project")
-    }),
-  )
-  it.live("project scope shadows builtin for same external driver id", () =>
-    Effect.gen(function* () {
-      const builtinExec = makeExecutor("builtin")
-      const projectExec = makeExecutor("project")
-      const layer = buildRegistry([
-        makeExt("ext-builtin", "builtin", {
-          externalDrivers: [{ id: "shared", executor: builtinExec, invalidate: noopInvalidate }],
-        }),
-        makeExt("ext-project", "project", {
-          externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
-        }),
-      ])
-      const driver = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getExternal("shared")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(driver?.executor).toBe(projectExec)
-    }),
-  )
+  test("getExternal resolves a registered external driver", () => {
+    const exec = makeExecutor("hello")
+    const resolved = resolveExtensions([
+      makeExt("acp-ext", "builtin", {
+        externalDrivers: [{ id: "acp-claude-code", executor: exec, invalidate: noopInvalidate }],
+      }),
+    ])
+    const result = resolved.externalDrivers.get("acp-claude-code")
+    expect(result?.id).toBe("acp-claude-code")
+    expect(result?.executor).toBe(exec)
+  })
+  test("project scope shadows builtin for same model driver id", () => {
+    const resolved = resolveExtensions([
+      makeExt("ext-builtin", "builtin", { modelDrivers: [makeModel("openai", "Builtin")] }),
+      makeExt("ext-project", "project", { modelDrivers: [makeModel("openai", "Project")] }),
+    ])
+    const result = resolved.modelDrivers.get("openai")
+    expect(result?.name).toBe("Project")
+  })
+  test("project scope shadows builtin for same external driver id", () => {
+    const builtinExec = makeExecutor("builtin")
+    const projectExec = makeExecutor("project")
+    const resolved = resolveExtensions([
+      makeExt("ext-builtin", "builtin", {
+        externalDrivers: [{ id: "shared", executor: builtinExec, invalidate: noopInvalidate }],
+      }),
+      makeExt("ext-project", "project", {
+        externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
+      }),
+    ])
+    const driver = resolved.externalDrivers.get("shared")
+    expect(driver?.executor).toBe(projectExec)
+  })
   it.live("listModelCatalog concatenates every driver's own catalog", () =>
     Effect.gen(function* () {
       const first: ModelDriverContribution = {
@@ -974,12 +908,10 @@ describe("DriverRegistry", () => {
         resolveModel: stubResolution,
         listModels: () => Effect.succeed([makeCatalogModel("second/one")]),
       }
-      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [first, second] })])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+      const resolved = resolveExtensions([
+        makeExt("ext", "builtin", { modelDrivers: [first, second] }),
+      ])
+      const result = yield* listModelCatalog(resolved.modelDrivers)
       expect(result.map((model) => model.id)).toEqual([
         ModelId.make("first/one"),
         ModelId.make("second/one"),
@@ -999,12 +931,10 @@ describe("DriverRegistry", () => {
         name: "Silent",
         resolveModel: stubResolution,
       }
-      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [listing, silent] })])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+      const resolved = resolveExtensions([
+        makeExt("ext", "builtin", { modelDrivers: [listing, silent] }),
+      ])
+      const result = yield* listModelCatalog(resolved.modelDrivers)
       expect(result.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
     }),
   )
@@ -1034,17 +964,13 @@ describe("DriverRegistry", () => {
             return [makeCatalogModel("auth-b/one")]
           }),
       }
-      const layer = buildRegistry([
+      const resolved = resolveExtensions([
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
-      yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog((driverId) => {
-          if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
-          return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
-        })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+      yield* listModelCatalog(resolved.modelDrivers, (driverId) => {
+        if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
+        return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
+      })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
       const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))
       expect(Option.isSome(authAEntry)).toBe(true)
@@ -1068,13 +994,10 @@ describe("DriverRegistry", () => {
         resolveModel: stubResolution,
         listModels: () => Effect.succeed([malformed]),
       }
-      const layer = buildRegistry([makeExt("broken-ext", "builtin", { modelDrivers: [broken] })])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog()
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(layer),
+      const resolved = resolveExtensions([
+        makeExt("broken-ext", "builtin", { modelDrivers: [broken] }),
+      ])
+      const result = yield* listModelCatalog(resolved.modelDrivers).pipe(
         Effect.catchEager((error) =>
           Effect.sync(() => {
             let message = error.message
@@ -2235,7 +2158,6 @@ describe("host facet survivors after C9.5 prune", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
         extensionRegistry: {
-          extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
           getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
         },
       })
@@ -2259,7 +2181,6 @@ describe("test Files facet path parity", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
         extensionRegistry: {
-          extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
           getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
         },
       })
@@ -2709,7 +2630,12 @@ const compileRegistryPolicy = (
   agent: AgentDefinition,
   projections: Parameters<typeof compileToolPolicy>[3] = [],
 ) =>
-  compileToolPolicy([...registry.getResolved().modelCapabilities.values()], agent, {}, projections)
+  compileToolPolicy(
+    [...registry.getResolved().modelCapabilities.values()].map((entry) => entry.capability),
+    agent,
+    {},
+    projections,
+  )
 const makeAgent = (
   name: string,
   options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
@@ -2805,7 +2731,7 @@ describe("resolveExtensions", () => {
       makeExtRegistry("a", "builtin", { tools: [builtinRead] }),
       makeExtRegistry("b", "project", { tools: [projectRead] }),
     ])
-    expect(resolved.modelCapabilities.get("read")?.description).toBe("project override")
+    expect(resolved.modelCapabilities.get("read")?.capability.description).toBe("project override")
   })
   test("later scope wins for same-name agent", () => {
     const builtinExplore = makeAgent("explore")
@@ -2960,26 +2886,14 @@ describe("ExtensionRegistry", () => {
       Effect.provide(ExtensionRegistry.fromResolved(resolved)),
     )
   }
-  const buildDriverRegistry = (
-    extensions: LoadedExtension[],
-    failedExtensions: Parameters<typeof resolveExtensions>[1] = [],
-  ) => {
-    const resolved = resolveExtensions(extensions, failedExtensions)
-    return Effect.service(DriverRegistry).pipe(
-      Effect.provide(
-        DriverRegistry.fromResolved({
-          modelDrivers: resolved.modelDrivers,
-          externalDrivers: resolved.externalDrivers,
-        }),
-      ),
-    )
-  }
   it.live("registered model capability is findable by name", () =>
     Effect.gen(function* () {
       const registry = yield* buildRegistry([
         makeExtRegistry("a", "builtin", { tools: [makeTool("read")] }),
       ])
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       const tool = tools.find((capability) => String(getToolId(capability)) === "read")
       expect(tool).toBeDefined()
       if (Predicate.isUndefined(tool)) return
@@ -2989,7 +2903,9 @@ describe("ExtensionRegistry", () => {
   it.live("unregistered model capability name returns undefined", () =>
     Effect.gen(function* () {
       const registry = yield* buildRegistry([])
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       const tool = tools.find((capability) => String(getToolId(capability)) === "nonexistent")
       expect(tool).toBeUndefined()
     }),
@@ -2999,7 +2915,9 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExtRegistry("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
       ])
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       expect(tools.length).toBe(2)
     }),
   )
@@ -3017,7 +2935,9 @@ describe("ExtensionRegistry", () => {
           },
         ],
       )
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       const failed = registry.getResolved().failedExtensions
       const statuses = registry.getResolved().extensionStatuses
       expect(tools.map((tool) => String(getToolId(tool)))).toEqual(["read"])
@@ -3152,51 +3072,36 @@ describe("ExtensionRegistry", () => {
       expect(tools.map((t) => String(getToolId(t)))).not.toContain("secret")
     }),
   )
-  it.live("registered model driver is findable by ID", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildDriverRegistry([
-        makeExtRegistry("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
-      ])
-      const provider = yield* registry.getModel("anthropic")
-      expect(provider?.id).toBe("anthropic")
-    }),
-  )
-  it.live("unregistered model driver ID returns undefined", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildDriverRegistry([])
-      const provider = yield* registry.getModel("nonexistent")
-      expect(provider).toBeUndefined()
-    }),
-  )
-  it.live("lists all registered model drivers", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildDriverRegistry([
-        makeExtRegistry("a", "builtin", {
-          modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
-        }),
-      ])
-      const providers = yield* registry.listModels
-      expect(providers.length).toBe(2)
-    }),
-  )
+  test("registered model driver is findable by ID", () => {
+    const registry = resolveExtensions([
+      makeExtRegistry("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
+    ])
+    const provider = registry.modelDrivers.get("anthropic")
+    expect(provider?.id).toBe("anthropic")
+  })
+  test("unregistered model driver ID returns undefined", () => {
+    const registry = resolveExtensions([])
+    const provider = registry.modelDrivers.get("nonexistent")
+    expect(provider).toBeUndefined()
+  })
+  test("lists all registered model drivers", () => {
+    const registry = resolveExtensions([
+      makeExtRegistry("a", "builtin", {
+        modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
+      }),
+    ])
+    expect(registry.modelDrivers.size).toBe(2)
+  })
   it.live("test layer starts with empty registry", () =>
     Effect.gen(function* () {
-      const layer = Layer.merge(
-        ExtensionRegistry.Test(),
-        DriverRegistry.fromResolved({ modelDrivers: new Map(), externalDrivers: new Map() }),
-      )
-      const registries = yield* Effect.gen(function* () {
+      const resolved = yield* Effect.gen(function* () {
         const ext = yield* ExtensionRegistry
-        const driver = yield* DriverRegistry
-        return { ext, driver }
+        return ext.getResolved()
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      const tools = [...registries.ext.getResolved().modelCapabilities.values()]
-      expect(tools.length).toBe(0)
-      const agents = [...registries.ext.getResolved().agents.values()]
-      expect(agents.length).toBe(0)
-      const providers = yield* registries.driver.listModels
-      expect(providers.length).toBe(0)
+      }).pipe(Effect.provide(ExtensionRegistry.Test()))
+      expect(resolved.modelCapabilities.size).toBe(0)
+      expect(resolved.agents.size).toBe(0)
+      expect(resolved.modelDrivers.size).toBe(0)
     }),
   )
 })
@@ -3264,7 +3169,9 @@ describe("resolveExtensions — slash command discovery", () => {
     })
     const resolved = resolveExtensions([makeExtRegistry("@test/echo", "builtin", { tools: [cap] })])
     expect(resolved.modelCapabilities.has("echo")).toBe(true)
-    expect(resolved.modelCapabilities.get("echo")?.description).toBe("Echo input back as output.")
+    expect(resolved.modelCapabilities.get("echo")?.capability.description).toBe(
+      "Echo input back as output.",
+    )
   })
   test("project rpc shadows builtin tool", () => {
     const builtin = makeExtRegistry("@test/shadow", "builtin", { tools: [makeTool("act")] })
@@ -3292,7 +3199,9 @@ describe("resolveExtensions — slash command discovery", () => {
     const project = makeExtRegistry("@test/shadow", "project", { tools: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("run")).toBe(true)
-    expect(resolved.modelCapabilities.get("run")?.description).toBe("project run override")
+    expect(resolved.modelCapabilities.get("run")?.capability.description).toBe(
+      "project run override",
+    )
   })
   test("model capability preserves all tool metadata fields", () => {
     const cap = tool({
@@ -3306,7 +3215,7 @@ describe("resolveExtensions — slash command discovery", () => {
       execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExtRegistry("@test/rich", "builtin", { tools: [cap] })])
-    const resolvedTool = resolved.modelCapabilities.get("rich")
+    const resolvedTool = resolved.modelCapabilities.get("rich")?.capability
     expect(resolvedTool).toBeDefined()
     if (Predicate.isUndefined(resolvedTool)) return
     expect(resolvedTool.description).toBe("rich tool")
@@ -3620,7 +3529,7 @@ describe("scope precedence", () => {
         extScopePrecedence("c", "project", { tools: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.modelCapabilities.get("greet")
+      const resolvedTool = resolved.modelCapabilities.get("greet")?.capability
       expect(resolvedTool).toBeDefined()
       if (!isToolCapability(resolvedTool)) return Effect.void
       expect(resolvedTool).toBe(projectTool)
@@ -3656,7 +3565,7 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.modelCapabilities.get("greet")
+      const resolvedTool = resolved.modelCapabilities.get("greet")?.capability
       expect(resolvedTool).toBeDefined()
       if (!isToolCapability(resolvedTool)) return Effect.void
       expect(resolvedTool).toBe(toolFromZ)
@@ -3728,10 +3637,6 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
     ToolRunner.Test(),
     ApprovalService.Test(),
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -3902,38 +3807,6 @@ describe("ExternalDriver registry", () => {
     expect(resolved.externalDrivers.size).toBe(1)
     expect(resolved.externalDrivers.get("shared-id")?.executor).toBe(echoExecutor)
   })
-  it.live("getExternal resolves driver with executor from registry service", () =>
-    Effect.gen(function* () {
-      const resolved = resolveExtensions([
-        makeExtTurnExecutor("ext-a", [{ id: "test-executor", executor: echoExecutor }]),
-      ])
-      const registryLayer = DriverRegistry.fromResolved({
-        modelDrivers: resolved.modelDrivers,
-        externalDrivers: resolved.externalDrivers,
-      })
-      const driver = yield* Effect.gen(function* () {
-        const registry = yield* DriverRegistry
-        return yield* registry.getExternal("test-executor")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(registryLayer))
-      expect(driver?.executor).toBe(echoExecutor)
-    }),
-  )
-  it.live("getExternal returns undefined for missing ID", () =>
-    Effect.gen(function* () {
-      const resolved = resolveExtensions([makeExtTurnExecutor("ext-a", [])])
-      const registryLayer = DriverRegistry.fromResolved({
-        modelDrivers: resolved.modelDrivers,
-        externalDrivers: resolved.externalDrivers,
-      })
-      const result = yield* Effect.gen(function* () {
-        const registry = yield* DriverRegistry
-        return yield* registry.getExternal("nonexistent")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(registryLayer))
-      expect(result).toBeUndefined()
-    }),
-  )
 })
 
 // ── addressed session verbs ─────────────────────────────────────────────────

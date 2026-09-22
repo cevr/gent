@@ -1611,7 +1611,6 @@ const currentHostParams = Effect.gen(function* () {
   const turnProfile = {
     turnGenerationId: profile.generationId,
     turnExtensionRegistry: profile.registryService,
-    turnDriverRegistry: profile.driverRegistryService,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(cellToolHost),
   }
@@ -3283,7 +3282,6 @@ it.scopedLive(
               profile: {
                 turnGenerationId: profile.generationId,
                 turnExtensionRegistry: profile.registryService,
-                turnDriverRegistry: profile.driverRegistryService,
                 turnBaseSections: profile.baseSections,
                 turnHostCtx: host.forRun(cell),
               },

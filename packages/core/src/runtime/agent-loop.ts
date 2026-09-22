@@ -116,7 +116,6 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import {
   buildResourceLayer,
   type CurrentExtensionHostContext,
-  DriverRegistry,
   ExtensionHostContextProvider,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
@@ -1332,7 +1331,6 @@ const makeAgentLoopBehavior = (
   | SqlClient.SqlClient
   | ModelResolver
   | ExtensionRegistry
-  | DriverRegistry
   | EventPublisher
   | ToolRunner
   | ProcessLocalToolReplay
@@ -1347,7 +1345,6 @@ const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
-    const driverRegistry = yield* DriverRegistry
     const eventPublisher = yield* EventPublisher
     yield* ToolCallBindingStorage
     yield* TurnRecordStorage
@@ -1416,10 +1413,7 @@ const makeAgentLoopBehavior = (
         sessionId,
         branchId,
         profileCache,
-        defaults: {
-          driverRegistry,
-          baseSections,
-        },
+        defaults: { baseSections },
       }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),
     )
 

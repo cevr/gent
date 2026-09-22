@@ -176,7 +176,6 @@ import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
-  DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
   SessionProfileCache,
@@ -1591,17 +1590,10 @@ describe("native model context projection", () => {
       },
     ])
     const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
-    const driverRegistry = DriverRegistry.fromResolved({
-      modelDrivers: resolved.modelDrivers,
-      externalDrivers: resolved.externalDrivers,
-    })
-    const modelResolver = ModelResolver.Live.pipe(
-      Layer.provide(Layer.mergeAll(Auth.Test(), driverRegistry)),
-    )
+    const modelResolver = ModelResolver.Live.pipe(Layer.provide(Auth.Test()))
     const deps = Layer.mergeAll(
       SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       extensionRegistry,
-      driverRegistry,
       RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),
       EventStore.Memory,
@@ -2817,10 +2809,6 @@ const makeRuntimeLayer = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
     eventStoreLayer,
     recorderLayer,
     toolRunnerLayer,
@@ -7020,11 +7008,6 @@ const makeExtRegistryExternalTurn = (
   executor: TurnExecutor,
   tools?: ReadonlyArray<ToolCapability>,
 ) => ExtensionRegistry.fromResolved(makeResolved(executor, tools))
-const makeDriverRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolCapability>) =>
-  DriverRegistry.fromResolved({
-    modelDrivers: makeResolved(executor, tools).modelDrivers,
-    externalDrivers: makeResolved(executor, tools).externalDrivers,
-  })
 /** Counting event store that captures published events. */
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.succeed(
@@ -7065,7 +7048,6 @@ const makeLayerWithEventsExternalTurn = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistryExternalTurn(executor, options?.tools),
-    makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
     toolRunnerLayer,
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -7546,10 +7528,6 @@ describe("external turn execution", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(agentsResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: agentsResolved.modelDrivers,
-          externalDrivers: agentsResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
@@ -7675,11 +7653,11 @@ describe("external turn execution", () => {
 })
 // ── ExternalDriverContribution end-to-end ──
 //
-// Proves that `ExternalDriverContribution` wired through `DriverRegistry`
+// Proves that `ExternalDriverContribution` wired through `ExtensionRegistry`
 // (not a mock) actually dispatches to the registered `TurnExecutor` AND
 // that the executor's text output lands in the stored messages.
 describe("ExternalDriverContribution end-to-end", () => {
-  it.live("text from TurnExecutor appears in stored messages via DriverRegistry dispatch", () =>
+  it.live("text from TurnExecutor appears in stored messages via registry dispatch", () =>
     Effect.gen(function* () {
       const e2eSessionId = SessionId.make("e2e-session")
       const e2eBranchId = BranchId.make("e2e-branch")
@@ -7716,10 +7694,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         // Messages go through focused storage directly — EventStore path is orthogonal.
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
@@ -7801,10 +7775,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
@@ -7900,10 +7870,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
@@ -7998,10 +7964,6 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),

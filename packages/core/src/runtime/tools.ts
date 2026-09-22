@@ -856,22 +856,10 @@ const normalizeToolExecutionError = (
 
 export const staticToolEntries = (
   activeRegistry: ExtensionRegistryService,
-): ReadonlyArray<ResolvedToolCapability> => {
-  const resolved = activeRegistry.getResolved()
-  const entries: ResolvedToolCapability[] = []
-  for (const capability of resolved.modelCapabilities.values()) {
-    const extension = resolved.extensions.find((extension) =>
-      (extension.contributions.tools ?? []).includes(capability),
-    )
-    if (!Predicate.isUndefined(extension)) {
-      entries.push({
-        extensionId: extension.manifest.id,
-        capability,
-      })
-    }
-  }
-  return entries
-}
+): ReadonlyArray<ResolvedToolCapability> =>
+  [...activeRegistry.getResolved().modelCapabilities.values()].map(
+    ({ extensionId, capability }) => ({ extensionId, capability }),
+  )
 
 const captureToolEntry = (params: {
   readonly toolName: string

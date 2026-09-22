@@ -72,7 +72,6 @@ import {
 } from "../domain/agent-loop.js"
 import {
   type ApprovalService,
-  type DriverRegistry,
   type ExtensionRegistry,
   resolveExistingSessionBranch,
 } from "./extension-host.js"
@@ -308,7 +307,6 @@ type SessionRuntimeLayerRequirements =
   | EventStore
   | EventPublisher
   | ExtensionRegistry
-  | DriverRegistry
   | ModelRegistry
   | GentPlatform
   | SessionStorage

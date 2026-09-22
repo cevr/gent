@@ -342,7 +342,7 @@ describe("defineExtension", () => {
         contributions,
       } satisfies LoadedExtension
       const resolved = resolveExtensions([loaded])
-      const resolvedTool = resolved.modelCapabilities.get("from-define")
+      const resolvedTool = resolved.modelCapabilities.get("from-define")?.capability
       expect(resolvedTool).toBeDefined()
       if (Predicate.isUndefined(resolvedTool)) return
       expect(String(getToolId(resolvedTool))).toBe("from-define")

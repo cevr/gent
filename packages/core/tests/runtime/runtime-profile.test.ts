@@ -316,8 +316,9 @@ describe("live Profile", () => {
 
             // The turn provides the profile's layer context, which carries the
             // built process resources, exactly as the agent loop does.
-            const result = yield* runtime.registryService.extensionHooks
-              .resolveTurnProjection(hookCtx.projection)
+            const result = yield* runtime.registryService
+              .getResolved()
+              .extensionHooks.resolveTurnProjection(hookCtx.projection)
               .pipe(
                 Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
                 Effect.provideContext(runtime.layerContext),
@@ -427,8 +428,9 @@ describe("live Profile", () => {
             home: "/tmp",
           }),
         }
-        const result = yield* registryService.extensionHooks
-          .resolveTurnProjection(hookCtx.projection)
+        const result = yield* registryService
+          .getResolved()
+          .extensionHooks.resolveTurnProjection(hookCtx.projection)
           .pipe(
             Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
             Effect.provideContext(layerContext),
