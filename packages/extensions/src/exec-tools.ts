@@ -675,7 +675,6 @@ export const BashTool = tool({
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. Large output is kept whole; the prompt shows the head and tail, and context.read(toolCallId, { offset, limit }) pages the rest.",
   promptSnippet: "Execute shell commands",
-  promptGuidelines: ["Use the read/grep/edit/write tools instead of cat/head/tail/grep/sed"],
   params: BashParams,
   output: BashResult,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
