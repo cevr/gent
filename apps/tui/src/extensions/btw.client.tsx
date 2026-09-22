@@ -11,6 +11,8 @@ import {
   ClientTransport,
   defineClientExtension,
   overlayContribution,
+  sessionQuery,
+  type ActiveExtensionSession,
   type OverlayProps,
 } from "./client-facets.js"
 import { ChromePanel } from "../ui"
@@ -31,94 +33,81 @@ import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 
 const BTW_OVERLAY_ID = "btw"
 
-interface ForkPaneState {
-  readonly fork: Option.Option<ForkViewType>
-  /** A question on its way to the fork. */
-  readonly pending: Option.Option<string>
-  readonly error: Option.Option<string>
-}
-
-const emptyPane: ForkPaneState = {
-  fork: Option.none(),
-  pending: Option.none(),
-  error: Option.none(),
-}
-
 interface ForkPaneController {
-  readonly state: () => ForkPaneState
+  /** The fork this branch opened last, as the server reports it. */
+  readonly fork: () => Option.Option<ForkViewType>
+  /** A question on its way to the fork. */
+  readonly pending: () => Option.Option<string>
+  readonly error: () => Option.Option<string>
   /** Forks now when the branch has no open fork; otherwise asks the open fork. */
   readonly ask: (question: string) => void
-  /** Applies the server's view of the fork. */
-  readonly sync: (fork: Option.Option<ForkViewType>) => void
-  readonly reset: () => void
+  /** Read the fork's view again. */
+  readonly refresh: () => void
 }
 
 interface ForkPaneActions {
-  readonly fork: (question: string) => Effect.Effect<void, { readonly message: string }, never>
-  readonly ask: (question: string) => Effect.Effect<void, { readonly message: string }, never>
-  readonly progress: Effect.Effect<Option.Option<ForkViewType>, { readonly message: string }, never>
+  readonly fork: (
+    question: string,
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<void, { readonly message: string }>
+  readonly ask: (
+    question: string,
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<void, { readonly message: string }>
+  readonly progress: (
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<Option.Option<ForkViewType>, { readonly message: string }>
 }
 
-/** Pane state plus the ask action; shared by the slash command and the overlay. */
+interface Outgoing {
+  readonly question: string
+  readonly send: (
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<void, { readonly message: string }>
+}
+
+/**
+ * The fork's view is a session query: it follows the shell, so a reply for a
+ * session the shell left never becomes the fork of the one it is on. A
+ * question rides the next read, which sends it and then reads the fork.
+ */
 export const makeForkPane = (
   actions: ForkPaneActions,
-  cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
-): ForkPaneController => {
-  const [state, setState] = createSignal<ForkPaneState>(emptyPane)
-  // Each reset starts a new generation; a reply from an earlier one is discarded.
-  let generation = 0
-  const settle = (asked: number, change: (current: ForkPaneState) => ForkPaneState) =>
-    Effect.sync(() => {
-      if (asked !== generation) return
-      setState(change)
+): Effect.Effect<ForkPaneController, never, ClientTransport | ClientShell | ClientLifecycle> =>
+  Effect.gen(function* () {
+    let outgoing = Option.none<Outgoing>()
+    const [asked, setAsked] = createSignal(Option.none<string>())
+    const view = yield* sessionQuery({
+      initial: Option.none<ForkViewType>(),
+      follow: true,
+      fetch: (session) => {
+        const sending = outgoing
+        outgoing = Option.none()
+        setAsked(Option.map(sending, (entry) => entry.question))
+        const send = Option.match(sending, {
+          onNone: () => Effect.void,
+          onSome: (entry) => entry.send(session),
+        })
+        return send.pipe(Effect.andThen(actions.progress(session)))
+      },
     })
-  const failed = (asked: number, message: string) =>
-    settle(asked, (current) => ({
-      ...current,
-      pending: Option.none(),
-      error: Option.some(message),
-    }))
-  return {
-    state,
-    reset: () => {
-      generation += 1
-      setState(emptyPane)
-    },
-    sync: (fork) => {
-      setState((current) => ({ ...current, fork }))
-    },
-    ask: (raw) => {
+    // Sent: once the read lands, the fork's view carries the question.
+    const pending = () => Option.filter(asked(), () => view.loading())
+    const ask = (raw: string): void => {
       const question = raw.trim()
-      const asked = generation
-      const current = state()
-      const replying = Option.match(current.fork, {
-        onNone: () => false,
-        onSome: (view) => view.replying,
+      const fork = view.value()
+      const replying = Option.exists(fork, (current) => current.replying)
+      if (Option.isSome(pending()) || replying) return
+      if (question.length === 0 && Option.isSome(fork)) return
+      const send = Option.match(fork, {
+        onNone: () => actions.fork,
+        onSome: () => actions.ask,
       })
-      if (Option.isSome(current.pending) || replying) return
-      if (question.length === 0 && Option.isSome(current.fork)) return
-      setState((previous) => ({
-        ...previous,
-        pending: Option.some(question),
-        error: Option.none(),
-      }))
-      const send = Option.match(current.fork, {
-        onNone: () => actions.fork(question),
-        onSome: () => actions.ask(question),
-      })
-      cast(
-        send.pipe(
-          Effect.andThen(actions.progress),
-          // Sent: the fork's view carries the question from here on.
-          Effect.flatMap((fork) =>
-            settle(asked, (previous) => ({ ...previous, fork, pending: Option.none() })),
-          ),
-          Effect.catch((error) => failed(asked, error.message)),
-        ),
-      )
-    },
-  }
-}
+      outgoing = Option.some({ question, send: (session) => send(question, session) })
+      view.refresh()
+    }
+    return { fork: view.value, pending, error: view.error, ask, refresh: view.refresh }
+  })
 
 export function ForkPane(
   props: OverlayProps & { controller: ForkPaneController; onOpen: () => void },
@@ -126,21 +115,15 @@ export function ForkPane(
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [draft, setDraft] = createSignal("")
-  const state = () => props.controller.state()
-  const fork = () => Option.getOrUndefined(state().fork)
-  const replying = () =>
-    Option.match(state().fork, { onNone: () => false, onSome: (view) => view.replying })
-  const close = () => {
-    props.controller.reset()
-    props.onClose()
-  }
+  const fork = () => Option.getOrUndefined(props.controller.fork())
+  const replying = () => Option.exists(props.controller.fork(), (view) => view.replying)
   useScopedKeyboard(
     (event) => {
       if (event.name === "escape") {
-        close()
+        props.onClose()
         return true
       }
-      if (event.ctrl === true && event.name === "o" && Option.isSome(state().fork)) {
+      if (event.ctrl === true && event.name === "o" && Option.isSome(props.controller.fork())) {
         props.onOpen()
         return true
       }
@@ -159,7 +142,7 @@ export function ForkPane(
   const height = () => Math.max(8, dimensions().height - 4)
   const left = () => Math.max(0, Math.floor((dimensions().width - width()) / 2))
   const title = () =>
-    Option.match(state().fork, {
+    Option.match(props.controller.fork(), {
       onNone: () => "btw · fork",
       onSome: (view) => `btw · ${view.name}`,
     })
@@ -187,7 +170,7 @@ export function ForkPane(
               </For>
             )}
           </Show>
-          <Show when={Option.getOrUndefined(state().pending)}>
+          <Show when={Option.getOrUndefined(props.controller.pending())}>
             {(question) => (
               <box flexDirection="column" marginBottom={1}>
                 <text>
@@ -197,7 +180,7 @@ export function ForkPane(
               </box>
             )}
           </Show>
-          <Show when={Option.getOrUndefined(state().error)}>
+          <Show when={Option.getOrUndefined(props.controller.error())}>
             {(message) => <text style={{ fg: theme.error }}>{message()}</text>}
           </Show>
         </ChromePanel.Body>
@@ -206,7 +189,7 @@ export function ForkPane(
             <text style={{ fg: theme.textMuted }}>ask: </text>
             <box flexGrow={1}>
               <input
-                focused={props.open && Option.isNone(state().pending) && !replying()}
+                focused={props.open && Option.isNone(props.controller.pending()) && !replying()}
                 value={draft()}
                 onInput={setDraft}
                 onSubmit={submit}
@@ -231,35 +214,31 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
     const lifecycle = yield* ClientLifecycle
     const asMessage = <A, E>(effect: Effect.Effect<A, E, never>) =>
       effect.pipe(Effect.mapError((error) => ({ message: String(error) })))
-    const progress = asMessage(
-      transport
-        .request(ref(BtwRpc.Progress), {})
-        .pipe(Effect.map((result) => Option.fromUndefinedOr(result.fork))),
-    )
-    const controller = makeForkPane(
-      {
-        fork: (question) =>
-          asMessage(transport.request(ref(BtwRpc.Fork), { question })).pipe(Effect.asVoid),
-        ask: (question) =>
-          asMessage(transport.request(ref(BtwRpc.Ask), { question })).pipe(Effect.asVoid),
-        progress,
-      },
-      shell.cast,
-    )
+    const controller = yield* makeForkPane({
+      fork: (question, session) =>
+        asMessage(transport.request(ref(BtwRpc.Fork), { question }, session)).pipe(Effect.asVoid),
+      ask: (question, session) =>
+        asMessage(transport.request(ref(BtwRpc.Ask), { question }, session)).pipe(Effect.asVoid),
+      progress: (session) =>
+        asMessage(
+          transport
+            .request(ref(BtwRpc.Progress), {}, session)
+            .pipe(Effect.map((result) => Option.fromUndefinedOr(result.fork))),
+        ),
+    })
     const [open, setOpen] = createSignal(false)
-    const refresh = () => shell.cast(progress.pipe(Effect.map(controller.sync), Effect.ignore))
-    // Each pulse from the btw extension means the fork's view changed; read it and apply it.
+    // Each pulse from the btw extension means the fork's view changed; read it again.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
         if (pulse.extensionId !== BTW_EXTENSION_ID) return
         if (!open()) return
-        refresh()
+        controller.refresh()
       }),
     )
     const show = () => {
       setOpen(true)
       shell.openOverlay(BTW_OVERLAY_ID)
-      refresh()
+      controller.refresh()
     }
     return clientContributions(
       clientCommandContribution({
@@ -286,9 +265,8 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
             }}
             controller={controller}
             onOpen={() => {
-              Option.map(controller.state().fork, (fork) => {
+              Option.map(controller.fork(), (fork) => {
                 setOpen(false)
-                controller.reset()
                 props.onClose()
                 shell.switchSession({
                   sessionId: fork.sessionId,

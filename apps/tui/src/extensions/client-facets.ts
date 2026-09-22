@@ -155,7 +155,7 @@ export const makeClientActivityLayer = (snapshot: () => ClientActivitySnapshot =
  * each Effect-typed setup against it.
  */
 
-type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
 /**
  * Per-loop detail, for one loop at a time.
@@ -177,9 +177,8 @@ export interface ExtensionAgentDetail {
 }
 
 export interface ClientTransportDefinition {
-  /** Active (sessionId, branchId) — absent before a session is mounted. */
-  // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
-  readonly currentSession: () => ActiveExtensionSession | undefined
+  /** Active (sessionId, branchId); `None` before a session is mounted. */
+  readonly currentSession: () => Option.Option<ActiveExtensionSession>
   readonly request: <Input, Output>(
     ref: CapabilityRef<Input, Output>,
     input: Input,
@@ -237,9 +236,8 @@ export interface ClientTransportDefinition {
 export interface ClientShellTransportDefinition {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
-  /** Active (sessionId, branchId) — absent before a session is mounted. */
-  // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
-  readonly currentSession: () => ActiveExtensionSession | undefined
+  /** Active (sessionId, branchId); `None` before a session is mounted. */
+  readonly currentSession: () => Option.Option<ActiveExtensionSession>
   /** Subscribe to `ExtensionStateChanged` pulses from the active session.
    *  Returns an unsubscribe function. Multiple subscribers receive each
    *  pulse independently. Widgets use this to invalidate cached state
@@ -322,9 +320,7 @@ const currentOrActiveSession = (
   transport: ClientShellTransportDefinition,
   activeSession?: ActiveExtensionSession,
 ): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
-  const session = Option.orElse(Option.fromNullishOr(activeSession), () =>
-    Option.fromNullishOr(transport.currentSession()),
-  )
+  const session = Option.orElse(Option.fromNullishOr(activeSession), transport.currentSession)
   if (Option.isNone(session)) return Effect.fail(new NoActiveSessionError())
   return Effect.succeed(session.value)
 }
@@ -516,23 +512,11 @@ export const makeClientLifecycleLayer = (
     }),
   )
 
-// ── Session Resource ─────────────────────────────────────────────────────
-
-type ActiveClientSession = NonNullable<ReturnType<ClientTransportDefinition["currentSession"]>>
-
-interface ClientSessionResource<A> {
-  // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
-  readonly read: () => A | undefined
-  readonly refetch: () => void
-}
+// ── Session Query ────────────────────────────────────────────────────────
 
 /**
- * A keyed query the caller refreshes itself, with the load state a docked pane
- * draws.
+ * A read keyed by the session the shell is on, with the load state a pane draws.
  *
- * {@link makeClientSessionResource} fetches on its own whenever the session
- * changes; a pane instead refreshes on its own schedule — a typed query, a
- * poll, an event — and needs to say whether it is loading and what failed. The
  * Two rules guard what a reply may write. The generation guard drops every
  * reply but the newest refresh's, because a filter fires one fetch per
  * keystroke and a shorter query can answer last. The key guard drops a reply
@@ -540,168 +524,94 @@ interface ClientSessionResource<A> {
  * cannot see because a switch raises no new refresh. A dropped reply still
  * clears the load state, or a pane that lost a race would say "loading" until
  * the next refresh.
+ *
+ * With `follow`, the query reads again whenever the session or the branch
+ * moves, and `value` answers `initial` until that read lands, so one session's
+ * data never shows under another. Without it, the caller refreshes on its own
+ * schedule (a typed filter, a poll, an event) and the last value stays up.
  */
-interface ClientSessionQuery<A, Q> {
+interface SessionQuery<A> {
   readonly value: () => A
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
-  readonly refresh: (query: Q) => void
-  /** Re-run the last query, for a caller whose data changed under it. */
-  readonly reload: () => void
+  readonly refresh: () => void
 }
 
-/** The key a query is made for; callers keep their own branded id types. */
-type SessionKey = { readonly sessionId: string; readonly branchId: string }
+const sameSession = (left: ActiveExtensionSession, right: ActiveExtensionSession): boolean =>
+  left.sessionId === right.sessionId && left.branchId === right.branchId
 
-export const makeClientSessionQuery = <A, Q, K extends SessionKey>(opts: {
+export const sessionQuery = <A>(opts: {
   readonly initial: A
-  readonly current: () => Option.Option<K>
-  readonly cast: (effect: Effect.Effect<void>) => void
-  readonly fetch: (query: Q, session: K) => Effect.Effect<A, { readonly message: string }>
-}): ClientSessionQuery<A, Q> => {
-  const [value, setValue] = createSignal<A>(opts.initial)
-  const [error, setError] = createSignal<Option.Option<string>>(Option.none())
-  const [loading, setLoading] = createSignal(false)
-  let generation = 0
-  let last = Option.none<Q>()
+  readonly follow: boolean
+  readonly fetch: (
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<A, { readonly message: string }>
+}): Effect.Effect<SessionQuery<A>, never, ClientTransport | ClientShell | ClientLifecycle> =>
+  Effect.gen(function* () {
+    const transport = yield* ClientTransport
+    const shell = yield* ClientShell
+    const lifecycle = yield* ClientLifecycle
+    return createRoot((dispose) => {
+      lifecycle.addCleanup(dispose)
+      type Keyed = { readonly session: ActiveExtensionSession; readonly value: A }
+      const [stored, setStored] = createSignal<Option.Option<Keyed>>(Option.none())
+      const [error, setError] = createSignal<Option.Option<string>>(Option.none())
+      const [loading, setLoading] = createSignal(false)
+      let generation = 0
 
-  const refresh = (query: Q): void => {
-    const captured = opts.current()
-    last = Option.some(query)
-    if (Option.isNone(captured)) return
-    const issued = ++generation
-    setLoading(true)
-    opts.cast(
-      opts.fetch(query, captured.value).pipe(
-        Effect.match({
-          onFailure: (failure) => {
-            if (issued !== generation) return
-            setLoading(false)
-            if (!isCurrent(captured.value)) return
-            setError(Option.some(failure.message))
-          },
-          onSuccess: (next) => {
-            if (issued !== generation) return
-            setLoading(false)
-            // The shell may have moved while this was out; that reply belongs
-            // to a session nobody is looking at any more.
-            if (!isCurrent(captured.value)) return
-            setValue(() => next)
-            setError(Option.none())
-          },
-        }),
-      ),
-    )
-  }
+      const isCurrent = (session: ActiveExtensionSession): boolean =>
+        Option.exists(transport.currentSession(), (now) => sameSession(now, session))
 
-  const reload = (): void => {
-    if (Option.isNone(last)) return
-    refresh(last.value)
-  }
-
-  const isCurrent = (captured: K): boolean =>
-    Option.match(opts.current(), {
-      onNone: () => false,
-      onSome: (now) => now.sessionId === captured.sessionId && now.branchId === captured.branchId,
-    })
-
-  return { value, error, loading, refresh, reload }
-}
-
-export const makeClientSessionResource = <A>(opts: {
-  /** Only the active identity: the resource asks which session, never what it is called. */
-  readonly transport: Pick<ClientTransportDefinition, "currentSession">
-  readonly lifecycle: Pick<ClientLifecycleDefinition, "addCleanup">
-  readonly cast: <B, E>(effect: Effect.Effect<B, E, never>) => void
-  readonly label: string
-  readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
-  // eslint-disable-next-line effect/noNullish -- subscription is optional for static resources.
-  readonly subscribe?: (refetch: () => void) => () => void
-}): Effect.Effect<ClientSessionResource<A>> =>
-  Effect.sync(() => {
-    type Keyed = {
-      readonly sessionId: string
-      readonly branchId: string
-      readonly value: A
-    }
-
-    let getState: () => Option.Option<Keyed> = () => Option.none()
-    let setState: (next: Option.Option<Keyed>) => void = () => {}
-
-    // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
-    const read = (): A | undefined => {
-      const state = getState()
-      const current = Option.fromNullishOr(opts.transport.currentSession())
-      if (Option.isNone(state) || Option.isNone(current)) {
-        return Option.getOrUndefined(Option.none<A>())
+      const settle = (issued: number, session: ActiveExtensionSession, write: () => void) => {
+        if (issued !== generation) return
+        setLoading(false)
+        // The shell may have moved while this was out; that reply belongs to a
+        // session nobody is looking at any more.
+        if (!isCurrent(session)) return
+        write()
       }
-      if (
-        state.value.sessionId !== current.value.sessionId ||
-        state.value.branchId !== current.value.branchId
-      ) {
-        return Option.getOrUndefined(Option.none<A>())
-      }
-      return state.value.value
-    }
 
-    const refetchCaptured = (captured: ActiveClientSession): void => {
-      opts.cast(
-        opts.fetch(captured).pipe(
-          Effect.flatMap((value) =>
-            Effect.sync(() => {
-              const current = Option.fromNullishOr(opts.transport.currentSession())
-              if (
-                Option.isNone(current) ||
-                current.value.sessionId !== captured.sessionId ||
-                current.value.branchId !== captured.branchId
-              ) {
-                return
-              }
-              setState(
-                Option.some({
-                  sessionId: captured.sessionId,
-                  branchId: captured.branchId,
-                  value,
+      const refresh = (): void => {
+        const captured = transport.currentSession()
+        if (Option.isNone(captured)) return
+        const session = captured.value
+        const issued = ++generation
+        setLoading(true)
+        shell.cast(
+          opts.fetch(session).pipe(
+            Effect.match({
+              onFailure: (failure) =>
+                settle(issued, session, () => setError(Option.some(failure.message))),
+              onSuccess: (value) =>
+                settle(issued, session, () => {
+                  setStored(Option.some({ session, value }))
+                  setError(Option.none())
                 }),
-              )
             }),
           ),
-          Effect.catchEager((err) =>
-            Effect.logWarning(`${opts.label} refresh failed`).pipe(
-              Effect.annotateLogs({ error: String(err) }),
-            ),
-          ),
-        ),
-      )
-    }
+        )
+      }
 
-    const refetch = (): void => {
-      const session = Option.fromNullishOr(opts.transport.currentSession())
-      if (Option.isNone(session)) return
-      refetchCaptured(session.value)
-    }
-
-    createRoot((dispose) => {
-      const [state, set] = createSignal<Option.Option<Keyed>>(Option.none())
-      getState = state
-      setState = set
       // `currentSession` is the client's identity accessor, so this fires only
-      // when the session or the branch actually moves — never for a rename or
-      // a model change. Blanking on every fire is therefore blanking on every
-      // real move, which is what the pane should draw while the new key loads.
-      createEffect(() => {
-        const session = Option.fromNullishOr(opts.transport.currentSession())
-        setState(Option.none())
-        if (Option.isNone(session)) return
-        refetchCaptured(session.value)
-      })
-      opts.lifecycle.addCleanup(dispose)
+      // when the session or the branch moves, never for a rename or a model change.
+      if (opts.follow) {
+        createEffect(() => {
+          setError(Option.none())
+          refresh()
+        })
+      }
+
+      const value = (): A =>
+        Option.match(stored(), {
+          onNone: () => opts.initial,
+          onSome: (keyed) => {
+            if (opts.follow && !isCurrent(keyed.session)) return opts.initial
+            return keyed.value
+          },
+        })
+
+      return { value, error, loading, refresh }
     })
-
-    const subscribe = Option.fromNullishOr(opts.subscribe)
-    if (Option.isSome(subscribe)) opts.lifecycle.addCleanup(subscribe.value(refetch))
-
-    return { read, refetch }
   })
 
 // ── contribution surface ────────────────────────────────────────────────────

@@ -215,7 +215,7 @@ describe("driver routing through ClientTransport", () => {
     "driverSet keeps the server's tagged error as the cause of ClientTransportRequestError",
     () => {
       const rejected = new DriverRejected({ driverId: "model:nope" })
-      const transport = makeClientTestTransport({ currentSession: () => absent })
+      const transport = makeClientTestTransport({ currentSession: () => Option.none() })
       const client = createMockClient({ driver: { set: () => Effect.fail(rejected) } })
       const layer = makeClientTransportLayer({ ...transport, client, runtime: createMockRuntime() })
       return Effect.gen(function* () {
@@ -245,7 +245,10 @@ describe("driver routing through ClientTransport", () => {
           },
         },
       })
-      const transport = { ...makeClientTestTransport({ currentSession: () => session }), client }
+      const transport = {
+        ...makeClientTestTransport({ currentSession: () => Option.some(session) }),
+        client,
+      }
       const notices = yield* runDriverSlash(transport, "main model:sonnet", settled).pipe(
         Effect.timeout("5 seconds"),
       )
@@ -262,7 +265,10 @@ describe("driver routing through ClientTransport", () => {
           set: () => Effect.fail(new DriverRejected({ driverId: "model:sonnet" })),
         },
       })
-      const transport = { ...makeClientTestTransport({ currentSession: () => session }), client }
+      const transport = {
+        ...makeClientTestTransport({ currentSession: () => Option.some(session) }),
+        client,
+      }
       const notices = yield* runDriverSlash(
         transport,
         "main model:sonnet",
@@ -287,7 +293,10 @@ describe("driver routing through ClientTransport", () => {
           },
         },
       })
-      const transport = { ...makeClientTestTransport({ currentSession: () => session }), client }
+      const transport = {
+        ...makeClientTestTransport({ currentSession: () => Option.some(session) }),
+        client,
+      }
       const notices = yield* runDriverSlash(transport, "main default", settled).pipe(
         Effect.timeout("5 seconds"),
       )
@@ -298,7 +307,7 @@ describe("driver routing through ClientTransport", () => {
 
   it.live("/driver with a malformed argument notifies the usage hint", () =>
     Effect.gen(function* () {
-      const transport = makeClientTestTransport({ currentSession: () => session })
+      const transport = makeClientTestTransport({ currentSession: () => Option.some(session) })
       const notices = yield* runDriverSlash(transport, "main", yield* Deferred.make<void>()).pipe(
         Effect.timeout("5 seconds"),
       )

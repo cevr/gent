@@ -194,7 +194,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       // The client's identity memo, read straight through: the reference is
       // stable across a rename, so an effect tracking this accessor stays put
       // while the session and the branch do.
-      currentSession: () => Option.getOrUndefined(client.sessionIdentity()),
+      currentSession: client.sessionIdentity,
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
     },

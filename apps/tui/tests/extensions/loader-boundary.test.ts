@@ -511,14 +511,7 @@ const { ListThingsRpc } = defineRequests(ExtensionId.make("@test/autocomplete"),
     execute: () => Effect.succeed([]),
   }),
 })
-// eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
-type FakeSession =
-  | {
-      sessionId: SessionId
-      branchId: BranchId
-    }
-  // eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
-  | undefined
+type FakeSession = Option.Option<{ sessionId: SessionId; branchId: BranchId }>
 const makeFakeTransport = (
   opts: {
     readonly currentSession?: () => FakeSession
@@ -529,10 +522,11 @@ const makeFakeTransport = (
   makeClientTestTransport({
     currentSession:
       opts.currentSession ??
-      (() => ({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      })),
+      (() =>
+        Option.some({
+          sessionId: SessionId.make("sess-1"),
+          branchId: BranchId.make("branch-1"),
+        })),
     requestEffect: opts.requestEffect,
     requestReply: opts.requestReply ?? [],
   })
@@ -555,8 +549,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
           Effect.gen(function* () {
             const t = yield* ClientTransport
             // Touch the transport so the test proves the service resolved.
-            const session = t.currentSession()
-            expect(session).toBeDefined()
+            expect(Option.isSome(t.currentSession())).toBe(true)
             return [
               { id: filter, label: `got:${filter}` },
             ] satisfies ReadonlyArray<AutocompleteItem>
@@ -575,7 +568,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
   )
   it.live("transport.request fails with NoActiveSessionError when no session active", () =>
     Effect.gen(function* () {
-      const transport = makeFakeTransport({ currentSession: () => absent })
+      const transport = makeFakeTransport({ currentSession: () => Option.none() })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
       expect(exit._tag).toBe("Failure")
@@ -591,7 +584,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     Effect.gen(function* () {
       // One broken contribution must not empty the popup for the rest, so the
       // helper names it to the caller's log and returns its rows as none.
-      const transport = makeFakeTransport({ currentSession: () => absent })
+      const transport = makeFakeTransport({ currentSession: () => Option.none() })
       const runtime = makeTestRuntime(transport)
       const contribution: AutocompleteContribution = {
         prefix: "$",
@@ -669,10 +662,9 @@ describe("autocomplete Effect items() through ClientTransport", () => {
           }),
         ),
       )
-      expect(resolved.currentSession()).toEqual({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      })
+      expect(resolved.currentSession()).toEqual(
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
+      )
       expect("run" in resolved).toBe(false)
       expect("cast" in resolved).toBe(false)
       yield* Effect.promise(() => runtime.dispose())
@@ -775,10 +767,8 @@ const skillItemsFor = (
 ): Effect.Effect<ReadonlyArray<string>> =>
   Effect.gen(function* () {
     const runtime = makeClientExtensionRuntime({
-      currentSession: () => ({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      }),
+      currentSession: () =>
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
       requestReply: names.map((name) => ({
         name,
         description: `The ${name} skill`,
@@ -914,10 +904,8 @@ const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
       // every run would share one file in /tmp and the assertion below would
       // pass on a previous run's pick.
       workspace: { cwd: home, home },
-      currentSession: () => ({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      }),
+      currentSession: () =>
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
       requestReply: names.map((name) => ({
         name,
         description: `The ${name} skill`,
@@ -1032,7 +1020,7 @@ const testRuntime = makeClientRuntime({
   transport: {
     client: stubClient,
     runtime: stubRuntime,
-    currentSession: () => Option.getOrUndefined(Option.none()),
+    currentSession: () => Option.none(),
     onExtensionStateChanged: () => () => {},
     onSessionEvent: () => () => {},
   },
@@ -1346,10 +1334,11 @@ export default defineClientExtension("@test/b", {
       transport: {
         client: createMockClient({ extension: { request: () => Effect.void } }),
         runtime: createMockRuntime(),
-        currentSession: () => ({
-          sessionId: SessionId.make("test-session-id"),
-          branchId: BranchId.make("test-branch-id"),
-        }),
+        currentSession: () =>
+          Option.some({
+            sessionId: SessionId.make("test-session-id"),
+            branchId: BranchId.make("test-branch-id"),
+          }),
         onExtensionStateChanged: () => () => {},
         onSessionEvent: () => () => {},
       },

@@ -26,8 +26,8 @@ import {
   ClientWorkspace,
   defineClientExtension,
   interactionRendererContribution,
-  makeClientSessionResource,
   rendererContribution,
+  sessionQuery,
   widgetContribution,
 } from "./client-facets.js"
 import { truncate, truncatePath } from "../utils"
@@ -562,26 +562,24 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
 const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
-    const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
 
-    const snapshot = yield* makeClientSessionResource<GoalSnapshot>({
-      transport,
-      lifecycle,
-      cast: shell.cast,
-      label: `${GOAL_EXTENSION_ID} goal`,
-      fetch: (session) => transport.request(ref(GoalRpc.Get), {}, session),
-      subscribe: (refetch) =>
-        transport.onExtensionStateChanged((pulse) => {
-          if (pulse.extensionId === GOAL_EXTENSION_ID) refetch()
-        }),
+    const snapshot = yield* sessionQuery({
+      initial: Option.none<GoalSnapshot>(),
+      follow: true,
+      fetch: (session) => transport.request(ref(GoalRpc.Get), {}, session).pipe(Effect.asSome),
     })
+    lifecycle.addCleanup(
+      transport.onExtensionStateChanged((pulse) => {
+        if (pulse.extensionId === GOAL_EXTENSION_ID) snapshot.refresh()
+      }),
+    )
 
     return borderLabelContribution({
       position: "bottom-right",
       priority: 40,
       produce: () => {
-        const goal = Option.fromNullishOr(snapshot.read()).pipe(
+        const goal = snapshot.value().pipe(
           Option.flatMap((value) => Option.fromUndefinedOr(value.goal)),
           Option.filter((value) => value.status !== "complete"),
         )
