@@ -21,6 +21,7 @@ import {
   windowLabel,
   windowsOf,
 } from "../../src/extensions/thread-view.client"
+import { childTaskText } from "@gent/extensions/client.js"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 
@@ -129,6 +130,16 @@ describe("windows on a branch", () => {
     expect(windowsOf(session("s1"), branchId, messages).map((window) => window.preview)).toEqual([
       "ask",
       "I will edit the rules file.",
+    ])
+  })
+
+  test("previews a child's task, not the line that names its parent", () => {
+    const messages = [
+      message("u1", "user", childTaskText(SessionId.make("parent-1"), "fix the csv quoting"), 1),
+      message("a1", "assistant", "done", 2),
+    ]
+    expect(windowsOf(session("s1"), branchId, messages).map((window) => window.preview)).toEqual([
+      "fix the csv quoting",
     ])
   })
 
