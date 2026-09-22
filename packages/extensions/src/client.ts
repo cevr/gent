@@ -10,4 +10,4 @@ export {
   type WakePending as WakePendingType,
   WakeRpc,
 } from "./wake.js"
-export { SessionMessageDetails } from "./session-tools.js"
+export { SessionMessageDetails, sessionMessageText } from "./session-tools.js"

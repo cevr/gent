@@ -256,7 +256,7 @@ const inverse = (relation: "parent" | "child" | "session"): "parent" | "child" |
 }
 
 /** The header the model reads: who wrote it, and what they are to the reader. */
-const sessionMessageText = (input: {
+export const sessionMessageText = (input: {
   readonly from: {
     readonly sessionId: SessionId
     readonly name?: string

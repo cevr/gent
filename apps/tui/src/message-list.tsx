@@ -46,7 +46,7 @@ import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
-import { SessionMessageDetails, WakeDetails } from "@gent/extensions/client.js"
+import { SessionMessageDetails, sessionMessageText, WakeDetails } from "@gent/extensions/client.js"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
@@ -243,8 +243,9 @@ interface SessionMessageView {
 }
 
 /**
- * The model reads one header line, a blank line, then the text. The row puts
- * the sender in its own muted line and shows only the text below it.
+ * The model reads the header `sessionMessageText` writes, then the text. The
+ * row puts the sender in its own muted line and removes that exact header, so
+ * a name or a body with blank lines in it stays whole.
  */
 const sessionMessageView = (
   { from }: SessionMessageDetails,
@@ -258,8 +259,9 @@ const sessionMessageView = (
     Option.map((value) => ` "${value}"`),
     Option.getOrElse(() => ""),
   )
-  const body = Option.liftPredicate(content.indexOf("\n\n"), (split) => split !== -1).pipe(
-    Option.map((split) => content.slice(split + 2)),
+  const header = sessionMessageText({ from, message: "" })
+  const body = Option.liftPredicate(content, (text) => text.startsWith(header)).pipe(
+    Option.map((text) => text.slice(header.length)),
     Option.getOrElse(() => content),
   )
   return { sender: `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`, body }

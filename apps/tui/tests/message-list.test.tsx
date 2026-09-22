@@ -941,7 +941,7 @@ describe("FX transcript treatment", () => {
         ...userMessage(
           "interjection-message",
           "sent-1",
-          'Message from your parent "auth refactor" (session 0199aabbccdd):\n\nUse the v2 token route.',
+          'Message from your parent "auth\n\nrefactor" (session 0199aabbccdd):\n\nUse the v2 token route.\n\nThen rerun the suite.',
           "steer",
         ),
         pendingMode: absent,
@@ -949,7 +949,7 @@ describe("FX transcript treatment", () => {
           customType: "session-message",
           extensionId: "@gent/session-tools",
           details: {
-            from: { sessionId: "0199aabbccdd", name: "auth refactor", relation: "parent" },
+            from: { sessionId: "0199aabbccdd", name: "auth\n\nrefactor", relation: "parent" },
           },
         },
       }
@@ -964,9 +964,13 @@ describe("FX transcript treatment", () => {
         )),
       )
       const frame = renderFrame(shown)
-      expect(frame).toContain('» from your parent "auth refactor" · 0199aabb')
+      // A blank line in the name or the body leaves the header strip whole.
+      expect(frame).toContain("» from your parent")
+      expect(frame).toContain('refactor" · 0199aabb')
       expect(frame).toContain("Use the v2 token route.")
+      expect(frame).toContain("Then rerun the suite.")
       expect(frame).not.toContain("Message from your parent")
+      expect(frame).not.toContain("(session 0199aabbccdd)")
       const expanded = yield* Effect.promise(() =>
         renderWithProviders(() => (
           <MessageList
