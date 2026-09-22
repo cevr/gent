@@ -24,6 +24,7 @@ import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gen
 import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
+import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 
@@ -787,23 +788,6 @@ interface WidgetContribution {
   readonly component: WidgetComponent
 }
 
-interface ClientCommandContribution {
-  readonly id: string
-  readonly title: string
-  readonly description?: string
-  readonly category?: string
-  readonly keybind?: string
-  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
-  readonly slash?: string
-  /** Additional slash names that resolve to this command */
-  readonly aliases?: ReadonlyArray<string>
-  /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
-  readonly slashPriority?: number
-  readonly onSelect: () => void
-  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
-  readonly onSlash?: (args: string) => void
-}
-
 interface OverlayContribution {
   readonly id: string
   /** Receives `{ open, onClose }` props at render time. */
@@ -861,7 +845,7 @@ export interface AutocompleteContribution {
 export interface ClientContributions {
   readonly renderers?: ReadonlyArray<RendererContribution>
   readonly widgets?: ReadonlyArray<WidgetContribution>
-  readonly commands?: ReadonlyArray<ClientCommandContribution>
+  readonly commands?: ReadonlyArray<Command>
   readonly overlays?: ReadonlyArray<OverlayContribution>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
   readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
@@ -919,9 +903,9 @@ export const widgetContribution = (opts: {
   readonly component: WidgetComponent
 }): ClientContributions => ({ widgets: [opts] })
 
-export const clientCommandContribution = (
-  opts: ClientCommandContribution,
-): ClientContributions => ({ commands: [opts] })
+export const clientCommandContribution = (opts: Command): ClientContributions => ({
+  commands: [opts],
+})
 
 export const overlayContribution = (opts: {
   readonly id: string

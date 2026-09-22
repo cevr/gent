@@ -631,7 +631,7 @@ function useComposerController(): ComposerController {
       state.value.type === "/" &&
       Option.isNone(formatInsertion) &&
       beforeTrigger.length === 0 &&
-      isSlashCommandName(value, command.commands())
+      isSlashCommandName(value, extensionUI.commands())
     ) {
       clearAutocomplete()
       submitSlashCommand(`/${value}`)

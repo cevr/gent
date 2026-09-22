@@ -43,8 +43,8 @@ Ported from opencode. Key patterns:
 ## Command Palette
 
 - `Ctrl+P` opens palette
-- Register commands via `command.register([...])` in `onMount`
-- Commands have `id`, `title`, `category`, optional `keybind`, `onSelect`
+- One `Command` shape (`id`, `title`, `category`, optional `keybind`, `slash`, `aliases`, `onSelect`, `onSlash`) and one resolved list, `useExtensionUI().commands()`
+- `resolveCommands` merges the session's own commands (`setSessionCommands`, builtin scope), client extension commands, and server slash commands (builtin scope). Precedence is project > user > builtin; a higher scope takes a slash or keybind from the earlier owner, and a same-scope claim is dropped and listed with the failed extensions
 
 ## Error Handling
 

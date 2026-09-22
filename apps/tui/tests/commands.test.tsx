@@ -8,6 +8,7 @@ import {
   useCommand,
 } from "../src/commands"
 import { createEffect, onMount } from "solid-js"
+import { resolveCommands } from "../src/extensions/loader-boundary"
 import { Effect, Option, Predicate } from "effect"
 import { BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
 import { type ClientContextValue, useClient } from "../src/client"
@@ -127,29 +128,61 @@ describe("executeSlashCommand", () => {
     expect(selectCalled).toBe(true)
   })
 
-  test("lower priority wins", () => {
+  test("a project extension overrides a builtin slash", () => {
+    let winner = ""
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [
+          cmd({ id: "session.model", slash: "model", onSelect: () => (winner = "builtin") }),
+        ],
+      },
+      {
+        id: "@test/model",
+        scope: "project",
+        source: "/project/model.client.ts",
+        commands: [
+          cmd({ id: "project.model", slash: "model", onSelect: () => (winner = "project") }),
+        ],
+      },
+    ])
+    const result = executeSlashCommand("model", "", commands)
+    expect(result.handled).toBe(true)
+    expect(winner).toBe("project")
+    expect(failures).toEqual([])
+    // The builtin keeps its palette row; only the slash moved.
+    expect(commands.find((command) => command.id === "session.model")?.slash).toBeUndefined()
+  })
+
+  test("a server slash that a session command already holds is dropped and reported", () => {
+    const { commands, failures } = resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: [cmd({ id: "session.model", slash: "model" })],
+      },
+      {
+        id: "@gent/acp-agents",
+        scope: "builtin",
+        source: "server:@gent/acp-agents",
+        commands: [cmd({ id: "server:model", slash: "model" })],
+      },
+    ])
+    expect(commands.map((command) => command.id)).toEqual(["session.model"])
+    expect(failures.map((failure) => failure.id)).toEqual(["@gent/acp-agents"])
+  })
+
+  test("a slash beats another command's alias", () => {
     let winner = ""
     const commands = [
-      cmd({
-        id: "a",
-        slash: "test",
-        slashPriority: 10,
-        onSelect: () => {
-          winner = "a"
-        },
-      }),
-      cmd({
-        id: "b",
-        slash: "test",
-        slashPriority: 0,
-        onSelect: () => {
-          winner = "b"
-        },
-      }),
+      cmd({ id: "new", slash: "new", aliases: ["clear"], onSelect: () => (winner = "alias") }),
+      cmd({ id: "clear", slash: "clear", onSelect: () => (winner = "slash") }),
     ]
-    const result = executeSlashCommand("test", "", commands)
-    expect(result.handled).toBe(true)
-    expect(winner).toBe("b")
+    executeSlashCommand("clear", "", commands)
+    expect(winner).toBe("slash")
   })
 
   test("aliases resolve to the command", () => {

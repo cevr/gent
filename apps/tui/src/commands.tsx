@@ -26,24 +26,28 @@ import {
 } from "./ui"
 import { textWidth } from "./text-width-adapter"
 import { useTheme } from "./theme"
+import { useExtensionUI } from "./extensions/host"
 
 // ── command types ───────────────────────────────────────────────────────────
 
+/**
+ * One command: a palette row, and optionally a keybind and a slash name. The
+ * session's own commands, client extension commands and server slash commands
+ * all take this shape and resolve under one rule (`resolveCommands`).
+ */
 export interface Command {
-  id: string
-  title: string
-  description?: string
-  category?: string
-  keybind?: string
+  readonly id: string
+  readonly title: string
+  readonly description?: string
+  readonly category?: string
+  readonly keybind?: string
   /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
-  slash?: string
+  readonly slash?: string
   /** Additional slash names that resolve to this command */
-  aliases?: readonly string[]
-  /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
-  slashPriority?: number
-  onSelect: () => void
+  readonly aliases?: readonly string[]
+  readonly onSelect: () => void
   /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
-  onSlash?: (args: string) => void
+  readonly onSlash?: (args: string) => void
 }
 
 interface Keybind {
@@ -99,17 +103,22 @@ function matchKeybind(
   )
 }
 
-// ── command registry ────────────────────────────────────────────────────────
+// ── palette and keybinds ────────────────────────────────────────────────────
 
+/**
+ * Whether the palette is open, and the key dispatch over the resolved
+ * commands. The commands themselves live on `useExtensionUI().commands()`.
+ */
 interface CommandContextValue {
-  commands: Accessor<Command[]>
-  register: (commands: Command[]) => () => void
-  handleKeybind: (event: {
-    name: string
-    ctrl?: boolean
-    shift?: boolean
-    meta?: boolean
-  }) => boolean
+  handleKeybind: (
+    event: {
+      name: string
+      ctrl?: boolean
+      shift?: boolean
+      meta?: boolean
+    },
+    commands: ReadonlyArray<Command>,
+  ) => boolean
   paletteOpen: Accessor<boolean>
   openPalette: () => void
   closePalette: () => void
@@ -126,35 +135,17 @@ interface CommandProviderProps {
 }
 
 export function CommandProvider(props: CommandProviderProps) {
-  const [registrations, setRegistrations] = createSignal<Command[][]>([])
   const [paletteOpen, setPaletteOpen] = createSignal(false)
 
-  const commands = () => {
-    const seen = new Set<string>()
-    const all: Command[] = []
-    for (const reg of registrations()) {
-      for (const cmd of reg) {
-        if (seen.has(cmd.id)) continue
-        seen.add(cmd.id)
-        all.push(cmd)
-      }
-    }
-    return all
-  }
-
-  const register = (cmds: Command[]) => {
-    setRegistrations((arr) => [...arr, cmds])
-    return () => {
-      setRegistrations((arr) => arr.filter((x) => x !== cmds))
-    }
-  }
-
-  const handleKeybind = (event: {
-    name: string
-    ctrl?: boolean
-    shift?: boolean
-    meta?: boolean
-  }): boolean => {
+  const handleKeybind = (
+    event: {
+      name: string
+      ctrl?: boolean
+      shift?: boolean
+      meta?: boolean
+    },
+    commands: ReadonlyArray<Command>,
+  ): boolean => {
     // Check for palette keybind (Ctrl+P)
     if (event.ctrl === true && event.name === "p" && event.shift !== true && event.meta !== true) {
       setPaletteOpen(true)
@@ -164,7 +155,7 @@ export function CommandProvider(props: CommandProviderProps) {
     // Don't process keybinds when palette is open
     if (paletteOpen()) return false
 
-    for (const cmd of commands()) {
+    for (const cmd of commands) {
       const kb = Option.flatMap(Option.fromNullishOr(cmd.keybind), parseKeybind)
       if (Option.isSome(kb) && matchKeybind(kb.value, event)) {
         cmd.onSelect()
@@ -175,8 +166,6 @@ export function CommandProvider(props: CommandProviderProps) {
   }
 
   const value: CommandContextValue = {
-    commands,
-    register,
     handleKeybind,
     paletteOpen,
     openPalette: () => setPaletteOpen(true),
@@ -199,33 +188,29 @@ interface SlashCommandResult {
 }
 
 /**
- * Find and execute a slash command from the command registry.
- * Matches by `slash` or `aliases`, sorted by `slashPriority` (lower wins).
+ * The command `/name` names, case-insensitively: the one whose `slash` it is,
+ * else the one that lists it among its `aliases`. Resolution leaves one owner
+ * per slash, so a slash beats an alias another command still carries.
  */
+const findSlashCommand = (
+  cmd: string,
+  commands: ReadonlyArray<Command>,
+): Option.Option<Command> => {
+  const lowerCmd = cmd.toLowerCase()
+  const bySlash = commands.find((c) => c.slash?.toLowerCase() === lowerCmd)
+  if (Predicate.isNotUndefined(bySlash)) return Option.some(bySlash)
+  return Option.fromNullishOr(
+    commands.find((c) => (c.aliases ?? []).some((alias) => alias.toLowerCase() === lowerCmd)),
+  )
+}
+
+/** Find and execute a slash command from the resolved commands. */
 export const executeSlashCommand = (
   cmd: string,
   args: string,
   commands: ReadonlyArray<Command>,
 ): SlashCommandResult => {
-  const lowerCmd = cmd.toLowerCase()
-
-  // Collect all matching commands, sort by priority
-  const matches = commands
-    .filter((c) => {
-      const slash = Option.fromNullishOr(c.slash)
-      if (Option.isNone(slash)) return false
-      if (slash.value.toLowerCase() === lowerCmd) return true
-      const aliases = Option.fromNullishOr(c.aliases)
-      if (Option.isNone(aliases)) return false
-      return aliases.value.some((a) => a.toLowerCase() === lowerCmd)
-    })
-    .sort((a, b) => {
-      const aPriority = Option.getOrElse(Option.fromNullishOr(a.slashPriority), () => 10)
-      const bPriority = Option.getOrElse(Option.fromNullishOr(b.slashPriority), () => 10)
-      return aPriority - bPriority
-    })
-
-  const match = Option.fromNullishOr(matches[0])
+  const match = findSlashCommand(cmd, commands)
   if (Option.isNone(match)) {
     return { handled: false, error: `Unknown command: /${cmd}` }
   }
@@ -255,8 +240,8 @@ export function parseSlashCommand(input: string): [string, string] | null {
 }
 
 /**
- * Whether `/name` is a registered slash command, matched like
- * {@link executeSlashCommand} does — by `slash` or `aliases`, case-insensitively.
+ * Whether `/name` is a resolved slash command, matched like
+ * {@link executeSlashCommand} does.
  *
  * The composer asks this to decide whether completing a slash name should
  * dispatch the command or only insert its text. No command in this repo
@@ -264,17 +249,8 @@ export function parseSlashCommand(input: string): [string, string] | null {
  * `/driver`, `/btw`) all treat an empty arg as "open my picker" or
  * "show usage", so naming a command is always enough to run it.
  */
-export const isSlashCommandName = (cmd: string, commands: ReadonlyArray<Command>): boolean => {
-  const lowerCmd = cmd.toLowerCase()
-  return commands.some((c) => {
-    const slash = Option.fromNullishOr(c.slash)
-    if (Option.isNone(slash)) return false
-    if (slash.value.toLowerCase() === lowerCmd) return true
-    const aliases = Option.fromNullishOr(c.aliases)
-    if (Option.isNone(aliases)) return false
-    return aliases.value.some((a) => a.toLowerCase() === lowerCmd)
-  })
-}
+export const isSlashCommandName = (cmd: string, commands: ReadonlyArray<Command>): boolean =>
+  Option.isSome(findSlashCommand(cmd, commands))
 
 // ── palette state ───────────────────────────────────────────────────────────
 
@@ -442,6 +418,7 @@ const buildSessionTree = (list: readonly DomainSession[]): SessionNode[] => {
 
 export function CommandPalette() {
   const command = useCommand()
+  const ext = useExtensionUI()
   const { theme, selected, set, all, mode, setMode } = useTheme()
   const client = useClient()
   const dimensions = useTerminalDimensions()
@@ -631,26 +608,15 @@ export function CommandPalette() {
         onSelect: () => pushLevel(modeLevel()),
       },
       {
-        id: "new-session",
-        title: "New Session",
-        description: "Start a fresh session",
-        category: "Session",
-        shortcut: "Ctrl+N",
-        onSelect: () => {
-          client.createSession()
-          closePalette()
-        },
-      },
-      {
         id: "branches",
         title: "Branches",
         description: "Switch branches in this session",
         category: "Session",
         onSelect: () => pushLevel(branchesLevel()),
       },
-      ...command
+      ...ext
         .commands()
-        .filter((cmd) => cmd.id !== "session.new" && cmd.id !== "session.sessions")
+        .filter((cmd) => cmd.id !== "session.sessions")
         .map((cmd) => ({
           id: `ext:${cmd.id}`,
           title: cmd.title,

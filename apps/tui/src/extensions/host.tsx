@@ -20,6 +20,7 @@ import {
   type Accessor,
   createContext,
   createEffect,
+  createMemo,
   createSignal,
   type JSX,
   onCleanup,
@@ -31,7 +32,9 @@ import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 import {
   type ClientExtensionFailure,
+  type CommandSource,
   loadExtensionUi,
+  resolveCommands,
   type ResolvedBorderLabel,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
@@ -107,7 +110,13 @@ interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
+  /**
+   * Every command the reader can run: the session's own, the client
+   * extensions' and the server's slash commands, under `resolveCommands`.
+   */
   readonly commands: Accessor<ReadonlyArray<Command>>
+  /** The session view supplies its own commands; they resolve at builtin scope. */
+  readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly overlays: Accessor<Map<string, OverlayComponent>>
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
@@ -127,7 +136,7 @@ interface ExtensionUIContextValue {
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   renderers: new Map(),
   widgets: [],
-  commands: [],
+  commandSources: [],
   overlays: new Map(),
   interactionRenderers: new Map(),
   borderLabels: [],
@@ -146,7 +155,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   )
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
-  const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
+  const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
+  const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
   >([])
@@ -257,51 +267,62 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         Effect.tap((cmds) =>
           Effect.sync(() => {
             if (!active) return
-            setServerCommands(
-              cmds.map((c) => {
-                const run = (args: string) => {
-                  const activeSession = Option.fromNullishOr(client.session())
-                  if (Option.isNone(activeSession)) return
-                  const sid = activeSession.value.sessionId
-                  const bid = activeSession.value.branchId
-                  client.runtime.cast(
-                    client.client.extension
-                      .request({
-                        sessionId: sid,
-                        extensionId: c.extensionId,
-                        capabilityId: c.capabilityId,
-                        input: args,
-                        branchId: bid,
-                      })
-                      .pipe(
-                        Effect.catchEager((error) =>
-                          Effect.logWarning("slash.command.failed").pipe(
-                            Effect.annotateLogs({
-                              extensionId: c.extensionId,
-                              capabilityId: c.capabilityId,
-                              error: String(error),
-                            }),
-                          ),
+            const byExtension = new Map<string, Array<Command>>()
+            for (const c of cmds) {
+              const run = (args: string) => {
+                const activeSession = Option.fromNullishOr(client.session())
+                if (Option.isNone(activeSession)) return
+                const sid = activeSession.value.sessionId
+                const bid = activeSession.value.branchId
+                client.runtime.cast(
+                  client.client.extension
+                    .request({
+                      sessionId: sid,
+                      extensionId: c.extensionId,
+                      capabilityId: c.capabilityId,
+                      input: args,
+                      branchId: bid,
+                    })
+                    .pipe(
+                      Effect.catchEager((error) =>
+                        Effect.logWarning("slash.command.failed").pipe(
+                          Effect.annotateLogs({
+                            extensionId: c.extensionId,
+                            capabilityId: c.capabilityId,
+                            error: String(error),
+                          }),
                         ),
                       ),
-                  )
-                }
+                    ),
+                )
+              }
 
-                const base = {
-                  id: `server:${c.name}`,
-                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
-                    Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
-                  ),
-                  slash: c.name,
-                  category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
-                  onSelect: () => run(""),
-                  onSlash: run,
-                }
-                return Option.match(Option.fromNullishOr(c.keybind), {
-                  onNone: () => base,
-                  onSome: (keybind) => ({ ...base, keybind }),
-                })
-              }),
+              const base = {
+                id: `server:${c.name}`,
+                title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
+                  Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
+                ),
+                slash: c.name,
+                category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
+                onSelect: () => run(""),
+                onSlash: run,
+              }
+              const command = Option.match(Option.fromNullishOr(c.keybind), {
+                onNone: (): Command => base,
+                onSome: (keybind): Command => ({ ...base, keybind }),
+              })
+              byExtension.set(c.extensionId, [
+                ...Option.getOrElse(Option.fromNullishOr(byExtension.get(c.extensionId)), () => []),
+                command,
+              ])
+            }
+            setServerCommands(
+              [...byExtension].map(([extensionId, commands]) => ({
+                id: extensionId,
+                scope: "builtin",
+                source: `server:${extensionId}`,
+                commands,
+              })),
             )
           }),
         ),
@@ -314,17 +335,33 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     )
   })
 
+  // The session's commands first, then the client extensions', then the
+  // server's: inside builtin scope the earlier source keeps a contested key.
+  const resolvedCommands = createMemo(() =>
+    resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: sessionCommands(),
+      },
+      ...resolved().commandSources,
+      ...serverCommands(),
+    ]),
+  )
+
   return (
     <ExtensionUIContext.Provider
       value={{
         renderers: () => resolved().renderers,
         widgets: () => resolved().widgets,
-        commands: () => [...resolved().commands, ...serverCommands()],
+        commands: () => resolvedCommands().commands,
+        setSessionCommands,
         overlays: () => resolved().overlays,
         interactionRenderers: () => resolved().interactionRenderers,
         borderLabels: () => resolved().borderLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
-        failures: () => resolved().failures,
+        failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,
         setOverlayDispatch,
         setActivityProvider: (provider) => setActivityProvider(() => provider),

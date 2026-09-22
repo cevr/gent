@@ -126,10 +126,10 @@ const discoverTuiExtensions = (opts: {
  * contribution is dropped and recorded in `failures`. Nothing else is lost.
  *
  * Keyed buckets (renderers by tool name, widgets and overlays by id,
- * interaction renderers by metadata type, commands by id) go through
- * `resolveKeyed`. A command's keybind and slash then go to its highest-scope
- * claimant, and `stripSuperseded` removes them from the earlier owner. Border
- * labels and autocomplete sources are collected in scope order.
+ * interaction renderers by metadata type) go through `resolveKeyed`. Commands
+ * are passed on as sources: the host adds the session's and the server's and
+ * resolves them all under `resolveCommands`. Border labels and autocomplete
+ * sources are collected in scope order.
  */
 
 /** A client extension, or one of its contributions, that did not load. */
@@ -162,7 +162,8 @@ export interface ResolvedBorderLabel {
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
-  readonly commands: ReadonlyArray<Command>
+  /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
+  readonly commandSources: ReadonlyArray<CommandSource>
   readonly overlays: Map<string, OverlayComponent>
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
@@ -187,16 +188,16 @@ const itemsOrEmpty = <A>(items: ReadonlyArray<A> | undefined): ReadonlyArray<A> 
  */
 const collides = (
   held: Option.Option<Claim>,
-  ext: LoadedTuiExtension,
+  claimant: { readonly id: string; readonly scope: ExtensionScope; readonly source: string },
   label: string,
   key: string,
   failures: Array<ClientExtensionFailure>,
 ): boolean => {
-  if (Option.isNone(held) || held.value.scope !== ext.scope) return false
-  if (held.value.source === ext.filePath) return false
+  if (Option.isNone(held) || held.value.scope !== claimant.scope) return false
+  if (held.value.source === claimant.source) return false
   failures.push({
-    id: ext.id,
-    reason: `${label} "${key}" is already claimed by "${held.value.source}" in scope "${ext.scope}"`,
+    id: claimant.id,
+    reason: `${label} "${key}" is already claimed by "${held.value.source}" in scope "${claimant.scope}"`,
   })
   return true
 }
@@ -223,12 +224,33 @@ const resolveKeyed = <K, V>(
   for (const ext of sorted) {
     for (const entry of entriesOf(ext.contributions)) {
       const held = Option.fromNullishOr(claims.get(entry.key))
-      if (collides(held, ext, label, entry.name, failures)) continue
+      const claimant = { id: ext.id, scope: ext.scope, source: ext.filePath }
+      if (collides(held, claimant, label, entry.name, failures)) continue
       values.set(entry.key, entry.value)
       claims.set(entry.key, { scope: ext.scope, source: ext.filePath })
     }
   }
   return values
+}
+
+// ── command resolution ──
+
+/**
+ * One owner of commands: the session's own commands, each client extension,
+ * and each server extension's slash commands. The session's commands and the
+ * server's sit at builtin scope.
+ */
+export interface CommandSource {
+  readonly id: string
+  readonly scope: ExtensionScope
+  /** Where the commands come from, named in a collision report. */
+  readonly source: string
+  readonly commands: ReadonlyArray<Command>
+}
+
+interface ResolvedCommands {
+  readonly commands: ReadonlyArray<Command>
+  readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
 
 type CommandAffordance = "keybind" | "slash"
@@ -246,7 +268,7 @@ interface AffordanceHolder {
 const stripSuperseded = (
   field: CommandAffordance,
   entry: Command,
-  ext: LoadedTuiExtension,
+  source: CommandSource,
   kept: Map<string, Command>,
   holders: Map<string, AffordanceHolder>,
   failures: Array<ClientExtensionFailure>,
@@ -256,7 +278,7 @@ const stripSuperseded = (
   const key = value.value.toLowerCase()
   const held = Option.fromNullishOr(holders.get(key))
   const heldClaim = Option.map(held, (holder) => holder.claim)
-  if (collides(heldClaim, ext, field, value.value, failures)) return false
+  if (collides(heldClaim, source, field, value.value, failures)) return false
   if (Option.isSome(held)) {
     const previous = Option.fromNullishOr(kept.get(held.value.commandId))
     if (Option.isSome(previous)) {
@@ -266,33 +288,41 @@ const stripSuperseded = (
       })
     }
   }
-  holders.set(key, { commandId: entry.id, claim: { scope: ext.scope, source: ext.filePath } })
+  holders.set(key, { commandId: entry.id, claim: { scope: source.scope, source: source.source } })
   return true
 }
 
-const resolveCommands = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-  failures: Array<ClientExtensionFailure>,
-): ReadonlyArray<Command> => {
-  const winners = resolveKeyed(sorted, failures, "command", (contributions) =>
-    itemsOrEmpty(contributions.commands).map((entry) => ({
-      key: entry.id,
-      value: entry,
-      name: entry.id,
-    })),
-  )
+/**
+ * The one command rule. Sources resolve by scope (builtin, then user, then
+ * project), in the given order inside a scope. A higher scope replaces a
+ * command id and takes its keybind or slash from the earlier owner; a
+ * same-scope claim of a held id, keybind or slash drops the later command.
+ */
+export const resolveCommands = (sources: ReadonlyArray<CommandSource>): ResolvedCommands => {
+  const ordered = [...sources].sort((a, b) => SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope])
+  const failures: Array<ClientExtensionFailure> = []
+  const winners = new Map<string, Command>()
+  const idClaims = new Map<string, Claim>()
+  for (const source of ordered) {
+    for (const entry of source.commands) {
+      const held = Option.fromNullishOr(idClaims.get(entry.id))
+      if (collides(held, source, "command", entry.id, failures)) continue
+      winners.set(entry.id, entry)
+      idClaims.set(entry.id, { scope: source.scope, source: source.source })
+    }
+  }
   const kept = new Map<string, Command>()
   const keybinds = new Map<string, AffordanceHolder>()
   const slashes = new Map<string, AffordanceHolder>()
-  for (const ext of sorted) {
-    for (const entry of itemsOrEmpty(ext.contributions.commands)) {
+  for (const source of ordered) {
+    for (const entry of source.commands) {
       if (winners.get(entry.id) !== entry) continue
-      if (!stripSuperseded("keybind", entry, ext, kept, keybinds, failures)) continue
-      if (!stripSuperseded("slash", entry, ext, kept, slashes, failures)) continue
+      if (!stripSuperseded("keybind", entry, source, kept, keybinds, failures)) continue
+      if (!stripSuperseded("slash", entry, source, kept, slashes, failures)) continue
       kept.set(entry.id, entry)
     }
   }
-  return [...kept.values()]
+  return { commands: [...kept.values()], failures }
 }
 
 const byPriority = <A extends { readonly priority: number }>(items: ReadonlyArray<A>) =>
@@ -339,7 +369,6 @@ export const resolveTuiExtensions = (
       name: contribution.id,
     })),
   )
-  const commands = resolveCommands(sorted, failures)
   const overlays = resolveKeyed(sorted, failures, "overlay", (contributions) =>
     itemsOrEmpty(contributions.overlays).map((contribution) => ({
       key: contribution.id,
@@ -361,7 +390,12 @@ export const resolveTuiExtensions = (
   return {
     renderers,
     widgets: byPriority([...widgets.values()]),
-    commands,
+    commandSources: sorted.map((ext) => ({
+      id: ext.id,
+      scope: ext.scope,
+      source: ext.filePath,
+      commands: itemsOrEmpty(ext.contributions.commands),
+    })),
     overlays,
     interactionRenderers,
     borderLabels: byPriority(

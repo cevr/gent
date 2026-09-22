@@ -31,6 +31,7 @@ import {
   loadTuiExtensions as _loadTuiExtensions,
   type LoadedTuiExtension,
   type ResolvedTuiExtensions,
+  resolveCommands,
   resolveTuiExtensions,
   runAutocompleteContributions,
 } from "../../src/extensions/loader-boundary"
@@ -61,6 +62,10 @@ import { makeClientRuntime } from "../../src/extensions/host"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 
 // ── ../extensions-resolve.test ──────────────────────────────────────────────
+
+/** The commands a load resolves to, before the session and the server add theirs. */
+const commandsOf = (resolved: ResolvedTuiExtensions) =>
+  resolveCommands(resolved.commandSources).commands
 
 const make = (
   id: string,
@@ -193,8 +198,9 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    const oldCommand = resolved.commands.find((command) => command.id === "cmd-old")
-    const newCommand = resolved.commands.find((command) => command.id === "cmd-new")
+    const { commands } = resolveCommands(resolved.commandSources)
+    const oldCommand = commands.find((command) => command.id === "cmd-old")
+    const newCommand = commands.find((command) => command.id === "cmd-new")
 
     expect(newCommand?.slash).toBe("deploy")
     expect(newCommand?.keybind).toBe("ctrl+k")
@@ -324,8 +330,9 @@ describe("resolveTuiExtensions", () => {
         clientCommandContribution({ id: "z", title: "D", slash: "same", onSelect: () => {} }),
       ),
     ])
-    expect(resolved.commands.map((command) => command.title)).toEqual(["A", "B"])
-    expect(resolved.failures.map((failure) => failure.id)).toEqual(["c", "d"])
+    const { commands, failures } = resolveCommands(resolved.commandSources)
+    expect(commands.map((command) => command.title)).toEqual(["A", "B"])
+    expect(failures.map((failure) => failure.id)).toEqual(["c", "d"])
   })
 })
 
@@ -1137,7 +1144,7 @@ describe("loadTuiExtensions", () => {
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.renderers.has("bash")).toBe(true)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(false)
+      expect(commandsOf(resolved).some((command) => command.id === "plan.create")).toBe(false)
       rmSync(emptyUser, { recursive: true, force: true })
       rmSync(emptyProject, { recursive: true, force: true })
     }),
@@ -1156,7 +1163,7 @@ describe("loadTuiExtensions", () => {
         )
         expect(resolved.renderers.has("my_custom_tool")).toBe(true)
         expect(resolved.widgets.some((widget) => widget.id === "test-widget")).toBe(true)
-        expect(resolved.commands.some((command) => command.id === "test-cmd")).toBe(true)
+        expect(commandsOf(resolved).some((command) => command.id === "test-cmd")).toBe(true)
         expect(resolved.overlays.has("test-overlay")).toBe(true)
       }),
   )
@@ -1172,7 +1179,7 @@ describe("loadTuiExtensions", () => {
             projectDir: PROJECT_DIR,
           }),
         )
-        const commandIds = resolved.commands.map((command) => command.id)
+        const commandIds = commandsOf(resolved).map((command) => command.id)
         expect(commandIds).toContain("prebuilt")
         expect(commandIds).not.toContain("hidden")
         expect(commandIds).not.toContain("internal")
@@ -1248,7 +1255,7 @@ export default {
       expect(resolved.renderers.has("read")).toBe(false)
       expect(resolved.renderers.has("bash")).toBe(false)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(false)
+      expect(commandsOf(resolved).some((command) => command.id === "plan.create")).toBe(false)
       rmSync(disabledDir, { recursive: true, force: true })
     }),
   )

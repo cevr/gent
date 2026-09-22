@@ -1190,12 +1190,11 @@ function createPromptSearchController(params: {
 interface SessionCommandRegistryProps {
   readonly client: ClientContextValue
   readonly command: {
-    readonly commands: Accessor<readonly Command[]>
-    readonly register: (commands: Command[]) => () => void
     readonly openPalette: () => void
   }
   readonly ext: {
-    readonly commands: Accessor<readonly Command[]>
+    readonly commands: Accessor<ReadonlyArray<Command>>
+    readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
     readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
@@ -1270,7 +1269,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "new",
     aliases: ["clear"],
-    slashPriority: 0,
     onSelect: () => props.client.createSession(),
   },
   {
@@ -1279,7 +1277,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     description: "Forget which commands and skills you pick most (/frecency-reset)",
     category: "Session",
     slash: "frecency-reset",
-    slashPriority: 0,
     onSelect: props.resetFrecency,
   },
   {
@@ -1287,7 +1284,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Open Sessions",
     category: "Session",
     slash: "sessions",
-    slashPriority: 0,
     onSelect: () => props.command.openPalette(),
   },
   {
@@ -1295,7 +1291,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Create Branch",
     category: "Session",
     slash: "branch",
-    slashPriority: 0,
     onSelect: () => {
       props.cast(props.client.surfaceError(props.client.createBranch()))
     },
@@ -1305,7 +1300,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Fork from Message",
     category: "Session",
     slash: "fork",
-    slashPriority: 0,
     onSelect: props.openForkPicker,
   },
   {
@@ -1314,7 +1308,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     description: "Pick the reasoning level for this session (/think <level>, /think default)",
     category: "Session",
     slash: "think",
-    slashPriority: 0,
     onSelect: props.openReasoningPicker,
     onSlash: (args) => {
       const level = args.trim().toLowerCase()
@@ -1347,7 +1340,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     description: "Pick the model for this session (/model <id or name>, /model default)",
     category: "Session",
     slash: "model",
-    slashPriority: 0,
     onSelect: props.openModelPicker,
     onSlash: (args) => {
       const query = args.trim()
@@ -1382,27 +1374,15 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Manage API Keys",
     category: "Session",
     slash: "auth",
-    slashPriority: 0,
     onSelect: props.openAuth,
   },
 ]
 
 const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void => {
-  const unsubBuiltins = props.command.register(createSessionBuiltins(props))
-  let unsubExtCommands: Option.Option<() => void> = Option.none()
+  props.ext.setSessionCommands(createSessionBuiltins(props))
 
   createEffect(() => {
-    if (Option.isSome(unsubExtCommands)) unsubExtCommands.value()
-    const cmds = props.ext.commands()
-    if (cmds.length > 0) {
-      unsubExtCommands = Option.some(props.command.register([...cmds]))
-    } else {
-      unsubExtCommands = Option.none()
-    }
-  })
-
-  createEffect(() => {
-    const allCommands = props.command.commands()
+    const allCommands = props.ext.commands()
     props.ext.setDynamicAutocomplete([
       {
         prefix: "/",
@@ -1416,8 +1396,7 @@ const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void 
   })
 
   onCleanup(() => {
-    unsubBuiltins()
-    if (Option.isSome(unsubExtCommands)) unsubExtCommands.value()
+    props.ext.setSessionCommands([])
     props.ext.setDynamicAutocomplete([])
   })
 }
@@ -2822,7 +2801,7 @@ export function createSessionController(props: {
 
   const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
     Effect.sync(() => {
-      const result = executeSlashCommand(cmd, args, command.commands())
+      const result = executeSlashCommand(cmd, args, ext.commands())
       Option.match(Option.fromNullishOr(result.error), {
         onNone: () => {},
         onSome: (error) => client.setError(error),
@@ -2916,7 +2895,7 @@ export function createSessionController(props: {
   }
 
   useScopedKeyboard((event) => {
-    if (command.handleKeybind(event)) return true
+    if (command.handleKeybind(event, ext.commands())) return true
     if (event.ctrl === true && event.name === "c") {
       handleInterrupt()
       return true
