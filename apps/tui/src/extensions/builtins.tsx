@@ -44,6 +44,7 @@ import {
 } from "@gent/extensions/client.js"
 import { useTheme } from "../theme"
 import { useClient } from "../client"
+import { useExtensionUI } from "./host"
 import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
 import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../interaction-renderers"
 import builtinAgentsView from "./agents.client"
@@ -601,6 +602,7 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
 
 export function ConnectionWidget() {
   const client = useClient()
+  const ext = useExtensionUI()
   const { theme } = useTheme()
   const disconnectedReason = () => {
     const state = Option.fromNullishOr(client.connectionState())
@@ -616,10 +618,12 @@ export function ConnectionWidget() {
     if (health._tag === "Degraded") return health.degradedExtensions
     return []
   }
-  const failedExtensions = () =>
-    degradedExtensions()
+  const failedExtensions = () => [
+    ...degradedExtensions()
       .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
-      .map((extension) => extension.manifest.id)
+      .map((extension) => extension.manifest.id),
+    ...ext.failures().map((failure) => failure.id),
+  ]
   const hasFailedExtensions = () => failedExtensions().length > 0
   const visible = () =>
     client.isReconnecting() ||

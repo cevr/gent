@@ -31,6 +31,7 @@ import type { ToolRenderer } from "../tool-renderers"
 import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
 import {
+  type ClientExtensionFailure,
   loadExtensionUi,
   type ResolvedBorderLabel,
   type ResolvedTuiExtensions,
@@ -115,6 +116,8 @@ interface ExtensionUIContextValue {
   readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
+  /** Client extensions, or contributions, that did not load. */
+  readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
@@ -144,6 +147,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   interactionRenderers: new Map(),
   borderLabels: [],
   autocompleteItems: [],
+  failures: [],
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -255,7 +259,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       cwd: workspace.cwd,
     })
       .then(setResolved)
-      .catch(() => {})
+      .catch((error: Error) =>
+        setResolved({
+          ...EMPTY_RESOLVED,
+          failures: [{ id: "client extensions", reason: String(error) }],
+        }),
+      )
       .finally(() => setLoading(false))
   })
 
@@ -347,6 +356,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         interactionRenderers: () => resolved().interactionRenderers,
         borderLabels: () => resolved().borderLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
+        failures: () => resolved().failures,
         loading,
         setDynamicAutocomplete,
         setOverlayDispatch,

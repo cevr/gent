@@ -1,15 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import {
-  Cause,
-  DateTime,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Predicate,
-  Schedule,
-  Schema,
-} from "effect"
+import { DateTime, Effect, FileSystem, Option, Path, Predicate, Schedule, Schema } from "effect"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core-internal/domain/ids"
 import {
@@ -263,7 +253,7 @@ describe("resolveTuiExtensions", () => {
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
   })
 
-  test("overlay surfaces use scope precedence and same-scope collisions still fail loudly", () => {
+  test("overlay surfaces use scope precedence and a same-scope collision drops the later one", () => {
     const resolved = resolveTuiExtensions([
       make(
         "builtin-overlay",
@@ -282,12 +272,14 @@ describe("resolveTuiExtensions", () => {
     if (Option.isNone(modal)) return
     expect(modal.value(overlayProps)).toBe("project")
 
-    expect(() =>
-      resolveTuiExtensions([
-        make("a", "user", overlayContribution({ id: "dup", component: overlay("a") })),
-        make("b", "user", overlayContribution({ id: "dup", component: overlay("b") })),
-      ]),
-    ).toThrow(/Same-scope TUI overlay collision/)
+    const collided = resolveTuiExtensions([
+      make("a", "user", overlayContribution({ id: "dup", component: overlay("a") })),
+      make("b", "user", overlayContribution({ id: "dup", component: overlay("b") })),
+    ])
+    const dup = Option.fromNullishOr(collided.overlays.get("dup"))
+    expect(Option.isSome(dup)).toBe(true)
+    if (Option.isSome(dup)) expect(dup.value(overlayProps)).toBe("a")
+    expect(collided.failures.map((failure) => failure.id)).toEqual(["b"])
   })
 
   test("border labels remain collected and priority sorted", () => {
@@ -344,21 +336,27 @@ describe("resolveTuiExtensions", () => {
     expect(resolved.autocompleteItems.map((entry) => entry.prefix)).toEqual(["$", "/", "@"])
   })
 
-  test("same-scope command collisions still fail loudly", () => {
-    expect(() =>
-      resolveTuiExtensions([
-        make(
-          "a",
-          "builtin",
-          clientCommandContribution({ id: "x", title: "A", onSelect: () => {} }),
-        ),
-        make(
-          "b",
-          "builtin",
-          clientCommandContribution({ id: "x", title: "B", onSelect: () => {} }),
-        ),
-      ]),
-    ).toThrow(/Same-scope TUI command collision/)
+  test("a same-scope command collision keeps the first command and records the second", () => {
+    const resolved = resolveTuiExtensions([
+      make("a", "builtin", clientCommandContribution({ id: "x", title: "A", onSelect: () => {} })),
+      make(
+        "b",
+        "builtin",
+        clientCommandContribution({ id: "y", title: "B", slash: "same", onSelect: () => {} }),
+      ),
+      make(
+        "c",
+        "builtin",
+        clientCommandContribution({ id: "x", title: "C", slash: "other", onSelect: () => {} }),
+      ),
+      make(
+        "d",
+        "builtin",
+        clientCommandContribution({ id: "z", title: "D", slash: "same", onSelect: () => {} }),
+      ),
+    ])
+    expect(resolved.commands.map((command) => command.title)).toEqual(["A", "B"])
+    expect(resolved.failures.map((failure) => failure.id)).toEqual(["c", "d"])
   })
 })
 
@@ -462,6 +460,7 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
         }),
       )
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+      expect(result.failures.map((failure) => failure.id)).toEqual(["@test/broken"])
     }),
   )
   // Regression lock — discovered (not pre-imported) modules with an
@@ -1034,10 +1033,6 @@ describe("skills autocomplete records and reads pick history", () => {
  * discovery, override precedence, disabled gating, invalid-file tolerance,
  * overlay state, autocomplete visibility, and startup with an active session.
  */
-class ExtensionIntegrationTestError extends Schema.TaggedError<ExtensionIntegrationTestError>()(
-  "ExtensionIntegrationTestError",
-  { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
-) {}
 const throwOnAccess = (label: string): never =>
   Effect.runSync(Effect.die(`unexpected transport call in pure load test: ${label}`))
 const stubClient = new Proxy(createMockClient(), {
@@ -1300,10 +1295,13 @@ export default {
         }),
       )
       expect(resolved.renderers.has("read")).toBe(true)
+      expect(resolved.failures).toEqual([
+        { id: join(badDir, "bad.client.ts"), reason: "missing id" },
+      ])
       rmSync(badDir, { recursive: true, force: true })
     }),
   )
-  it.scopedLive("same-scope collisions still fail through the public load path", () =>
+  it.scopedLive("a same-scope collision drops the later contribution and keeps every builtin", () =>
     Effect.gen(function* () {
       yield* integrationFixture
       const collisionDir = join(TEST_DIR, "collision-tool")
@@ -1326,19 +1324,21 @@ export default defineClientExtension("@test/b", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "b")),
 })`,
       )
-      const exit = yield* Effect.tryPromise({
-        try: () =>
-          loadTuiExtensions({
-            builtins: builtinClientModules,
-            userDir: collisionDir,
-            projectDir: join(TEST_DIR, "no-project"),
-          }),
-        catch: (cause) => new ExtensionIntegrationTestError({ message: String(cause), cause }),
-      }).pipe(Effect.exit)
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        expect(String(Cause.squash(exit.cause))).toContain("Same-scope TUI renderer collision")
-      }
+      const resolved = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        }),
+      )
+      expect(resolved.renderers.has("read")).toBe(true)
+      expect(resolved.renderers.has("bash")).toBe(true)
+      const myTool = Option.fromNullishOr(resolved.renderers.get("my_tool"))
+      if (Option.isNone(myTool)) return yield* Effect.die("expected my_tool renderer")
+      expect(myTool.value(toolProps)).toBe("a")
+      expect(resolved.failures).toHaveLength(1)
+      expect(resolved.failures[0]?.id).toBe("@test/b")
+      expect(resolved.failures[0]?.reason).toContain('renderer "my_tool"')
       rmSync(collisionDir, { recursive: true, force: true })
     }),
   )
