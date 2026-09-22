@@ -379,13 +379,26 @@ const deliverCompletion = (
     return settled(entry, outcome, usage, text)
   })
 
+const CHILD_TASK_PREFIX = "Task from your parent session "
+
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
  * own task for an injection.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
-  `Task from your parent session ${parentSessionId}. Your final reply returns to the parent as your completion; ask it with session.send if you are blocked.\n\n${prompt}`
+  `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply returns to the parent as your completion; ask it with session.send if you are blocked.\n\n${prompt}`
+
+/** The task without its source line; a message that is not a child task is returned whole. */
+export const childTaskBody = (text: string): string =>
+  Option.liftPredicate(text, (value) => value.startsWith(CHILD_TASK_PREFIX)).pipe(
+    Option.flatMap((value) =>
+      Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
+        Option.map((split) => value.slice(split + 2)),
+      ),
+    ),
+    Option.getOrElse(() => text),
+  )
 
 /** The child's prompt as its one durable turn. A repeat with the same id is a no-op at the loop. */
 const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>

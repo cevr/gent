@@ -13,6 +13,7 @@ import {
   type SelectListRow,
   usePickerGeometry,
 } from "../ui"
+import { childTaskBody } from "@gent/extensions/client.js"
 import { formatAge, plural, truncate } from "../utils"
 import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
@@ -201,7 +202,8 @@ const windowOf = (
         omittedCount: 0,
         preview: Option.match(spoken, {
           onNone: () => "",
-          onSome: (message) => firstLine(messageText(message)),
+          // A child's first message opens with its source; the preview shows the task.
+          onSome: (message) => firstLine(childTaskBody(messageText(message))),
         }),
         updatedAt: last.createdAt.getTime(),
       }
