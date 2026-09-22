@@ -1366,6 +1366,71 @@ describe("extension command RPCs", () => {
     ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 
+  it.live("a child session created through the facade starts its own thread", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/spawn-child")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "spawn-child",
+              input: Schema.String,
+              output: SessionId,
+              execute: (name) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const child = yield* ctx.Session.create({
+                    name,
+                    parentSessionId: ctx.sessionId,
+                    parentBranchId: ctx.branchId,
+                  })
+                  return child.sessionId
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "spawn-child",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [ext],
+              cwd: "/tmp/gent-child-thread",
+            })
+            const childId = yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "spawn-child",
+              input: "side work",
+            })
+            const child = yield* Schema.decodeUnknownEffect(SessionId)(childId)
+            const parentThread = yield* client.session.thread({ sessionId })
+            expect(parentThread.map((session) => session.id)).toEqual([sessionId])
+            const childThread = yield* client.session.thread({ sessionId: child })
+            expect(childThread.map((session) => session.id)).toEqual([child])
+            expect(childThread[0]?.parentSessionId).toBe(sessionId)
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+
   it.live("RPC request follow-up on a warm idle branch runs the queued turn", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-warm")

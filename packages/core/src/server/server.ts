@@ -552,7 +552,6 @@ const makeSessionMutationsService: Effect.Effect<
             message: "parentBranchId requires parentSessionId",
           })
         }
-        let parentThread = Option.none<SessionId>()
         if (!Predicate.isUndefined(input.parentSessionId)) {
           const parent = yield* sessionStorage.getSession(input.parentSessionId)
           if (Predicate.isUndefined(parent)) {
@@ -560,7 +559,6 @@ const makeSessionMutationsService: Effect.Effect<
               message: `Parent session not found: ${input.parentSessionId}`,
             })
           }
-          parentThread = Option.fromNullishOr(parent.threadId)
           yield* admitChildSessionDepth(input.parentSessionId).pipe(
             Effect.provideService(RelationshipStorage, relationshipStorage),
           )
@@ -583,9 +581,8 @@ const makeSessionMutationsService: Effect.Effect<
         const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
-        // A handoff continues the parent's work, so it stays in the parent's
-        // thread. Every other create — including a spawn — starts its own,
-        // which storage supplies by defaulting the thread to the session id.
+        // Every created session starts its own thread, a child included:
+        // storage defaults the thread to the session id.
         const session = new Session({
           id: sessionId,
           name,
@@ -593,7 +590,6 @@ const makeSessionMutationsService: Effect.Effect<
           activeBranchId: branchId,
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
-          threadId: Option.getOrUndefined(parentThread),
           createdAt: now,
           updatedAt: now,
         })
