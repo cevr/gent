@@ -25,7 +25,7 @@ import {
 } from "../src/agents"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentsExtension } from "../src/agents.js"
-import { FsToolsExtension } from "../src/index.js"
+import { FsToolsExtension } from "../src/fs-tools.js"
 import { isToolEventFor } from "./helpers/tool-event.js"
 
 // ── agents.test ─────────────────────────────────────────────────────────────

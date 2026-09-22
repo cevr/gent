@@ -6,7 +6,7 @@ import {
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CellBranchTools, CellExtension } from "./cell.js"
-import { CompactionExtension, ModelContextCompactorResource } from "./compaction.js"
+import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
 import { DelegateExtension } from "./delegate.js"
 import { AgentsExtension } from "./agents.js"
@@ -52,30 +52,12 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.ma
 
 // ── builtin composition ─────────────────────────────────────────────────────
 
-export {
-  CompactionExtension,
-  ModelContextCompactorResource,
-  ExecToolsExtension,
-  DelegateExtension,
-  AgentsExtension,
-  SkillsExtension,
-  AcpAgentsExtension,
-  WorkflowsExtension,
-  HandoffExtension,
-  GoalExtension,
-  WakeExtension,
-  BtwExtension,
-  AgentsViewExtension,
-  SessionToolsExtension,
-  FsToolsExtension,
-}
-
 /**
- * The cell: the surface the model runs code on, and the branch-tool feature
- * that surface needs installed. A root naming one names the other -- a `cell`
- * tool whose storage and kernel are missing fails on first use.
+ * The branch-tool feature the cell in `BuiltinExtensions` needs. A root that
+ * installs the builtins passes this too -- a `cell` tool whose storage and
+ * kernel are missing fails on first use.
  */
-export { CellExtension, CellBranchTools }
+export { CellBranchTools }
 
 export const BuiltinExtensions: ReadonlyArray<
   GentExtension<ChildProcessSpawner | ExtensionHost | FileSystem.FileSystem | Path.Path>
