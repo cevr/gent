@@ -58,6 +58,9 @@ const researchRecipe = (input: string) => {
   ].join("\n")
 }
 
+const handoffRecipe = () =>
+  "Please create a handoff by distilling the current context into a concise summary. Use the handoff tool with the distilled context. Include: current task status, key decisions made, relevant file paths, open questions, and any state that needs to carry over to the new session."
+
 const command = (params: {
   readonly id: string
   readonly slash: {
@@ -147,6 +150,18 @@ const WorkflowCommands = [
       category: "Tools",
     },
     recipe: researchRecipe,
+  }),
+  // Context pressure is the runtime's job: it compacts automatically and the
+  // transcript shows the record. Handoff stays an explicit user action.
+  command({
+    id: "handoff-command",
+    slash: {
+      trigger: "handoff",
+      name: "Handoff",
+      description: "Distill context into new session",
+      category: "Workflow",
+    },
+    recipe: handoffRecipe,
   }),
 ]
 

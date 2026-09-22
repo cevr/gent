@@ -17,7 +17,6 @@ import { GoogleExtension, MistralExtension } from "./providers.js"
 import { SkillsExtension } from "./skills.js"
 import { AcpAgentsExtension } from "./acp-agents.js"
 import { WorkflowsExtension } from "./workflows.js"
-import { HandoffExtension } from "./handoff.js"
 import { GoalExtension } from "./goal.js"
 import { WakeExtension } from "./wake.js"
 import { BtwExtension } from "./btw.js"
@@ -64,7 +63,6 @@ export const BuiltinExtensions: ReadonlyArray<
 > = [
   CellExtension,
   CompactionExtension,
-  HandoffExtension,
   GoalExtension,
   WakeExtension,
   BtwExtension,

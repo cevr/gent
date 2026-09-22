@@ -202,6 +202,55 @@ export const PromptTool = tool({
   }),
 })
 
+// ── handoff ─────────────────────────────────────────────────────────────────
+
+const HandoffParams = Schema.Struct({
+  context: Schema.String.annotate({
+    description:
+      "Distilled context for the new session. Include: current task, key decisions, relevant files, open questions, and any state that needs to carry over. This becomes the initial prompt.",
+  }),
+  reason: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "Why handoff is needed (e.g. context window filling up)",
+    }),
+  ),
+})
+
+const HandoffResult = Schema.Struct({
+  handoff: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
+  parentSessionId: Schema.optional(Schema.String),
+})
+
+/** One approval with `metadata.type: "handoff"`; on yes the client opens the new session. */
+export const HandoffTool = tool({
+  id: "handoff",
+  description:
+    "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
+  promptSnippet: "Transfer context to a new session",
+  promptGuidelines: [
+    "ONLY use when context is getting large and you need a clean slate",
+    "Include all essential context — the new session starts fresh",
+  ],
+  params: HandoffParams,
+  output: HandoffResult,
+  execute: Effect.fn("HandoffTool.execute")(function* (params: typeof HandoffParams.Type) {
+    const ctx = yield* ExtensionContext
+    const decision = yield* ctx.Interaction.approve({
+      text: params.context,
+      metadata: { type: "handoff", reason: params.reason },
+    })
+    if (!decision.approved) return { handoff: false, reason: "User rejected handoff" }
+    return {
+      handoff: true,
+      summary: params.context,
+      reason: params.reason,
+      parentSessionId: ctx.sessionId,
+    }
+  }),
+})
+
 // ── extension ───────────────────────────────────────────────────────────────
 
 const INTERACTION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/interaction-tools")
@@ -210,6 +259,6 @@ export const InteractionToolsExtension = defineExtension({
   id: INTERACTION_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", AskUserTool, PromptTool)
+    yield* host.register("tool", AskUserTool, PromptTool, HandoffTool)
   }),
 })
