@@ -2,6 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Option } from "effect"
 import { createRoot, createSignal } from "solid-js"
+import type { TextareaRenderable } from "@opentui/core"
 import { BranchId, SessionId } from "@gent/core/extensions/api"
 import type { ForkViewType } from "@gent/extensions/client.js"
 import btwExtension, { ForkPane, makeForkPane } from "../../src/extensions/btw.client"
@@ -155,6 +156,39 @@ describe("fork pane", () => {
       setup.mockInput.pressEnter()
       yield* queue.drain
       expect(server.asked).toEqual(["and then?"])
+    }),
+  )
+
+  it.scopedLive("a paste while the pane is open fills its ask line, not the composer", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      let composer = Option.none<TextareaRenderable>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <box flexDirection="column">
+            <textarea focused ref={(node: TextareaRenderable) => (composer = Option.some(node))} />
+            <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+          </box>
+        )),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "fork view"),
+      )
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText("pasted\nquestion"))
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("ask › pasted question"), "draft"),
+      )
+      expect(Option.map(composer, (node) => node.plainText)).toEqual(Option.some(""))
+      setup.mockInput.pressEnter()
+      yield* queue.drain
+      expect(server.asked).toEqual(["pasted question"])
     }),
   )
 

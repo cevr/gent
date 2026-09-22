@@ -113,12 +113,17 @@ const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
     (text) => text.length > 0 && [...text].every((char) => char >= " " && char !== "\u007f"),
   )
 
+/** The ask line is one line: a pasted line break becomes a space, other control bytes drop. */
+const pastedText = (text: string): string =>
+  [...text.replace(/\r?\n/g, " ")].filter((char) => char >= " " && char !== "\u007f").join("")
+
 /**
  * The fork pane, docked under the composer like the thread and agents panes.
  *
  * The composer keeps the terminal's focus, so the pane takes its keys through
  * the keyboard scope, as the agents filter does: a key it types or acts on
- * never reaches the composer, and any other key (a keybind) still does.
+ * never reaches the composer, and any other key (a keybind) still does. A
+ * paste goes to the ask line through the same scope.
  */
 export function ForkPane(props: {
   open: boolean
@@ -160,7 +165,13 @@ export function ForkPane(props: {
       setDraft((current) => current + typed.value)
       return true
     },
-    { when: () => props.open },
+    {
+      when: () => props.open,
+      paste: (text) => {
+        setDraft((current) => current + pastedText(text))
+        return true
+      },
+    },
   )
 
   const height = () => Math.max(8, Math.floor(dimensions().height / 2))

@@ -182,7 +182,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     },
     workspace: { cwd: workspace.cwd, home: workspace.home },
     shell: {
-      notify: (message) => client.setError(message),
+      notify: (message) => client.setNotice(message),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
     },

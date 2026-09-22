@@ -65,11 +65,13 @@ import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/work
 import { baseLocalLayer } from "@gent/core-internal/test-utils/index"
 import { createMemo, createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
-import { runEffectBoundary } from "./run-effect-boundary"
+import { runEffectBoundary, runRuntimeEffectBoundary } from "./run-effect-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ExtensionId, InteractionRequestId, RequestId } from "@gent/core-internal/domain/ids"
 import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
 import { useSessionFeed } from "../src/session"
+import { useExtensionUI } from "../src/extensions/host"
+import { type ClientRuntime, ClientShell } from "../src/extensions/client-facets"
 
 // ── agent-lifecycle.test ────────────────────────────────────────────────────
 
@@ -1066,6 +1068,67 @@ describe("ClientProvider session lifecycle", () => {
       client.applySessionRuntime({ sessionId, branchId, runtime })
       expect(client.isStreaming()).toBe(false)
     }),
+  )
+  it.live("an extension notice keeps the running turn and the standing error", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      let runtime = Option.none<ClientRuntime>()
+      const sessionId = SessionId.make("session-notice")
+      const branchId = BranchId.make("branch-notice")
+      function NoticeProbe() {
+        const client = useClient()
+        const ext = useExtensionUI()
+        onMount(() => {
+          ctx = Option.some(client)
+          runtime = Option.some(ext.clientRuntime)
+        })
+        return <box />
+      }
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <NoticeProbe />, {
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Notice",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClientSessionState(ctx)
+      const clientRuntime = yield* requireValue(runtime, "extension runtime never mounted")
+      const notify = (message: string) =>
+        Effect.promise(() =>
+          runRuntimeEffectBoundary(
+            clientRuntime,
+            ClientShell.use((shell) => Effect.sync(() => shell.notify(message))),
+          ),
+        )
+      client.applySessionSnapshot({
+        sessionId,
+        branchId,
+        messages: [],
+        lastEventId: 1,
+        reasoningLevel: absent,
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        runtime: { _tag: "Running", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
+        metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+      })
+      yield* notify("Usage: /driver <agent> <driver-id|default>")
+      // Esc cancels a streaming turn; a notice must not turn it into a quit.
+      expect(client.isStreaming()).toBe(true)
+      expect(client.notice()).toEqual(Option.some("Usage: /driver <agent> <driver-id|default>"))
+
+      client.applySessionRuntime({
+        sessionId,
+        branchId,
+        runtime: { _tag: "Idle", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
+      })
+      client.setError("provider refused the request")
+      yield* notify('Unknown driver "nope".')
+      expect(client.error()).toBe("provider refused the request")
+      expect(client.notice()).toEqual(Option.some('Unknown driver "nope".'))
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("model list failures surface as agent errors", () =>
     Effect.gen(function* () {

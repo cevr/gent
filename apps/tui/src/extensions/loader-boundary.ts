@@ -259,24 +259,35 @@ interface AffordanceHolder {
 }
 
 /**
- * Give `entry` its `field` (keybind or slash) and strip it from the command
- * that held it before. Returns false, recording a failure, when a command of
- * the same scope already holds it.
+ * Whether a command of the same scope already holds `entry`'s `field`
+ * (keybind or slash). A collision is recorded as a failure.
  */
-const stripSuperseded = (
+const affordanceCollides = (
+  field: CommandAffordance,
+  entry: Command,
+  source: CommandSource,
+  holders: Map<string, AffordanceHolder>,
+  failures: Array<ClientExtensionFailure>,
+): boolean => {
+  const value = Option.fromNullishOr(entry[field])
+  if (Option.isNone(value)) return false
+  const held = Option.fromNullishOr(holders.get(value.value.toLowerCase()))
+  const heldClaim = Option.map(held, (holder) => holder.claim)
+  return collides(heldClaim, source, field, value.value, failures)
+}
+
+/** Give `entry` its `field` and strip it from the command that held it before. */
+const takeAffordance = (
   field: CommandAffordance,
   entry: Command,
   source: CommandSource,
   kept: Map<string, Command>,
   holders: Map<string, AffordanceHolder>,
-  failures: Array<ClientExtensionFailure>,
-): boolean => {
+): void => {
   const value = Option.fromNullishOr(entry[field])
-  if (Option.isNone(value)) return true
+  if (Option.isNone(value)) return
   const key = value.value.toLowerCase()
   const held = Option.fromNullishOr(holders.get(key))
-  const heldClaim = Option.map(held, (holder) => holder.claim)
-  if (collides(heldClaim, source, field, value.value, failures)) return false
   if (Option.isSome(held)) {
     const previous = Option.fromNullishOr(kept.get(held.value.commandId))
     if (Option.isSome(previous)) {
@@ -287,7 +298,6 @@ const stripSuperseded = (
     }
   }
   holders.set(key, { commandId: entry.id, claim: { scope: source.scope, source: source.source } })
-  return true
 }
 
 /**
@@ -295,6 +305,8 @@ const stripSuperseded = (
  * project), in the given order inside a scope. A higher scope replaces a
  * command id and takes its keybind or slash from the earlier owner; a
  * same-scope claim of a held id, keybind or slash drops the later command.
+ * A command is all-or-nothing: every collision it has is checked before it
+ * takes any keybind or slash, so a dropped command strips nothing.
  */
 export const resolveCommands = (sources: ReadonlyArray<CommandSource>): ResolvedCommands => {
   const ordered = [...sources].sort((a, b) => SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope])
@@ -315,8 +327,11 @@ export const resolveCommands = (sources: ReadonlyArray<CommandSource>): Resolved
   for (const source of ordered) {
     for (const entry of source.commands) {
       if (winners.get(entry.id) !== entry) continue
-      if (!stripSuperseded("keybind", entry, source, kept, keybinds, failures)) continue
-      if (!stripSuperseded("slash", entry, source, kept, slashes, failures)) continue
+      const keybindCollides = affordanceCollides("keybind", entry, source, keybinds, failures)
+      const slashCollides = affordanceCollides("slash", entry, source, slashes, failures)
+      if (keybindCollides || slashCollides) continue
+      takeAffordance("keybind", entry, source, kept, keybinds)
+      takeAffordance("slash", entry, source, kept, slashes)
       kept.set(entry.id, entry)
     }
   }

@@ -301,6 +301,48 @@ describe("resolveTuiExtensions", () => {
     expect(commands.map((command) => command.title)).toEqual(["A", "B"])
     expect(failures.map((failure) => failure.id)).toEqual(["c", "d"])
   })
+
+  test("a command that loses its slash leaves the keybind with its earlier owner", () => {
+    const resolved = resolveTuiExtensions([
+      make(
+        "core",
+        "builtin",
+        clientCommandContribution({
+          id: "new",
+          title: "New",
+          keybind: "ctrl+n",
+          onSelect: () => {},
+        }),
+      ),
+      make(
+        "a",
+        "user",
+        clientCommandContribution({
+          id: "a-taken",
+          title: "A",
+          slash: "taken",
+          onSelect: () => {},
+        }),
+      ),
+      make(
+        "b",
+        "user",
+        clientCommandContribution({
+          id: "b-both",
+          title: "B",
+          keybind: "ctrl+n",
+          slash: "taken",
+          onSelect: () => {},
+        }),
+      ),
+    ])
+    const { commands, failures } = resolveCommands(resolved.commandSources)
+    const byTitle = new Map(commands.map((command) => [command.title, command]))
+    expect(byTitle.get("New")?.keybind).toBe("ctrl+n")
+    expect(byTitle.get("A")?.slash).toBe("taken")
+    expect(byTitle.has("B")).toBe(false)
+    expect(failures.map((failure) => failure.id)).toEqual(["b"])
+  })
 })
 
 // ── ../extension-effect-setup.test ──────────────────────────────────────────

@@ -595,11 +595,16 @@ export function Session(props: SessionProps) {
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
-    // A local error (a slash command that could not apply, a failed RPC)
-    // replaces the phase word until the next turn clears it.
+    // One footer line, one owner. A local error (a slash command that could
+    // not apply, a failed RPC) replaces the phase word until the next turn
+    // clears it; an extension notice shows when no error stands, and a
+    // notice never replaces an error.
     const localError = Option.fromNullishOr(client.error())
+    const notice = client.notice()
     if (Option.isSome(localError)) {
       items.push({ text: localError.value, color: theme.error })
+    } else if (Option.isSome(notice)) {
+      items.push({ text: notice.value, color: theme.warning })
     } else if (a.phase === "idle") {
       items.push({ text: controller.phaseLabel(), color: theme.textMuted })
     }
