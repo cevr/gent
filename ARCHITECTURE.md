@@ -259,8 +259,8 @@ Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
 
-`compileBaseSections(profile)` combines static core and extension prompt sections.
-Per-turn projection hooks resolve dynamic prompt content inside the extension
+Core writes one base prompt section, the environment. Extensions add sections
+only from `turnProjection` hooks, which run each turn inside the extension
 service context.
 
 ## Runtime

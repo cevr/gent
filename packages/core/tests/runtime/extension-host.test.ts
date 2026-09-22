@@ -120,7 +120,6 @@ import {
   GentToolMetadataTag,
   getToolMetadata,
   isToolCapability,
-  type PromptSection,
 } from "../../src/domain/capability"
 import { builtinAgent, getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
@@ -1268,7 +1267,6 @@ describe("extension activation isolation", () => {
     id: string,
     metadata: {
       readonly id?: string
-      readonly prompt?: PromptSection
     } = {},
   ): never => {
     const legit = tool({
@@ -1276,7 +1274,6 @@ describe("extension activation isolation", () => {
       description: "legit",
       params: Schema.Unknown,
       output: Schema.Void,
-      prompt: metadata.prompt,
       execute: () => Effect.void,
     })
     // oxlint-disable-next-line effect/noAs -- This metadata-spoofed native tool is a runtime validation fixture.
@@ -1397,45 +1394,6 @@ describe("extension activation isolation", () => {
             Effect.succeed({
               tools: [metadataSpoofedToolLeaf("spoofed_native", { id: "shared_cap" })],
             }),
-          ),
-        ].map(builtin),
-        cwd: "/tmp",
-        home: "/tmp",
-        disabled: new Set(),
-      })
-
-      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
-      expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
-      expect(result.failed[0]?.error).toContain(
-        "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
-      )
-    }).pipe(Effect.provide(fsLayer)),
-  )
-
-  it.live("a metadata-spoofed tool never collides on a copied prompt section", () =>
-    Effect.gen(function* () {
-      const prompt = { id: "shared_prompt", content: "rules", priority: 50 }
-      const result = yield* setupExtensions({
-        extensions: [
-          makeBuiltin(
-            "healthy-ext",
-            Effect.succeed({
-              tools: [
-                tool({
-                  id: "healthy_tool",
-                  description: "healthy",
-                  params: Schema.Unknown,
-                  output: Schema.Void,
-                  prompt,
-                  execute: () => Effect.void,
-                }),
-              ],
-            }),
-          ),
-          makeBuiltin(
-            "metadata-spoof",
-            Effect.succeed({ tools: [metadataSpoofedToolLeaf("spoofed_native", { prompt })] }),
           ),
         ].map(builtin),
         cwd: "/tmp",
@@ -2768,17 +2726,6 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
       ),
     ),
 })
-// Static prompt sections live on capability leaf `prompt`. Build a synthetic
-// no-op model capability to carry each section through the pipeline.
-const promptSectionAsToolContribution = (section: PromptSection): ToolCapability =>
-  tool({
-    id: `section-carrier-${section.id}`,
-    description: `carrier for ${section.id}`,
-    params: Schema.Struct({}),
-    output: Schema.Void,
-    prompt: section,
-    execute: () => Effect.void,
-  })
 const makeExtRegistry = (
   id: string,
   scope: "builtin" | "user" | "project",
@@ -2787,13 +2734,9 @@ const makeExtRegistry = (
     requests?: RequestCapability[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
-    promptSections?: PromptSection[]
   },
 ): LoadedExtension => {
-  const tools = [
-    ...(opts?.tools ?? []),
-    ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
-  ]
+  const tools = opts?.tools ?? []
   let contributions: ExtensionContributions = {}
   if (tools.length > 0) contributions = { ...contributions, tools }
   if (!Predicate.isUndefined(opts?.requests))
@@ -3254,20 +3197,6 @@ describe("ExtensionRegistry", () => {
       expect(agents.length).toBe(0)
       const providers = yield* registries.driver.listModels
       expect(providers.length).toBe(0)
-    }),
-  )
-  it.live("static prompt sections are returned as-is", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildRegistry([
-        makeExtRegistry("@gent/test", "builtin", {
-          promptSections: [{ id: "test", content: "Hello", priority: 50 }],
-        }),
-      ])
-      const sections = [...registry.getResolved().promptSections.values()]
-      expect(sections.length).toBe(1)
-      expect(sections[0]?.id).toBe("test")
-      expect(sections[0]?.content).toBe("Hello")
-      expect(sections[0]?.priority).toBe(50)
     }),
   )
 })
@@ -3770,61 +3699,6 @@ describe("scope precedence", () => {
       return Effect.sync(() =>
         expect(resolved.agents.get(builtinAgent.name)?.description).toBe("shadowed"),
       )
-    })
-
-    test("prompt section by id: project tool prompt shadows builtin", () => {
-      const builtinTool = tool({
-        id: "carrier-builtin",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        prompt: { id: "rules", content: "builtin rules", priority: 50 },
-        execute: () => Effect.succeed("ok"),
-      })
-      const projectTool = tool({
-        id: "carrier-project",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        prompt: { id: "rules", content: "project rules", priority: 50 },
-        execute: () => Effect.succeed("ok"),
-      })
-
-      const resolved = resolveExtensions([
-        extScopePrecedence("a", "builtin", { tools: [builtinTool] }),
-        extScopePrecedence("b", "project", { tools: [projectTool] }),
-      ])
-      return Effect.sync(() =>
-        expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
-      )
-    })
-
-    test("tool prompt: shadowed lower-scope prompt does NOT survive", () => {
-      // Previously, prompts/rules were collected from raw extracted leaves, not
-      // winners. A higher-scope tool shadowing a lower-scope tool would leak
-      // the loser's prompt.
-      const builtinTool = tool({
-        id: "shadow-me",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        prompt: { id: "shadow-prompt", content: "BUILTIN PROMPT", priority: 50 },
-        execute: () => Effect.succeed("ok"),
-      })
-      const projectTool = tool({
-        id: "shadow-me",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        // NO prompt — should remove the section
-        execute: () => Effect.succeed("ok"),
-      })
-
-      const resolved = resolveExtensions([
-        extScopePrecedence("a", "builtin", { tools: [builtinTool] }),
-        extScopePrecedence("b", "project", { tools: [projectTool] }),
-      ])
-      return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
     })
 
     test("same scope ties broken by extension id alphabetically", () => {

@@ -201,7 +201,7 @@ export default defineExtension({
   returned to the model
 - `execute(params)` — returns `Effect`; host access comes from
   `yield* ExtensionContext`
-- Optional: `readonly`, `destructive`, `interactive`, `prompt`,
+- Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
   `promptSnippet`, `promptGuidelines`
 
 `readonly` and `destructive` are provider hints lowered to Effect AI's

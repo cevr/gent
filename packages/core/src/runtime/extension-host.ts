@@ -509,7 +509,6 @@ interface ResolvedExtensions {
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
-  readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -797,19 +796,6 @@ export const resolveExtensions = (
     (d) => d.id,
   )
 
-  // Prompt sections from capability leaves are read off the WINNERS map,
-  // not raw extractions. Otherwise a higher-scope capability shadowing a
-  // lower-scope tool would still inherit the loser's prompt — defeating the
-  // shadow. Last scope wins by section id.
-  // (Dynamic prompt content is assembled per-turn by ExtensionHooks, not here.)
-  const promptSectionsMap = new Map<string, PromptSection>()
-  for (const { capability: cap } of capabilityWinners.values()) {
-    let prompt = Option.none<PromptSection>()
-    if (isToolCapability(cap)) prompt = Option.fromUndefinedOr(getToolMetadata(cap).prompt)
-    else prompt = Option.fromUndefinedOr(cap.prompt)
-    if (Option.isSome(prompt)) promptSectionsMap.set(prompt.value.id, prompt.value)
-  }
-
   const slashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionHooks = compileExtensionHooks(sorted)
@@ -824,7 +810,6 @@ export const resolveExtensions = (
     agents,
     modelDrivers,
     externalDrivers,
-    promptSections: promptSectionsMap,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -1542,25 +1527,6 @@ const collectValidationFailures = (
     (driver) => Option.some(driver.id),
     "external driver",
   )
-  // Static prompt sections live on capability leaf `prompt`. Collision check
-  // uses prompt-section id dedup.
-  collectScopedCollisions(
-    (cs) => {
-      const sections: PromptSection[] = []
-      for (const tool of cs.tools ?? []) {
-        if (!isToolCapability(tool)) continue
-        const prompt = Option.fromUndefinedOr(getToolMetadata(tool).prompt)
-        if (Option.isSome(prompt)) sections.push(prompt.value)
-      }
-      for (const rpc of cs.requests ?? []) {
-        const prompt = Option.fromUndefinedOr(rpc.prompt)
-        if (Option.isSome(prompt)) sections.push(prompt.value)
-      }
-      return sections
-    },
-    (section) => Option.some(section.id),
-    "prompt section",
-  )
 
   return failures
 }
@@ -1707,7 +1673,7 @@ export const loadRuntimeProfileDeclarations = (
       active: extensionDeclarations.active,
       failed: [...setup.failed, ...extensionDeclarations.failed],
     }
-    // 5. Build base prompt sections (core writes the environment; extensions shadow by id)
+    // 5. Build the base prompt section: core writes the environment
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
@@ -1755,16 +1721,13 @@ const buildSessionProfile = (params: {
       }),
     )
     const layerContext = yield* Layer.build(Layer.provideMerge(resourceLayer, baseLayers))
-    // Extension sections shadow core sections by id.
-    const sectionMap = new Map(params.coreSections.map((s) => [s.id, s]))
-    for (const s of params.resolved.promptSections.values()) sectionMap.set(s.id, s)
     return {
       cwd: params.cwd,
       resolved: params.resolved,
       layerContext,
       registryService: Context.get(layerContext, ExtensionRegistry),
       driverRegistryService: Context.get(layerContext, DriverRegistry),
-      baseSections: [...sectionMap.values()],
+      baseSections: params.coreSections,
       generationId: params.generationId,
     } satisfies SessionProfile
   })

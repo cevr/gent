@@ -55,7 +55,6 @@ describe("ref(capability)", () => {
 
   test("tool lowers to a native Effect AI tool with Gent metadata annotations", () => {
     const params = Schema.Struct({ x: Schema.String })
-    const prompt = { id: "tool.prompt", content: "Use carefully.", priority: 42 }
     const capability = tool({
       id: "test.tool",
       description: "ephemeral",
@@ -66,7 +65,6 @@ describe("ref(capability)", () => {
       promptSnippet: "short",
       promptGuidelines: ["be precise"],
       interactive: true,
-      prompt,
       execute: () => Effect.succeed("ok"),
     })
 
@@ -81,7 +79,6 @@ describe("ref(capability)", () => {
     expect(metadata.promptSnippet).toBe("short")
     expect(metadata.promptGuidelines).toEqual(["be precise"])
     expect(metadata.interactive).toBe(true)
-    expect(metadata.prompt).toEqual(prompt)
   })
 
   test("default tool is neither readonly nor destructive", () => {
@@ -178,7 +175,6 @@ const declaredTool = tool({
   promptGuidelines: ["prefer this tool"],
   interactive: true,
   dispatches: true,
-  prompt: { id: "declared", content: "how to use it", priority: 50 },
   execute: () => Effect.succeed("done"),
 })
 
@@ -189,7 +185,6 @@ describe("tool declarations", () => {
     expect(metadata.promptGuidelines).toEqual(["prefer this tool"])
     expect(metadata.interactive).toBe(true)
     expect(metadata.dispatches).toBe(true)
-    expect(metadata.prompt?.id).toBe("declared")
   })
 
   test("reach the capability itself", () => {
@@ -197,18 +192,11 @@ describe("tool declarations", () => {
     expect(declaredTool.promptGuidelines).toEqual(["prefer this tool"])
     expect(declaredTool.interactive).toBe(true)
     expect(declaredTool.dispatches).toBe(true)
-    expect(declaredTool.prompt?.id).toBe("declared")
   })
 
   test("stay absent, not undefined, when the tool declares none", () => {
     const metadata = getToolMetadata(bareTool)
-    for (const key of [
-      "promptSnippet",
-      "promptGuidelines",
-      "interactive",
-      "dispatches",
-      "prompt",
-    ]) {
+    for (const key of ["promptSnippet", "promptGuidelines", "interactive", "dispatches"]) {
       expect(Object.hasOwn(metadata, key)).toBe(false)
       expect(Object.hasOwn(bareTool, key)).toBe(false)
     }

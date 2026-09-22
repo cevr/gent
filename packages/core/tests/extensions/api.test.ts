@@ -162,13 +162,11 @@ describe("defineExtension", () => {
 
   test("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
-      // The PromptSection is bundled on the Capability it decorates (`myTool.prompt`).
       const myTool = tool({
         id: "echo",
         description: "echo",
         params: Schema.Struct({}),
         output: Schema.String,
-        prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
       const myLayer = Layer.empty
@@ -195,9 +193,7 @@ describe("defineExtension", () => {
       const firstModelCap = modelCaps[0]
       expect(firstModelCap).toBeDefined()
       if (Predicate.isUndefined(firstModelCap)) return
-      const modelCapMetadata = getToolMetadata(firstModelCap)
       expect(String(getToolId(firstModelCap))).toBe("echo")
-      expect(modelCapMetadata?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(DEFAULT_AGENT_NAME)
       expect(contributions.hooks?.[0]?.kind).toBe("systemPrompt")
       const resources = contributions.resources ?? []

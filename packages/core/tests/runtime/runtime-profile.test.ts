@@ -52,25 +52,6 @@ const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
   return { ...profile, profile }
 })
 
-// Static prompt sections live on capability leaf `prompt`. The tool here is a
-// no-op carrier — its only purpose is to bring the prompt section into scope.
-const sectionTool = tool({
-  id: "rp-test-tool",
-  description: "carrier for rp-test-section",
-  params: S.Struct({}),
-  output: S.String,
-  prompt: { id: "rp-test-section", content: "rp test content", priority: 50 },
-  execute: () => Effect.succeed("ok"),
-})
-
-const sectionExtension = defineExtension({
-  id: "@gent/test-runtime-profile",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", sectionTool)
-  }),
-})
-
 // Dynamic prompt section: the hook Effect yields a service from the
 // extension's Resource layer. The service Tag is `ReadOnly`-branded so the
 // prompt hook only receives a read surface.
@@ -172,21 +153,6 @@ describe("live Profile", () => {
                 }),
               }) as never,
             )
-            yield* host.register(
-              "tool",
-              tool({
-                id: "rp-declaration-prompt",
-                description: "declaration prompt fixture",
-                params: S.Struct({}),
-                output: S.String,
-                prompt: {
-                  id: "rp-declaration-prompt-section",
-                  content: "loaded during declaration setup",
-                  priority: 1,
-                },
-                execute: () => Effect.succeed("ok"),
-              }),
-            )
           }),
         })
         const validTool = tool({
@@ -236,11 +202,6 @@ describe("live Profile", () => {
         const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs, false)))
         expect(runtimeExit._tag).toBe("Success")
         if (runtimeExit._tag === "Success") {
-          expect(runtimeExit.value.profile.baseSections).toContainEqual({
-            id: "rp-declaration-prompt-section",
-            content: "loaded during declaration setup",
-            priority: 1,
-          })
           expect(runtimeExit.value.profile.resolved.failedExtensions).toContainEqual(
             expect.objectContaining({
               manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
@@ -460,23 +421,6 @@ describe("live Profile", () => {
         }
 
         expect(starts).toBe(2)
-      }),
-    ).pipe(Effect.provide(sharedLayer)))
-
-  test("the profile's ExtensionRegistry carries the resolved prompt sections", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layerContext } = yield* openProfile({
-          cwd: "/tmp",
-          home: "/tmp",
-          platform: "darwin",
-          extensions: [sectionExtension],
-        })
-        const registryService = Context.get(layerContext, ExtensionRegistry)
-
-        const sections = [...registryService.getResolved().promptSections.values()]
-        const ids = sections.map((s) => s.id)
-        expect(ids).toContain("rp-test-section")
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
