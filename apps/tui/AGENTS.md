@@ -114,15 +114,15 @@ Components derive state from providers, not props. Add/remove rows per view.
 
 ## CLI Flags
 
-| Flag             | Purpose                                                  |
-| ---------------- | -------------------------------------------------------- |
-| `-p, --prompt`   | Initial message (goes straight to session view)          |
-| `-s, --session`  | Resume specific session ID                               |
-| `-H, --headless` | Headless mode + prompt arg                               |
-| `-a, --agent`    | Agent override for headless mode (e.g. `memory:reflect`) |
+| Flag             | Purpose                                         |
+| ---------------- | ----------------------------------------------- |
+| `-p, --prompt`   | Initial message (goes straight to session view) |
+| `-s, --session`  | Resume specific session ID                      |
+| `-H, --headless` | Headless mode + prompt arg                      |
+| `-a, --agent`    | Agent override for headless mode                |
 
 `gent resume [session-id]` opens a stored session; with no id it opens the last
-session in this directory, which is what `--continue` used to mean.
+session in this directory.
 
 Priority: headless → session → continue → prompt → home
 
@@ -135,7 +135,7 @@ Special prefixes at input start trigger different modes:
 | `!`    | Shell mode - prompt changes to `$`, ESC exits |
 | `$`    | Skills popup (scans ~/.claude/skills, etc.)   |
 | `@`    | File finder popup, supports `@file.ts#10-20`  |
-| `/`    | Command popup (/clear, /sessions, etc.)       |
+| `/`    | Command popup (/new, /agents, etc.)           |
 
 ### Shell Mode
 
@@ -150,13 +150,15 @@ Special prefixes at input start trigger different modes:
 
 ### Slash Commands
 
-| Command     | Action               |
-| ----------- | -------------------- |
-| `/clear`    | Clear messages       |
-| `/sessions` | Open sessions picker |
-| `/branch`   | Create new branch    |
-| `/tree`     | Browse branch tree   |
-| `/fork`     | Fork from a message  |
+| Command            | Action                                                  |
+| ------------------ | ------------------------------------------------------- |
+| `/new`, `/clear`   | Start a new session                                     |
+| `/sessions`        | Open the command palette; its Sessions level lists them |
+| `/branch`          | Create new branch                                       |
+| `/fork`            | Fork from a message                                     |
+| `/agents`, `/tree` | Agents pane: every loop, live and stored                |
+| `/thread`          | Thread pane: the sessions and windows this one runs on  |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side           |
 
 ## Extensions
 
@@ -184,7 +186,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - User/project extensions discovered via filesystem scan (`loader-boundary.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientLifecycle`
-- **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `goal.client.ts` and `tool-renderers.client.tsx` are the canonical examples.
+- **Transport-only widgets**: there is no in-process snapshot cache. A widget reads server state through `sessionQuery` (in `client-facets.ts`), which yields the client services, keys each reply on `(sessionId, branchId)` and drops a reply for a session the shell has left. `follow: true` reads again on every session move. The widget refreshes it on typed session events or `ClientTransport.onExtensionStateChanged` pulses. The goal label (`builtins.tsx`) and the wake tray (`wake.client.tsx`) are the canonical examples.
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `ClientLifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - Extensions have no overlays. A pane is a `below-input` widget that the extension opens and closes with its own signal (agents, thread, btw). A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back.
@@ -192,7 +194,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
 - `ClientWorkspace.cwd` / `ClientWorkspace.home` for workspace-relative operations
-- **`ClientActivity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (headless takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.
+- **`ClientActivity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (a test takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.
 
 ## Key Files (Composer + Session)
 

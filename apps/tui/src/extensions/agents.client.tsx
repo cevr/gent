@@ -37,9 +37,9 @@ import {
  * Subagent tray — one line above the composer.
  *
  * It reports how many loops hang off the current session while the agents pane
- * is closed, so a reader sees delegated work without opening anything. The pane
- * in `agents-view.client.tsx` owns the controller and the projection; this file
- * only reads and renders.
+ * is closed, so a reader sees delegated work without opening anything. The
+ * `@gent/agents-view` server half projects the rows; this file reads and
+ * renders them.
  *
  * @module
  */
@@ -170,8 +170,6 @@ export function SubagentTray(props: { controller: AgentsController }) {
  * loop, live or stored, grouped by section and nested under its parent. The
  * server owns the projection, so this file only renders and navigates.
  *
- * Replaces the former `session-tree.tsx` overlay: this shows every loop rather
- * than one session's descendants, adds liveness, and is keyed per branch.
  * Filtering and cursor movement belong to `SelectList`.
  *
  * @module
@@ -182,8 +180,8 @@ const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
 /**
  * Rows plus the load state, held in the setup closure.
  *
- * The overlay component remounts on every open, so anything that must survive
- * a close lives here instead. See `btw.client.tsx` for the same split.
+ * The tray and the pane read the same rows, so they live here rather than in
+ * either component.
  */
 interface AgentsController {
   readonly rows: () => ReadonlyArray<AgentRowEntry>
@@ -203,9 +201,8 @@ interface AgentsController {
   /** Tell the controller which row is selected, so it can fetch that detail. */
   readonly select: (row: Option.Option<AgentRowEntry>) => void
   /**
-   * Whether the pane is showing. A docked widget is always mounted, unlike the
-   * overlay this replaced, so visibility is controller state rather than
-   * something the overlay registry decides.
+   * Whether the pane is showing. A docked widget is always mounted, so
+   * visibility is controller state.
    */
   readonly open: () => boolean
   readonly setOpen: (open: boolean) => void
@@ -645,9 +642,6 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         description: "Show every agent loop, live and stored",
         category: "Session",
         slash: "agents",
-        // `/tree` was the session-tree overlay, which this view replaces: it
-        // shows every loop rather than one session's descendants, adds liveness,
-        // and is keyed per branch. Kept as an alias so the habit still works.
         aliases: ["tree"],
         onSelect: () => {
           controller.setOpen(true)

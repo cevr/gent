@@ -47,11 +47,10 @@ import type { RGBA } from "@opentui/core"
  * the seam is at the rendering edge, not in the Effect surface.
  *
  * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
- * Each client surface (TUI shell, future SDK headless, web UI) augments its
- * runtime with the services its extensions need, and an extension widens its
- * `R` accordingly. The TUI shell publishes its typed `ClientTransport` tag
- * at `apps/tui/src/extensions/client-facets.ts` because the SDK client
- * types (`GentNamespacedClient`, `GentRuntime`) live downstream of `@gent/core`.
+ * The TUI shell augments its runtime with the client services below, and an
+ * extension widens its `R` to the ones it yields. `ClientTransport` lives
+ * here, not in `@gent/core`, because the SDK client types
+ * (`GentNamespacedClient`, `GentRuntime`) live downstream of `@gent/core`.
  */
 
 // ── Errors ────────────────────────────────────────────────────────────────
@@ -70,17 +69,9 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
 /**
  * The dependency channel a client extension's setup Effect MAY require.
  *
- * `ClientDeps` is the TUI-local floor: file system and path
- * services. It's a *floor*, not a ceiling — an individual client surface
- * (the TUI shell, a future SDK headless, a web UI) augments its runtime
- * with additional services like transport, theming, or platform-specific
- * APIs, and an extension that yields one of those declares a wider `R`.
- *
- * `@gent/core` does NOT declare `ClientTransport` because its payload type
- * lives downstream (`GentNamespacedClient` + `GentRuntime` are SDK types).
- * The TUI declares its own `ClientTransport` tag with a typed payload at
- * `apps/tui/src/extensions/client-facets.ts`. Other
- * client surfaces would do the same with whatever transport they speak.
+ * `ClientDeps` is the TUI-local floor: file system and path services. It is
+ * a floor, not a ceiling: the TUI runtime adds the client services below, and
+ * an extension that yields one of those declares a wider `R`.
  */
 type ClientDeps = FileSystem.FileSystem | Path.Path
 
@@ -137,22 +128,19 @@ export const makeClientActivityLayer = (snapshot: () => ClientActivitySnapshot =
  *
  *   ```ts
  *   import { Effect } from "effect"
- *   import { ClientTransport } from "../client-transport"
+ *   import { ClientTransport, defineClientExtension } from "./client-facets"
  *
  *   export default defineClientExtension("@gent/x", {
- *     id: "@gent/x",
  *     setup: Effect.gen(function* () {
  *       const transport = yield* ClientTransport
  *       const result = yield* transport.request(ref(MyRpc.List), {})
- *       return [...]
+ *       return clientContributions(...)
  *     }),
  *   })
  *   ```
  *
- * The TUI's `ExtensionUIProvider` constructs a per-render `ManagedRuntime`
- * that includes `BunFileSystem | BunPath | ClientTransport.Live(payload)`,
- * passes it to `loadTuiExtensions`, and the loader's `invokeSetup` runs
- * each Effect-typed setup against it.
+ * The TUI's `ExtensionUIProvider` builds one `ManagedRuntime` per provider
+ * with `makeClientRuntime`, and `loadTuiExtensions` runs each setup on it.
  */
 
 export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
@@ -423,8 +411,7 @@ const agentDetailAt = (
  * Why split: each service has a different lifetime/coupling profile.
  * `ClientWorkspace` is process-static (cwd/home don't change).
  * `ClientShell` captures session-bound callbacks. Splitting lets a setup
- * yield exactly what it depends on and lets future client surfaces (SDK headless, web
- * UI) provide a subset.
+ * yield exactly what it depends on.
  */
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
@@ -627,12 +614,11 @@ export const sessionQuery = <A>(opts: {
 // Adding a new facet means adding an explicit field and resolver path, not
 // another stringly runtime tag table. Per-bucket conflict rules are preserved
 // by the resolver:
-//   - renderers: last (highest scope) wins by tool name
-//   - widgets:   last (highest scope) wins by widget id; sorted by priority
-//   - commands:  last (highest scope) wins by command id; superseded
-//                keybind/slash entries are stripped from prior owners
-//   - interaction renderers: last (highest scope) wins by metadataType
-//   - composer surface: single slot, last (highest scope) wins
+//   - renderers, widgets, interaction renderers: keyed by tool name, widget
+//     id and metadataType; the highest scope wins, and inside one scope the
+//     first claim keeps the key. Widgets sort by priority.
+//   - commands: the same rule by id, slash and keybind, applied by the host's
+//     `resolveCommands` over the session's, the extensions' and the server's
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 

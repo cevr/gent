@@ -241,10 +241,6 @@ export const windowsOf = (
   return windows
 }
 
-/**
- * Windows plus the load state, held in the setup closure so they survive the
- * pane closing. See `agents-view.client.tsx` for the same split.
- */
 /** What one load produces: the chain length and the windows across it. */
 interface Loaded {
   readonly sessions: number

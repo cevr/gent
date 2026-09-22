@@ -21,7 +21,7 @@ import type { AutocompleteItem } from "./extensions/client-facets.js"
  *
  * This module is pure. It computes scores from a store value handed to it and
  * never reads a clock or a disk of its own; the caller supplies `now`, and
- * `autocomplete-frecency-store.ts` owns the file. That is what keeps the
+ * the frecency store section below owns the file. That is what keeps the
  * ranker unit-testable at a fixed instant.
  *
  * @module
@@ -187,10 +187,10 @@ export const frecencyLookup =
 // ── frecency store ──────────────────────────────────────────────────────────
 
 /**
- * Persistence for autocomplete frecency — the impure edge around
- * `autocomplete-frecency.ts`.
+ * Persistence for autocomplete frecency — the impure edge around the pure
+ * ranker above.
  *
- * Shaped after `use-prompt-history.ts`, which solved the same problem first: a
+ * Shaped after `usePromptHistory` in `session.tsx`, which has the same needs: a
  * `Schema.Struct` encoded with `Schema.fromJsonString`, a path under
  * `~/.cache/gent/`, a read that answers `Option.none()` for anything it cannot
  * use, and a write that ends in `Effect.ignoreCause`. Following it rather than

@@ -820,8 +820,8 @@ function AppContent(props: AppProps) {
   })
 
   // Which session shows is the client's to say. `switchSession` is the one
-  // writer, and every pane that moves the reader between sessions already
-  // goes through it, so keying the mount on it is all the router ever did.
+  // writer, and every pane that moves the reader between sessions goes
+  // through it, so the session view mounts keyed on it.
   const sessionClient = useClient()
   //
   // The key is the identity, not the session record: a new name or a new model

@@ -112,7 +112,7 @@ export function getFileTag(path: string): string {
  * Scan readiness: each finder kicks off `waitForScan` once on creation,
  * stored as an Effect. The native call is wrapped so
  * a throwing call resolves to a typed failure object instead of leaving
- * the promise unresolved (counsel  finding 4). The search effect
+ * the promise unresolved. The search effect
  * awaits via `Effect.promise` + a typed error map; Effect interruption
  * cleanly abandons the wait without canceling the underlying scan (which
  * is fine — the finder stays valid for the next search).
@@ -237,8 +237,7 @@ export const trackSelection = (cwd: string, query: string, filePath: string): vo
  *
  * Yields `ClientWorkspace` for cwd/home and `FileSystem.FileSystem` for the
  * empty-filter top-level directory listing. Non-empty filter goes through
- * the FFF-backed `searchFiles` Effect — no runtime glob fallback (deleted in
- *  with the "no native bun apis" mandate).
+ * the FFF-backed `searchFiles` Effect; there is no glob fallback.
  *
  * The FFF db directory is resolved once here, from the workspace home this
  * setup already yields, so the finder module never re-decides where it lives.

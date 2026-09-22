@@ -45,12 +45,12 @@ import { useClient } from "../client"
 
 /**
  * One client `ManagedRuntime` for every surface that loads client
- * extensions: the interactive shell, the headless runner, and tests.
+ * extensions: the interactive shell and tests.
  *
  * A surface supplies the transport, the workspace, and the `cast` of its
- * connected runtime. Shell UI callbacks, the activity
- * provider, and the lifecycle cleanup registry default to no-ops so a
- * surface without a UI (headless) does not restate them.
+ * connected runtime. Shell UI callbacks, the activity provider, and the
+ * lifecycle cleanup registry default to no-ops so a test does not restate
+ * them.
  */
 
 interface ClientRuntimeDeps {
@@ -94,11 +94,10 @@ export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
  * Loads on mount: discovers *.client.* files, imports them, resolves with
  * scope precedence. Provides resolved contributions to descendants.
  *
- *  deleted the paired-package snapshot cache. Widgets that need
- * server-side state subscribe to `ClientTransport.onSessionEvent` or
- * `ClientTransport.onExtensionStateChanged` and call
- * `ClientTransport.request(...)` directly — see e.g.
- * `builtins/tool-renderers.client.tsx`.
+ * Widgets that need server-side state read it through `sessionQuery` and
+ * refresh on `ClientTransport.onSessionEvent` or
+ * `ClientTransport.onExtensionStateChanged`; see the goal label in
+ * `builtins.tsx` and the wake tray in `wake.client.tsx`.
  */
 
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
@@ -168,8 +167,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // (FileSystem, Path) with the TUI client services Effect-typed
   // extensions may yield: `ClientTransport` (typed RPC client + event
   // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
-  // (notify, session switch). The loader's `invokeSetup` runs each
-  // setup against this runtime.
+  // (notify, session switch). `loadTuiExtensions` runs each setup on this
+  // runtime.
   const clientRuntime: ClientRuntime = makeClientRuntime({
     transport: {
       client: client.client,

@@ -113,15 +113,9 @@ import { useExtensionUI } from "./extensions/host"
 /**
  * Session shell — what the TUI carries into the session it booted with.
  *
- * There used to be a router here: a reducer, a history stack, a subscriber
- * set, and two route tags. Only one of those tags ever changed at runtime.
- * The branch picker was never navigated to; the bootstrap built it once and
- * nothing pushed it again, so the history stack was always empty and `back`
- * always returned false.
- *
- * The fact the router was really carrying — which session and branch show —
- * belongs to `ClientProvider`, where `switchSession` writes it and `session()`
- * reads it. What is left over is the startup prompt.
+ * Which session and branch show belongs to `ClientProvider`, where
+ * `switchSession` writes it and `session()` reads it. The shell carries the
+ * startup prompt.
  *
  * The prompt belongs to the session the startup flags named, on whichever
  * branch of it the reader ends up: picking a branch in the boot picker
@@ -1086,12 +1080,11 @@ export function usePromptHistory(): PromptHistory {
  * The live pick history behind the composer's autocomplete ranking.
  *
  * One store serves every prefix and every session. The value lives in
- * `autocomplete-frecency-store.ts` rather than here, because two surfaces
+ * the frecency store in `autocomplete.ts` rather than here, because two surfaces
  * record picks — this hook for `/` commands, and the `$` skills extension —
  * and a cache owned by one of them goes stale the moment the other writes.
- * That is not hypothetical: it is the bug this hook used to have. A snapshot
- * loaded once and never refreshed was serialized back over the file on every
- * `/` pick, erasing whatever `$` had written in between.
+ * A snapshot loaded once and written back on every `/` pick would erase
+ * whatever `$` wrote in between.
  *
  * So this hook keeps no store of its own. It reads the shared snapshot for
  * ranking and delegates every write to `recordFrecencyPick`, which folds the
