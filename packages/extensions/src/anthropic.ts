@@ -1,8 +1,10 @@
 import {
   Clock,
   Context,
+  Crypto,
   Duration,
   Effect,
+  Encoding,
   Equal,
   FileSystem,
   Layer,
@@ -30,7 +32,6 @@ import {
   type ProviderAuthorizationResult,
   type ProviderHints,
 } from "@gent/core/extensions/api"
-import { GentPlatform } from "@gent/core/extensions/branch-tools"
 import {
   type CredentialCache,
   type CredentialCacheCell,
@@ -54,9 +55,8 @@ import {
 } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import type { HttpClientError } from "effect/unstable/http/HttpClientError"
-import { BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { Model as AiModel } from "effect/unstable/ai"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 
 // ── model config ────────────────────────────────────────────────────────────
 
@@ -351,17 +351,27 @@ export const extractFirstUserMessageText = (messages: ReadonlyArray<object>): st
   )
 
 /**
+ * Hex SHA-256 of `text` (UTF-8). A digest of an in-memory buffer does not
+ * fail on a working runtime, so a failure is a defect.
+ */
+const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const digest = yield* crypto
+      .digest("SHA-256", new TextEncoder().encode(text))
+      .pipe(Effect.orDie)
+    return Encoding.encodeHex(digest)
+  })
+
+/**
  * Compute `cch` — first 5 hex chars of `sha256(messageText)`. The
  * Anthropic billing-validation step rejects requests whose `cch`
  * doesn't match the first user message we send, so this MUST be
  * recomputed per request (the previous hardcoded `c5e82` placeholder
  * worked exactly once, by accident).
  */
-export const computeCch = (messageText: string): Effect.Effect<string, never, GentPlatform> =>
-  Effect.gen(function* () {
-    const platform = yield* GentPlatform
-    return platform.hash("sha256", messageText).slice(0, 5)
-  })
+export const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
+  sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
  * Compute the 3-char version suffix appended to `cc_version`. Samples
@@ -373,14 +383,13 @@ export const computeCch = (messageText: string): Effect.Effect<string, never, Ge
 export const computeVersionSuffix = (
   messageText: string,
   version: string,
-): Effect.Effect<string, never, GentPlatform> =>
+): Effect.Effect<string, never, Crypto.Crypto> =>
   Effect.gen(function* () {
-    const platform = yield* GentPlatform
     const sampled = [4, 7, 20]
       .map((index) => Option.getOrElse(Option.fromNullishOr(messageText[index]), () => "0"))
       .join("")
-    const input = `${BILLING_SALT}${sampled}${version}`
-    return platform.hash("sha256", input).slice(0, 3)
+    const hex = yield* sha256Hex(`${BILLING_SALT}${sampled}${version}`)
+    return hex.slice(0, 3)
   })
 
 /**
@@ -392,7 +401,7 @@ export const buildBillingHeaderValue = (
   messages: ReadonlyArray<object>,
   version: string,
   entrypoint: string,
-): Effect.Effect<string, never, GentPlatform> =>
+): Effect.Effect<string, never, Crypto.Crypto> =>
   Effect.gen(function* () {
     const text = extractFirstUserMessageText(messages)
     const suffix = yield* computeVersionSuffix(text, version)
@@ -1314,7 +1323,7 @@ const build = (
  * out of the generic provider boundary.
  */
 
-type KeychainTransformRequirements = GentPlatform | AnthropicPlatform
+type KeychainTransformRequirements = Crypto.Crypto | AnthropicPlatform
 
 // ── Constants ──
 
@@ -2291,7 +2300,7 @@ const makeOauthAnthropicLayer = (
 
   const wrappedClient = makeKeychainClientLayer.pipe(
     Layer.provide(clientLayer),
-    Layer.provide(BunGentPlatformLive),
+    Layer.provide(BunCrypto.layer),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
   )
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(

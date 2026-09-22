@@ -50,9 +50,8 @@ import {
   SynchronizedRef,
 } from "effect"
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
-import { BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { testHostFacts } from "@gent/core-internal/test-utils/index"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
@@ -128,13 +127,12 @@ const testPlatformLayer = Layer.succeed(
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 
-// Synchronously run a transformPayload effect with the live Bun platform —
-// `BunGentPlatformLive` is `Layer.succeed`, so the underlying SHA256 hash is
-// computed eagerly without needing an async runtime.
+// Synchronously run a transformPayload effect — `BunCrypto.layer` hashes
+// with `node:crypto` `createHash`, which is synchronous.
 const transformPayload = (payload: JsonRecord): JsonRecord =>
   Effect.runSync(
     transformPayloadEffect(payload).pipe(
-      Effect.provide(Layer.merge(BunGentPlatformLive, testPlatformLayer)),
+      Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
     ),
   )
 
@@ -1972,14 +1970,14 @@ describe("freshEnoughForUse", () => {
  * validator on every request, surfacing as `InvalidKey` from the SDK.
  */
 
-// `BunGentPlatformLive` is `Layer.succeed` — the real SHA256 hash is
-// computed synchronously, so each helper can run via `Effect.runSync`.
+// `BunCrypto.layer` hashes synchronously, so each helper can run via
+// `Effect.runSync`.
 const runSync = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)
 
 const computeCch = (text: string): string =>
-  runSync(computeCchEffect(text).pipe(Effect.provide(BunGentPlatformLive)))
+  runSync(computeCchEffect(text).pipe(Effect.provide(BunCrypto.layer)))
 const computeVersionSuffix = (text: string, version: string): string =>
-  runSync(computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunGentPlatformLive)))
+  runSync(computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunCrypto.layer)))
 const buildBillingHeaderValue = (
   messages: Parameters<typeof buildBillingHeaderValueEffect>[0],
   version: string,
@@ -1987,7 +1985,7 @@ const buildBillingHeaderValue = (
 ): string =>
   runSync(
     buildBillingHeaderValueEffect(messages, version, entrypoint).pipe(
-      Effect.provide(BunGentPlatformLive),
+      Effect.provide(BunCrypto.layer),
     ),
   )
 
@@ -2086,6 +2084,17 @@ describe("buildBillingHeaderValue", () => {
     )
     const expectedCch = computeCch("the prompt")
     expect(value).toContain(`cch=${expectedCch};`)
+  })
+
+  test("matches a fixed vector byte for byte", () => {
+    const value = buildBillingHeaderValue(
+      [{ role: "user", content: "Fix the flaky test in the billing module, please." }],
+      "2.1.80",
+      "cli",
+    )
+    expect(value).toBe(
+      "x-anthropic-billing-header: cc_version=2.1.80.764; cc_entrypoint=cli; cch=cb258;",
+    )
   })
 
   test("uses the entrypoint verbatim", () => {

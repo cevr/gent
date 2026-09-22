@@ -1610,10 +1610,6 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform-bun.ts",
   "packages/core/src/server/server-root.ts",
   "packages/core/src/test-utils/index.ts",
-  // The Anthropic extension wires a keychain-aware AnthropicClient layer that
-  // needs the live Bun platform to satisfy `GentPlatform` inside the
-  // request-signing transform. It's a shipped builtin, not a user extension.
-  "packages/extensions/src/anthropic.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
@@ -1681,17 +1677,7 @@ const bannedShippedExtensionPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
-/** Names with no public entry point, each already exempt from a platform rule above. */
-const shippedExtensionCoreInternalFiles = new Set([
-  // `BunGentPlatformLive` is exported by no public entry point; the Anthropic
-  // extension needs the live Bun platform to satisfy `GentPlatform` inside its
-  // request-signing transform. Same file, same reason as the platform root
-  // exemption in `platformProviderRootFiles`.
-  "packages/extensions/src/anthropic.ts",
-])
-
-const shippedExtensionFile = (file: string): boolean =>
-  file.startsWith("packages/extensions/src/") && !shippedExtensionCoreInternalFiles.has(file)
+const shippedExtensionFile = (file: string): boolean => file.startsWith("packages/extensions/src/")
 
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   const patterns = bannedActiveSourcePatterns.filter(
