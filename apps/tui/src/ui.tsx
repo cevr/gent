@@ -17,7 +17,6 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { useTheme } from "./theme"
-import { formatDuration } from "./utils"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
 
@@ -851,10 +850,7 @@ export function SelectList<A>(props: SelectListProps<A>) {
  *   42 │ const foo = "bar"
  *   43 │ const baz = "qux"
  *
- * Supports:
- * - Optional highlight ranges (base color vs dim)
- * - Start line offset for file excerpts
- * - Optional max lines with head/tail truncation
+ * `startLine` offsets the numbers for a file excerpt.
  */
 
 interface GutterTextProps {
@@ -862,23 +858,13 @@ interface GutterTextProps {
   lines: string[]
   /** Starting line number (1-based). Default: 1 */
   startLine?: number
-  /** Line numbers to highlight (1-based). If empty/undefined, all highlighted */
-  highlightLines?: Set<number>
-  /** Max gutter width. Auto-computed if not provided */
-  gutterWidth?: number
 }
 
 export function GutterText(props: GutterTextProps) {
   const { theme } = useTheme()
 
   const startLine = () => props.startLine ?? 1
-  const gutterWidth = () =>
-    props.gutterWidth ?? Math.max(3, String(startLine() + props.lines.length - 1).length)
-
-  const isHighlighted = (lineNum: number) => {
-    if (!props.highlightLines || props.highlightLines.size === 0) return true
-    return props.highlightLines.has(lineNum)
-  }
+  const gutterWidth = () => Math.max(3, String(startLine() + props.lines.length - 1).length)
 
   return (
     <box flexDirection="column">
@@ -886,20 +872,10 @@ export function GutterText(props: GutterTextProps) {
         {(line, index) => {
           const lineNum = () => startLine() + index()
           const gutter = () => String(lineNum()).padStart(gutterWidth())
-          const highlighted = () => isHighlighted(lineNum())
-          const gutterColor = () => {
-            if (highlighted()) return theme.textMuted
-            return theme.border
-          }
-          const textColor = () => {
-            if (highlighted()) return theme.text
-            return theme.textMuted
-          }
-
           return (
             <text>
-              <span style={{ fg: gutterColor() }}>{gutter()} │ </span>
-              <span style={{ fg: textColor() }}>{line}</span>
+              <span style={{ fg: theme.textMuted }}>{gutter()} │ </span>
+              <span style={{ fg: theme.text }}>{line}</span>
             </text>
           )
         }}
@@ -945,8 +921,6 @@ interface ToolFrameProps {
   subtitleHref?: string
   /** Status: drives icon */
   status: "running" | "completed" | "error"
-  /** Duration in ms */
-  durationMs?: number
   /** Whether box content is expanded */
   expanded: boolean
   /** Box content */
@@ -980,12 +954,6 @@ export function ToolFrame(props: ToolFrameProps) {
     if (props.status === "error") return theme.error
     return theme.textMuted
   }
-
-  const footer = () =>
-    Option.fromNullishOr(props.durationMs).pipe(
-      Option.map((ms) => formatDuration(ms, "precise")),
-      Option.getOrUndefined,
-    )
 
   const expandIndicator = () => {
     if (localExpanded()) return "▾"
@@ -1023,9 +991,6 @@ export function ToolFrame(props: ToolFrameProps) {
           <text flexShrink={0} wrapMode="none">
             <Show when={callIdentityLabel()}>
               {(identity) => <span style={{ fg: theme.textMuted }}> {identity()}</span>}
-            </Show>
-            <Show when={footer()}>
-              <span style={{ fg: theme.textMuted }}> {footer()}</span>
             </Show>
             <span style={{ fg: theme.textMuted }}> {expandIndicator()}</span>
           </text>

@@ -266,33 +266,32 @@ function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
   )
 }
 
-// ── agent tree ──────────────────────────────────────────────────────────────
+// ── subagent renderer ───────────────────────────────────────────────────────
 
 /**
- * AgentTree — shared renderer for subagent tools (delegate, counsel, research, review).
+ * The `delegate.start` renderer.
  *
- * Collapsed: tool call tree (last 10) + usage stats + optional summary
+ * Collapsed: tool call tree (last 10) + usage stats
  * Expanded:
  *   - Running: live tool calls + streaming text
  *   - Completed: full tool call tree + usage + thinking + message text
  *   - Fallback: toolCall.output/preview when message fetch unavailable
  */
 
-interface AgentTreeProps {
-  /** Tool display name */
-  title: string
-  /** Subtitle for header */
-  subtitle?: string
-  /** The tool call data (for output/summary fallback) */
-  toolCall: ToolCall
-  /** Whether expanded */
-  expanded: boolean
-  /** Child sessions from tracker */
-  childSessions?: ChildSessionEntry[]
-  /** Summary shown in collapsed state (e.g. review severity counts) */
-  collapsedSummary?: SolidJSX.Element
-  /** Optional extra content to show after tool calls (e.g. review comments) */
-  completedContent?: SolidJSX.Element
+const decodeDelegateInput = Schema.decodeUnknownOption(
+  Schema.Struct({
+    todo: Schema.optional(Schema.String),
+  }),
+)
+
+/** The delegated task, cut to 60 columns, as the header subtitle. */
+const delegateSubtitle = (input: ToolInput): Option.Option<string> => {
+  const todo = decodeDelegateInput(input).pipe(
+    Option.flatMap((inp) => Option.fromNullishOr(inp.todo)),
+  )
+  if (Option.isNone(todo)) return Option.none()
+  if (todo.value.length > 60) return Option.some(todo.value.slice(0, 60) + "…")
+  return todo
 }
 
 interface ChildContent {
@@ -320,7 +319,7 @@ function extractChildContent(
   return { reasoning, text }
 }
 
-function AgentTree(props: AgentTreeProps) {
+function SubagentToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
   const clientCtx = useClient()
 
@@ -424,8 +423,8 @@ function AgentTree(props: AgentTreeProps) {
 
   return (
     <ToolFrame
-      title={props.title}
-      subtitle={props.subtitle}
+      title="delegate"
+      subtitle={Option.getOrUndefined(delegateSubtitle(props.toolCall.input))}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
@@ -436,7 +435,6 @@ function AgentTree(props: AgentTreeProps) {
           <Show when={Option.getOrUndefined(usageLine())}>
             {(line) => <text style={{ fg: theme.textMuted }}>{line()}</text>}
           </Show>
-          {props.collapsedSummary}
         </box>
       }
     >
@@ -496,43 +494,7 @@ function AgentTree(props: AgentTreeProps) {
           </text>
         )}
       </Show>
-
-      {/* Tool-specific completed content (e.g. review comments) */}
-      {props.completedContent}
     </ToolFrame>
-  )
-}
-
-// ── subagent renderer ───────────────────────────────────────────────────────
-
-const decodeDelegateInput = Schema.decodeUnknownOption(
-  Schema.Struct({
-    todo: Schema.optional(Schema.String),
-  }),
-)
-
-const parseDelegateInput = (input: ToolInput) => decodeDelegateInput(input)
-
-function SubagentToolRenderer(props: ToolRendererProps) {
-  const delegateInput = () => parseDelegateInput(props.toolCall.input)
-
-  const title = () => "delegate"
-
-  const subtitle = (): Option.Option<string> => {
-    const todo = delegateInput().pipe(Option.flatMap((inp) => Option.fromNullishOr(inp.todo)))
-    if (Option.isNone(todo)) return Option.none()
-    if (todo.value.length > 60) return Option.some(todo.value.slice(0, 60) + "…")
-    return todo
-  }
-
-  return (
-    <AgentTree
-      title={title()}
-      subtitle={Option.getOrUndefined(subtitle())}
-      toolCall={props.toolCall}
-      expanded={props.expanded}
-      childSessions={props.childSessions}
-    />
   )
 }
 

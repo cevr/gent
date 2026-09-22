@@ -2599,10 +2599,6 @@ export function createSessionController(props: {
     () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
   )
 
-  ext.setSwitchSessionDispatch((input) => {
-    client.switchSession(input.sessionId, input.branchId, input.name)
-  })
-
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))

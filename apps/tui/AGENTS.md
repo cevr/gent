@@ -187,7 +187,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - **Transport-only widgets**: there is no in-process snapshot cache. Widgets subscribe to typed session events or `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.request(...)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `goal.client.ts` and `tool-renderers.client.tsx` are the canonical examples.
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `ClientLifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
-- `useExtensionUI()` provides `sessionId()`, `branchId()`, `clientRuntime`
+- `useExtensionUI()` provides the resolved contributions, the load `failures`, and `clientRuntime`; widgets read the session from `ClientTransport.currentSession()`
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
 - `ClientWorkspace.cwd` / `ClientWorkspace.home` for workspace-relative operations
