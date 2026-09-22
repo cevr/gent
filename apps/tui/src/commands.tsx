@@ -104,7 +104,6 @@ function matchKeybind(
 interface CommandContextValue {
   commands: Accessor<Command[]>
   register: (commands: Command[]) => () => void
-  trigger: (id: string) => void
   handleKeybind: (event: {
     name: string
     ctrl?: boolean
@@ -150,11 +149,6 @@ export function CommandProvider(props: CommandProviderProps) {
     }
   }
 
-  const trigger = (id: string) => {
-    const cmd = commands().find((c) => c.id === id)
-    cmd?.onSelect()
-  }
-
   const handleKeybind = (event: {
     name: string
     ctrl?: boolean
@@ -183,7 +177,6 @@ export function CommandProvider(props: CommandProviderProps) {
   const value: CommandContextValue = {
     commands,
     register,
-    trigger,
     handleKeybind,
     paletteOpen,
     openPalette: () => setPaletteOpen(true),
@@ -268,7 +261,7 @@ export function parseSlashCommand(input: string): [string, string] | null {
  * The composer asks this to decide whether completing a slash name should
  * dispatch the command or only insert its text. No command in this repo
  * requires an argument: the arg-aware ones (`/model`, `/think`, `/goal`,
- * `/driver`, `/loop`, `/btw`) all treat an empty arg as "open my picker" or
+ * `/driver`, `/btw`) all treat an empty arg as "open my picker" or
  * "show usage", so naming a command is always enough to run it.
  */
 export const isSlashCommandName = (cmd: string, commands: ReadonlyArray<Command>): boolean => {

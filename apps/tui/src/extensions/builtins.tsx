@@ -714,35 +714,13 @@ export function ConnectionWidget() {
  */
 
 const builtinTools = defineClientExtension("@gent/tools", {
-  setup: Effect.gen(function* () {
-    const shell = yield* ClientShell
-    return clientContributions(
+  setup: Effect.succeed(
+    clientContributions(
       ...BUILTIN_TOOL_RENDERERS.map((entry) =>
         rendererContribution(entry.toolNames, entry.component, { headless: entry.headless }),
       ),
-      clientCommandContribution({
-        id: "tools.loop",
-        title: "Loop",
-        description: "Iterate until condition met",
-        category: "Tools",
-        slash: "loop",
-        onSelect: () =>
-          shell.sendMessage(
-            "Use the loop tool to iterate on the current task until complete or a condition is met.",
-          ),
-        onSlash: (args) => {
-          const trimmed = args.trim()
-          if (trimmed.length > 0) {
-            shell.sendMessage(`Use the loop tool: ${trimmed}`)
-            return
-          }
-          shell.sendMessage(
-            "Use the loop tool to iterate on the current task until complete or a condition is met.",
-          )
-        },
-      }),
-    )
-  }),
+    ),
+  ),
 })
 
 const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
