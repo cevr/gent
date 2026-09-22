@@ -214,6 +214,12 @@ const awaitReceipt = (target: TurnTarget) =>
     )
   })
 
+/**
+ * The flags a turn raised. Two writers race to record one completion: the
+ * child's `turnAfter` hook passes every flag, and reconcile reads the
+ * `TurnCompleted` event, which omits the false ones. Keeping only the raised
+ * flags gives one stored shape whichever writer wins.
+ */
 const outcomeOf = (receipt: {
   readonly interrupted?: boolean
   readonly streamFailed?: boolean
@@ -225,7 +231,7 @@ const outcomeOf = (receipt: {
       streamFailed: receipt.streamFailed,
       unanswered: receipt.unanswered,
     },
-    Predicate.isNotUndefined,
+    (flag) => flag === true,
   )
 
 const usageOf = (
