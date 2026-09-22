@@ -681,20 +681,44 @@ export const CancelTool = tool({
   }),
 })
 
+/** One read for the model and the tray: what is pending on this branch, against the same clock. */
+const listPending = Effect.fn("WakeTool.list")(function* () {
+  const now = yield* Clock.currentTimeMillis
+  const entries = yield* readWakeEntries()
+  return { now, entries }
+})
+
+const ListTool = tool({
+  id: "wake.list",
+  readonly: true,
+  description:
+    "List the alarms and monitors pending on this branch and the notices nobody has answered. Times are epoch milliseconds; compare them with `now`. Use it after a context handoff, or before you arm a wake that may already exist.",
+  promptSnippet: "List pending alarms, monitors, and notices",
+  params: Schema.Struct({
+    wakeId: Schema.optionalKey(
+      Schema.String.annotate({ description: "Show only this alarm, monitor, or notice." }),
+    ),
+  }),
+  output: WakePending,
+  execute: Effect.fn("ListTool.execute")(function* (params) {
+    const pending = yield* listPending()
+    return Option.match(Option.fromUndefinedOr(params.wakeId), {
+      onNone: () => pending,
+      onSome: (id) => ({ ...pending, entries: pending.entries.filter((e) => e.wakeId === id) }),
+    })
+  }),
+})
+
 // ── Requests ──
 
 export const WakeRpc = defineRequests(WAKE_EXTENSION_ID, {
-  List: request({
-    id: "wake.list",
+  Pending: request({
+    id: "wake.pending",
     description:
       "The alarms and monitors still pending on the current branch, and the notices not yet read",
     input: Schema.Struct({}),
     output: WakePending,
-    execute: Effect.fn("WakeRpc.List")(function* () {
-      const now = yield* Clock.currentTimeMillis
-      const entries = yield* readWakeEntries()
-      return { now, entries }
-    }),
+    execute: () => listPending(),
   }),
 })
 
@@ -704,8 +728,8 @@ export const WakeExtension = defineExtension({
   id: WAKE_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", WakeTool, MonitorTool, CancelTool)
-    yield* host.register("request", WakeRpc.List)
+    yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
+    yield* host.register("request", WakeRpc.Pending)
     // The branch resource starts without a session facade, so the first turn
     // after a restart is where stored entries get their timers back.
     yield* host.on("turnProjection", () =>

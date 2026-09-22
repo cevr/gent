@@ -28,7 +28,7 @@ import { truncate } from "../utils"
  * The wake tray under the status line.
  *
  * One dim line per alarm or monitor still pending on the current branch,
- * from `WakeRpc.List`; hidden while nothing is pending. Reads again when a
+ * from `WakeRpc.Pending`; hidden while nothing is pending. Reads again when a
  * tool call starts or a message lands, and on a slow clock while it shows
  * anything, so the countdowns move.
  */
@@ -172,7 +172,7 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
       lifecycle,
       cast: shell.cast,
       label: `${WAKE_EXTENSION_ID} pending`,
-      fetch: (session) => transport.request(ref(WakeRpc.List), {}, session),
+      fetch: (session) => transport.request(ref(WakeRpc.Pending), {}, session),
       subscribe: (refetch) =>
         transport.onSessionEvent((envelope) => {
           if (REFRESH_EVENTS.has(envelope.event._tag)) refetch()
