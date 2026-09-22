@@ -89,19 +89,15 @@ export const subtreeCounts = (
 const TRAY_HINT = "^t agents"
 const TRAY_MAX_ROWS = 3
 
-/** The task a row is on: its name without the `agent: ` prefix the delegate title carries, else its cwd. */
-const taskFor = (row: AgentRowEntry): string => {
-  const agent = Option.getOrElse(Option.fromUndefinedOr(row.agent), () => "")
-  const name = Option.fromUndefinedOr(row.name).pipe(
+/** What a row is called: its session name, else its cwd, else its id. */
+const nameFor = (row: AgentRowEntry): string =>
+  Option.fromUndefinedOr(row.name).pipe(
     Option.orElse(() => Option.fromUndefinedOr(row.cwd)),
     Option.getOrElse(() => row.sessionId),
   )
-  if (agent.length > 0 && name.startsWith(`${agent}: `)) return name.slice(agent.length + 2)
-  return name
-}
 
 /**
- * fx's subagent rows: `<agent> working · <task>`, one per running child and
+ * fx's subagent rows: `working · <name>`, one per running child and
  * nothing else. Past the cap the rest collapse into one count line.
  */
 export const trayLines = (
@@ -109,10 +105,10 @@ export const trayLines = (
   width: number,
 ): ReadonlyArray<{ readonly pulse: boolean; readonly text: string }> => {
   const shown = running.slice(0, TRAY_MAX_ROWS)
-  const lines = shown.map((row) => {
-    const agent = Option.getOrElse(Option.fromUndefinedOr(row.agent), () => "agent")
-    return { pulse: true, text: truncate(`${agent} working · ${taskFor(row)}`, width) }
-  })
+  const lines = shown.map((row) => ({
+    pulse: true,
+    text: truncate(`working · ${nameFor(row)}`, width),
+  }))
   const rest = running.length - shown.length
   if (rest > 0) lines.push({ pulse: false, text: `+${rest} more working` })
   return lines
@@ -308,15 +304,6 @@ const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
 /** Tree prefix from depth. The server already ordered parents before children. */
 const indentFor = (depth: number): string => "  ".repeat(Math.max(0, depth))
 
-const labelFor = (row: AgentRowEntry): string => {
-  const name = Option.fromUndefinedOr(row.name).pipe(
-    Option.orElse(() => Option.fromUndefinedOr(row.cwd)),
-    Option.getOrElse(() => row.sessionId),
-  )
-  const agent = Option.fromUndefinedOr(row.agent).pipe(Option.getOrElse(() => "—"))
-  return `${name}  ·  ${agent}`
-}
-
 /** What the selected row is doing, from its detail read; other rows carry nothing. */
 const activityFor = (detail: Option.Option<ExtensionAgentDetail>): string =>
   Option.match(
@@ -470,7 +457,7 @@ export function AgentsPane(
     return colorFor(section, selected)
   }
 
-  /** `<marker><indent><glyph> name · agent  ·  activity` padded so the age sits on the right edge. */
+  /** `<marker><indent><glyph> name  ·  activity` padded so the age sits on the right edge. */
   const rowLine = (row: AgentRowEntry, selected: boolean): string => {
     if (Option.contains(armed(), row.sessionId)) {
       return "^x again to delete this session and its children"
@@ -478,7 +465,7 @@ export function AgentsPane(
     const age = ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
-    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${labelFor(row)}`
+    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${nameFor(row)}`
     if (activity.length > 0) left = `${left}  ·  ${activity}`
     const width = Math.max(0, rowWidth() - age.length - 2)
     return `${truncate(left, width).padEnd(width)}  ${age}`

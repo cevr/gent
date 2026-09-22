@@ -371,7 +371,7 @@ describe("Agents pane navigation", () => {
 
       const frame = renderFrame(setup)
       expect(frame).toContain("Idle (1)")
-      expect(frame).toContain("Alpha  ·  —  ·  running")
+      expect(frame).toContain("Alpha  ·  running")
     }),
   )
 
@@ -858,8 +858,7 @@ const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => (
 
 const child = (id: string, section: AgentRowEntry["section"], parent: string): AgentRowEntry => ({
   ...root(id, section),
-  agent: "main",
-  name: `main: ${id} task`,
+  name: `delegate: ${id} task`,
   parentSessionId: SessionId.make(parent),
 })
 
@@ -888,18 +887,18 @@ describe("subtreeCounts", () => {
 })
 
 describe("trayLines", () => {
-  it.live("one line per running child, the agent prefix dropped, the rest counted", () =>
+  it.live("one line per running child by name, the rest counted", () =>
     Effect.sync(() => {
       const running = ["a", "b", "c", "d", "e"].map((id) => child(id, "running", "root"))
       const lines = trayLines(running, 60)
       expect(lines.map((line) => line.text)).toEqual([
-        "main working · a task",
-        "main working · b task",
-        "main working · c task",
+        "working · delegate: a task",
+        "working · delegate: b task",
+        "working · delegate: c task",
         "+2 more working",
       ])
       expect(lines.map((line) => line.pulse)).toEqual([true, true, true, false])
-      expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("main working · a …")
+      expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("working · delegat…")
     }),
   )
 })
@@ -935,7 +934,7 @@ describe("Subagent tray", () => {
         waitForRenderedFrame(setup, () => renderFrame(setup).includes("working"), "tray"),
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("main working · child-a task")
+      expect(frame).toContain("working · delegate: child-a task")
       expect(frame).not.toContain("child-b")
       expect(frame).not.toContain("idle")
       expect(frame).toContain("^t agents")
