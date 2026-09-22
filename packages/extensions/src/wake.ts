@@ -688,24 +688,82 @@ const listPending = Effect.fn("WakeTool.list")(function* () {
   return { now, entries }
 })
 
+/**
+ * One entry as the model reads it: ISO times, like the `wake` and `monitor`
+ * results, instead of the epoch milliseconds the tray counts against.
+ */
+const WakeListing = Schema.TaggedUnion({
+  alarm: WakeResult.fields,
+  monitor: {
+    ...MonitorResult.fields,
+    command: Schema.String,
+    cwd: Schema.optionalKey(Schema.String),
+    until: Schema.optionalKey(Schema.String),
+  },
+  notice: {
+    wakeId: Schema.String,
+    outcome: Schema.Literals(["fired", "matched", "timed-out"]),
+    firedAt: Schema.String,
+    content: Schema.String,
+    note: Schema.String,
+  },
+})
+
+const WakeListResult = Schema.Struct({
+  now: Schema.String,
+  entries: Schema.Array(WakeListing),
+})
+
+const listingOf = Match.type<WakeEntry>().pipe(
+  Match.tagsExhaustive({
+    alarm: (entry) =>
+      WakeListing.cases.alarm.make({
+        wakeId: entry.wakeId,
+        dueAt: isoOf(entry.dueAt),
+        mode: modeOf(entry),
+        note: entry.note,
+        ...omitUndefined({ everySeconds: entry.everySeconds }),
+      }),
+    monitor: (entry) =>
+      WakeListing.cases.monitor.make({
+        wakeId: entry.wakeId,
+        command: entry.command,
+        everySeconds: entry.everySeconds,
+        deadline: isoOf(entry.deadline),
+        mode: modeOf(entry),
+        note: entry.note,
+        ...omitUndefined({ cwd: entry.cwd, until: entry.until }),
+      }),
+    notice: (entry) =>
+      WakeListing.cases.notice.make({
+        wakeId: entry.wakeId,
+        outcome: entry.outcome,
+        firedAt: isoOf(entry.firedAt),
+        content: entry.content,
+        note: entry.note,
+      }),
+  }),
+)
+
 const ListTool = tool({
   id: "wake.list",
   readonly: true,
   description:
-    "List the alarms and monitors pending on this branch and the notices nobody has answered. Times are epoch milliseconds; compare them with `now`. Use it after a context handoff, or before you arm a wake that may already exist.",
+    "List the alarms and monitors pending on this branch and the notices nobody has answered, with ISO times and the current time as `now`. Use it after a context handoff, or before you arm a wake that may already exist.",
   promptSnippet: "List pending alarms, monitors, and notices",
   params: Schema.Struct({
     wakeId: Schema.optionalKey(
       Schema.String.annotate({ description: "Show only this alarm, monitor, or notice." }),
     ),
   }),
-  output: WakePending,
+  output: WakeListResult,
   execute: Effect.fn("ListTool.execute")(function* (params) {
     const pending = yield* listPending()
-    return Option.match(Option.fromUndefinedOr(params.wakeId), {
-      onNone: () => pending,
-      onSome: (id) => ({ ...pending, entries: pending.entries.filter((e) => e.wakeId === id) }),
-    })
+    const target = Option.fromUndefinedOr(params.wakeId)
+    const entries = pending.entries.filter((entry) =>
+      Option.match(target, { onNone: () => true, onSome: (id) => entry.wakeId === id }),
+    )
+    return { now: isoOf(pending.now), entries: entries.map(listingOf) }
   }),
 })
 
