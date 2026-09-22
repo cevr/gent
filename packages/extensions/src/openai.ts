@@ -822,7 +822,7 @@ const allocateOpenAIAuthorization: Effect.Effect<
 
 /**
  * OpenAICredentialService — ChatGPT OAuth (Codex) credentials behind the
- * shared credential cache (`../provider-credentials.ts`).
+ * shared credential cache (`makeCredentialCache` in `providers.ts`).
  *
  * There is no keychain: the initial credentials come from `authInfo` and
  * the cache cell is the sole copy of the rotated refresh token until
@@ -993,9 +993,8 @@ const build = (
  * surface `OpenAICredentialService` as a requirement and break the
  * type. The factory captures the service instance in a closure;
  * per-request semantics survive because each call to `creds.getFresh`
- * still consults the live `Ref` cache. (Same precedent as the
- * Anthropic `buildKeychainTransformClient` factory — see
- * `keychain-transform.ts:22-32`.)
+ * still consults the live `Ref` cache. The Anthropic
+ * `buildKeychainTransformClient` factory has the same shape.
  */
 
 // Preserve vendor JSON fields that this transport adapter does not interpret.

@@ -262,13 +262,10 @@ export const projectAgentRows = (params: {
 // ── protocol ────────────────────────────────────────────────────────────────
 
 /**
- * Agents view — the wire contract between the two halves.
- *
- * Split from `index.ts` so the client half can import the row schema and the
- * capability ref without pulling in the server's projection code, and so
- * `defineRequests` binds the extension id before either half runs.
- *
- * @module
+ * Agents view — the wire contract between the two halves. The client half
+ * imports the row schema and the capability ref from here through
+ * `client.ts`; `defineRequests` binds the extension id before either half
+ * runs.
  */
 
 const AGENTS_VIEW_EXTENSION_ID = ExtensionId.make("@gent/agents-view")
@@ -307,7 +304,8 @@ const ListAgentsOutput = Schema.Struct({
  * Join the live loop enumeration against durable session storage.
  *
  * Neither catalog is sufficient alone: the live one is empty after a restart,
- * and the durable one cannot say what is running. See `./projection.js`.
+ * and the durable one cannot say what is running. `projectAgentRows` above
+ * reconciles the two.
  */
 const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string) {
   const ctx = yield* ExtensionContext
@@ -389,10 +387,8 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
  * not app code. This half contributes one `request` capability returning the
  * reconciled agent rows; the client half renders them.
  *
- * The wire contract lives in `./protocol.js` and the reconciliation in
- * `./projection.js`, so the correctness is tested without a terminal.
- *
- * @module
+ * The wire contract and the reconciliation above are pure, so their
+ * correctness is tested without a terminal.
  */
 
 export const AgentsViewExtension = defineExtension({

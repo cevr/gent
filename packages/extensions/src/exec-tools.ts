@@ -731,8 +731,8 @@ export const BashTool = tool({
     // Sync mode — spawn into an explicit scope so on timeout we can
     // fork-and-forget the scope-close (which fires SIGTERM/SIGKILL via
     // the spawn finalizer) instead of awaiting forceKillAfter on the
-    // calling fiber. Matches the prior killGracefully fire-and-forget
-    // semantics: tool returns immediately on timeout, kill happens async.
+    // calling fiber: the tool returns immediately on timeout and the kill
+    // happens async.
     const spawnScope = yield* Scope.make()
     const closeSpawnScope = Scope.close(spawnScope, Exit.void).pipe(Effect.ignore)
     const result = yield* runBashCommand(command, cwd).pipe(

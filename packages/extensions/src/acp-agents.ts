@@ -181,8 +181,7 @@ export const ACP_PROTOCOL_AGENTS = {
 /**
  * Transcript composition for external-session rebuilds.
  *
- * Both transports (Claude SDK + ACP protocol) expose only a user-message
- * input channel. When a cached session is rebuilt mid-conversation
+ * The ACP transport exposes only a user-message input channel. When a cached session is rebuilt mid-conversation
  * (fingerprint mismatch, `invalidateDriver`, manual `invalidate`), the
  * remote agent has zero memory of prior turns — sending only the live
  * user message would silently drop the history. The executor seeds the
@@ -190,11 +189,10 @@ export const ACP_PROTOCOL_AGENTS = {
  * prior messages with structured tool/reasoning blocks, then appends the
  * live user message.
  *
- * Counsel  — the prior renderer only emitted text parts, so tool-heavy
- * codemode sessions lost every `tool_use`/`tool_result`/`reasoning` block
- * across a rebuild. User content is HTML-escaped and the whole preamble
- * is wrapped in `<historical-transcript>` so the remote agent treats it
- * as context, not instructions.
+ * The preamble keeps every `tool_use`/`tool_result`/`reasoning` block, so a
+ * tool-heavy session survives a rebuild. User content is HTML-escaped and
+ * the whole preamble is wrapped in `<historical-transcript>` so the remote
+ * agent treats it as context, not instructions.
  *
  * @module
  */
@@ -886,10 +884,10 @@ const splitLines = <E>(stream: Stream.Stream<string, E>): Stream.Stream<string, 
  * @module
  */
 
-// ── Session Manager Interface (Batch 3 provides implementation) ──
+// ── Session Manager Interface ──
 
 /**
- * Composite cache key shared by the SDK and ACP-protocol managers.
+ * Composite cache key for the ACP session manager.
  * Keying on `(driverId, sessionId, branchId)` keeps two branches of the
  * same gent session, and two driver routings of the same branch, from
  * sharing remote state.
@@ -1481,7 +1479,7 @@ const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, ChildProc
  * first-class gent agents via the ExternalDriver primitive.
  *
  * Each agent is a subprocess spoken to over ACP JSON-RPC on stdio
- * (`protocol.ts` + `schema.ts`); `AcpSessionManager` owns one subprocess
+ * (the wire schema and protocol sections above); `AcpSessionManager` owns one subprocess
  * per gent session and is captured by both the contributed drivers and the
  * process-scoped Resource that disposes them.
  *
