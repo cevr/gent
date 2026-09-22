@@ -14,10 +14,9 @@ import { useSpinnerClock } from "../ui"
 import {
   clientContributions,
   ClientLifecycle,
-  ClientShell,
   ClientTransport,
   defineClientExtension,
-  makeClientSessionResource,
+  sessionQuery,
   widgetContribution,
 } from "./client-facets.js"
 import { truncate } from "../utils"
@@ -164,31 +163,28 @@ const REFRESH_EVENTS: ReadonlySet<string> = new Set([
 export default defineClientExtension(WAKE_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
-    const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
 
-    const pending = yield* makeClientSessionResource<WakePendingType>({
-      transport,
-      lifecycle,
-      cast: shell.cast,
-      label: `${WAKE_EXTENSION_ID} pending`,
-      fetch: (session) => transport.request(ref(WakeRpc.Pending), {}, session),
-      subscribe: (refetch) =>
-        transport.onSessionEvent((envelope) => {
-          if (REFRESH_EVENTS.has(envelope.event._tag)) refetch()
-        }),
+    const pending = yield* sessionQuery({
+      initial: Option.none<WakePendingType>(),
+      follow: true,
+      fetch: (session) => transport.request(ref(WakeRpc.Pending), {}, session).pipe(Effect.asSome),
     })
+    lifecycle.addCleanup(
+      transport.onSessionEvent((envelope) => {
+        if (REFRESH_EVENTS.has(envelope.event._tag)) pending.refresh()
+      }),
+    )
 
     const nowMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
-    const current = (): Option.Option<WakePendingType> => Option.fromNullishOr(pending.read())
 
     // A pending entry changes nothing in this session until it fires, so the
     // list is re-read on a slow clock only while it shows something.
     yield* lifecycle.scoped(
       Effect.forkScoped(
         Effect.sync(() => {
-          const value = Option.fromNullishOr(pending.read())
-          if (Option.isSome(value) && value.value.entries.length > 0) pending.refetch()
+          const value = pending.value()
+          if (Option.isSome(value) && value.value.entries.length > 0) pending.refresh()
         }).pipe(Effect.repeat(Schedule.spaced("5 seconds"))),
       ),
     )
@@ -206,7 +202,7 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
             tick()
             return nowMillis()
           }
-          return <WakeTray pending={current} now={now} />
+          return <WakeTray pending={pending.value} now={now} />
         },
       }),
     )

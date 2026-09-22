@@ -24,8 +24,7 @@ import {
   ClientShell,
   ClientTransport,
   defineClientExtension,
-  makeClientSessionQuery,
-  type OverlayProps,
+  sessionQuery,
   widgetContribution,
 } from "./client-facets"
 
@@ -242,10 +241,6 @@ export const windowsOf = (
   return windows
 }
 
-/**
- * Windows plus the load state, held in the setup closure so they survive the
- * pane closing. See `agents-view.client.tsx` for the same split.
- */
 /** What one load produces: the chain length and the windows across it. */
 interface Loaded {
   readonly sessions: number
@@ -274,67 +269,62 @@ export const makeThreadController = (
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<number, { readonly message: string }>,
-  cast: (effect: Effect.Effect<void>) => void,
-  current: () => Option.Option<{ sessionId: SessionId; branchId: BranchId }>,
-): ThreadController => {
-  const [open, setOpen] = createSignal(false)
+): Effect.Effect<ThreadController, never, ClientTransport | ClientShell | ClientLifecycle> =>
+  Effect.gen(function* () {
+    const transport = yield* ClientTransport
+    const [open, setOpen] = createSignal(false)
 
-  /** The branch a session contributes: the shell's branch for its own session, else the active one. */
-  const branchFor = (
-    session: Session,
-    active: { sessionId: SessionId; branchId: BranchId },
-  ): Option.Option<BranchId> => {
-    if (session.id === active.sessionId) return Option.some(active.branchId)
-    return Option.fromUndefinedOr(session.activeBranchId)
-  }
+    /** The branch a session contributes: the shell's branch for its own session, else the active one. */
+    const branchFor = (
+      session: Session,
+      active: { sessionId: SessionId; branchId: BranchId },
+    ): Option.Option<BranchId> => {
+      if (session.id === active.sessionId) return Option.some(active.branchId)
+      return Option.fromUndefinedOr(session.activeBranchId)
+    }
 
-  const load = (active: { sessionId: SessionId; branchId: BranchId }) =>
-    Effect.gen(function* () {
-      const chain = threadChain(yield* fetchSessions(active.sessionId), active.sessionId)
-      const perSession = yield* Effect.forEach(chain, (session) =>
-        Option.match(branchFor(session, active), {
-          onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
-          onSome: (branchId) =>
-            Effect.map(fetchMessages(branchId), (messages) =>
-              windowsOf(session, branchId, messages),
-            ),
-        }),
-      )
-      const omitted = yield* fetchOmitted(active)
-      const windows = perSession.flat()
-      // The projection metric belongs to the live window: the last one on the shell's branch.
-      const live = windows.findLastIndex((window) => window.branchId === active.branchId)
-      return {
-        sessions: chain.length,
-        windows: windows.map((window, index) => {
-          if (index !== live) return window
-          return { ...window, omittedCount: omitted }
-        }),
-      }
-    })
+    const load = (active: { sessionId: SessionId; branchId: BranchId }) =>
+      Effect.gen(function* () {
+        const chain = threadChain(yield* fetchSessions(active.sessionId), active.sessionId)
+        const perSession = yield* Effect.forEach(chain, (session) =>
+          Option.match(branchFor(session, active), {
+            onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
+            onSome: (branchId) =>
+              Effect.map(fetchMessages(branchId), (messages) =>
+                windowsOf(session, branchId, messages),
+              ),
+          }),
+        )
+        const omitted = yield* fetchOmitted(active)
+        const windows = perSession.flat()
+        // The projection metric belongs to the live window: the last one on the shell's branch.
+        const live = windows.findLastIndex((window) => window.branchId === active.branchId)
+        return {
+          sessions: chain.length,
+          windows: windows.map((window, index) => {
+            if (index !== live) return window
+            return { ...window, omittedCount: omitted }
+          }),
+        }
+      })
 
-  // A compaction event refetches while the pane shows, and the shell can move
-  // between the ask and the reply; the keyed query drops a reply whose session
-  // is no longer the current one.
-  const empty: Loaded = { sessions: 0, windows: [] }
-  const loaded = makeClientSessionQuery({
-    initial: empty,
-    current,
-    cast,
-    fetch: (_query: "reload", session) => load(session),
+    // A compaction event refetches while the pane shows, and the shell can move
+    // between the ask and the reply; the session query drops a reply whose session
+    // is no longer the current one.
+    const empty: Loaded = { sessions: 0, windows: [] }
+    const loaded = yield* sessionQuery({ initial: empty, follow: false, fetch: load })
+
+    return {
+      windows: () => loaded.value().windows,
+      sessions: () => loaded.value().sessions,
+      current: transport.currentSession,
+      error: loaded.error,
+      loading: loaded.loading,
+      refresh: loaded.refresh,
+      open,
+      setOpen,
+    }
   })
-
-  return {
-    windows: () => loaded.value().windows,
-    sessions: () => loaded.value().sessions,
-    current,
-    error: loaded.error,
-    loading: loaded.loading,
-    refresh: () => loaded.refresh("reload"),
-    open,
-    setOpen,
-  }
-}
 
 /** The list as drawn: a heading opens each session, windows keep their index for selection. */
 type ThreadItem =
@@ -379,12 +369,12 @@ const emptyLabel = (loading: boolean): string => {
   return "no windows"
 }
 
-export function ThreadPane(
-  props: OverlayProps & {
-    controller: ThreadController
-    onSelect: (window: ThreadWindow) => void
-  },
-) {
+export function ThreadPane(props: {
+  open: boolean
+  onClose: () => void
+  controller: ThreadController
+  onSelect: (window: ThreadWindow) => void
+}) {
   const { theme } = useTheme()
   const [cursor, setCursor] = createSignal(Option.none<ThreadWindow>())
 
@@ -500,7 +490,7 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
     const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
 
-    const controller = makeThreadController(
+    const controller = yield* makeThreadController(
       (sessionId) =>
         transport
           .threadSessions(sessionId)
@@ -514,12 +504,6 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
           Effect.map((detail) => detail.omittedMessages),
           Effect.mapError((error) => ({ message: error.message })),
         ),
-      shell.cast,
-      () =>
-        Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({
-          sessionId: active.sessionId,
-          branchId: active.branchId,
-        })),
     )
 
     // A handoff on the shell's branch opens a new window; re-read while showing.

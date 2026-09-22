@@ -27,14 +27,7 @@ interface HeadlessToolCall {
   readonly output: Option.Option<string>
 }
 
-export type HeadlessToolRenderer = (toolCall: HeadlessToolCall) => Option.Option<string>
-
-interface HeadlessToolRendererEntry {
-  readonly toolNames: ReadonlyArray<string>
-  readonly render: HeadlessToolRenderer
-}
-
-type HeadlessToolRendererRegistry = ReadonlyMap<string, HeadlessToolRenderer>
+type HeadlessToolRenderer = (toolCall: HeadlessToolCall) => Option.Option<string>
 
 const inputSummary = (toolName: string, input: Option.Option<ToolInput>): string =>
   Option.match(input, {
@@ -80,7 +73,7 @@ const renderGeneric: HeadlessToolRenderer = (toolCall) => {
   )
 }
 
-export const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
+const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   const command = inputSummary("bash", toolCall.input)
   if (toolCall.status === "running") {
     if (command.length > 0) return Option.some(`[tool: bash] ${command}`)
@@ -123,7 +116,7 @@ const receiptGlyph = (outcome: "succeeded" | "failed" | "incomplete") => {
   return "?"
 }
 
-export const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
+const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   const firstLine = inputSummary("cell", toolCall.input)
   if (toolCall.status === "running") {
     if (firstLine.length > 0) return Option.some(`[tool: cell] ${firstLine}`)
@@ -151,33 +144,15 @@ export const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   return Option.some(lines.join("\n"))
 }
 
-const BUILTIN_HEADLESS_TOOL_RENDERERS: ReadonlyArray<HeadlessToolRendererEntry> = [
-  { toolNames: ["bash"], render: BashHeadlessToolRenderer },
-  { toolNames: ["cell"], render: CellHeadlessToolRenderer },
-]
+/** Tools with a dedicated headless line; every other tool renders generically. */
+const HEADLESS_TOOL_RENDERERS: ReadonlyMap<string, HeadlessToolRenderer> = new Map([
+  ["bash", BashHeadlessToolRenderer],
+  ["cell", CellHeadlessToolRenderer],
+])
 
-const resolveHeadlessToolRenderers = (
-  entries: ReadonlyArray<HeadlessToolRendererEntry>,
-): HeadlessToolRendererRegistry => {
-  const renderers = new Map<string, HeadlessToolRenderer>()
-  for (const entry of entries) {
-    for (const toolName of entry.toolNames) {
-      renderers.set(toolName.toLowerCase(), entry.render)
-    }
-  }
-  return renderers
-}
-
-export const DEFAULT_HEADLESS_TOOL_RENDERERS = resolveHeadlessToolRenderers(
-  BUILTIN_HEADLESS_TOOL_RENDERERS,
-)
-
-export const renderHeadlessToolCall = (
-  toolCall: HeadlessToolCall,
-  renderers: HeadlessToolRendererRegistry = DEFAULT_HEADLESS_TOOL_RENDERERS,
-): string => {
+export const renderHeadlessToolCall = (toolCall: HeadlessToolCall): string => {
   const renderer = Option.getOrElse(
-    Option.fromNullishOr(renderers.get(toolCall.toolName.toLowerCase())),
+    Option.fromNullishOr(HEADLESS_TOOL_RENDERERS.get(toolCall.toolName.toLowerCase())),
     () => renderGeneric,
   )
   return renderer(toolCall).pipe(
@@ -206,7 +181,6 @@ export const runHeadless = (
   promptText: string,
   agentOverride?: AgentName,
   runSpec?: RunSpec,
-  toolRenderers: HeadlessToolRendererRegistry = DEFAULT_HEADLESS_TOOL_RENDERERS,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -218,7 +192,7 @@ export const runHeadless = (
       const done = yield* Deferred.make<boolean>()
       const activeTools = new Map<string, HeadlessToolCall>()
       const renderTool = (toolCall: HeadlessToolCall, parentToolCallId?: string) => {
-        const rendered = renderHeadlessToolCall(toolCall, toolRenderers)
+        const rendered = renderHeadlessToolCall(toolCall)
         if (Predicate.isUndefined(parentToolCallId)) return writeStdout(`${rendered}\n`)
         // Cell-admitted calls stay visibly nested under their cell.
         const nested = rendered

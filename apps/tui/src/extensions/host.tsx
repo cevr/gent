@@ -14,12 +14,12 @@ import {
   makeClientShellLayer,
   makeClientTransportLayer,
   makeClientWorkspaceLayer,
-  type OverlayComponent,
 } from "./client-facets.js"
 import {
   type Accessor,
   createContext,
   createEffect,
+  createMemo,
   createSignal,
   type JSX,
   onCleanup,
@@ -28,15 +28,16 @@ import {
 import { useRequiredContext } from "../utils"
 import { builtinClientModules } from "./builtins"
 import type { ToolRenderer } from "../tool-renderers"
-import type { HeadlessToolRenderer } from "../headless"
 import type { Command } from "../commands"
 import {
+  type ClientExtensionFailure,
+  type CommandSource,
   loadExtensionUi,
+  resolveCommands,
   type ResolvedBorderLabel,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
 } from "./loader-boundary"
-import type { BranchId, SessionId } from "@gent/core/extensions/api"
 import { useWorkspace } from "../workspace"
 import { useClient } from "../client"
 
@@ -44,30 +45,27 @@ import { useClient } from "../client"
 
 /**
  * One client `ManagedRuntime` for every surface that loads client
- * extensions: the interactive shell, the headless runner, and tests.
+ * extensions: the interactive shell and tests.
  *
- * A surface supplies the transport, the workspace, and the `run`/`cast`
- * pair of its connected runtime. Shell UI callbacks, the activity
- * provider, and the lifecycle cleanup registry default to no-ops so a
- * surface without a UI (headless) does not restate them.
+ * A surface supplies the transport, the workspace, and the `cast` of its
+ * connected runtime. Shell UI callbacks, the activity provider, and the
+ * lifecycle cleanup registry default to no-ops so a test does not restate
+ * them.
  */
 
 interface ClientRuntimeDeps {
   readonly transport: ClientShellTransportDefinition
   readonly workspace: ClientWorkspaceDefinition
-  /** `run`/`cast` are required; every UI callback defaults to a no-op. */
-  readonly shell: Pick<ClientShellDefinition, "run" | "cast"> &
-    Partial<Omit<ClientShellDefinition, "run" | "cast">>
+  /** `cast` is required; every UI callback defaults to a no-op. */
+  readonly shell: Pick<ClientShellDefinition, "cast"> & Partial<Omit<ClientShellDefinition, "cast">>
   /** Current UI activity; absent when the surface has no activity to report. */
   readonly activity?: () => ClientActivitySnapshot
   /** Cleanup registry; absent when the surface disposes the runtime whole. */
   readonly lifecycle?: Pick<ClientLifecycleDefinition, "addCleanup">
 }
 
-const noopShell: Omit<ClientShellDefinition, "run" | "cast"> = {
-  sendMessage: () => {},
-  openOverlay: () => {},
-  closeOverlay: () => {},
+const noopShell: Omit<ClientShellDefinition, "cast"> = {
+  notify: () => {},
   switchSession: () => {},
 }
 
@@ -96,11 +94,10 @@ export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
  * Loads on mount: discovers *.client.* files, imports them, resolves with
  * scope precedence. Provides resolved contributions to descendants.
  *
- *  deleted the paired-package snapshot cache. Widgets that need
- * server-side state subscribe to `ClientTransport.onSessionEvent` or
- * `ClientTransport.onExtensionStateChanged` and call
- * `ClientTransport.request(...)` directly — see e.g.
- * `builtins/tool-renderers.client.tsx`.
+ * Widgets that need server-side state read it through `sessionQuery` and
+ * refresh on `ClientTransport.onSessionEvent` or
+ * `ClientTransport.onExtensionStateChanged`; see the goal label in
+ * `builtins.tsx` and the wake tray in `wake.client.tsx`.
  */
 
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
@@ -108,29 +105,22 @@ export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
 interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
-  readonly headlessRenderers: Accessor<Map<string, HeadlessToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
+  /**
+   * Every command the reader can run: the session's own, the client
+   * extensions' and the server's slash commands, under `resolveCommands`.
+   */
   readonly commands: Accessor<ReadonlyArray<Command>>
-  readonly overlays: Accessor<Map<string, OverlayComponent>>
+  /** The session view supplies its own commands; they resolve at builtin scope. */
+  readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
-  readonly loading: Accessor<boolean>
-  /** Wire overlay dispatch from the session controller */
-  readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
-  readonly setSwitchSessionDispatch: (
-    dispatch: (input: { sessionId: SessionId; branchId: BranchId; name: string }) => void,
-  ) => void
+  /** Client extensions, or contributions, that did not load. */
+  readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
-  /** Wire composer state reactive getter from the session controller */
-  /** Current session ID (absent before session is active). */
-  // eslint-disable-next-line effect/noNullish -- extension consumers use absence before session activation.
-  readonly sessionId: Accessor<string | undefined>
-  /** Current branch ID (absent before session is active). */
-  // eslint-disable-next-line effect/noNullish -- extension consumers use absence before session activation.
-  readonly branchId: Accessor<string | undefined>
   /** ManagedRuntime providing FileSystem, Path, ClientTransport — used by
    *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
   readonly clientRuntime: ClientRuntime
@@ -138,13 +128,12 @@ interface ExtensionUIContextValue {
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   renderers: new Map(),
-  headlessRenderers: new Map(),
   widgets: [],
-  commands: [],
-  overlays: new Map(),
+  commandSources: [],
   interactionRenderers: new Map(),
   borderLabels: [],
   autocompleteItems: [],
+  failures: [],
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -158,36 +147,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   )
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
-  const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
+  const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
+  const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
     ReadonlyArray<AutocompleteContribution>
   >([])
-  const [loading, setLoading] = createSignal(true)
 
-  // Overlay dispatch — wired by session controller after mount
-  const [overlayDispatch, setOverlayDispatchSignal] = createSignal<{
-    open: (id: string) => void
-    close: () => void
-  }>({ open: () => {}, close: () => {} })
-
-  const setOverlayDispatch = (open: (id: string) => void, close: () => void) => {
-    setOverlayDispatchSignal({ open, close })
-  }
-
-  // Session switching — wired by the session controller after mount, for the
-  // same reason as the overlay dispatch: navigating needs the router, and
-  // `RouterProvider` is a descendant of this provider, not an ancestor.
-  const [switchSessionDispatch, setSwitchSessionDispatchSignal] = createSignal<
-    (input: { sessionId: SessionId; branchId: BranchId; name: string }) => void
-  >(() => {})
-
-  const setSwitchSessionDispatch = (
-    dispatch: (input: { sessionId: SessionId; branchId: BranchId; name: string }) => void,
-  ) => {
-    setSwitchSessionDispatchSignal(() => dispatch)
-  }
-
-  // Composer state provider — wired by session controller
   // Provider-scoped cleanup registry. Widget setups that detach Solid
   // roots or subscribe to pulses register their disposers here; the
   // `onCleanup` below runs them in order when the provider unmounts.
@@ -202,8 +167,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // (FileSystem, Path) with the TUI client services Effect-typed
   // extensions may yield: `ClientTransport` (typed RPC client + event
   // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
-  // (send/sendMessage/overlays). The loader's `invokeSetup` runs each
-  // setup against this runtime.
+  // (notify, session switch). `loadTuiExtensions` runs each setup on this
+  // runtime.
   const clientRuntime: ClientRuntime = makeClientRuntime({
     transport: {
       client: client.client,
@@ -211,17 +176,14 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       // The client's identity memo, read straight through: the reference is
       // stable across a rename, so an effect tracking this accessor stays put
       // while the session and the branch do.
-      currentSession: () => Option.getOrUndefined(client.sessionIdentity()),
+      currentSession: client.sessionIdentity,
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
     },
     workspace: { cwd: workspace.cwd, home: workspace.home },
     shell: {
-      sendMessage: (content) => client.sendMessage(content),
-      openOverlay: (id) => overlayDispatch().open(id),
-      closeOverlay: () => overlayDispatch().close(),
-      switchSession: (input) => switchSessionDispatch()(input),
-      run: client.runtime.run,
+      notify: (message) => client.setNotice(message),
+      switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
     },
     activity: () => activityProvider()(),
@@ -257,8 +219,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
       cwd: workspace.cwd,
     })
       .then(setResolved)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+      .catch((error: Error) =>
+        setResolved({
+          ...EMPTY_RESOLVED,
+          failures: [{ id: "client extensions", reason: String(error) }],
+        }),
+      )
   })
 
   // The contributed rows belong to the session, not to its name: track the id
@@ -281,51 +247,62 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         Effect.tap((cmds) =>
           Effect.sync(() => {
             if (!active) return
-            setServerCommands(
-              cmds.map((c) => {
-                const run = (args: string) => {
-                  const activeSession = Option.fromNullishOr(client.session())
-                  if (Option.isNone(activeSession)) return
-                  const sid = activeSession.value.sessionId
-                  const bid = activeSession.value.branchId
-                  client.runtime.cast(
-                    client.client.extension
-                      .request({
-                        sessionId: sid,
-                        extensionId: c.extensionId,
-                        capabilityId: c.capabilityId,
-                        input: args,
-                        branchId: bid,
-                      })
-                      .pipe(
-                        Effect.catchEager((error) =>
-                          Effect.logWarning("slash.command.failed").pipe(
-                            Effect.annotateLogs({
-                              extensionId: c.extensionId,
-                              capabilityId: c.capabilityId,
-                              error: String(error),
-                            }),
-                          ),
+            const byExtension = new Map<string, Array<Command>>()
+            for (const c of cmds) {
+              const run = (args: string) => {
+                const activeSession = Option.fromNullishOr(client.session())
+                if (Option.isNone(activeSession)) return
+                const sid = activeSession.value.sessionId
+                const bid = activeSession.value.branchId
+                client.runtime.cast(
+                  client.client.extension
+                    .request({
+                      sessionId: sid,
+                      extensionId: c.extensionId,
+                      capabilityId: c.capabilityId,
+                      input: args,
+                      branchId: bid,
+                    })
+                    .pipe(
+                      Effect.catchEager((error) =>
+                        Effect.logWarning("slash.command.failed").pipe(
+                          Effect.annotateLogs({
+                            extensionId: c.extensionId,
+                            capabilityId: c.capabilityId,
+                            error: String(error),
+                          }),
                         ),
                       ),
-                  )
-                }
+                    ),
+                )
+              }
 
-                const base = {
-                  id: `server:${c.name}`,
-                  title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
-                    Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
-                  ),
-                  slash: c.name,
-                  category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
-                  onSelect: () => run(""),
-                  onSlash: run,
-                }
-                return Option.match(Option.fromNullishOr(c.keybind), {
-                  onNone: () => base,
-                  onSome: (keybind) => ({ ...base, keybind }),
-                })
-              }),
+              const base = {
+                id: `server:${c.name}`,
+                title: Option.getOrElse(Option.fromNullishOr(c.displayName), () =>
+                  Option.getOrElse(Option.fromNullishOr(c.description), () => c.name),
+                ),
+                slash: c.name,
+                category: Option.getOrElse(Option.fromNullishOr(c.category), () => "Extension"),
+                onSelect: () => run(""),
+                onSlash: run,
+              }
+              const command = Option.match(Option.fromNullishOr(c.keybind), {
+                onNone: (): Command => base,
+                onSome: (keybind): Command => ({ ...base, keybind }),
+              })
+              byExtension.set(c.extensionId, [
+                ...Option.getOrElse(Option.fromNullishOr(byExtension.get(c.extensionId)), () => []),
+                command,
+              ])
+            }
+            setServerCommands(
+              [...byExtension].map(([extensionId, commands]) => ({
+                id: extensionId,
+                scope: "builtin",
+                source: `server:${extensionId}`,
+                commands,
+              })),
             )
           }),
         ),
@@ -338,32 +315,34 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     )
   })
 
+  // The session's commands first, then the client extensions', then the
+  // server's: inside builtin scope the earlier source keeps a contested key.
+  const resolvedCommands = createMemo(() =>
+    resolveCommands([
+      {
+        id: "@gent/session",
+        scope: "builtin",
+        source: "builtin:@gent/session",
+        commands: sessionCommands(),
+      },
+      ...resolved().commandSources,
+      ...serverCommands(),
+    ]),
+  )
+
   return (
     <ExtensionUIContext.Provider
       value={{
         renderers: () => resolved().renderers,
-        headlessRenderers: () => resolved().headlessRenderers,
         widgets: () => resolved().widgets,
-        commands: () => [...resolved().commands, ...serverCommands()],
-        overlays: () => resolved().overlays,
+        commands: () => resolvedCommands().commands,
+        setSessionCommands,
         interactionRenderers: () => resolved().interactionRenderers,
         borderLabels: () => resolved().borderLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
-        loading,
+        failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,
-        setOverlayDispatch,
-        setSwitchSessionDispatch,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
-        // Widgets key their own signals on these, so they read the identity
-        // memo: a rename must not invalidate a widget's cached state.
-        sessionId: () =>
-          Option.getOrUndefined(
-            Option.map(client.sessionIdentity(), (identity) => identity.sessionId),
-          ),
-        branchId: () =>
-          Option.getOrUndefined(
-            Option.map(client.sessionIdentity(), (identity) => identity.branchId),
-          ),
         clientRuntime,
       }}
     >

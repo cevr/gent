@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Option } from "effect"
-import { createRoot, createSignal } from "solid-js"
+import { createSignal } from "solid-js"
 import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import {
@@ -15,6 +15,7 @@ import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { usePickerGeometry } from "../../src/ui"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
+import { provideClientServices } from "../extension-test-harness-boundary"
 import { makeThreadController } from "../../src/extensions/thread-view.client"
 
 // ── ../components/agents-controller.test ────────────────────────────────────
@@ -49,7 +50,6 @@ describe("Agents controller detail", () => {
     Effect.gen(function* () {
       // Stands in for the client's `cast`, which runs effects on the shell's
       // own runtime; here that is the surrounding test context.
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const slow = yield* Deferred.make<ExtensionAgentDetail>()
       const fast = yield* Deferred.make<ExtensionAgentDetail>()
       const gates = new Map([
@@ -57,68 +57,53 @@ describe("Agents controller detail", () => {
         ["second", fast],
       ])
 
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           () => Effect.succeed([]),
           (key) =>
             Option.match(Option.fromUndefinedOr(gates.get(key.sessionId)), {
               onNone: () => Effect.never,
               onSome: (gate) => Deferred.await(gate),
             }),
-          (effect) => {
-            cast(effect)
-          },
-          () => Option.none(),
-        )
-        return { controller, dispose }
-      })
+        ),
+        { currentSession: () => Option.none() },
+      )
 
       // Select the first row, then move on before its reply arrives.
-      result.controller.select(Option.some(row("first")))
-      result.controller.select(Option.some(row("second")))
+      controller.select(Option.some(row("first")))
+      controller.select(Option.some(row("second")))
 
       // The stale reply lands first and must not be shown.
       yield* Deferred.succeed(slow, detail(111))
       yield* Effect.yieldNow
-      expect(result.controller.detail()).toEqual(Option.none())
+      expect(controller.detail()).toEqual(Option.none())
 
       // The reply for the row still selected is the one that wins.
       yield* Deferred.succeed(fast, detail(222))
       yield* Effect.yieldNow
-      expect(Option.map(result.controller.detail(), (value) => value.turns)).toEqual(
-        Option.some(222),
-      )
-
-      result.dispose()
+      expect(Option.map(controller.detail(), (value) => value.turns)).toEqual(Option.some(222))
     }),
   )
 
   it.scopedLive("clears detail when the selection goes away", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const gate = yield* Deferred.make<ExtensionAgentDetail>()
 
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           () => Effect.succeed([]),
           () => Deferred.await(gate),
-          (effect) => {
-            cast(effect)
-          },
-          () => Option.none(),
-        )
-        return { controller, dispose }
-      })
+        ),
+        { currentSession: () => Option.none() },
+      )
 
-      result.controller.select(Option.some(row("only")))
+      controller.select(Option.some(row("only")))
       yield* Deferred.succeed(gate, detail(5))
       yield* Effect.yieldNow
-      expect(Option.isSome(result.controller.detail())).toBe(true)
+      expect(Option.isSome(controller.detail())).toBe(true)
 
-      result.controller.select(Option.none())
-      expect(result.controller.detail()).toEqual(Option.none())
-
-      result.dispose()
+      controller.select(Option.none())
+      expect(controller.detail()).toEqual(Option.none())
     }),
   )
 })
@@ -126,32 +111,29 @@ describe("Agents controller detail", () => {
 describe("Agents controller reload", () => {
   it.scopedLive("re-reads the filter the reader typed, not the whole listing", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const asked: Array<string> = []
 
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           (query) => {
             asked.push(query)
             return Effect.succeed([])
           },
           () => Effect.never,
-          (effect) => {
-            cast(effect)
-          },
-          () => Option.some({ sessionId: SessionId.make("only"), branchId: BranchId.make("only") }),
-        )
-        return { controller, dispose }
-      })
+        ),
+        {
+          currentSession: () =>
+            Option.some({ sessionId: SessionId.make("only"), branchId: BranchId.make("only") }),
+        },
+      )
 
       // The reader filters the pane, then deletes a row from it. The listing
       // that comes back must still be the filtered one.
-      result.controller.refresh("dep")
-      result.controller.reload()
+      controller.refresh("dep")
+      controller.reload()
       yield* Effect.yieldNow
 
       expect(asked).toEqual(["dep", "dep"])
-      result.dispose()
     }),
   )
 })
@@ -159,27 +141,20 @@ describe("Agents controller reload", () => {
 describe("Agents controller stored rows", () => {
   it.scopedLive("never asks a stored session for detail, since the read would spawn its loop", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const asked: Array<string> = []
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           () => Effect.succeed([]),
           (key) => {
             asked.push(key.sessionId)
             return Effect.succeed(detail(1))
           },
-          (effect) => {
-            cast(effect)
-          },
-          () => Option.none(),
-        )
-        controller.select(Option.some(row("stored", false)))
-        const seen = controller.detail()
-        dispose()
-        return seen
-      })
+        ),
+        { currentSession: () => Option.none() },
+      )
+      controller.select(Option.some(row("stored", false)))
       expect(asked).toEqual([])
-      expect(result).toEqual(Option.none())
+      expect(controller.detail()).toEqual(Option.none())
     }),
   )
 })
@@ -466,7 +441,7 @@ describe("Agents pane delete", () => {
 })
 
 describe("Agents pane reopen", () => {
-  it.live("a live row asked about before closing is asked about again on reopen", () =>
+  it.scopedLive("a live row asked about before closing is asked about again on reopen", () =>
     Effect.gen(function* () {
       // The pane unmounts its list on close, so the list never observes
       // `open=false`. Without a cursor reset from cleanup, the controller keeps
@@ -481,12 +456,9 @@ describe("Agents pane reopen", () => {
       const [open, setOpen] = createSignal(true)
       const [turns, setTurns] = createSignal(1)
 
-      // The pane runs detail fetches as fibers. Forking with the test's own
-      // services keeps those children inside this Effect rather than starting a
-      // second runtime beside it.
-      const runFork = Effect.runForkWith(yield* Effect.context<never>())
-
-      const controller = createRoot(() =>
+      // The shell is on this loop. The listing is keyed on it, so a reply
+      // is kept only while it is still the current session.
+      const controller = yield* provideClientServices(
         makeAgentsController(
           () => Effect.succeed([live]),
           (key) => {
@@ -500,13 +472,10 @@ describe("Agents pane reopen", () => {
               omittedMessages: 0,
             })
           },
-          (effect) => {
-            runFork(effect)
-          },
-          // The shell is on this loop. The listing is keyed on it, so a reply
-          // is kept only while it is still the current session.
-          () => Option.some({ sessionId: live.sessionId, branchId: live.branchId }),
         ),
+        {
+          currentSession: () => Option.some({ sessionId: live.sessionId, branchId: live.branchId }),
+        },
       )
 
       const setup = yield* Effect.promise(() =>
@@ -915,7 +884,11 @@ describe("Subagent tray", () => {
           <SubagentTray
             controller={{
               rows: () => rows,
-              current: () => Option.some({ sessionId: "root", branchId: "root-branch" }),
+              current: () =>
+                Option.some({
+                  sessionId: SessionId.make("root"),
+                  branchId: BranchId.make("root-branch"),
+                }),
               error: () => Option.none(),
               loading: () => false,
               refresh: (query) => {
@@ -956,7 +929,8 @@ describe("Subagent tray", () => {
           <SubagentTray
             controller={{
               rows: () => rows,
-              current: () => Option.some({ sessionId: "child-b", branchId: "b" }),
+              current: () =>
+                Option.some({ sessionId: SessionId.make("child-b"), branchId: BranchId.make("b") }),
               error: () => Option.none(),
               loading: () => false,
               refresh: () => {},
@@ -1008,40 +982,33 @@ const rowStaleReply = (id: string): AgentRowEntry => ({
 describe("Agents controller across a session switch", () => {
   it.scopedLive("drops a reply that lands after the shell moved to another session", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
 
       // The shell starts on "first"; the test moves it while the fetch is out.
       let active = Option.some(key("first"))
 
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           () => Deferred.await(gate),
           () => Effect.never,
-          (effect) => {
-            cast(effect)
-          },
-          () => active,
-        )
-        return { controller, dispose }
-      })
+        ),
+        { currentSession: () => active },
+      )
 
       // Fetch for "first" goes out, then the shell switches to "second".
-      result.controller.refresh("")
+      controller.refresh("")
       active = Option.some(key("second"))
 
       // The in-flight reply carries the previous session's rows.
       yield* Deferred.succeed(gate, [rowStaleReply("first")])
       yield* Effect.yieldNow
 
-      expect(result.controller.rows()).toEqual([])
-      result.dispose()
+      expect(controller.rows()).toEqual([])
     }).pipe(Effect.timeout("20 seconds")),
   )
 
   it.scopedLive("keeps the newest filter's rows when an older one replies last", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const first = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
       const second = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
       const gates = new Map([
@@ -1050,66 +1017,55 @@ describe("Agents controller across a session switch", () => {
       ])
 
       const active = Option.some(key("only"))
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           (query) =>
             Option.match(Option.fromUndefinedOr(gates.get(query)), {
               onNone: () => Effect.never,
               onSome: (gate) => Deferred.await(gate),
             }),
           () => Effect.never,
-          (effect) => {
-            cast(effect)
-          },
-          () => active,
-        )
-        return { controller, dispose }
-      })
+        ),
+        { currentSession: () => active },
+      )
 
       // One fetch per keystroke; the shorter query is still out when the
       // longer one replies.
-      result.controller.refresh("a")
-      result.controller.refresh("ab")
+      controller.refresh("a")
+      controller.refresh("ab")
 
       yield* Deferred.succeed(second, [rowStaleReply("ab-match")])
       yield* Effect.yieldNow
       yield* Deferred.succeed(first, [rowStaleReply("a-match")])
       yield* Effect.yieldNow
 
-      expect(result.controller.rows().map((entry) => String(entry.sessionId))).toEqual(["ab-match"])
-      result.dispose()
+      expect(controller.rows().map((entry) => String(entry.sessionId))).toEqual(["ab-match"])
     }).pipe(Effect.timeout("20 seconds")),
   )
 
   it.scopedLive("stops loading even when the reply is for the session the shell left", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const gate = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
 
       let active = Option.some(key("first"))
-      const result = createRoot((dispose) => {
-        const controller = makeAgentsController(
+      const controller = yield* provideClientServices(
+        makeAgentsController(
           () => Deferred.await(gate),
           () => Effect.never,
-          (effect) => {
-            cast(effect)
-          },
-          () => active,
-        )
-        return { controller, dispose }
-      })
+        ),
+        { currentSession: () => active },
+      )
 
-      result.controller.refresh("")
-      expect(result.controller.loading()).toBe(true)
+      controller.refresh("")
+      expect(controller.loading()).toBe(true)
       active = Option.some(key("second"))
 
       yield* Deferred.succeed(gate, [rowStaleReply("first")])
       yield* Effect.yieldNow
 
       // The rows are dropped, but the pane must not draw "loading" forever.
-      expect(result.controller.rows()).toEqual([])
-      expect(result.controller.loading()).toBe(false)
-      result.dispose()
+      expect(controller.rows()).toEqual([])
+      expect(controller.loading()).toBe(false)
     }).pipe(Effect.timeout("20 seconds")),
   )
 })
@@ -1117,25 +1073,20 @@ describe("Agents controller across a session switch", () => {
 describe("Thread controller across a session switch", () => {
   it.scopedLive("drops windows fetched for the session the shell just left", () =>
     Effect.gen(function* () {
-      const cast = Effect.runForkWith(yield* Effect.context<never>())
       const gate = yield* Deferred.make<ReadonlyArray<Session>>()
 
       let active = Option.some(key("first"))
 
-      const result = createRoot((dispose) => {
-        const controller = makeThreadController(
+      const controller = yield* provideClientServices(
+        makeThreadController(
           () => Deferred.await(gate),
           () => Effect.succeed([]),
           () => Effect.succeed(0),
-          (effect) => {
-            cast(effect)
-          },
-          () => active,
-        )
-        return { controller, dispose }
-      })
+        ),
+        { currentSession: () => active },
+      )
 
-      result.controller.refresh()
+      controller.refresh()
       active = Option.some(key("second"))
 
       yield* Deferred.succeed(gate, [
@@ -1149,8 +1100,7 @@ describe("Thread controller across a session switch", () => {
       ])
       yield* Effect.yieldNow
 
-      expect(result.controller.sessions()).toBe(0)
-      result.dispose()
+      expect(controller.sessions()).toBe(0)
     }).pipe(Effect.timeout("20 seconds")),
   )
 })

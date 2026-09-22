@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {
   useKeyboard,
+  usePaste,
   useRenderer,
   useTerminalDimensions as useRendererTerminalDimensions,
 } from "@opentui/solid"
@@ -48,6 +49,8 @@ export const useTerminalDimensions = (): Accessor<TerminalDimensions> =>
 
 type KeyInput = Parameters<Parameters<typeof useKeyboard>[0]>[0]
 type ScopedKeyHandler = (event: KeyInput) => boolean | void
+/** Takes the pasted text; `true` means the scope took it. */
+type ScopedPasteHandler = (text: string) => boolean
 export type ScopedKeyboardEvent = KeyInput
 
 interface KeyboardScopeEntry {
@@ -55,6 +58,7 @@ interface KeyboardScopeEntry {
   when?: () => boolean
   capture?: boolean
   handler: ScopedKeyHandler
+  paste?: ScopedPasteHandler
 }
 
 interface KeyboardScopeContextValue {
@@ -66,6 +70,11 @@ const KeyboardScopeContext = createContext<KeyboardScopeContextValue>()
 interface ScopedKeyboardOptions {
   when?: () => boolean
   capture?: boolean
+  /**
+   * A paste arrives as its own event, not as keys. A scope that types text
+   * takes it here; the terminal otherwise hands it to the focused composer.
+   */
+  paste?: ScopedPasteHandler
 }
 
 export function KeyboardScopeProvider(props: ParentProps) {
@@ -81,6 +90,20 @@ export function KeyboardScopeProvider(props: ParentProps) {
         event.stopPropagation()
         return
       }
+    }
+  })
+
+  // The same stack, newest first: the first live scope that takes the paste
+  // keeps it from the focused renderable.
+  usePaste((event) => {
+    const stack = [...entries].sort((left, right) => right.order - left.order)
+    const text = new TextDecoder().decode(event.bytes)
+    for (const entry of stack) {
+      if (entry.when?.() === false) continue
+      if (entry.paste?.(text) !== true) continue
+      event.preventDefault()
+      event.stopPropagation()
+      return
     }
   })
 
@@ -114,6 +137,7 @@ export function useScopedKeyboard(handler: ScopedKeyHandler, options?: ScopedKey
       handler,
       when: options?.when,
       capture: options?.capture,
+      paste: options?.paste,
     })
     onCleanup(unregister)
   })

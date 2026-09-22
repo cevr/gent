@@ -323,16 +323,11 @@ function summarizeWrite(args: Schema.JsonObject, options?: ToolArgSummaryOptions
   return text
 }
 
-function summarizeScopedPattern(
-  args: Schema.JsonObject,
-  options?: ToolArgSummaryOptions,
-  patternPrefix = "",
-  patternSuffix = "",
-): string {
+function summarizeGrep(args: Schema.JsonObject, options?: ToolArgSummaryOptions): string {
   const pattern = getStringArg(args, "pattern")
   if (pattern.length === 0) return ""
   const rawPath = getStringArg(args, "path") || "."
-  return `${patternPrefix}${pattern}${patternSuffix} in ${shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))}`
+  return `/${pattern}/ in ${shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))}`
 }
 
 function summarizeDelegate(args: Schema.JsonObject): string {
@@ -360,8 +355,7 @@ const toolArgFormatters = {
     }
     return ""
   },
-  grep: (args, options) => summarizeScopedPattern(args, options, "/", "/"),
-  glob: (args, options) => summarizeScopedPattern(args, options),
+  grep: summarizeGrep,
   delegate: summarizeDelegate,
   read_session: (args) => truncate(getStringArg(args, "goal"), 50),
   handoff: (args) => truncate(getStringArg(args, "reason"), 50),
@@ -476,7 +470,7 @@ export function truncatePath(path: string, maxLen = 40): string {
  * Format tool input for display in tool header.
  * Delegates to toolArgSummary for smart formatting, then applies
  * truncatePath for width safety on path-heavy tools. Preserves
- * cwd fallback for glob/grep when no path is specified.
+ * cwd fallback for grep when no path is specified.
  */
 export function formatToolInput(
   toolName: string,
@@ -486,16 +480,14 @@ export function formatToolInput(
 ): string {
   const name = toolName.toLowerCase()
 
-  // glob/grep: cwd fallback needs to happen before toolArgSummary
-  if (name === "glob" || name === "grep") {
+  // grep: cwd fallback needs to happen before toolArgSummary
+  if (name === "grep") {
     const pattern = getString(input, "pattern")
     if (pattern.length === 0) return ""
     const path = getString(input, "path")
     let searchPath = truncatePath(cwd, 30)
     if (path.length > 0) searchPath = truncatePath(path, 30)
-    let prefix = pattern
-    if (name === "grep") prefix = `/${pattern}/`
-    return `${prefix} in ${searchPath}`
+    return `/${pattern}/ in ${searchPath}`
   }
 
   const summary = toolArgSummary(name, input, { home })

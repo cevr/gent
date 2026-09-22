@@ -595,11 +595,16 @@ export function Session(props: SessionProps) {
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
-    // A local error (a slash command that could not apply, a failed RPC)
-    // replaces the phase word until the next turn clears it.
+    // One footer line, one owner. A local error (a slash command that could
+    // not apply, a failed RPC) replaces the phase word until the next turn
+    // clears it; an extension notice shows when no error stands, and a
+    // notice never replaces an error.
     const localError = Option.fromNullishOr(client.error())
+    const notice = client.notice()
     if (Option.isSome(localError)) {
       items.push({ text: localError.value, color: theme.error })
+    } else if (Option.isSome(notice)) {
+      items.push({ text: notice.value, color: theme.warning })
     } else if (a.phase === "idle") {
       items.push({ text: controller.phaseLabel(), color: theme.textMuted })
     }
@@ -781,25 +786,15 @@ export function Session(props: SessionProps) {
 
         {(() => {
           const overlay = controller.uiState().overlay
-          switch (overlay._tag) {
-            case "auth":
-              return (
-                <Auth
-                  sessionId={props.sessionId}
-                  enforceAuth={overlay.enforceAuth}
-                  onResolved={controller.resolveAuthGate}
-                  onClose={controller.closeOverlay}
-                />
-              )
-            case "extension": {
-              const Overlay = Option.fromNullishOr(ext.overlays().get(overlay.overlayId))
-              if (Option.isNone(Overlay)) return <></>
-              const OverlayComponent = Overlay.value
-              return <OverlayComponent open={true} onClose={controller.closeOverlay} />
-            }
-            default:
-              return <></>
-          }
+          if (overlay._tag !== "auth") return <></>
+          return (
+            <Auth
+              sessionId={props.sessionId}
+              enforceAuth={overlay.enforceAuth}
+              onResolved={controller.resolveAuthGate}
+              onClose={controller.closeOverlay}
+            />
+          )
         })()}
       </box>
     </SessionControllerContext.Provider>
@@ -830,8 +825,8 @@ function AppContent(props: AppProps) {
   })
 
   // Which session shows is the client's to say. `switchSession` is the one
-  // writer, and every pane that moves the reader between sessions already
-  // goes through it, so keying the mount on it is all the router ever did.
+  // writer, and every pane that moves the reader between sessions goes
+  // through it, so the session view mounts keyed on it.
   const sessionClient = useClient()
   //
   // The key is the identity, not the session record: a new name or a new model

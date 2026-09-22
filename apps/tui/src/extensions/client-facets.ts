@@ -24,7 +24,7 @@ import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gen
 import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
-import type { HeadlessToolRenderer } from "../headless"
+import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
 
@@ -47,11 +47,10 @@ import type { RGBA } from "@opentui/core"
  * the seam is at the rendering edge, not in the Effect surface.
  *
  * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
- * Each client surface (TUI shell, future SDK headless, web UI) augments its
- * runtime with the services its extensions need, and an extension widens its
- * `R` accordingly. The TUI shell publishes its typed `ClientTransport` tag
- * at `apps/tui/src/extensions/client-facets.ts` because the SDK client
- * types (`GentNamespacedClient`, `GentRuntime`) live downstream of `@gent/core`.
+ * The TUI shell augments its runtime with the client services below, and an
+ * extension widens its `R` to the ones it yields. `ClientTransport` lives
+ * here, not in `@gent/core`, because the SDK client types
+ * (`GentNamespacedClient`, `GentRuntime`) live downstream of `@gent/core`.
  */
 
 // ── Errors ────────────────────────────────────────────────────────────────
@@ -70,17 +69,9 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
 /**
  * The dependency channel a client extension's setup Effect MAY require.
  *
- * `ClientDeps` is the TUI-local floor: file system and path
- * services. It's a *floor*, not a ceiling — an individual client surface
- * (the TUI shell, a future SDK headless, a web UI) augments its runtime
- * with additional services like transport, theming, or platform-specific
- * APIs, and an extension that yields one of those declares a wider `R`.
- *
- * `@gent/core` does NOT declare `ClientTransport` because its payload type
- * lives downstream (`GentNamespacedClient` + `GentRuntime` are SDK types).
- * The TUI declares its own `ClientTransport` tag with a typed payload at
- * `apps/tui/src/extensions/client-facets.ts`. Other
- * client surfaces would do the same with whatever transport they speak.
+ * `ClientDeps` is the TUI-local floor: file system and path services. It is
+ * a floor, not a ceiling: the TUI runtime adds the client services below, and
+ * an extension that yields one of those declares a wider `R`.
  */
 type ClientDeps = FileSystem.FileSystem | Path.Path
 
@@ -137,25 +128,22 @@ export const makeClientActivityLayer = (snapshot: () => ClientActivitySnapshot =
  *
  *   ```ts
  *   import { Effect } from "effect"
- *   import { ClientTransport } from "../client-transport"
+ *   import { ClientTransport, defineClientExtension } from "./client-facets"
  *
  *   export default defineClientExtension("@gent/x", {
- *     id: "@gent/x",
  *     setup: Effect.gen(function* () {
  *       const transport = yield* ClientTransport
  *       const result = yield* transport.request(ref(MyRpc.List), {})
- *       return [...]
+ *       return clientContributions(...)
  *     }),
  *   })
  *   ```
  *
- * The TUI's `ExtensionUIProvider` constructs a per-render `ManagedRuntime`
- * that includes `BunFileSystem | BunPath | ClientTransport.Live(payload)`,
- * passes it to `loadTuiExtensions`, and the loader's `invokeSetup` runs
- * each Effect-typed setup against it.
+ * The TUI's `ExtensionUIProvider` builds one `ManagedRuntime` per provider
+ * with `makeClientRuntime`, and `loadTuiExtensions` runs each setup on it.
  */
 
-type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
 /**
  * Per-loop detail, for one loop at a time.
@@ -177,9 +165,8 @@ export interface ExtensionAgentDetail {
 }
 
 export interface ClientTransportDefinition {
-  /** Active (sessionId, branchId) — absent before a session is mounted. */
-  // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
-  readonly currentSession: () => ActiveExtensionSession | undefined
+  /** Active (sessionId, branchId); `None` before a session is mounted. */
+  readonly currentSession: () => Option.Option<ActiveExtensionSession>
   readonly request: <Input, Output>(
     ref: CapabilityRef<Input, Output>,
     input: Input,
@@ -237,9 +224,8 @@ export interface ClientTransportDefinition {
 export interface ClientShellTransportDefinition {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
-  /** Active (sessionId, branchId) — absent before a session is mounted. */
-  // eslint-disable-next-line effect/noNullish -- extension transport preserves an absent active session.
-  readonly currentSession: () => ActiveExtensionSession | undefined
+  /** Active (sessionId, branchId); `None` before a session is mounted. */
+  readonly currentSession: () => Option.Option<ActiveExtensionSession>
   /** Subscribe to `ExtensionStateChanged` pulses from the active session.
    *  Returns an unsubscribe function. Multiple subscribers receive each
    *  pulse independently. Widgets use this to invalidate cached state
@@ -322,9 +308,7 @@ const currentOrActiveSession = (
   transport: ClientShellTransportDefinition,
   activeSession?: ActiveExtensionSession,
 ): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
-  const session = Option.orElse(Option.fromNullishOr(activeSession), () =>
-    Option.fromNullishOr(transport.currentSession()),
-  )
+  const session = Option.orElse(Option.fromNullishOr(activeSession), transport.currentSession)
   if (Option.isNone(session)) return Effect.fail(new NoActiveSessionError())
   return Effect.succeed(session.value)
 }
@@ -427,8 +411,7 @@ const agentDetailAt = (
  * Why split: each service has a different lifetime/coupling profile.
  * `ClientWorkspace` is process-static (cwd/home don't change).
  * `ClientShell` captures session-bound callbacks. Splitting lets a setup
- * yield exactly what it depends on and lets future client surfaces (SDK headless, web
- * UI) provide a subset.
+ * yield exactly what it depends on.
  */
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
@@ -449,12 +432,11 @@ export const makeClientWorkspaceLayer = (
 // ── ClientShell ──────────────────────────────────────────────────────────
 
 export interface ClientShellDefinition {
-  /** Send a chat message into the active session. */
-  readonly sendMessage: (content: string) => void
-  /** Open a registered overlay by id. */
-  readonly openOverlay: (id: OverlayId) => void
-  /** Close any open overlay. */
-  readonly closeOverlay: () => void
+  /**
+   * Show a one-line status in the footer, where the session's own slash
+   * commands report a usage hint or a failure. The next turn clears it.
+   */
+  readonly notify: (message: string) => void
   /**
    * Switch the shell to another session branch and navigate to it.
    *
@@ -467,8 +449,6 @@ export interface ClientShellDefinition {
     readonly branchId: BranchId
     readonly name: string
   }) => void
-  /** Run an extension-owned Effect from a sync UI callback. */
-  readonly run: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
   /** Fork an extension-owned Effect from a sync UI callback. */
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
 }
@@ -515,23 +495,11 @@ export const makeClientLifecycleLayer = (
     }),
   )
 
-// ── Session Resource ─────────────────────────────────────────────────────
-
-type ActiveClientSession = NonNullable<ReturnType<ClientTransportDefinition["currentSession"]>>
-
-interface ClientSessionResource<A> {
-  // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
-  readonly read: () => A | undefined
-  readonly refetch: () => void
-}
+// ── Session Query ────────────────────────────────────────────────────────
 
 /**
- * A keyed query the caller refreshes itself, with the load state a docked pane
- * draws.
+ * A read keyed by the session the shell is on, with the load state a pane draws.
  *
- * {@link makeClientSessionResource} fetches on its own whenever the session
- * changes; a pane instead refreshes on its own schedule — a typed query, a
- * poll, an event — and needs to say whether it is loading and what failed. The
  * Two rules guard what a reply may write. The generation guard drops every
  * reply but the newest refresh's, because a filter fires one fetch per
  * keystroke and a shorter query can answer last. The key guard drops a reply
@@ -539,168 +507,94 @@ interface ClientSessionResource<A> {
  * cannot see because a switch raises no new refresh. A dropped reply still
  * clears the load state, or a pane that lost a race would say "loading" until
  * the next refresh.
+ *
+ * With `follow`, the query reads again whenever the session or the branch
+ * moves, and `value` answers `initial` until that read lands, so one session's
+ * data never shows under another. Without it, the caller refreshes on its own
+ * schedule (a typed filter, a poll, an event) and the last value stays up.
  */
-interface ClientSessionQuery<A, Q> {
+interface SessionQuery<A> {
   readonly value: () => A
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
-  readonly refresh: (query: Q) => void
-  /** Re-run the last query, for a caller whose data changed under it. */
-  readonly reload: () => void
+  readonly refresh: () => void
 }
 
-/** The key a query is made for; callers keep their own branded id types. */
-type SessionKey = { readonly sessionId: string; readonly branchId: string }
+const sameSession = (left: ActiveExtensionSession, right: ActiveExtensionSession): boolean =>
+  left.sessionId === right.sessionId && left.branchId === right.branchId
 
-export const makeClientSessionQuery = <A, Q, K extends SessionKey>(opts: {
+export const sessionQuery = <A>(opts: {
   readonly initial: A
-  readonly current: () => Option.Option<K>
-  readonly cast: (effect: Effect.Effect<void>) => void
-  readonly fetch: (query: Q, session: K) => Effect.Effect<A, { readonly message: string }>
-}): ClientSessionQuery<A, Q> => {
-  const [value, setValue] = createSignal<A>(opts.initial)
-  const [error, setError] = createSignal<Option.Option<string>>(Option.none())
-  const [loading, setLoading] = createSignal(false)
-  let generation = 0
-  let last = Option.none<Q>()
+  readonly follow: boolean
+  readonly fetch: (
+    session: ActiveExtensionSession,
+  ) => Effect.Effect<A, { readonly message: string }>
+}): Effect.Effect<SessionQuery<A>, never, ClientTransport | ClientShell | ClientLifecycle> =>
+  Effect.gen(function* () {
+    const transport = yield* ClientTransport
+    const shell = yield* ClientShell
+    const lifecycle = yield* ClientLifecycle
+    return createRoot((dispose) => {
+      lifecycle.addCleanup(dispose)
+      type Keyed = { readonly session: ActiveExtensionSession; readonly value: A }
+      const [stored, setStored] = createSignal<Option.Option<Keyed>>(Option.none())
+      const [error, setError] = createSignal<Option.Option<string>>(Option.none())
+      const [loading, setLoading] = createSignal(false)
+      let generation = 0
 
-  const refresh = (query: Q): void => {
-    const captured = opts.current()
-    last = Option.some(query)
-    if (Option.isNone(captured)) return
-    const issued = ++generation
-    setLoading(true)
-    opts.cast(
-      opts.fetch(query, captured.value).pipe(
-        Effect.match({
-          onFailure: (failure) => {
-            if (issued !== generation) return
-            setLoading(false)
-            if (!isCurrent(captured.value)) return
-            setError(Option.some(failure.message))
-          },
-          onSuccess: (next) => {
-            if (issued !== generation) return
-            setLoading(false)
-            // The shell may have moved while this was out; that reply belongs
-            // to a session nobody is looking at any more.
-            if (!isCurrent(captured.value)) return
-            setValue(() => next)
-            setError(Option.none())
-          },
-        }),
-      ),
-    )
-  }
+      const isCurrent = (session: ActiveExtensionSession): boolean =>
+        Option.exists(transport.currentSession(), (now) => sameSession(now, session))
 
-  const reload = (): void => {
-    if (Option.isNone(last)) return
-    refresh(last.value)
-  }
-
-  const isCurrent = (captured: K): boolean =>
-    Option.match(opts.current(), {
-      onNone: () => false,
-      onSome: (now) => now.sessionId === captured.sessionId && now.branchId === captured.branchId,
-    })
-
-  return { value, error, loading, refresh, reload }
-}
-
-export const makeClientSessionResource = <A>(opts: {
-  /** Only the active identity: the resource asks which session, never what it is called. */
-  readonly transport: Pick<ClientTransportDefinition, "currentSession">
-  readonly lifecycle: Pick<ClientLifecycleDefinition, "addCleanup">
-  readonly cast: <B, E>(effect: Effect.Effect<B, E, never>) => void
-  readonly label: string
-  readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
-  // eslint-disable-next-line effect/noNullish -- subscription is optional for static resources.
-  readonly subscribe?: (refetch: () => void) => () => void
-}): Effect.Effect<ClientSessionResource<A>> =>
-  Effect.sync(() => {
-    type Keyed = {
-      readonly sessionId: string
-      readonly branchId: string
-      readonly value: A
-    }
-
-    let getState: () => Option.Option<Keyed> = () => Option.none()
-    let setState: (next: Option.Option<Keyed>) => void = () => {}
-
-    // eslint-disable-next-line effect/noNullish -- resource consumers use undefined before the first fetch.
-    const read = (): A | undefined => {
-      const state = getState()
-      const current = Option.fromNullishOr(opts.transport.currentSession())
-      if (Option.isNone(state) || Option.isNone(current)) {
-        return Option.getOrUndefined(Option.none<A>())
+      const settle = (issued: number, session: ActiveExtensionSession, write: () => void) => {
+        if (issued !== generation) return
+        setLoading(false)
+        // The shell may have moved while this was out; that reply belongs to a
+        // session nobody is looking at any more.
+        if (!isCurrent(session)) return
+        write()
       }
-      if (
-        state.value.sessionId !== current.value.sessionId ||
-        state.value.branchId !== current.value.branchId
-      ) {
-        return Option.getOrUndefined(Option.none<A>())
-      }
-      return state.value.value
-    }
 
-    const refetchCaptured = (captured: ActiveClientSession): void => {
-      opts.cast(
-        opts.fetch(captured).pipe(
-          Effect.flatMap((value) =>
-            Effect.sync(() => {
-              const current = Option.fromNullishOr(opts.transport.currentSession())
-              if (
-                Option.isNone(current) ||
-                current.value.sessionId !== captured.sessionId ||
-                current.value.branchId !== captured.branchId
-              ) {
-                return
-              }
-              setState(
-                Option.some({
-                  sessionId: captured.sessionId,
-                  branchId: captured.branchId,
-                  value,
+      const refresh = (): void => {
+        const captured = transport.currentSession()
+        if (Option.isNone(captured)) return
+        const session = captured.value
+        const issued = ++generation
+        setLoading(true)
+        shell.cast(
+          opts.fetch(session).pipe(
+            Effect.match({
+              onFailure: (failure) =>
+                settle(issued, session, () => setError(Option.some(failure.message))),
+              onSuccess: (value) =>
+                settle(issued, session, () => {
+                  setStored(Option.some({ session, value }))
+                  setError(Option.none())
                 }),
-              )
             }),
           ),
-          Effect.catchEager((err) =>
-            Effect.logWarning(`${opts.label} refresh failed`).pipe(
-              Effect.annotateLogs({ error: String(err) }),
-            ),
-          ),
-        ),
-      )
-    }
+        )
+      }
 
-    const refetch = (): void => {
-      const session = Option.fromNullishOr(opts.transport.currentSession())
-      if (Option.isNone(session)) return
-      refetchCaptured(session.value)
-    }
-
-    createRoot((dispose) => {
-      const [state, set] = createSignal<Option.Option<Keyed>>(Option.none())
-      getState = state
-      setState = set
       // `currentSession` is the client's identity accessor, so this fires only
-      // when the session or the branch actually moves — never for a rename or
-      // a model change. Blanking on every fire is therefore blanking on every
-      // real move, which is what the pane should draw while the new key loads.
-      createEffect(() => {
-        const session = Option.fromNullishOr(opts.transport.currentSession())
-        setState(Option.none())
-        if (Option.isNone(session)) return
-        refetchCaptured(session.value)
-      })
-      opts.lifecycle.addCleanup(dispose)
+      // when the session or the branch moves, never for a rename or a model change.
+      if (opts.follow) {
+        createEffect(() => {
+          setError(Option.none())
+          refresh()
+        })
+      }
+
+      const value = (): A =>
+        Option.match(stored(), {
+          onNone: () => opts.initial,
+          onSome: (keyed) => {
+            if (opts.follow && !isCurrent(keyed.session)) return opts.initial
+            return keyed.value
+          },
+        })
+
+      return { value, error, loading, refresh }
     })
-
-    const subscribe = Option.fromNullishOr(opts.subscribe)
-    if (Option.isSome(subscribe)) opts.lifecycle.addCleanup(subscribe.value(refetch))
-
-    return { read, refetch }
   })
 
 // ── contribution surface ────────────────────────────────────────────────────
@@ -720,13 +614,11 @@ export const makeClientSessionResource = <A>(opts: {
 // Adding a new facet means adding an explicit field and resolver path, not
 // another stringly runtime tag table. Per-bucket conflict rules are preserved
 // by the resolver:
-//   - renderers: last (highest scope) wins by tool name
-//   - widgets:   last (highest scope) wins by widget id; sorted by priority
-//   - commands:  last (highest scope) wins by command id; superseded
-//                keybind/slash entries are stripped from prior owners
-//   - overlays:  last (highest scope) wins by overlay id
-//   - interaction renderers: last (highest scope) wins by metadataType
-//   - composer surface: single slot, last (highest scope) wins
+//   - renderers, widgets, interaction renderers: keyed by tool name, widget
+//     id and metadataType; the highest scope wins, and inside one scope the
+//     first claim keeps the key. Widgets sort by priority.
+//   - commands: the same rule by id, slash and keybind, applied by the host's
+//     `resolveCommands` over the session's, the extensions' and the server's
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
@@ -739,14 +631,7 @@ export interface InteractionRendererProps {
   readonly resolve: (result: ApprovalResult) => void
 }
 
-/** Props passed to registered overlay components. */
-export interface OverlayProps {
-  readonly open: boolean
-  readonly onClose: () => void
-}
-
 export type WidgetComponent = () => JSX.Element
-export type OverlayComponent = (props: OverlayProps) => JSX.Element
 export type InteractionRendererComponent = (props: InteractionRendererProps) => JSX.Element
 
 export type ClientRuntimeServices =
@@ -777,7 +662,6 @@ type AutocompleteItemsEffect = Effect.Effect<
 interface RendererContribution {
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
-  readonly headless?: HeadlessToolRenderer
 }
 
 interface WidgetContribution {
@@ -786,29 +670,6 @@ interface WidgetContribution {
   /** Lower = earlier; default 100. */
   readonly priority?: number
   readonly component: WidgetComponent
-}
-
-interface ClientCommandContribution {
-  readonly id: string
-  readonly title: string
-  readonly description?: string
-  readonly category?: string
-  readonly keybind?: string
-  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
-  readonly slash?: string
-  /** Additional slash names that resolve to this command */
-  readonly aliases?: ReadonlyArray<string>
-  /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
-  readonly slashPriority?: number
-  readonly onSelect: () => void
-  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
-  readonly onSlash?: (args: string) => void
-}
-
-interface OverlayContribution {
-  readonly id: string
-  /** Receives `{ open, onClose }` props at render time. */
-  readonly component: OverlayComponent
 }
 
 interface InteractionRendererContribution {
@@ -862,8 +723,7 @@ export interface AutocompleteContribution {
 export interface ClientContributions {
   readonly renderers?: ReadonlyArray<RendererContribution>
   readonly widgets?: ReadonlyArray<WidgetContribution>
-  readonly commands?: ReadonlyArray<ClientCommandContribution>
-  readonly overlays?: ReadonlyArray<OverlayContribution>
+  readonly commands?: ReadonlyArray<Command>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
   readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
@@ -897,7 +757,6 @@ export const clientContributions = (
     out.renderers = append(out.renderers, part.renderers)
     out.widgets = append(out.widgets, part.widgets)
     out.commands = append(out.commands, part.commands)
-    out.overlays = append(out.overlays, part.overlays)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
     out.borderLabels = append(out.borderLabels, part.borderLabels)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
@@ -911,8 +770,7 @@ export const clientContributions = (
 export const rendererContribution = (
   toolNames: ReadonlyArray<string>,
   component: ToolRenderer,
-  options?: { readonly headless?: HeadlessToolRenderer },
-): ClientContributions => ({ renderers: [{ toolNames, component, ...options }] })
+): ClientContributions => ({ renderers: [{ toolNames, component }] })
 
 export const widgetContribution = (opts: {
   readonly id: string
@@ -921,14 +779,9 @@ export const widgetContribution = (opts: {
   readonly component: WidgetComponent
 }): ClientContributions => ({ widgets: [opts] })
 
-export const clientCommandContribution = (
-  opts: ClientCommandContribution,
-): ClientContributions => ({ commands: [opts] })
-
-export const overlayContribution = (opts: {
-  readonly id: string
-  readonly component: OverlayComponent
-}): ClientContributions => ({ overlays: [opts] })
+export const clientCommandContribution = (opts: Command): ClientContributions => ({
+  commands: [opts],
+})
 
 /**
  * Build an interaction renderer contribution. The component must be a function
@@ -953,9 +806,6 @@ export const borderLabelContribution = (opts: BorderLabelContribution): ClientCo
 export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({
   autocomplete: [opts],
 })
-
-/** Overlay identifier (registered in `OverlayContribution`). */
-type OverlayId = string
 
 /**
  * A client extension's setup is an Effect that yields its dependencies

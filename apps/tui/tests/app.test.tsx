@@ -42,6 +42,7 @@ import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
 import { ConnectionWidget } from "../src/extensions/builtins"
+import { useExtensionUI } from "../src/extensions/host"
 
 // ── app-bootstrap.test ──────────────────────────────────────────────────────
 
@@ -441,6 +442,16 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   return <box />
 }
 
+function ExtensionUIProbe(props: {
+  readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
+}) {
+  const ext = useExtensionUI()
+  onMount(() => {
+    props.onReady(ext)
+  })
+  return <box />
+}
+
 function TerminalDimensionsProbe() {
   const dimensions = useTerminalDimensions()
   return <text>{`${dimensions().width}x${dimensions().height}`}</text>
@@ -679,6 +690,58 @@ describe("App auth gate", () => {
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       expect(sentMessages.filter((message) => message.sessionId === nextSessionId)).toEqual([])
+      setup.renderer.destroy()
+    }),
+  )
+  it.live("opening the palette between two escapes does not quit", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("ready ·"), "session view"),
+      )
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      // One escape arms the quit; the palette keybind disarms it, and an escape closes the palette.
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      setup.mockInput.pressKey("p", { ctrl: true })
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("Commands"), "palette"),
+      )
+      setup.mockInput.pressEscape()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => !frame.includes("Commands"), "palette closed"),
+      )
+      // The quit is disarmed, so this escape only arms it again.
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow the escape must be parsed and handled before the negative assertion
+      yield* Effect.sleep("100 millis")
+      expect(shutdowns).toBe(0)
+      // A second escape in the window quits.
+      setup.mockInput.pressEscape()
+      yield* Effect.promise(() => waitForRenderedFrame(setup, () => shutdowns > 0, "quit"))
+      setup.renderer.destroy = destroy
+      expect(shutdowns).toBe(1)
       setup.renderer.destroy()
     }),
   )
@@ -2034,4 +2097,66 @@ describe("uiModel schema validation", () => {
     const result = decode(nullValue)
     expect(result._tag).toBe("None")
   })
+})
+
+describe("client extension status", () => {
+  it.live("a /driver usage hint lands in the footer and never starts a model turn", () =>
+    Effect.gen(function* () {
+      const sentMessages: Array<{ readonly content: string }> = []
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        message: {
+          send: (input: { readonly content: string }) =>
+            Effect.sync(() => {
+              sentMessages.push(input)
+            }),
+        },
+      })
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime: createMockRuntime(),
+            width: 140,
+            initialSession: {
+              id: SessionId.make("session-driver"),
+              activeBranchId: BranchId.make("branch-driver"),
+              name: "Driver",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const driverCommand = () =>
+        ext.pipe(
+          Option.flatMap((value) =>
+            Option.fromUndefinedOr(value.commands().find((command) => command.slash === "driver")),
+          ),
+        )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => Option.isSome(driverCommand()), "driver command loaded"),
+      )
+      const command = driverCommand()
+      if (Option.isNone(command)) return yield* Effect.die("driver command not loaded")
+      command.value.onSlash?.("")
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (text) => text.includes("Usage: /driver <agent> <driver-id|default>"),
+          "driver usage in the footer",
+        ),
+      )
+      expect(frame).toContain("Usage: /driver")
+      expect(sentMessages).toEqual([])
+      setup.renderer.destroy()
+    }),
+  )
 })

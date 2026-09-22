@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Context, Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { createMemo, createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
@@ -8,10 +8,10 @@ import {
   ClientShell,
   ClientTransport,
   ClientWorkspace,
-  makeClientSessionResource,
+  sessionQuery,
 } from "../../src/extensions/client-facets"
 import { makeClientRuntime } from "../../src/extensions/host"
-import { makeClientTestTransport } from "../extension-test-harness-boundary"
+import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { createMockRuntime } from "../render-harness-boundary"
 import { runRuntimeEffectBoundary } from "../run-effect-boundary"
 
@@ -71,8 +71,6 @@ const waitFor = (
   return check
 }
 
-const emptyContext = Context.makeUnsafe<never>(new Map<string, never>())
-
 const sessionId = SessionId.make("session-resource")
 const branchId = BranchId.make("branch-resource")
 
@@ -96,58 +94,70 @@ const identityMemo = (record: () => { readonly name: string }) =>
     },
   )
 
-describe("makeClientSessionResource", () => {
-  it.live("keeps its value when the session is renamed", () =>
+describe("sessionQuery", () => {
+  it.scopedLive("keeps its value when the session is renamed", () =>
     Effect.gen(function* () {
       let renameTo: (name: string) => void = () => {}
       let fetches = 0
-      // eslint-disable-next-line effect/noNullish -- the resource reports absence as undefined.
-      let read: () => number | undefined = () => Option.getOrUndefined(Option.none())
 
-      const cleanups: Array<() => void> = []
-
-      const dispose = createRoot((disposeRoot) => {
+      const { identity, dispose } = createRoot((disposeRoot) => {
         const [record, setRecord] = createSignal({ name: "A" })
         renameTo = (name) => setRecord({ name })
-        const identity = identityMemo(record)
-        const resource = Effect.runSyncWith(emptyContext)(
-          makeClientSessionResource<number>({
-            transport: { currentSession: () => Option.getOrUndefined(identity()) },
-            lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
-            cast: (effect) => {
-              Effect.runForkWith(emptyContext)(effect)
-            },
-            label: "test resource",
-            fetch: () =>
-              Effect.sync(() => {
-                fetches += 1
-                return fetches
-              }),
-          }),
-        )
-        read = resource.read
-        return disposeRoot
+        return { identity: identityMemo(record), dispose: disposeRoot }
       })
+      const query = yield* provideClientServices(
+        sessionQuery({
+          initial: 0,
+          follow: true,
+          fetch: () =>
+            Effect.sync(() => {
+              fetches += 1
+              return fetches
+            }),
+        }),
+        { currentSession: identity },
+      )
 
-      yield* waitFor("first fetch", () => fetches === 1).pipe(
+      yield* waitFor("first value", () => query.value() === 1).pipe(
         Effect.timeout("2 seconds"),
         Effect.onError(() => Effect.sync(dispose)),
       )
-      yield* waitFor("first value", () => read() === 1).pipe(
-        Effect.timeout("2 seconds"),
-        Effect.onError(() => Effect.sync(dispose)),
-      )
 
-      // The wake tray row and the goal border label are drawn from resources
+      // The wake tray row and the goal border label are drawn from queries
       // like this one. A rename must not blank them for a round trip.
       renameTo("A better name")
       // gent/no-sleep: allow a real-clock gap so a refetch, if one starts, lands before the assertion
       yield* Effect.sleep("50 millis")
 
-      expect(read()).toBe(1)
+      expect(query.value()).toBe(1)
       expect(fetches).toBe(1)
       dispose()
-      for (const fn of cleanups) fn()
+    }),
+  )
+
+  it.scopedLive("a follow query blanks on a switch and reads the new session", () =>
+    Effect.gen(function* () {
+      const { active, setActive, dispose } = createRoot((disposeRoot) => {
+        const [current, setCurrent] = createSignal("a")
+        return { active: current, setActive: setCurrent, dispose: disposeRoot }
+      })
+      const query = yield* provideClientServices(
+        sessionQuery({
+          initial: "none",
+          follow: true,
+          fetch: (session) => Effect.succeed(String(session.sessionId)),
+        }),
+        {
+          currentSession: () =>
+            Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
+        },
+      )
+      yield* waitFor("first session", () => query.value() === "a").pipe(Effect.timeout("2 seconds"))
+      setActive("z")
+      yield* waitFor("second session", () => query.value() === "z").pipe(
+        Effect.timeout("2 seconds"),
+      )
+      dispose()
     }),
   )
 })
@@ -157,19 +167,19 @@ describe("makeClientSessionResource", () => {
 /**
  * `makeClientRuntime` is the one runtime every client-extension surface
  * loads against. A surface gives it a transport, a workspace, and
- * `run`/`cast`; everything else defaults so headless and tests do not
+ * `cast`; everything else defaults so headless and tests do not
  * restate no-op callbacks.
  */
 
 const workspace = { cwd: "/tmp/client-runtime-cwd", home: "/tmp/client-runtime-home" }
 const mockRuntime = createMockRuntime()
-const runCast = { run: mockRuntime.run, cast: mockRuntime.cast }
+const runCast = { cast: mockRuntime.cast }
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
 
 describe("makeClientRuntime", () => {
-  it.live("transport, workspace and run/cast alone resolve every client service", () => {
+  it.live("transport, workspace and cast alone resolve every client service", () => {
     const runtime = makeClientRuntime({
-      transport: makeClientTestTransport({ currentSession: () => session }),
+      transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
       workspace,
       shell: runCast,
     })
@@ -183,9 +193,7 @@ describe("makeClientRuntime", () => {
             const lifecycle = yield* ClientLifecycle
             const activity = yield* ClientActivity
             const transport = yield* ClientTransport
-            shell.sendMessage("ignored")
-            shell.openOverlay("ignored")
-            shell.closeOverlay()
+            shell.notify("ignored")
             shell.switchSession({ ...session, name: "ignored" })
             lifecycle.addCleanup(() => {})
             return {
@@ -196,7 +204,11 @@ describe("makeClientRuntime", () => {
           }),
         ),
       )
-      expect(seen).toEqual({ cwd: workspace.cwd, activity: "unknown", session })
+      expect(seen).toEqual({
+        cwd: workspace.cwd,
+        activity: "unknown",
+        session: Option.some(session),
+      })
       yield* Effect.promise(() => runtime.dispose())
     })
   })
@@ -205,9 +217,9 @@ describe("makeClientRuntime", () => {
     const sent: Array<string> = []
     const cleanups: Array<() => void> = []
     const runtime = makeClientRuntime({
-      transport: makeClientTestTransport({ currentSession: () => session }),
+      transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
       workspace,
-      shell: { ...runCast, sendMessage: (content) => sent.push(content) },
+      shell: { ...runCast, notify: (message) => sent.push(message) },
       activity: () => ({ state: "working" }),
       lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
     })
@@ -219,7 +231,7 @@ describe("makeClientRuntime", () => {
             const shell = yield* ClientShell
             const lifecycle = yield* ClientLifecycle
             const activity = yield* ClientActivity
-            shell.sendMessage("hello")
+            shell.notify("hello")
             lifecycle.addCleanup(() => {})
             return activity.snapshot().state
           }),
