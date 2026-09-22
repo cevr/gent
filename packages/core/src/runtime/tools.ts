@@ -1163,34 +1163,15 @@ const applyToolProjection = (
   projection: TurnProjection,
   allToolsByName: ReadonlyMap<string, ToolCapability>,
 ): ToolCapability[] => {
-  const policy = Option.fromUndefinedOr(projection.toolPolicy)
-  if (Option.isNone(policy)) return tools
-
-  const overrideSet = Option.fromUndefinedOr(policy.value.overrideSet)
-  if (Option.isSome(overrideSet)) {
-    return overrideSet.value.flatMap((name) => {
-      const tool = allToolsByName.get(name)
-      if (Predicate.isUndefined(tool)) return []
-      return [tool]
-    })
-  }
-
-  const include = Option.fromUndefinedOr(policy.value.include)
-  if (Option.isSome(include)) {
-    const existing = new Set(tools.map((tool) => String(getToolId(tool))))
-    for (const name of include.value) {
-      if (existing.has(name)) continue
-      const tool = allToolsByName.get(name)
-      if (Predicate.isUndefined(tool)) continue
-      tools.push(tool)
-      existing.add(name)
-    }
-  }
-
-  const exclude = Option.fromUndefinedOr(policy.value.exclude)
-  if (Option.isSome(exclude)) {
-    const excludeSet = new Set(exclude.value)
-    return tools.filter((tool) => !excludeSet.has(String(getToolId(tool))))
+  const include = Option.fromUndefinedOr(projection.toolPolicy?.include)
+  if (Option.isNone(include)) return tools
+  const existing = new Set(tools.map((tool) => String(getToolId(tool))))
+  for (const name of include.value) {
+    if (existing.has(name)) continue
+    const tool = allToolsByName.get(name)
+    if (Predicate.isUndefined(tool)) continue
+    tools.push(tool)
+    existing.add(name)
   }
   return tools
 }
@@ -1211,9 +1192,11 @@ const collectProjectionPromptSections = (
  *
  * Pipeline:
  * 1. Agent allow/deny filtering
- * 2. Extension projection fragments (include/exclude/overrideSet)
+ * 2. Extension `include` fragments add tools
  * 3. Re-apply agent deny list (extensions can't escape denials)
- * 4. Collect extension-contributed prompt sections
+ * 4. Drop interactive tools in a non-interactive turn
+ * 5. The last `modelSet` picks the model-facing subset
+ * 6. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
   allTools: ReadonlyArray<ToolCapability>,
@@ -1226,15 +1209,15 @@ export const compileToolPolicy = (
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
 
-  // 2. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
+  // 2. Extension `include` fragments
   for (const projection of extensionProjections) {
     tools = applyToolProjection(tools, projection, allToolsByName)
   }
 
-  // 4. Re-apply agent deny list — extensions can't escape denials
+  // 3. Re-apply agent deny list — extensions can't escape denials
   tools = applyDenyFilter(tools, agent)
 
-  // 5. Filter interactive tools in non-interactive contexts (headless, subagent)
+  // 4. Filter interactive tools in non-interactive contexts (headless, subagent)
   if (turn.interactive === false) {
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }

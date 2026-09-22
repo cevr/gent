@@ -505,14 +505,10 @@ export interface ExtensionTurnContext extends RunContext {
   readonly allTools: ReadonlyArray<ToolCapability>
 }
 
-/** Fragment contributed by an extension's derive() to influence tool visibility */
+/** Fragment a `turnProjection` hook returns to shape the turn's tools */
 export interface ToolPolicyFragment {
-  /** Tool names to force-include */
+  /** Tool names the host may run although the agent does not allow them. Agent deny still wins. */
   readonly include?: ReadonlyArray<string>
-  /** Tool names to force-exclude */
-  readonly exclude?: ReadonlyArray<string>
-  /** If set, replaces the full tool list (before agent deny reapplication) */
-  readonly overrideSet?: ReadonlyArray<string>
   /**
    * Model-facing subset of the final admitted host tools. The last supplied set
    * wins. Missing, denied, and filtered interactive tools cannot be restored here.
