@@ -109,7 +109,7 @@ import {
   ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
-import { turnBoundary, withWideEvent } from "./wide-event-boundary.js"
+import { withWideEvent } from "effect-wide-event"
 import { Entity, Sharding, ShardingConfig } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -1061,13 +1061,12 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       yield* scope.runTurn(startState).pipe(
         Effect.annotateLogs({ sessionId: scope.sessionId, branchId: scope.branchId }),
         Effect.withSpan("AgentLoop.turn"),
-        withWideEvent(
-          turnBoundary(
-            scope.sessionId,
-            scope.branchId,
-            startState.agentOverride ?? DEFAULT_AGENT_NAME,
-          ),
-        ),
+        withWideEvent({
+          service: "agent-loop",
+          method: "turn",
+          actor: startState.agentOverride ?? DEFAULT_AGENT_NAME,
+          envelope: { sessionId: scope.sessionId, branchId: scope.branchId },
+        }),
         Effect.matchCauseEffect({
           onFailure: (cause) => failTurnWorker(cause).pipe(scope.interruptSemaphore.withPermits(1)),
           onSuccess: (outcome) =>

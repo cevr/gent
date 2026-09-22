@@ -129,7 +129,7 @@ import {
 } from "../runtime/extension-host.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import {
   type ApprovalDecision,
   decodeInteractionDecision,

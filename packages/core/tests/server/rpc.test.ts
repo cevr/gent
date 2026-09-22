@@ -91,7 +91,7 @@ import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import { type Message, messageSingleText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
-import { type LogEvent, WideEventLogger } from "../../src/runtime/wide-event-boundary"
+import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc-contract.test ───────────────────────────────────────────────────────
 
@@ -1271,6 +1271,47 @@ describe("extension command RPCs", () => {
         ),
       )
     }),
+  )
+  it.live("a turn emits one agent-loop wide event with its session envelope", () =>
+    narrowR(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("traced reply"),
+          ])
+          const wideEvents = MutableRef.make<Array<LogEvent>>([])
+          const minimumLogLevel = Layer.effectContext(
+            Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+          )
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/gent-turn-wide-event",
+            extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+          })
+          yield* client.message.send({ sessionId, branchId, content: "trace me" })
+          const turnEvents = yield* waitFor(
+            Effect.sync(() =>
+              MutableRef.get(wideEvents).filter(
+                (event) => event.annotations["service"] === "agent-loop",
+              ),
+            ),
+            (events) => events.length > 0,
+            4000,
+            "turn wide event",
+          )
+          expect(turnEvents).toHaveLength(1)
+          expect(turnEvents[0]?.annotations).toMatchObject({
+            service: "agent-loop",
+            method: "turn",
+            status: "ok",
+            actor: DEFAULT_AGENT_NAME,
+            sessionId,
+            branchId,
+          })
+        }),
+      ),
+    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
   it.live("RPC event subscriptions mark the move from replay to live", () =>
     narrowR(

@@ -47,7 +47,7 @@ bun run --cwd apps/tui dev sessions
 - **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`) and extension-owned service Tags for private state. Shipped extensions never import core-internal Tags such as `FileLockService` or `ExtensionStatePublisher` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send`, `steer`, `events`, `delete`, `queueFollowUp` with `sessionId`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (`bannedShippedExtensionPatterns` in `packages/tooling/src/guards.ts` enforces the import side).
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
-- **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Use domain context factories from `wide-event-boundary.ts`.
+- **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Import `WideEvent`, `WideEventBoundary`, and `withWideEvent` from `effect-wide-event` directly.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
 - **A failed extension fails the test** - Test roots stop with `Extensions failed to load: <id> (<scope>, <phase>): <reason>`. Fix the extension; set `allowFailedExtensions: true` only in a test about the failure report.
@@ -153,19 +153,18 @@ assertSequence(calls, [
 
 ## Key Files
 
-| File                                               | Purpose                                             |
-| -------------------------------------------------- | --------------------------------------------------- |
-| `packages/core/src/storage/storage.ts`             | SQLite layer composition for focused storage tags   |
-| `packages/core/src/storage/schema.ts`              | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/index.ts`            | recorders, harnesses, and the in-process layers     |
-| `packages/core/src/server/server.ts`               | startup wiring + dependency graph                   |
-| `packages/core/src/server/rpc.ts`                  | shared client contract                              |
-| `packages/core/src/domain/agent-loop.ts`           | loop state, entity id, and the actor protocol       |
-| `packages/core/src/runtime/agent-loop.ts`          | mailbox, worker, behavior, and the actor            |
-| `packages/core/src/runtime/turn.ts`                | per-branch turn engine used by the actor            |
-| `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
-| `packages/core/src/test-utils/language-model.ts`   | `LanguageModelLayers`, step and stream-part helpers |
-| `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
+| File                                             | Purpose                                             |
+| ------------------------------------------------ | --------------------------------------------------- |
+| `packages/core/src/storage/storage.ts`           | SQLite layer composition for focused storage tags   |
+| `packages/core/src/storage/schema.ts`            | SQLite schema, migration, and initialization logic  |
+| `packages/core/src/test-utils/index.ts`          | recorders, harnesses, and the in-process layers     |
+| `packages/core/src/server/server.ts`             | startup wiring + dependency graph                   |
+| `packages/core/src/server/rpc.ts`                | shared client contract                              |
+| `packages/core/src/domain/agent-loop.ts`         | loop state, entity id, and the actor protocol       |
+| `packages/core/src/runtime/agent-loop.ts`        | mailbox, worker, behavior, and the actor            |
+| `packages/core/src/runtime/turn.ts`              | per-branch turn engine used by the actor            |
+| `packages/core/src/test-utils/language-model.ts` | `LanguageModelLayers`, step and stream-part helpers |
+| `apps/tui/tsconfig.json`                         | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation
 

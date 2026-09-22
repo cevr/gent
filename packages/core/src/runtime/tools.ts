@@ -70,7 +70,7 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
 } from "../domain/event.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "./wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"

@@ -135,7 +135,7 @@ import {
   type ResolveModelRequest,
   retryProviderCall,
 } from "./provider.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "./wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
   currentHandoffId,
