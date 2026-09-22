@@ -686,7 +686,7 @@ describe("continuation", () => {
         )
         yield* controls.waitForCall(1)
         yield* steerAgentLoop({
-          _tag: "Interrupt",
+          _tag: "Cancel",
           sessionId: contSessionId,
           branchId: contBranchId,
           requestId: "req-continuation-interrupt-first",
@@ -781,7 +781,7 @@ describe("continuation", () => {
         // time it returns, the actor has already set `interruptedRef = true`
         // and signalled the active stream. No additional wait needed.
         yield* steerAgentLoop({
-          _tag: "Interrupt",
+          _tag: "Cancel",
           sessionId: contSessionId,
           branchId: contBranchId,
           requestId: "req-continuation-interrupt-second",
@@ -1964,7 +1964,7 @@ describe("turn lifecycle hooks", () => {
       yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
       yield* client.steer.command({
         command: {
-          _tag: "Interrupt",
+          _tag: "Cancel",
           sessionId,
           branchId,
           requestId: "req-lifecycle-interrupt",
@@ -4266,7 +4266,7 @@ describe("interaction", () => {
             const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
             yield* Deferred.await(toolCallArrived)
             yield* steerAgentLoop({
-              _tag: "Interrupt",
+              _tag: "Cancel",
               sessionId: intSessionId,
               branchId: intBranchId,
               requestId: "req-interrupt-mid-tool-call",
@@ -4332,7 +4332,7 @@ describe("interaction", () => {
           const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(started)
           yield* steerAgentLoop({
-            _tag: "Interrupt",
+            _tag: "Cancel",
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: "req-interrupt-running-tool",
@@ -4424,7 +4424,7 @@ describe("interaction", () => {
             "WaitingForInteraction",
           )
           yield* steerAgentLoop({
-            _tag: "Interrupt",
+            _tag: "Cancel",
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: "req-interrupt-waiting-interaction",
@@ -5330,6 +5330,7 @@ describe("streaming", () => {
           const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
           yield* Deferred.await(startedA)
           yield* Deferred.await(startedB)
+          // No writer sends `Interrupt` now; a stored steer row with it still cancels.
           yield* steerAgentLoop({
             _tag: "Interrupt",
             sessionId: SessionId.make("s1"),

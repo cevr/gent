@@ -186,6 +186,8 @@ export const SteerCommand = Schema.Union([
     ...SteerTargetFields,
     messageId: Schema.optional(MessageId),
   }),
+  // No writer sends `Interrupt`; it stays so stored Steer mailbox rows still decode.
+  // The loop treats it as `Cancel`.
   Schema.TaggedStruct("Interrupt", {
     ...SteerTargetFields,
     messageId: Schema.optional(MessageId),

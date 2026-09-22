@@ -18,13 +18,26 @@ import {
   messagesToolCalls,
   projectMessagesWithToolInteractions,
   projectResponsePartsToMessageParts,
+  SteerCommand,
   toolCallDurations,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
-import { Option } from "effect"
+import { Option, Schema } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 
 // ── message.test ────────────────────────────────────────────────────────────
+
+describe("steer command", () => {
+  test("a stored Interrupt row still decodes", () => {
+    const decoded = Schema.decodeSync(SteerCommand)({
+      _tag: "Interrupt",
+      sessionId: "stored-session",
+      branchId: "stored-branch",
+      requestId: "stored-request",
+    })
+    expect(decoded._tag).toBe("Interrupt")
+  })
+})
 
 describe("message branch copies", () => {
   test("preserves interjection variant when copying to a new branch", () => {

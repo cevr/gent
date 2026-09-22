@@ -353,7 +353,7 @@ describe("a parent interrupt", () => {
           const child = yield* childOf(harness)
           yield* client.steer.command({
             command: SteerCommand.make({
-              _tag: "Interrupt",
+              _tag: "Cancel",
               sessionId,
               branchId,
               requestId: RequestId.make("interrupt-parent-of-running-child"),

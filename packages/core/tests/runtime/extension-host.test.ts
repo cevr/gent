@@ -3887,7 +3887,7 @@ describe("addressed session verbs via RPC", () => {
       execute: Effect.fn("Steer.execute")(function* (target) {
         const ctx = yield* ExtensionContext
         yield* ctx.Session.steer({
-          _tag: "Interrupt",
+          _tag: "Cancel",
           ...target,
           requestId: RequestId.make("addressed-interrupt"),
         })

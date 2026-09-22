@@ -617,10 +617,10 @@ const stopChild = (entry: DelegateEntry) =>
       })
       .pipe(Effect.ignore)
     yield* ctx.Session.steer({
-      _tag: "Interrupt",
+      _tag: "Cancel",
       sessionId: entry.sessionId,
       branchId: entry.branchId,
-      requestId: RequestId.make(`delegate-interrupt:${entry.sessionId}`),
+      requestId: RequestId.make(`delegate-stop:${entry.sessionId}`),
     }).pipe(Effect.ignore)
   })
 

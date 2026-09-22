@@ -533,7 +533,7 @@ describe("notices", () => {
           yield* Deferred.await(streaming)
           yield* client.steer.command({
             command: SteerCommand.make({
-              _tag: "Interrupt",
+              _tag: "Cancel",
               sessionId,
               branchId,
               requestId: RequestId.make("interrupt-holding-turn"),

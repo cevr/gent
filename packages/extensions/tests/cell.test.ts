@@ -2936,7 +2936,7 @@ describe("branch cell lifetime", () => {
                 if (Predicate.isUndefined(pid)) return yield* Effect.die("Missing active worker")
                 yield* client.steer.command({
                   command: SteerCommand.make({
-                    _tag: "Interrupt",
+                    _tag: "Cancel",
                     sessionId,
                     branchId: targetBranch,
                     requestId: RequestId.make(yield* platform.randomId),
@@ -4302,7 +4302,7 @@ describe("model context directives from a cell", () => {
           yield* Deferred.await(scheduled)
           yield* client.steer.command({
             command: SteerCommand.make({
-              _tag: "Interrupt",
+              _tag: "Cancel",
               sessionId,
               branchId,
               requestId: RequestId.make("interrupt-context-directive"),
