@@ -169,7 +169,7 @@ describe("wake", () => {
                 sessionId,
                 branchId,
                 extensionId: WAKE_EXTENSION_ID,
-                capabilityId: WakeRpc.List.id,
+                capabilityId: WakeRpc.Pending.id,
                 input: {},
               })
               .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
@@ -375,6 +375,71 @@ describe("wake", () => {
   )
 })
 
+describe("wake.list", () => {
+  it.live(
+    "the model lists what it armed, with the clock it counts against",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const listed: Array<unknown> = []
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            calls += 1
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "wake",
+                    { afterSeconds: 3600, everySeconds: 600, note: "check CI" },
+                    { toolCallId: ToolCallId.make("arm-1") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            if (calls === 2) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart("wake.list", {}, { toolCallId: ToolCallId.make("list-1") }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            for (const message of options.prompt.content) {
+              if (message.role !== "tool") continue
+              for (const part of message.content) {
+                if (part.type === "tool-result" && part.id === "list-1") {
+                  listed.push(part.result)
+                }
+              }
+            }
+            return Effect.succeed(replyStream("one alarm pending"))
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "what is armed?" })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && answered(current.messages, "one alarm pending"),
+            8_000,
+            "the turn answered",
+          )
+          expect(listed.length).toBe(1)
+          const pending = yield* Schema.decodeUnknownEffect(WakePending)(listed[0])
+          expect(pending.entries).toMatchObject([
+            { _tag: "alarm", note: "check CI", everySeconds: 600 },
+          ])
+          const [alarm] = pending.entries
+          expect(alarm?._tag === "alarm" && alarm.dueAt > pending.now).toBe(true)
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+})
+
 describe("notices", () => {
   it.live(
     "a notice stays in every step's prompt and survives an interrupted turn; an answered turn clears it",
@@ -436,7 +501,7 @@ describe("notices", () => {
                 sessionId,
                 branchId,
                 extensionId: WAKE_EXTENSION_ID,
-                capabilityId: WakeRpc.List.id,
+                capabilityId: WakeRpc.Pending.id,
                 input: {},
               })
               .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))

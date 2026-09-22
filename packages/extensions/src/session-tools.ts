@@ -217,7 +217,7 @@ class SendSessionError extends Schema.TaggedError<SendSessionError>()("SendSessi
 const SESSION_MESSAGE_TYPE = "session-message"
 
 /** The sender, as the receiving client sees it. */
-const SessionMessageDetails = Schema.Struct({
+export const SessionMessageDetails = Schema.Struct({
   from: Schema.Struct({
     sessionId: SessionId,
     name: Schema.optional(Schema.String),
@@ -225,7 +225,7 @@ const SessionMessageDetails = Schema.Struct({
     relation: Schema.Literals(["parent", "child", "session"]),
   }),
 })
-type SessionMessageDetails = typeof SessionMessageDetails.Type
+export type SessionMessageDetails = typeof SessionMessageDetails.Type
 
 const SendSessionParams = Schema.Struct({
   to: Schema.String.annotate({
@@ -256,7 +256,7 @@ const inverse = (relation: "parent" | "child" | "session"): "parent" | "child" |
 }
 
 /** The header the model reads: who wrote it, and what they are to the reader. */
-const sessionMessageText = (input: {
+export const sessionMessageText = (input: {
   readonly from: {
     readonly sessionId: SessionId
     readonly name?: string

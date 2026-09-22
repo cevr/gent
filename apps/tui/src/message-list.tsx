@@ -46,7 +46,7 @@ import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
-import { WakeDetails } from "@gent/extensions/client.js"
+import { SessionMessageDetails, sessionMessageText, WakeDetails } from "@gent/extensions/client.js"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
@@ -232,6 +232,41 @@ const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
 /** A fired wake shows what fired and the note the model left itself, not the full line. */
 const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
+
+/** A message from another session names its sender on a line of its own. */
+const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
+
+/** One sent message as the reader sees it: who wrote it, then the text. */
+interface SessionMessageView {
+  readonly sender: string
+  readonly body: string
+}
+
+/**
+ * The model reads the header `sessionMessageText` writes, then the text. The
+ * row puts the sender in its own muted line and removes that exact header, so
+ * a name or a body with blank lines in it stays whole.
+ */
+const sessionMessageView = (
+  { from }: SessionMessageDetails,
+  content: string,
+): SessionMessageView => {
+  const who = Option.liftPredicate(from.relation, (relation) => relation !== "session").pipe(
+    Option.map((relation) => `your ${relation}`),
+    Option.getOrElse(() => "session"),
+  )
+  const name = Option.fromUndefinedOr(from.name).pipe(
+    Option.map((value) => ` "${value}"`),
+    Option.getOrElse(() => ""),
+  )
+  const header = sessionMessageText({ from, message: "" })
+  const body = Option.liftPredicate(content, (text) => text.startsWith(header)).pipe(
+    Option.map((text) => text.slice(header.length)),
+    Option.getOrElse(() => content),
+  )
+  return { sender: `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`, body }
+}
+
 const PREVIEW_LINES = 20
 
 const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
@@ -408,6 +443,17 @@ function UserMessage(props: {
       ),
       Option.filter(() => !props.fullDetail),
     )
+  const sessionMessage = () =>
+    Option.fromUndefinedOr(props.customType).pipe(
+      Option.filter((customType) => customType === "session-message" && !props.fullDetail),
+      Option.flatMap(() => decodeSessionMessageDetails(props.details)),
+      Option.map((details) => sessionMessageView(details, props.content)),
+    )
+  const shownContent = () =>
+    Option.match(sessionMessage(), {
+      onNone: () => props.content,
+      onSome: (view) => view.body,
+    })
   const textColor = () => {
     if (props.interjection) return theme.warning
     return theme.text
@@ -448,6 +494,9 @@ function UserMessage(props: {
             </Show>
             <Show when={props.content.length > 0}>
               <box flexDirection="column">
+                <Show when={Option.getOrUndefined(sessionMessage())}>
+                  {(view) => <text style={{ fg: theme.textMuted }}>{view().sender}</text>}
+                </Show>
                 <Show when={label()}>
                   {(value) => (
                     <text>
@@ -456,7 +505,7 @@ function UserMessage(props: {
                   )}
                 </Show>
                 <text style={{ fg: textColor() }}>
-                  <span style={{ bold: true }}>{props.content}</span>
+                  <span style={{ bold: true }}>{shownContent()}</span>
                 </text>
               </box>
             </Show>
