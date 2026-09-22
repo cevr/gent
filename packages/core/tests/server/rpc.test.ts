@@ -1708,6 +1708,7 @@ describe("extension command RPCs", () => {
             Effect.map(Effect.scope, (scope) =>
               SessionProfileCache.Live({
                 home,
+                failOnExtensionFailure: true,
                 platform: "test",
                 extensions: [ext],
               }).pipe(
@@ -1745,6 +1746,37 @@ describe("extension command RPCs", () => {
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
+  it.live("a test root stops at a failed extension and names it", () =>
+    Effect.gen(function* () {
+      const failingExtension: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/failing-load") },
+        setup: Effect.fail(
+          new ExtensionLoadError({
+            extensionId: ExtensionId.make("@test/failing-load"),
+            message: "setup boom",
+          }),
+        ),
+      }
+      const exit = yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            return yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensionInputs: [failingExtension],
+              cwd: "/tmp",
+            })
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      ).pipe(Effect.exit)
+      // A defect with the reason, at once; not a later timeout with the extension silently gone.
+      expect(Exit.isFailure(exit)).toBe(true)
+      const reason = Exit.match(exit, { onSuccess: () => "", onFailure: Cause.pretty })
+      expect(reason).toContain("@test/failing-load (builtin, setup): setup boom")
+      expect(reason).not.toContain("TimeoutError")
+    }),
+  )
   it.live("RPC listStatus returns structurally tagged extension health", () =>
     Effect.gen(function* () {
       const failingExtension: GentExtension = {
@@ -1764,6 +1796,8 @@ describe("extension command RPCs", () => {
               ...e2ePreset,
               providerLayer,
               extensionInputs: [failingExtension],
+              // This test is about the failure report, so the load must survive it.
+              allowFailedExtensions: true,
               cwd: "/tmp",
             })
             const status = yield* client.extension.listStatus({ sessionId })
@@ -1967,17 +2001,32 @@ describe("extension command RPCs", () => {
         },
       }
       yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [builtinExt, projectExt],
-            cwd: "/tmp",
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
+        narrowR(
+          Effect.gen(function* () {
+            // The harness loads every input as builtin, so the two scopes go in through a profile.
+            const profile = yield* makeProfile("/tmp", [builtinExt, projectExt])
+            expect(profile.resolved.failedExtensions).toEqual([])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer: SessionProfileCache.Test(new Map([["/tmp", profile]])),
+              cwd: "/tmp",
+            })
+            const commands = yield* client.extension.listSlashCommands({ sessionId })
+            expect(commands.map((command) => command.name)).toEqual([])
+            // The project request answers, not the builtin one it shadows.
+            const answer = yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "shadowed",
+              input: { value: "project" },
+            })
+            expect(answer).toEqual({ value: "project" })
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
       )
     }),
   )
@@ -2017,17 +2066,23 @@ describe("extension command RPCs", () => {
         },
       }
       yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extensions: [builtinExt, projectExt],
-            cwd: "/tmp",
-          })
-          const commands = yield* client.extension.listSlashCommands({ sessionId })
-          expect(commands.map((command) => command.name)).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
+        narrowR(
+          Effect.gen(function* () {
+            // The harness loads every input as builtin, so the two scopes go in through a profile.
+            const profile = yield* makeProfile("/tmp", [builtinExt, projectExt])
+            expect(profile.resolved.failedExtensions).toEqual([])
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client, sessionId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer: SessionProfileCache.Test(new Map([["/tmp", profile]])),
+              cwd: "/tmp",
+            })
+            const commands = yield* client.extension.listSlashCommands({ sessionId })
+            expect(commands.map((command) => command.name)).toEqual([])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
       )
     }),
   )

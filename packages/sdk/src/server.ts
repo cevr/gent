@@ -995,6 +995,8 @@ const buildOwnedServer = (
         observability: GentObservability(options.cwd),
         dependencies: {
           cwd: options.cwd,
+          // One broken user extension is reported, not fatal: the rest of the profile runs.
+          failOnExtensionFailure: false,
           home,
           platform: osInfo.platform,
           osVersion: osInfo.release,

@@ -1790,7 +1790,23 @@ interface SessionProfileCacheConfig {
   readonly osVersion?: string
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
+  /**
+   * A failed extension stops the profile build instead of leaving the rest
+   * live. Production keeps going so one broken user extension cannot take the
+   * server down; test roots turn this on, because there a failed extension is
+   * an authoring bug that otherwise shows up as an unrelated timeout.
+   */
+  readonly failOnExtensionFailure: boolean
 }
+
+/** One line per failed extension: which one, in which phase, and why. */
+const describeFailedExtensions = (failed: ReadonlyArray<FailedExtension>): string =>
+  [
+    "Extensions failed to load:",
+    ...failed.map(
+      (entry) => `- ${entry.manifest.id} (${entry.scope}, ${entry.phase}): ${entry.error}`,
+    ),
+  ].join("\n")
 
 export interface SessionProfileCacheService {
   /** Get or lazily create a profile for the given cwd. */
@@ -1944,6 +1960,9 @@ export class SessionProfileCache extends Context.Service<
                 ...declarations.extensionDeclarations.failed,
                 ...started.failed,
               ])
+              if (config.failOnExtensionFailure && resolved.failedExtensions.length > 0) {
+                return yield* Effect.die(describeFailedExtensions(resolved.failedExtensions))
+              }
               return yield* buildSessionProfile({
                 cwd,
                 resolved,
