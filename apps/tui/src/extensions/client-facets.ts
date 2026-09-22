@@ -449,8 +449,11 @@ export const makeClientWorkspaceLayer = (
 // ── ClientShell ──────────────────────────────────────────────────────────
 
 export interface ClientShellDefinition {
-  /** Send a chat message into the active session. */
-  readonly sendMessage: (content: string) => void
+  /**
+   * Show a one-line status in the footer, where the session's own slash
+   * commands report a usage hint or a failure. The next turn clears it.
+   */
+  readonly notify: (message: string) => void
   /** Open a registered overlay by id. */
   readonly openOverlay: (id: OverlayId) => void
   /** Close any open overlay. */
@@ -467,8 +470,6 @@ export interface ClientShellDefinition {
     readonly branchId: BranchId
     readonly name: string
   }) => void
-  /** Run an extension-owned Effect from a sync UI callback. */
-  readonly run: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
   /** Fork an extension-owned Effect from a sync UI callback. */
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
 }

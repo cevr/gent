@@ -1053,9 +1053,6 @@ const stubRuntime = new Proxy(createMockRuntime(), {
   get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`),
 })
 
-const runTestShellEffect = <A, E>(_effect: Effect.Effect<A, E, never>): Promise<A> =>
-  stubRuntime.run(_effect)
-
 const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => {
   Effect.runFork(effect)
 }
@@ -1069,7 +1066,7 @@ const testRuntime = makeClientRuntime({
     onSessionEvent: () => () => {},
   },
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
-  shell: { run: runTestShellEffect, cast: castTestShellEffect },
+  shell: { cast: castTestShellEffect },
 })
 const loadTuiExtensions = (
   opts: Omit<Parameters<typeof _loadTuiExtensions>[0], "runtime"> & {

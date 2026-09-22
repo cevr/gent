@@ -42,6 +42,7 @@ import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
 import { ConnectionWidget } from "../src/extensions/builtins"
+import { useExtensionUI } from "../src/extensions/host"
 
 // ── app-bootstrap.test ──────────────────────────────────────────────────────
 
@@ -437,6 +438,16 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   const client = useClient()
   onMount(() => {
     props.onReady(client)
+  })
+  return <box />
+}
+
+function ExtensionUIProbe(props: {
+  readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
+}) {
+  const ext = useExtensionUI()
+  onMount(() => {
+    props.onReady(ext)
   })
   return <box />
 }
@@ -2034,4 +2045,66 @@ describe("uiModel schema validation", () => {
     const result = decode(nullValue)
     expect(result._tag).toBe("None")
   })
+})
+
+describe("client extension status", () => {
+  it.live("a /driver usage hint lands in the footer and never starts a model turn", () =>
+    Effect.gen(function* () {
+      const sentMessages: Array<{ readonly content: string }> = []
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        message: {
+          send: (input: { readonly content: string }) =>
+            Effect.sync(() => {
+              sentMessages.push(input)
+            }),
+        },
+      })
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime: createMockRuntime(),
+            width: 140,
+            initialSession: {
+              id: SessionId.make("session-driver"),
+              activeBranchId: BranchId.make("branch-driver"),
+              name: "Driver",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const driverCommand = () =>
+        ext.pipe(
+          Option.flatMap((value) =>
+            Option.fromUndefinedOr(value.commands().find((command) => command.slash === "driver")),
+          ),
+        )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, () => Option.isSome(driverCommand()), "driver command loaded"),
+      )
+      const command = driverCommand()
+      if (Option.isNone(command)) return yield* Effect.die("driver command not loaded")
+      command.value.onSlash?.("")
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (text) => text.includes("Usage: /driver <agent> <driver-id|default>"),
+          "driver usage in the footer",
+        ),
+      )
+      expect(frame).toContain("Usage: /driver")
+      expect(sentMessages).toEqual([])
+      setup.renderer.destroy()
+    }),
+  )
 })

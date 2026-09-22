@@ -81,7 +81,6 @@ export const makeClientExtensionRuntime = (
       home: "/tmp/test-home",
     })),
     shell: {
-      run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
         Effect.runFork(effect)
       },

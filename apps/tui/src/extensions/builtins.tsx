@@ -481,14 +481,13 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
 /**
  * Driver routing UI — `/driver` slash command.
  *
- * Two forms:
- *   - `/driver <agent> <driverId>`  → set per-agent runtime override
+ *   - `/driver <agent> <driverId>`    → set per-agent runtime override
  *   - `/driver <agent> default|clear` → remove the override
- *   - `/driver` (no args)            → emit a status hint message
+ *   - `/driver` (no args)             → usage hint
  *
- * Validation lives server-side: `driver.set` rejects unknown driver ids
- * with `NotFoundError`. The TUI surfaces the failure as an inline status
- * message rather than a modal — same UX as `/clear` etc.
+ * Validation lives server-side: `driver.set` rejects unknown driver ids. The
+ * usage hint and every failure go to the footer through `ClientShell.notify`;
+ * a change that lands reports nothing.
  *
  * This contribution is delivered by a core builtin (not by the
  * `@gent/acp-agents` extension) so the slash remains available even when
@@ -497,80 +496,54 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"
 
+const driverRef = (entry: { readonly _tag: string; readonly id: string }) => {
+  if (entry._tag === "External") return ExternalDriverRef.make({ id: entry.id })
+  return ModelDriverRef.make({ id: entry.id })
+}
+
 export const builtinDriver = defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
     const transport = yield* ClientTransport
+    const notify = (message: string) => Effect.sync(() => shell.notify(message))
+
+    const clearDriver = (agentName: AgentName) =>
+      transport
+        .driverClear({ agentName })
+        .pipe(Effect.catch((error) => notify(`Failed to clear driver override: ${String(error)}`)))
+
+    const setDriver = (agentName: AgentName, driverId: string) =>
+      Effect.gen(function* () {
+        const { drivers } = yield* transport.driverList
+        const matches = drivers.filter((driver) => driver.id === driverId)
+        const match = Option.fromNullishOr(matches[0])
+        if (matches.length > 1) return yield* notify(`Ambiguous driver "${driverId}".`)
+        if (Option.isNone(match)) return yield* notify(`Unknown driver "${driverId}".`)
+        yield* transport.driverSet({ agentName, driver: driverRef(match.value) })
+      }).pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
+
+    const route = (args: string): Effect.Effect<void> => {
+      const parts = args.trim().split(/\s+/)
+      const rawAgentName = Option.fromNullishOr(parts[0])
+      const driverArg = Option.fromNullishOr(parts[1])
+      if (parts.length !== 2 || Option.isNone(rawAgentName) || Option.isNone(driverArg)) {
+        return notify(USAGE)
+      }
+      const agentName = AgentName.make(rawAgentName.value)
+      if (driverArg.value === "default" || driverArg.value === "clear") {
+        return clearDriver(agentName)
+      }
+      return setDriver(agentName, driverArg.value)
+    }
+
     return clientCommandContribution({
       id: "driver.route",
       title: "Driver routing",
       description: "Set or clear a per-agent driver override",
       category: "Driver",
       slash: "driver",
-      onSelect: () => {
-        shell.sendMessage(USAGE)
-      },
-      onSlash: (args) => {
-        const trimmed = args.trim()
-        if (trimmed.length === 0) {
-          shell.sendMessage(USAGE)
-          return
-        }
-        const parts = trimmed.split(/\s+/)
-        if (parts.length !== 2) {
-          shell.sendMessage(USAGE)
-          return
-        }
-        const rawAgentName = Option.fromNullishOr(parts[0])
-        const driverArg = Option.fromNullishOr(parts[1])
-        if (Option.isNone(rawAgentName) || Option.isNone(driverArg)) {
-          shell.sendMessage(USAGE)
-          return
-        }
-        const agentName = AgentName.make(rawAgentName.value)
-        if (driverArg.value === "default" || driverArg.value === "clear") {
-          void shell
-            .run(transport.driverClear({ agentName }))
-            .then(() => {
-              shell.sendMessage(`Cleared driver override for "${agentName}".`)
-            })
-            .catch((err) => {
-              shell.sendMessage(`Failed to clear driver override: ${String(err)}`)
-            })
-          return
-        }
-        void shell
-          .run(
-            Effect.gen(function* () {
-              const { drivers } = yield* transport.driverList
-              const matches = drivers.filter((driver) => driver.id === driverArg.value)
-              if (matches.length === 0) {
-                shell.sendMessage(`Unknown driver "${driverArg.value}".`)
-                return false
-              }
-              if (matches.length > 1) {
-                shell.sendMessage(`Ambiguous driver "${driverArg.value}".`)
-                return false
-              }
-              const match = Option.fromNullishOr(matches[0])
-              if (Option.isNone(match)) return false
-              const driver = (() => {
-                if (match.value._tag === "External") {
-                  return ExternalDriverRef.make({ id: match.value.id })
-                }
-                return ModelDriverRef.make({ id: match.value.id })
-              })()
-              yield* transport.driverSet({ agentName, driver })
-              return true
-            }),
-          )
-          .then((changed) => {
-            if (changed) shell.sendMessage(`Set "${agentName}" → driver "${driverArg.value}".`)
-          })
-          .catch((err) => {
-            shell.sendMessage(`Failed to set driver: ${String(err)}`)
-          })
-      },
+      onSelect: () => shell.notify(USAGE),
+      onSlash: (args) => shell.cast(route(args)),
     })
   }),
 })

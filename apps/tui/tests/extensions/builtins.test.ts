@@ -161,7 +161,8 @@ describe("file finder db dir", () => {
  *
  * The transport seals every shell RPC failure into a
  * `ClientTransportRequestError` that names the RPC and keeps the server's
- * tagged error as `cause`; the slash command reports that failure inline.
+ * tagged error as `cause`; the slash command reports that failure through
+ * `ClientShell.notify`, and a change that lands reports nothing.
  */
 
 class DriverRejected extends Schema.TaggedError<DriverRejected>()("DriverRejected", {
@@ -178,18 +179,24 @@ const driverListReply = {
   agents: AllBuiltinAgents,
 }
 
-/** Run the `/driver` slash once and return the first message the shell receives. */
+/**
+ * Run the `/driver` slash once. Resolves with the notices the shell received
+ * once `settled` completes: the transport call the test waits on, or the
+ * first notice.
+ */
 const runDriverSlash = (
   transport: ReturnType<typeof makeClientTestTransport>,
   args: string,
-): Effect.Effect<string> =>
+  settled: Deferred.Deferred<void>,
+): Effect.Effect<ReadonlyArray<string>> =>
   Effect.gen(function* () {
-    const message = yield* Deferred.make<string>()
+    const notices: Array<string> = []
     const contributions = yield* runClientExtensionSetupWithRuntime(builtinDriver, {
       transport,
       shell: {
-        sendMessage: (content) => {
-          Deferred.doneUnsafe(message, Effect.succeed(content))
+        notify: (message) => {
+          notices.push(message)
+          Deferred.doneUnsafe(settled, Effect.void)
         },
       },
     })
@@ -199,7 +206,8 @@ const runDriverSlash = (
     )
     expect(Option.isSome(command)).toBe(true)
     if (Option.isSome(command)) command.value(args)
-    return yield* Deferred.await(message)
+    yield* Deferred.await(settled)
+    return notices
   })
 
 describe("driver routing through ClientTransport", () => {
@@ -224,23 +232,24 @@ describe("driver routing through ClientTransport", () => {
     },
   )
 
-  it.live("/driver <agent> <known-id> sets the override and confirms it", () =>
+  it.live("/driver <agent> <known-id> sets the override without a notice", () =>
     Effect.gen(function* () {
+      const settled = yield* Deferred.make<void>()
       const seen: Array<{ readonly agentName: string; readonly driverId: string }> = []
       const client = createMockClient({
         driver: {
           list: () => Effect.succeed(driverListReply),
           set: (input: { agentName: AgentName; driver: { id: string } }) => {
             seen.push({ agentName: input.agentName, driverId: input.driver.id })
-            return Effect.void
+            return Deferred.succeed(settled, absent)
           },
         },
       })
       const transport = { ...makeClientTestTransport({ currentSession: () => session }), client }
-      const message = yield* runDriverSlash(transport, "main model:sonnet").pipe(
+      const notices = yield* runDriverSlash(transport, "main model:sonnet", settled).pipe(
         Effect.timeout("5 seconds"),
       )
-      expect(message).toBe('Set "main" → driver "model:sonnet".')
+      expect(notices).toEqual([])
       expect(seen).toEqual([{ agentName: "main", driverId: "model:sonnet" }])
     }),
   )
@@ -254,32 +263,46 @@ describe("driver routing through ClientTransport", () => {
         },
       })
       const transport = { ...makeClientTestTransport({ currentSession: () => session }), client }
-      const message = yield* runDriverSlash(transport, "main model:sonnet").pipe(
-        Effect.timeout("5 seconds"),
-      )
-      expect(message).toContain("Failed to set driver:")
-      expect(message).toContain("ClientTransportRequestError")
-      expect(message).toContain("DriverRejected")
+      const notices = yield* runDriverSlash(
+        transport,
+        "main model:sonnet",
+        yield* Deferred.make<void>(),
+      ).pipe(Effect.timeout("5 seconds"))
+      const notice = notices.join("\n")
+      expect(notice).toContain("Failed to set driver:")
+      expect(notice).toContain("ClientTransportRequestError")
+      expect(notice).toContain("DriverRejected")
     }),
   )
 
-  it.live("/driver <agent> default clears the override", () =>
+  it.live("/driver <agent> default clears the override without a notice", () =>
     Effect.gen(function* () {
+      const settled = yield* Deferred.make<void>()
       const cleared: Array<string> = []
       const client = createMockClient({
         driver: {
           clear: (input: { agentName: AgentName }) => {
             cleared.push(input.agentName)
-            return Effect.void
+            return Deferred.succeed(settled, absent)
           },
         },
       })
       const transport = { ...makeClientTestTransport({ currentSession: () => session }), client }
-      const message = yield* runDriverSlash(transport, "main default").pipe(
+      const notices = yield* runDriverSlash(transport, "main default", settled).pipe(
         Effect.timeout("5 seconds"),
       )
-      expect(message).toBe('Cleared driver override for "main".')
+      expect(notices).toEqual([])
       expect(cleared).toEqual(["main"])
+    }),
+  )
+
+  it.live("/driver with a malformed argument notifies the usage hint", () =>
+    Effect.gen(function* () {
+      const transport = makeClientTestTransport({ currentSession: () => session })
+      const notices = yield* runDriverSlash(transport, "main", yield* Deferred.make<void>()).pipe(
+        Effect.timeout("5 seconds"),
+      )
+      expect(notices).toEqual(["Usage: /driver <agent> <driver-id|default>"])
     }),
   )
 })

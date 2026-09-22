@@ -133,7 +133,7 @@ const runHeadlessTurn = (
       onSessionEvent: () => () => {},
     },
     workspace: { cwd, home },
-    shell: { run: bundle.runtime.run, cast: bundle.runtime.cast },
+    shell: { cast: bundle.runtime.cast },
   })
 
   return Effect.gen(function* () {

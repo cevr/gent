@@ -157,17 +157,17 @@ describe("makeClientSessionResource", () => {
 /**
  * `makeClientRuntime` is the one runtime every client-extension surface
  * loads against. A surface gives it a transport, a workspace, and
- * `run`/`cast`; everything else defaults so headless and tests do not
+ * `cast`; everything else defaults so headless and tests do not
  * restate no-op callbacks.
  */
 
 const workspace = { cwd: "/tmp/client-runtime-cwd", home: "/tmp/client-runtime-home" }
 const mockRuntime = createMockRuntime()
-const runCast = { run: mockRuntime.run, cast: mockRuntime.cast }
+const runCast = { cast: mockRuntime.cast }
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
 
 describe("makeClientRuntime", () => {
-  it.live("transport, workspace and run/cast alone resolve every client service", () => {
+  it.live("transport, workspace and cast alone resolve every client service", () => {
     const runtime = makeClientRuntime({
       transport: makeClientTestTransport({ currentSession: () => session }),
       workspace,
@@ -183,7 +183,7 @@ describe("makeClientRuntime", () => {
             const lifecycle = yield* ClientLifecycle
             const activity = yield* ClientActivity
             const transport = yield* ClientTransport
-            shell.sendMessage("ignored")
+            shell.notify("ignored")
             shell.openOverlay("ignored")
             shell.closeOverlay()
             shell.switchSession({ ...session, name: "ignored" })
@@ -207,7 +207,7 @@ describe("makeClientRuntime", () => {
     const runtime = makeClientRuntime({
       transport: makeClientTestTransport({ currentSession: () => session }),
       workspace,
-      shell: { ...runCast, sendMessage: (content) => sent.push(content) },
+      shell: { ...runCast, notify: (message) => sent.push(message) },
       activity: () => ({ state: "working" }),
       lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
     })
@@ -219,7 +219,7 @@ describe("makeClientRuntime", () => {
             const shell = yield* ClientShell
             const lifecycle = yield* ClientLifecycle
             const activity = yield* ClientActivity
-            shell.sendMessage("hello")
+            shell.notify("hello")
             lifecycle.addCleanup(() => {})
             return activity.snapshot().state
           }),

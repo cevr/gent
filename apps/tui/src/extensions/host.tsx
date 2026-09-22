@@ -46,8 +46,8 @@ import { useClient } from "../client"
  * One client `ManagedRuntime` for every surface that loads client
  * extensions: the interactive shell, the headless runner, and tests.
  *
- * A surface supplies the transport, the workspace, and the `run`/`cast`
- * pair of its connected runtime. Shell UI callbacks, the activity
+ * A surface supplies the transport, the workspace, and the `cast` of its
+ * connected runtime. Shell UI callbacks, the activity
  * provider, and the lifecycle cleanup registry default to no-ops so a
  * surface without a UI (headless) does not restate them.
  */
@@ -55,17 +55,16 @@ import { useClient } from "../client"
 interface ClientRuntimeDeps {
   readonly transport: ClientShellTransportDefinition
   readonly workspace: ClientWorkspaceDefinition
-  /** `run`/`cast` are required; every UI callback defaults to a no-op. */
-  readonly shell: Pick<ClientShellDefinition, "run" | "cast"> &
-    Partial<Omit<ClientShellDefinition, "run" | "cast">>
+  /** `cast` is required; every UI callback defaults to a no-op. */
+  readonly shell: Pick<ClientShellDefinition, "cast"> & Partial<Omit<ClientShellDefinition, "cast">>
   /** Current UI activity; absent when the surface has no activity to report. */
   readonly activity?: () => ClientActivitySnapshot
   /** Cleanup registry; absent when the surface disposes the runtime whole. */
   readonly lifecycle?: Pick<ClientLifecycleDefinition, "addCleanup">
 }
 
-const noopShell: Omit<ClientShellDefinition, "run" | "cast"> = {
-  sendMessage: () => {},
+const noopShell: Omit<ClientShellDefinition, "cast"> = {
+  notify: () => {},
   openOverlay: () => {},
   closeOverlay: () => {},
   switchSession: () => {},
@@ -202,7 +201,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // (FileSystem, Path) with the TUI client services Effect-typed
   // extensions may yield: `ClientTransport` (typed RPC client + event
   // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
-  // (send/sendMessage/overlays). The loader's `invokeSetup` runs each
+  // (notify, overlays, session switch). The loader's `invokeSetup` runs each
   // setup against this runtime.
   const clientRuntime: ClientRuntime = makeClientRuntime({
     transport: {
@@ -217,11 +216,10 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     },
     workspace: { cwd: workspace.cwd, home: workspace.home },
     shell: {
-      sendMessage: (content) => client.sendMessage(content),
+      notify: (message) => client.setError(message),
       openOverlay: (id) => overlayDispatch().open(id),
       closeOverlay: () => overlayDispatch().close(),
       switchSession: (input) => switchSessionDispatch()(input),
-      run: client.runtime.run,
       cast: client.runtime.cast,
     },
     activity: () => activityProvider()(),
