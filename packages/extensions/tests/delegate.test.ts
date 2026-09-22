@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Deferred,
   Effect,
@@ -258,7 +258,6 @@ describe("a child's completion", () => {
             preview: "pong",
           })
           expect(entry?.completed).toEqual({})
-          expect(entry?.waiter).toBeUndefined()
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -374,7 +373,6 @@ describe("a parent interrupt", () => {
             "the parent's interrupt settled the child's row",
           )
           expect(entry).toMatchObject({ delivered: true, completed: { interrupted: true } })
-          expect(entry?.waiter).toBeUndefined()
           const settled = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) => current.runtime._tag === "Idle",
@@ -520,46 +518,14 @@ describe("a start nobody waits for", () => {
     12_000,
   )
 
-  it.live(
-    "a private child whose waiter died with its process is removed with its session",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ack")])
-          const harness = yield* harnessWithHome(providerLayer)
-          const { client, sessionId, branchId } = harness
-          const child = yield* client.session.create({
-            cwd: "/tmp",
-            parentSessionId: sessionId,
-            parentBranchId: branchId,
-          })
-          yield* harness.writeRegistry(branchId, [
-            {
-              requestId: RequestId.make(`run:${child.sessionId}`),
-              sessionId: child.sessionId,
-              branchId: child.branchId,
-              agentName: DELEGATE_AGENT_NAME,
-              prompt: "a side question",
-              private: true,
-              submitted: true,
-              delivered: false,
-              waiter: "waiter:a-process-that-is-gone",
-            },
-          ])
-          yield* sendPrompt(harness, "hello again")
-          yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) => current.runtime._tag === "Idle",
-            5_000,
-            "the parent turn ended",
-          )
-          expect(yield* harness.registryOf(branchId)).toEqual([])
-          const sessions = yield* client.session.list()
-          expect(sessions.some((session) => session.id === child.sessionId)).toBe(false)
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
+  test("a registry row an older binary wrote, private and claimed, still decodes", () => {
+    // The bytes an older binary wrote: a private extraction child its waiter still claimed.
+    const row = Schema.decodeSync(registryCodec)(
+      `[{"requestId":"run:old-child","sessionId":"old-child","branchId":"old-child-branch","agentName":"${DELEGATE_AGENT_NAME}","prompt":"a side question","private":true,"submitted":true,"delivered":false,"waiter":"waiter:a-process-that-is-gone"}]`,
+    )
+    expect(row[0]?.requestId).toBe(RequestId.make("run:old-child"))
+    expect(row[0]?.private).toBe(true)
+  })
 })
 
 // ── delegate/pending-cap ────────────────────────────────────────────────────

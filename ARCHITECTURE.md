@@ -304,11 +304,7 @@ Shape:
 - One writer settles a child's completion. The delegate's `turnAfter` hook on
   the child branch delivers every receipt as one idempotent follow-up message
   on the parent branch (metadata `customType: "child-completion"`, `wake` set
-  so a parent with no prior turn still starts one). The one exception is a
-  private helper run (`runChild`, used by `read_session`), whose
-  caller needs the answer in hand: it claims the row under a per-process nonce
-  and the hook leaves it alone; a claim naming another process is a crash
-  leftover and reads as unclaimed.
+  so a parent with no prior turn still starts one). Nothing waits on a child.
 - The same hook, read on the parent side, cascades an interrupt: when a turn
   ends interrupted, every child it started and had not heard from is settled
   as interrupted and then stopped, so a parent Escape stops the whole subtree
@@ -443,9 +439,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Completion has one writer: the delegate's `turnAfter` hook on the child
   branch delivers every receipt as one ordinary user message on the parent
   branch (metadata `customType: "child-completion"`) with the outcome and a
-  bounded preview, and the message wakes the parent. The model never waits on a
-  child; only the private helper run (`runChild`) does, and it holds its row so
-  the hook leaves it alone. Lazy reconcile covers the crash window between the
+  bounded preview, and the message wakes the parent. Nothing waits on a child.
+  Lazy reconcile covers the crash window between the
   receipt and the hook: the delegate reconciles its registry on the parent's
   next turn and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
@@ -471,7 +466,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn.
-- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared. Helper runs such as `read_session` goal extraction pass `visibility: "private"`.
+- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from. The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource); `^o` opens the fork as the shell's session, which is `switchSession`, because the fork already is one. The open fork per branch is process state; the fork itself is durable and listed with every other child session.
 - Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.

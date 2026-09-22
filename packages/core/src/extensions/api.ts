@@ -61,7 +61,6 @@ export {
   makeRunSpec,
   type RunSpec,
   RunSpecSchema,
-  AgentRunToolCallSchema,
 } from "../domain/agent.js"
 export {
   type GentExtension,
@@ -92,11 +91,7 @@ export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.j
 export { AuthMethod } from "../runtime/provider.js"
 export { type Message, type Branch } from "../domain/message.js"
 export type { AgentEvent, Question } from "../domain/event.js"
-export {
-  latestAssistantText,
-  messagePartsDisplayText,
-  messagesToolCalls,
-} from "../domain/message.js"
+export { latestAssistantText, messagePartsDisplayText } from "../domain/message.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).

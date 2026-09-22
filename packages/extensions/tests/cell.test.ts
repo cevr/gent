@@ -2696,7 +2696,7 @@ describe("branch cell lifetime", () => {
           },
           {
             send: false,
-            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
+            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.messageCount > 0 && reply.content.includes('verified child result')",
           },
         ]
         const steps = turns.flatMap<SequenceStep>((turn, index) => [

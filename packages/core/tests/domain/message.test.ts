@@ -15,7 +15,6 @@ import {
   messagePartsTextLines,
   messagePartsToolCallParts,
   messageSingleText,
-  messagesToolCalls,
   projectMessagesWithToolInteractions,
   projectResponsePartsToMessageParts,
   SteerCommand,
@@ -574,37 +573,5 @@ describe("message part projection", () => {
     ]
     expect(latestAssistantText(latestWins)).toBe("second")
     expect(latestAssistantText([])).toBe("")
-  })
-
-  test("finished tool calls keep object params and drop scalar or array params", () => {
-    const call = (id: string, name: string, params: Prompt.ToolCallPart["params"]) =>
-      Prompt.toolCallPart({ id: ToolCallId.make(id), name, params, providerExecuted: false })
-    const result = (id: string, name: string, isFailure: boolean) =>
-      Prompt.toolResultPart({
-        id: ToolCallId.make(id),
-        name,
-        isFailure,
-        providerExecuted: false,
-        result: "done",
-      })
-    const messages = [
-      makeMessage("a-1", "assistant", [
-        call("scalar", "scalar-tool", "scalar input"),
-        call("array", "array-tool", ["array", 1]),
-        call("object", "object-tool", { path: "src", limit: 2 }),
-        call("pending", "slow-tool", {}),
-      ]),
-      makeMessage("t-1", "tool", [
-        result("scalar", "scalar-tool", false),
-        result("array", "array-tool", true),
-        result("object", "object-tool", false),
-      ]),
-    ]
-    expect(messagesToolCalls(messages)).toEqual([
-      { toolName: "scalar-tool", args: {}, isError: false },
-      { toolName: "array-tool", args: {}, isError: true },
-      { toolName: "object-tool", args: { path: "src", limit: 2 }, isError: false },
-    ])
-    expect(messagesToolCalls([])).toEqual([])
   })
 })

@@ -298,7 +298,6 @@ export const effectiveModelDriver = (
 // ── RunSpec — per-run dispatch configuration ──
 //
 // Separates per-run concerns from agent identity:
-//   - `visibility`    — whether the child leaves a trace on the parent
 //   - `overrides`     — per-turn model/tool/prompt overrides
 //   - `parentToolCallId` — links a child run to the tool call that spawned it
 //
@@ -316,15 +315,7 @@ export const AgentRunOverridesSchema = Schema.Struct({
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
-/**
- * `private` keeps a run off the parent's event stream, and its session is
- * deleted when the run ends. One-shot extractions rely on it.
- */
-const AgentRunVisibility = Schema.Literals(["parent", "private"])
-type AgentRunVisibility = typeof AgentRunVisibility.Type
-
 export const RunSpecSchema = Schema.Struct({
-  visibility: Schema.optional(AgentRunVisibility),
   overrides: Schema.optional(AgentRunOverridesSchema),
   parentToolCallId: Schema.optional(ToolCallId),
 })
@@ -353,15 +344,5 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
     max: Schema.Int,
   },
 ) {}
-/**
- * One child turn's tool call, in the shape the delegate persists on its run
- * receipt and `message.ts` decodes when replaying a child's history.
- */
-export const AgentRunToolCallSchema = Schema.Struct({
-  toolName: Schema.String,
-  args: Schema.Record(Schema.String, Schema.Unknown),
-  isError: Schema.Boolean,
-})
-export type AgentRunToolCall = Schema.Schema.Type<typeof AgentRunToolCallSchema>
 
 // ── steer ───────────────────────────────────────────────────────────────────
