@@ -22,10 +22,7 @@ import {
   isLongContextError,
   MODEL_CONFIG,
   parseOAuthResponse,
-  PRIMARY_CLAUDE_SERVICE,
   repairToolPairs,
-  shouldFallBackToCli,
-  shouldFallBackToCredentialsFile,
   supports1mContext,
   SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
@@ -1881,52 +1878,6 @@ describe("updateCredentialBlob", () => {
       expiresAt: 0,
     })
     expect(Option.isNone(next)).toBe(true)
-  })
-})
-
-describe("PRIMARY_CLAUDE_SERVICE", () => {
-  // Counsel K2 — the primary service name was hard-coded inside the
-  // module. Exposing it as a named export forces every caller that
-  // assumes "the default account" to spell it out, so a future
-  // multi-account picker UI can audit-grep all the places that need
-  // updating.
-  test("is the canonical Claude Code keychain service name", () => {
-    expect(PRIMARY_CLAUDE_SERVICE).toBe("Claude Code-credentials")
-  })
-})
-
-describe("source-policy gates", () => {
-  // Two real defects this guards: a non-primary keychain miss silently
-  // falling through to the on-disk file (which holds only the primary
-  // credential), and the CLI refresh fallback running for any source
-  // (the CLI persists to whichever account is active, not the
-  // requested one). Both policies extracted into pure helpers so the
-  // gate is unit-testable without spawning `security` or `claude`.
-  describe("shouldFallBackToCredentialsFile", () => {
-    test("returns true on non-darwin (no keychain at all)", () => {
-      expect(shouldFallBackToCredentialsFile("linux", PRIMARY_CLAUDE_SERVICE)).toBe(true)
-      expect(shouldFallBackToCredentialsFile("linux", "Claude Code-credentials-abc123")).toBe(true)
-    })
-
-    test("returns true for the primary source on darwin", () => {
-      expect(shouldFallBackToCredentialsFile("darwin", PRIMARY_CLAUDE_SERVICE)).toBe(true)
-    })
-
-    test("returns false for non-primary sources on darwin", () => {
-      expect(shouldFallBackToCredentialsFile("darwin", "Claude Code-credentials-abc123")).toBe(
-        false,
-      )
-    })
-  })
-
-  describe("shouldFallBackToCli", () => {
-    test("returns true for the primary source", () => {
-      expect(shouldFallBackToCli(PRIMARY_CLAUDE_SERVICE)).toBe(true)
-    })
-
-    test("returns false for non-primary sources", () => {
-      expect(shouldFallBackToCli("Claude Code-credentials-abc123")).toBe(false)
-    })
   })
 })
 

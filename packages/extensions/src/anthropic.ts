@@ -802,13 +802,8 @@ const writeCredentialsFile = (
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
 
-/**
- * Default keychain service name and on-disk file path. Counsel K2
- * called out that hard-coding the primary service silently broke any
- * future multi-account UI consumer — every credential helper now takes
- * an explicit `source` so callers spell out which account they mean.
- */
-export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
+/** The keychain service Claude Code stores its primary account under. */
+const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 class ClaudeKeychainNotFoundError extends Schema.TaggedError<ClaudeKeychainNotFoundError>()(
   "ClaudeKeychainNotFoundError",
@@ -857,41 +852,13 @@ const spawnSecurity = (
     })
   })
 
-const readFromKeychain = (
-  source: string,
-): Effect.Effect<
+const readFromKeychain: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError | ClaudeKeychainNotFoundError,
   AnthropicPlatform
-> =>
-  spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
-    Effect.flatMap(decodeCredentials),
-  )
-
-/**
- * Pure policy: should a keychain miss for `source` fall back to the
- * on-disk credentials file? Only when we're not on darwin (no
- * keychain at all) or the request is for the primary account. For
- * non-primary sources on darwin, source means source — silently
- * returning the disk credential would leak the primary into a
- * multi-account picker.
- *
- * Exported so the policy can be unit-tested without spawning
- * `security`. Counsel  review surfaced this as a real defect.
- */
-export const shouldFallBackToCredentialsFile = (platform: string, source: string): boolean =>
-  platform !== "darwin" || source === PRIMARY_CLAUDE_SERVICE
-
-/**
- * Pure policy: when direct OAuth refresh fails, should we spawn the
- * `claude` CLI as a fallback? Only safe for the primary source — the
- * CLI persists to whichever account it considers active, so a
- * non-primary spawn could refresh the wrong account.
- *
- * Exported so the policy can be unit-tested without spawning a
- * subprocess. Counsel  review.
- */
-export const shouldFallBackToCli = (source: string): boolean => source === PRIMARY_CLAUDE_SERVICE
+> = spawnSecurity(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"]).pipe(
+  Effect.flatMap(decodeCredentials),
+)
 
 /**
  * Discover the macOS username stored on a keychain entry. The Claude
@@ -954,47 +921,27 @@ const writeKeychainEntry = (
 // ── oauth accounts ──────────────────────────────────────────────────────────
 
 /**
- * Read Claude Code credentials for `source` (the keychain service name).
- * Use `PRIMARY_CLAUDE_SERVICE` for the default account.
- *
- * On non-darwin (no keychain), `source` is ignored and the on-disk
- * `.credentials.json` is read instead — that file holds only one
- * credential, mirroring the CLI's behaviour.
- *
- * On darwin, the on-disk fallback is gated to PRIMARY only. A
- * non-primary keychain miss propagates `ProviderAuthError` rather
- * than silently returning the disk credential as if it belonged to
- * the requested source.
+ * Read Claude Code's primary-account credentials: the keychain on darwin,
+ * falling back to `~/.claude/.credentials.json` when the keychain has no
+ * entry; that file alone elsewhere, mirroring the CLI.
  */
-const readClaudeCodeCredentials = (
-  source: string,
-): Effect.Effect<
+const readClaudeCodeCredentials: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
-    if (platform.platform !== "darwin") {
-      return yield* readCredentialsFile
-    }
-    return yield* readFromKeychain(source).pipe(
-      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => {
-        if (shouldFallBackToCredentialsFile(platform.platform, source)) {
-          return readCredentialsFile
-        }
-        return Effect.fail(
-          new ProviderAuthError({
-            message: `No Claude credentials found in keychain for source: ${source}`,
-          }),
-        )
-      }),
-    )
-  })
+> = Effect.gen(function* () {
+  const platform = yield* AnthropicPlatform
+  if (platform.platform !== "darwin") {
+    return yield* readCredentialsFile
+  }
+  return yield* readFromKeychain.pipe(
+    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile),
+  )
+})
 
 /**
- * Persist refreshed credentials back to the keychain entry named by
- * `source` (or `~/.claude/.credentials.json` on non-darwin). Without
+ * Persist refreshed credentials back to the primary keychain entry
+ * (or `~/.claude/.credentials.json` on non-darwin). Without
  * this, every direct OAuth refresh is wasted — the next read pulls
  * the stale `accessToken` straight back from disk/keychain. The
  * `acct` field is preserved by reading the existing entry first.
@@ -1005,7 +952,6 @@ const readClaudeCodeCredentials = (
  */
 const writeBackCredentials = (
   creds: ClaudeCredentials,
-  source: string,
 ): Effect.Effect<
   void,
   ProviderAuthError,
@@ -1027,19 +973,27 @@ const writeBackCredentials = (
     // the public signature stays narrow — write-back callers use a
     // best-effort `catchEager` that doesn't need to know about the
     // internal not-found tag.
-    const raw = yield* spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
+    const raw = yield* spawnSecurity([
+      "find-generic-password",
+      "-s",
+      CLAUDE_KEYCHAIN_SERVICE,
+      "-w",
+    ]).pipe(
       Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
         Effect.fail(
           new ProviderAuthError({
-            message: `Cannot write back: no keychain entry for source: ${source}`,
+            message: `Cannot write back: no keychain entry for ${CLAUDE_KEYCHAIN_SERVICE}`,
           }),
         ),
       ),
     )
     const updated = updateCredentialBlob(raw, creds)
     if (Option.isNone(updated)) return
-    const accountName = Option.getOrElse(yield* getKeychainAccountName(source), () => source)
-    yield* writeKeychainEntry(source, accountName, updated.value)
+    const accountName = Option.getOrElse(
+      yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
+      () => CLAUDE_KEYCHAIN_SERVICE,
+    )
+    yield* writeKeychainEntry(CLAUDE_KEYCHAIN_SERVICE, accountName, updated.value)
   })
 
 // ── oauth refresh ───────────────────────────────────────────────────────────
@@ -1157,47 +1111,35 @@ const spawnClaudeCli = (): Effect.Effect<
  * here is best-effort; the in-memory creds are authoritative for this
  * turn.
  */
-const refreshClaudeCodeCredentials = (
-  source: string,
-): Effect.Effect<
+const refreshClaudeCodeCredentials: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const current = yield* readClaudeCodeCredentials(source).pipe(Effect.option)
-    if (Option.isSome(current) && current.value.refreshToken !== "") {
-      const refreshed = yield* refreshViaOAuth(current.value.refreshToken).pipe(Effect.option)
-      if (Option.isSome(refreshed)) {
-        // Best-effort write-back so subsequent processes pick up the
-        // new token. A failure here doesn't lose the refresh — the
-        // caller has it in memory.
-        yield* writeBackCredentials(refreshed.value, source).pipe(
-          Effect.catchEager((e: ProviderAuthError) =>
-            Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
-              Effect.annotateLogs({ error: String(e), source }),
-            ),
+> = Effect.gen(function* () {
+  const current = yield* readClaudeCodeCredentials.pipe(Effect.option)
+  if (Option.isSome(current) && current.value.refreshToken !== "") {
+    const refreshed = yield* refreshViaOAuth(current.value.refreshToken).pipe(Effect.option)
+    if (Option.isSome(refreshed)) {
+      // Best-effort write-back so subsequent processes pick up the
+      // new token. A failure here doesn't lose the refresh — the
+      // caller has it in memory.
+      yield* writeBackCredentials(refreshed.value).pipe(
+        Effect.catchEager((e: ProviderAuthError) =>
+          Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
+            Effect.annotateLogs({ error: String(e) }),
           ),
-        )
-        return refreshed.value
-      }
+        ),
+      )
+      return refreshed.value
     }
-    // Direct path failed — fall back to the CLI spawn (second attempt
-    // historically helps when the first invocation kicks a stale-token
-    // error). The CLI persists its own credentials to whichever
-    // account it considers active, so this fallback is ONLY safe for
-    // the primary source. For non-primary accounts a CLI spawn could
-    // refresh the wrong account; surface a typed failure instead so
-    // the picker can prompt the user to refresh that account
-    // explicitly.
-    if (!shouldFallBackToCli(source)) {
-      return yield* new ProviderAuthError({
-        message: `Direct OAuth refresh failed for ${source}; CLI fallback would target the active account, not this one. Refresh the account in Claude Code directly.`,
-      })
-    }
-    yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
-    return yield* readClaudeCodeCredentials(source)
-  })
+  }
+  // Direct path failed — fall back to the CLI spawn (second attempt
+  // historically helps when the first invocation kicks a stale-token
+  // error). The CLI refreshes its active account, which is the
+  // primary one read here.
+  yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
+  return yield* readClaudeCodeCredentials
+})
 
 // ── credential service ──────────────────────────────────────────────────────
 
@@ -1228,17 +1170,15 @@ type CredentialIO = Effect.Effect<
 
 /** IO the service depends on, lifted out so tests can drive it without spawning `security` or touching the keychain. */
 export interface AnthropicCredentialIO {
-  /** Read currently-stored creds for the primary source. */
+  /** Read the primary account's stored creds. */
   readonly read: CredentialIO
-  /** Refresh creds for the primary source via OAuth or CLI fallback. */
+  /** Refresh the primary account's creds via OAuth or CLI fallback. */
   readonly refresh: CredentialIO
 }
 
-// PRIMARY_CLAUDE_SERVICE is the only source wired here — the multi-account
-// picker UI doesn't exist yet. Spelled out so an audit-grep finds every site.
 const realIO: AnthropicCredentialIO = {
-  read: readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
-  refresh: refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
+  read: readClaudeCodeCredentials,
+  refresh: refreshClaudeCodeCredentials,
 }
 
 // ── Service tag ──
@@ -2392,17 +2332,14 @@ export const buildAnthropicModelDriver = (
     authorize: (ctx) =>
       Effect.gen(function* () {
         if (ctx.methodIndex !== 0) return Option.none()
-        // The Claude Code authorize flow targets the primary
-        // account by default. PRIMARY_CLAUDE_SERVICE is spelled
-        // out here so a future audit-grep finds every "default"
-        // site (the multi-account picker UI is the next consumer).
-        let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
+        // The Claude Code authorize flow reads the primary account.
+        let creds = yield* readClaudeCodeCredentials
         const now = yield* Clock.currentTimeMillis
         if (!freshEnoughForUse(creds, now)) {
           // Use the returned creds — re-reading keychain after refresh
           // would silently lose direct-OAuth tokens whenever write-back
           // failed.
-          creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
+          creds = yield* refreshClaudeCodeCredentials
         }
         // Persist keychain creds to Auth
         yield* ctx.persist({
