@@ -25,6 +25,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
+import { classifyBashCommand } from "./exec-tools.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -594,9 +595,8 @@ const validRegex = (pattern: Option.Option<string>): Effect.Effect<void, WakeErr
       }).pipe(Effect.asVoid),
   })
 
-const MonitorTool = tool({
+export const MonitorTool = tool({
   id: "monitor",
-  readonly: true,
   description:
     "Poll a shell command on an interval until it exits 0 (or its output matches `until`), then wake this branch with a message carrying the last output and your note. Use it for CI runs, deploys, ports, files, or URLs that change on their own.",
   promptSnippet: "Poll a command until it succeeds, then wake",
@@ -627,6 +627,17 @@ const MonitorTool = tool({
     )
     if (params.command.trim().length === 0) {
       return yield* new WakeError({ message: "command is empty" })
+    }
+    // The command runs on every check, so it passes the bash guardrail once, here.
+    const risk = classifyBashCommand(params.command)
+    if (risk.level !== "safe") {
+      const decision = yield* ctx.Interaction.approve({
+        text: `This monitor command is classified as ${risk.level}: ${risk.reason}\n\n\`${params.command}\`\n\nAllow it to run on every check?`,
+        metadata: { type: "bash-guardrail", level: risk.level },
+      })
+      if (!decision.approved) {
+        return yield* new WakeError({ message: `Command blocked: ${risk.reason}` })
+      }
     }
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.

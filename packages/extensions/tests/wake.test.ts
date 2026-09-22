@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import {
   Clock,
   DateTime,
@@ -36,6 +36,7 @@ import {
   CancelTool,
   dueAtOf,
   monitorMessage,
+  MonitorTool,
   nextDueAt,
   rearmPendingAlarms,
   WAKE_EXTENSION_ID,
@@ -672,6 +673,41 @@ const readFile = (home: string) =>
     const fs = yield* FileSystem.FileSystem
     return yield* fs.readFileString(`${home}/.gent/wakes/${branchId}.json`)
   }).pipe(Effect.provide(BunFileSystem.layer))
+
+describe("monitor guardrail", () => {
+  test("monitor runs shell commands, so it does not claim to be readonly", () => {
+    expect(MonitorTool.readonly).toBe(false)
+  })
+
+  it.scopedLive("a flagged command asks once; a denial stores no monitor", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-monitor-guard-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const asked = yield* Ref.make<ReadonlyArray<string>>([])
+      const base = contextWith(home, queued)
+      const ctx = {
+        ...base,
+        Interaction: {
+          ...base.Interaction,
+          approve: ({ text }: { readonly text: string }) =>
+            Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
+        },
+      }
+      const exit = yield* Effect.exit(
+        runToolWithCtx(MonitorTool, { command: "rm -rf build && ls build", note: "gone" }, ctx),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      const prompts = yield* Ref.get(asked)
+      expect(prompts.length).toBe(1)
+      expect(prompts[0]).toContain("rm -rf")
+      const fs = yield* FileSystem.FileSystem
+      expect(yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)).toBe(false)
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
+  )
+})
 
 describe("wake store", () => {
   it.scopedLive("an alarm is written to the branch file and removed once it fires", () =>
