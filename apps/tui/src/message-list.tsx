@@ -46,8 +46,9 @@ import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
-import { SessionMessageDetails, sessionMessageText, WakeDetails } from "@gent/extensions/client.js"
+import { SessionMessageDetails, sessionMessageBody, WakeDetails } from "@gent/extensions/client.js"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
+import { textWidth } from "./text-width-adapter"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
 
@@ -237,14 +238,20 @@ const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
 const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
 
 /** The sender line fits the id: an auto-named child carries its whole task in the name. */
-const SENDER_NAME_MAX_CHARS = 32
+const SENDER_NAME_MAX_COLUMNS = 32
 
+const graphemes = new Intl.Segmenter([], { granularity: "grapheme" })
+
+/** Cuts by terminal columns and whole graphemes, so a wide or combined character is never split. */
 const shortName = (name: string): string => {
   const flat = name.replace(/\s+/g, " ").trim()
-  return Option.liftPredicate(flat, (value) => value.length > SENDER_NAME_MAX_CHARS).pipe(
-    Option.map((value) => `${value.slice(0, SENDER_NAME_MAX_CHARS - 1).trimEnd()}…`),
-    Option.getOrElse(() => flat),
-  )
+  if (textWidth(flat) <= SENDER_NAME_MAX_COLUMNS) return flat
+  let kept = ""
+  for (const { segment } of graphemes.segment(flat)) {
+    if (textWidth(kept + segment) > SENDER_NAME_MAX_COLUMNS - 1) break
+    kept += segment
+  }
+  return `${kept.trimEnd()}…`
 }
 
 /** One sent message as the reader sees it: who wrote it, then the text. */
@@ -255,8 +262,8 @@ interface SessionMessageView {
 
 /**
  * The model reads the header `sessionMessageText` writes, then the text. The
- * row puts the sender in its own muted line and removes that exact header, so
- * a name or a body with blank lines in it stays whole.
+ * row puts the sender in its own muted line and `sessionMessageBody` removes
+ * the header, old rows included, so blank lines in a name or body stay whole.
  */
 const sessionMessageView = (
   { from }: SessionMessageDetails,
@@ -270,12 +277,10 @@ const sessionMessageView = (
     Option.map((value) => ` "${shortName(value)}"`),
     Option.getOrElse(() => ""),
   )
-  const header = sessionMessageText({ from, message: "" })
-  const body = Option.liftPredicate(content, (text) => text.startsWith(header)).pipe(
-    Option.map((text) => text.slice(header.length)),
-    Option.getOrElse(() => content),
-  )
-  return { sender: `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`, body }
+  return {
+    sender: `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`,
+    body: sessionMessageBody(from, content),
+  }
 }
 
 const PREVIEW_LINES = 20

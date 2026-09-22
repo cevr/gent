@@ -1025,6 +1025,46 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a child row stored before the status line still shows only its text", () =>
+    Effect.gen(function* () {
+      const from = {
+        sessionId: SessionId.make("01a0ca0cb3e7"),
+        name: "日本語のタスク名がとても長い子エージェントの名前です、さらに続く",
+        relation: "child",
+      } satisfies SessionMessageDetails["from"]
+      const sent: ListMessage = {
+        ...userMessage(
+          "interjection-message",
+          "sent-3",
+          // The header as it was written before the child status line existed.
+          `Message from your child "${from.name}" (session ${from.sessionId}):\n\nold question`,
+          "steer",
+        ),
+        pendingMode: absent,
+        metadata: {
+          customType: "session-message",
+          extensionId: "@gent/session-tools",
+          details: { from },
+        },
+      }
+      const shown = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <MessageList
+            items={[sent]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+            streaming={false}
+          />
+        )),
+      )
+      const frame = renderFrame(shown)
+      expect(frame).toContain("old question")
+      expect(frame).not.toContain("Message from your child")
+      // Wide characters count two columns: 15 of them fit before the ellipsis, and the id stays on the line.
+      expect(frame).toContain(`"${Array.from(from.name).slice(0, 15).join("")}…" · 01a0ca0c`)
+    }),
+  )
+
   it.live("keeps multiline user text visible in a narrow transcript", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [

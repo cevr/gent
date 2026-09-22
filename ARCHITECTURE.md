@@ -324,7 +324,9 @@ Shape:
   completion follows. A message from a child adds a line saying the child is
   still running and this is not its completion. The TUI draws the row as a
   muted sender line (`» from your parent "name" · <id>`, the name cut at 32
-  characters) over the text; full detail shows the header the model reads.
+  terminal columns on a grapheme) over the text; `sessionMessageBody` removes
+  the header, with or without the child line, so older rows render the same.
+  Full detail shows the header the model reads.
 - `Interject` steering never interrupts an open stream. The item is admitted to
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
