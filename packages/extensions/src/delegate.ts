@@ -379,6 +379,14 @@ const deliverCompletion = (
     return settled(entry, outcome, usage, text)
   })
 
+/**
+ * The child's first message names where the task came from. Without it a
+ * child reads a bare instruction after its system prompt and can take its
+ * own task for an injection.
+ */
+export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
+  `Task from your parent session ${parentSessionId}. Your final reply returns to the parent as your completion; ask it with session.send if you are blocked.\n\n${prompt}`
+
 /** The child's prompt as its one durable turn. A repeat with the same id is a no-op at the loop. */
 const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
   Effect.gen(function* () {
@@ -386,7 +394,7 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
     yield* ctx.Session.send({
       sessionId: entry.sessionId,
       branchId: entry.branchId,
-      content: entry.prompt,
+      content: childTaskText(ctx.sessionId, entry.prompt),
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       agentOverride: entry.agentName,
       interactive: false,
