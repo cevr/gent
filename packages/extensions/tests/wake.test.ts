@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Clock,
+  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -428,12 +429,29 @@ describe("wake.list", () => {
             "the turn answered",
           )
           expect(listed.length).toBe(1)
-          const pending = yield* Schema.decodeUnknownEffect(WakePending)(listed[0])
-          expect(pending.entries).toMatchObject([
-            { _tag: "alarm", note: "check CI", everySeconds: 600 },
+          // The model reads ISO times, the same format `wake` returned for this alarm.
+          const listing = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              now: Schema.String,
+              entries: Schema.Array(
+                Schema.TaggedStruct("alarm", {
+                  dueAt: Schema.String,
+                  everySeconds: Schema.Finite,
+                  mode: Schema.String,
+                  note: Schema.String,
+                }),
+              ),
+            }),
+          )(listed[0])
+          expect(listing.entries).toMatchObject([
+            { _tag: "alarm", note: "check CI", everySeconds: 600, mode: "wake" },
           ])
-          const [alarm] = pending.entries
-          expect(alarm?._tag === "alarm" && alarm.dueAt > pending.now).toBe(true)
+          const millis = (iso: string) =>
+            Option.getOrElse(Option.map(DateTime.make(iso), DateTime.toEpochMillis), () => NaN)
+          const aheadSeconds =
+            (millis(listing.entries[0]?.dueAt ?? "") - millis(listing.now)) / 1000
+          expect(aheadSeconds).toBeGreaterThan(3500)
+          expect(aheadSeconds).toBeLessThanOrEqual(3600)
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,

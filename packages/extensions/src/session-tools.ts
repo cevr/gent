@@ -256,23 +256,61 @@ const inverse = (relation: "parent" | "child" | "session"): "parent" | "child" |
 }
 
 /** The header the model reads: who wrote it, and what they are to the reader. */
-export const sessionMessageText = (input: {
-  readonly from: {
-    readonly sessionId: SessionId
-    readonly name?: string
-    readonly relation: string
-  }
-  readonly message: string
-}): string => {
-  const name = Option.fromUndefinedOr(input.from.name).pipe(
+type SessionMessageSender = {
+  readonly sessionId: SessionId
+  readonly name?: string
+  readonly relation: string
+}
+
+/** The first header line: who wrote it, and what they are to the reader. */
+const senderLine = (from: SessionMessageSender): string => {
+  const name = Option.fromUndefinedOr(from.name).pipe(
     Option.map((value) => ` "${value}"`),
     Option.getOrElse(() => ""),
   )
-  const who = Option.liftPredicate(input.from.relation, (relation) => relation !== "session").pipe(
+  const who = Option.liftPredicate(from.relation, (relation) => relation !== "session").pipe(
     Option.map((relation) => `your ${relation}`),
     Option.getOrElse(() => "another session"),
   )
-  return `Message from ${who}${name} (session ${input.from.sessionId}):\n\n${input.message}`
+  return `Message from ${who}${name} (session ${from.sessionId}):`
+}
+
+/** A child's message arrives mid-turn; its completion is a separate message. */
+const CHILD_STATUS_LINE =
+  "Your child is still running. This is not its completion; that arrives as a separate message."
+
+export const sessionMessageText = (input: {
+  readonly from: SessionMessageSender
+  readonly message: string
+}): string => {
+  const status = Option.liftPredicate(input.from.relation, (relation) => relation === "child").pipe(
+    Option.map(() => `\n${CHILD_STATUS_LINE}`),
+    Option.getOrElse(() => ""),
+  )
+  return `${senderLine(input.from)}${status}\n\n${input.message}`
+}
+
+/**
+ * The text of a stored message without its header. Rows written before the
+ * child status line existed have none, so the line is removed only when it
+ * is there; a row whose header does not match is returned whole.
+ */
+export const sessionMessageBody = (from: SessionMessageSender, content: string): string => {
+  const afterSender = (text: string) =>
+    Option.liftPredicate(text, (value) => value.startsWith(senderLine(from))).pipe(
+      Option.map((value) => value.slice(senderLine(from).length)),
+    )
+  const afterStatus = (text: string) =>
+    Option.liftPredicate(text, (value) => value.startsWith(`\n${CHILD_STATUS_LINE}`)).pipe(
+      Option.map((value) => value.slice(CHILD_STATUS_LINE.length + 1)),
+      Option.getOrElse(() => text),
+    )
+  return afterSender(content).pipe(
+    Option.map(afterStatus),
+    Option.filter((rest) => rest.startsWith("\n\n")),
+    Option.map((rest) => rest.slice(2)),
+    Option.getOrElse(() => content),
+  )
 }
 
 const SendSessionTool = tool({

@@ -255,9 +255,9 @@ describe("a child's completion", () => {
             private: false,
             submitted: true,
             delivered: true,
-            completed: { streamFailed: false },
             preview: "pong",
           })
+          expect(entry?.completed).toEqual({})
           expect(entry?.waiter).toBeUndefined()
         }).pipe(Effect.timeout("10 seconds")),
       ),
@@ -440,9 +440,10 @@ describe("a start nobody waits for", () => {
             private: false,
             submitted: true,
             delivered: true,
-            completed: { interrupted: false, streamFailed: false, unanswered: false },
             preview: "pong",
           })
+          // A clean turn raised no flag; the shape is the same whichever writer recorded it.
+          expect(entry?.completed).toEqual({})
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -780,6 +781,7 @@ describe("session.send", () => {
           from: { sessionId, relation: "parent" },
         })
         expect(messageTexts([received!])[0]).toContain("Message from your parent")
+        expect(messageTexts([received!])[0]).not.toContain("not its completion")
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -822,6 +824,8 @@ describe("session.send", () => {
         const [asked] = sessionMessages(snapshot.messages)
         expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
         expect(messageTexts([asked!])[0]).toContain("Message from your child")
+        // A question mid-turn must not read as the child being done.
+        expect(messageTexts([asked!])[0]).toContain("This is not its completion")
         // The question was a turn of its own: the parent's last user text before the answer.
         const texts = messageTexts(snapshot.messages)
         expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(
