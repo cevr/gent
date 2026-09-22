@@ -693,6 +693,58 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
+  it.live("opening the palette between two escapes does not quit", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          client,
+          runtime: createMockRuntime(),
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("ready ·"), "session view"),
+      )
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      // One escape arms the quit; the palette keybind disarms it, and an escape closes the palette.
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
+      yield* Effect.sleep("100 millis")
+      setup.mockInput.pressKey("p", { ctrl: true })
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("Commands"), "palette"),
+      )
+      setup.mockInput.pressEscape()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => !frame.includes("Commands"), "palette closed"),
+      )
+      // The quit is disarmed, so this escape only arms it again.
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow the escape must be parsed and handled before the negative assertion
+      yield* Effect.sleep("100 millis")
+      expect(shutdowns).toBe(0)
+      // A second escape in the window quits.
+      setup.mockInput.pressEscape()
+      yield* Effect.promise(() => waitForRenderedFrame(setup, () => shutdowns > 0, "quit"))
+      setup.renderer.destroy = destroy
+      expect(shutdowns).toBe(1)
+      setup.renderer.destroy()
+    }),
+  )
   it.live("escape in the boot branch picker quits, because no branch was chosen", () =>
     Effect.gen(function* () {
       // The picker is where a resumed multi-branch session starts. With no

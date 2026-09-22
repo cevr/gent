@@ -2391,37 +2391,23 @@ export function createSessionController(props: {
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
-  const ESC_DOUBLE_TAP_MS = 1_000
-  let lastEscTime = 0
-  const handleEsc = (): boolean => {
-    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-    if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
-      exit()
-      return true
-    }
-    lastEscTime = now
-    return false
+  // Escape twice within a second quits. The first press arms the quit (and
+  // clears a draft); a keybind, an interrupt, or any other use of escape
+  // disarms it.
+  const QUIT_WINDOW_MS = 1_000
+  let quitArmedAt = Option.none<number>()
+  const disarmQuit = () => {
+    quitArmedAt = Option.none()
   }
-  const QUIT_CHAIN_WINDOW_MS = 1_000
-  let quitArmed: Option.Option<{ id: string; at: number }> = Option.none()
-  const quitChain = {
-    trigger: (id: string, actions?: { first?: () => void; second: () => void }) => {
-      const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-      const isSecond = Option.exists(
-        quitArmed,
-        (armed) => armed.id === id && now - armed.at < QUIT_CHAIN_WINDOW_MS,
-      )
-      if (isSecond) {
-        quitArmed = Option.none()
-        actions?.second()
-        return
-      }
-      quitArmed = Option.some({ id, at: now })
-      actions?.first?.()
-    },
-    reset: () => {
-      quitArmed = Option.none()
-    },
+  const pressQuit = (first: () => void) => {
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+    if (Option.exists(quitArmedAt, (at) => now - at < QUIT_WINDOW_MS)) {
+      disarmQuit()
+      exit()
+      return
+    }
+    quitArmedAt = Option.some(now)
+    first()
   }
   const history = usePromptHistory()
   const frecency = useAutocompleteFrecency()
@@ -2859,7 +2845,7 @@ export function createSessionController(props: {
   }
 
   const handleInterrupt = () => {
-    quitChain.reset()
+    disarmQuit()
     if (uiState().overlay._tag !== "none") {
       exit()
       return
@@ -2880,60 +2866,50 @@ export function createSessionController(props: {
   }
 
   useScopedKeyboard((event) => {
-    if (command.handleKeybind(event, ext.commands())) return true
+    // A keybind between two escapes is a different gesture, so it disarms the quit.
+    if (command.handleKeybind(event, ext.commands())) {
+      disarmQuit()
+      return true
+    }
     if (event.ctrl === true && event.name === "c") {
       handleInterrupt()
       return true
     }
     if (uiState().overlay._tag !== "none") return false
 
-    const clearComposer = () => {
-      onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
-    }
-
-    const handleQuitKey = (chainId: string) => {
-      if (interactionState().draft.length > 0) {
-        quitChain.trigger(chainId, { first: clearComposer, second: exit })
-        return
-      }
-      quitChain.trigger(chainId, {
-        first: () => {
-          handleEsc()
-        },
-        second: exit,
-      })
-    }
-
     if (event.name === "escape") {
       if (uiState().transcriptExpanded && !command.paletteOpen()) {
         dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
-        quitChain.reset()
+        disarmQuit()
         return true
       }
       if (command.paletteOpen()) {
         command.closePalette()
-        quitChain.reset()
+        disarmQuit()
         return true
       }
       if (uiState().disclosure !== "collapsed") {
         dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
-        quitChain.reset()
+        disarmQuit()
         return true
       }
 
       if (client.isStreaming()) {
         client.steer(SteerCommandInput.cases.Cancel.make({}))
-        quitChain.reset()
+        disarmQuit()
         return true
       }
 
-      handleQuitKey("escape")
+      pressQuit(() => {
+        if (interactionState().draft.length === 0) return
+        onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
+      })
       return true
     }
 
     if (event.ctrl === true && event.name === "r") {
       promptSearch.open()
-      quitChain.reset()
+      disarmQuit()
       return true
     }
 

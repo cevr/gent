@@ -715,7 +715,7 @@ describe("ClientProvider contract", () => {
       const unsubscribe = client.onSessionEvent(() => {
         seen = seen + 1
       })
-      expect(client.connectionGeneration()).toBe(0)
+      expect(client.isReconnecting()).toBe(false)
       expect(client.isActive()).toBe(false)
       expect(client.agentStatus()._tag).toBe("Idle")
       expect(client.isStreaming()).toBe(false)

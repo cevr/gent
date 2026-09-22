@@ -768,7 +768,6 @@ interface ClientTransportValue {
   connectionState: () => ConnectionState | undefined
   waitForTransportReady: Effect.Effect<void>
   isReconnecting: () => boolean
-  connectionGeneration: () => number
   // eslint-disable-next-line effect/noNullish -- UI transport exposes null when no issue is present.
   connectionIssue: () => string | null
   extensionHealth: () => ExtensionHealthSnapshot
@@ -1352,13 +1351,6 @@ export function ClientProvider(props: ClientProviderProps) {
     waitForTransportReady: runtime.lifecycle.waitForReady,
     isReconnecting,
     extensionHealth,
-    connectionGeneration: () => {
-      const state = connectionState()
-      if (Option.isNone(state)) return 0
-      if (state.value._tag === "Connected") return state.value.generation
-      if (state.value._tag === "Reconnecting") return state.value.generation
-      return 0
-    },
     connectionIssue: connectionIssueValue,
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,

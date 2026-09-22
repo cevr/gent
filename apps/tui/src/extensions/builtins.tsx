@@ -623,24 +623,19 @@ export function ConnectionWidget() {
     ...ext.failures().map((failure) => failure.id),
   ]
   const hasFailedExtensions = () => failedExtensions().length > 0
+  // Reconnecting and the restart count belong to the top-left border label;
+  // this widget draws what the label cannot: issues and failed extensions.
   const visible = () =>
-    client.isReconnecting() ||
-    Option.isSome(connectionIssue()) ||
-    Option.isSome(disconnectedReason()) ||
-    hasFailedExtensions()
+    Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()
   const accent = () => {
-    if (client.isReconnecting()) return theme.warning
     if (hasFailedExtensions()) return theme.warning
     return theme.error
   }
   const subtitle = () => {
-    if (client.isReconnecting()) return "worker reconnect in progress"
     if (hasFailedExtensions()) return "extension activation degraded"
     if (Option.isSome(disconnectedReason())) return "runtime unavailable"
     return Option.getOrElse(connectionIssue(), () => "")
   }
-  const restartCount = () => client.connectionGeneration()
-
   return (
     <Show when={visible()}>
       <box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
@@ -649,16 +644,6 @@ export function ConnectionWidget() {
           <span style={{ fg: theme.textMuted }}> · {subtitle()}</span>
         </text>
         <box flexDirection="column" paddingLeft={2}>
-          <Show when={client.isReconnecting()}>
-            <text>
-              <span style={{ fg: theme.text }}>reconnecting to worker…</span>
-            </text>
-          </Show>
-          <Show when={restartCount() > 0}>
-            <text>
-              <span style={{ fg: theme.textMuted }}>restart count: {restartCount()}</span>
-            </text>
-          </Show>
           <Show when={Option.isSome(connectionIssue())}>
             <text>
               <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
