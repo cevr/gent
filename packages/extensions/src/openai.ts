@@ -33,6 +33,7 @@ import {
   DEFAULT_RETRY_POLICY,
   defineExtension,
   ExtensionHost,
+  isRecord,
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
@@ -1003,29 +1004,17 @@ const build = (
 // ── Codex routing ──
 
 /**
- * The ChatGPT backend endpoint Codex requests target. The SDK's
- * baseline `prependUrl("https://api.openai.com/v1")` produces e.g.
- * `https://api.openai.com/v1/chat/completions` — we rewrite the entire
- * URL to the Codex endpoint when the path matches a Codex-eligible
- * shape (see `isCodexBoundPath`).
+ * The ChatGPT backend endpoint Codex requests target. A request whose
+ * path is a Responses path (see `isCodexBoundPath`) is sent here whole.
  */
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 
 /**
- * Exact path equality: only `/v1/chat/completions` and `/v1/responses`
- * qualify. Substring matching would also match e.g.
- * `/v1/chat/completions/foo` if the SDK ever added a sub-resource;
- * lock the surface to the exact paths the SDK emits today.
- *
- * The OpenAI-compat SDK only POSTs `/chat/completions` today, but
- * `/responses` is reserved for when the upstream switches to the
- * responses-API shape. Both forward to the same Codex endpoint.
+ * Exact path equality: only `/v1/responses` and `/responses` qualify, so a
+ * sub-resource such as `/v1/responses/foo` is left alone.
  */
 const isCodexBoundPath = (pathname: string): boolean =>
-  pathname === "/v1/chat/completions" ||
-  pathname === "/v1/responses" ||
-  pathname === "/chat/completions" ||
-  pathname === "/responses"
+  pathname === "/v1/responses" || pathname === "/responses"
 
 const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
 
@@ -1062,14 +1051,7 @@ const ensureBetaToken = (existing: Option.Option<string>, requiredToken: string)
  *   - Leading `system`/`developer` items move into top-level `instructions`.
  *     Later updates stay in chronological order as developer messages.
  *   - `store: false` to prevent server-side conversation persistence
- *
- * The OAuth path uses the Responses SDK, but the transformer also normalizes
- * legacy chat-completions `messages` bodies so old tests and future adapter
- * drift fail closed at this boundary instead of hitting Codex with the wrong
- * shape.
  */
-const isRecord = (value: unknown): value is Record<string, unknown> => Predicate.isObject(value)
-
 const isInstructionItem = (
   item: unknown,
 ): item is { role: "system" | "developer"; content?: unknown } => {
@@ -1117,66 +1099,12 @@ const splitInstructions = (
   return Option.some({ instructions, input: filteredInput })
 }
 
-const convertChatContent = (content: unknown) => {
-  if (Predicate.isString(content)) return [{ type: "input_text", text: content }]
-  if (!Array.isArray(content)) return content
-  return content.map((part) => {
-    if (!isRecord(part)) return part
-    if (part["type"] === "text" && Predicate.isString(part["text"])) {
-      return { ...part, type: "input_text" }
-    }
-    if (part["type"] === "image_url") {
-      const image = part["image_url"]
-      if (Predicate.isString(image)) return { type: "input_image", image_url: image }
-      if (isRecord(image) && Predicate.isString(image["url"])) {
-        return { type: "input_image", image_url: image["url"] }
-      }
-    }
-    return part
-  })
-}
-
-const chatMessagesToResponsesInput = (
-  messages: unknown,
-): Option.Option<{ instructions: string[]; input: unknown[] }> => {
-  if (!Array.isArray(messages)) return Option.none()
-  const input: unknown[] = []
-
-  for (const message of messages) {
-    if (!isRecord(message)) continue
-    const role = message["role"]
-    if (role === "system" || role === "developer") {
-      input.push({ role, content: convertChatContent(message["content"]) })
-      continue
-    }
-    if (role === "user") {
-      input.push({ role: "user", content: convertChatContent(message["content"]) })
-      continue
-    }
-    if (role === "assistant") {
-      const text = textFromContent(message["content"])
-      if (Option.isSome(text)) {
-        input.push({
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: text.value, annotations: [] }],
-          status: "completed",
-        })
-        continue
-      }
-    }
-    input.push(message)
-  }
-
-  return splitInstructions(input)
-}
-
 /**
  * Try to read the request body as a JSON object. Returns `None`
  * when the body isn't a `Uint8Array` HttpBody (the only shape the SDK
  * emits via `bodyJsonUnsafe`) or when JSON parsing fails. Both cases
  * cause the URL/header rewrite to still apply but the body to pass
- * through unchanged — Codex tolerates the chat-completions shape today.
+ * through unchanged.
  */
 const CodexBodyJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 const decodeCodexBody = Schema.decodeUnknownOption(CodexBodyJson)
@@ -1192,13 +1120,10 @@ const rewriteCodexBody = (
 ): HttpClientRequest.HttpClientRequest => {
   const parsed = tryReadJsonBody(req.body)
   if (Option.isNone(parsed)) return req
-  const split = splitInstructions(parsed.value["input"]).pipe(
-    Option.orElse(() => chatMessagesToResponsesInput(parsed.value["messages"])),
-  )
+  const split = splitInstructions(parsed.value["input"])
   if (Option.isNone(split)) return req
   const { instructions, input } = split.value
   const next = { ...parsed.value }
-  delete next["messages"]
   // The Codex backend rejects sampling limits ("Unsupported parameter:
   // max_output_tokens"); reasoning models there also take no temperature.
   delete next["max_output_tokens"]
@@ -1266,7 +1191,7 @@ const buildOauthHeaders = (
  *   2. Auth headers — Bearer + ChatGPT-Account-Id +
  *      originator/user-agent defaults
  *   3. If the request URL matches a Codex-eligible path
- *      (`/v1/chat/completions` or `/v1/responses`):
+ *      (`/v1/responses` or `/responses`):
  *        a. Ensure `OpenAI-Beta` carries `responses=experimental`,
  *           merged with any upstream tokens
  *        b. Rewrite body shape if it carries an `input` array
