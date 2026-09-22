@@ -107,7 +107,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -172,7 +172,7 @@ describe("tool execution", () => {
         registryLayer,
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -279,7 +279,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -329,7 +329,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -374,7 +374,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -491,7 +491,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -553,7 +553,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -629,7 +629,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -703,7 +703,7 @@ describe("tool execution", () => {
         ),
         eventPublisherLayer,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)

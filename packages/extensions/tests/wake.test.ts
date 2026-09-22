@@ -261,7 +261,7 @@ describe("wake", () => {
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home, platform: "darwin" })],
+            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
           })
           const fs = yield* FileSystem.FileSystem
           yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })

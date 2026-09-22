@@ -116,7 +116,6 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import {
   buildResourceLayer,
   type CurrentExtensionHostContext,
-  ExtensionHostContextProvider,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
@@ -124,7 +123,7 @@ import {
   SessionProfileCache,
   type SessionProfileCacheService,
 } from "./extension-host.js"
-import type { ConfigService } from "./config.js"
+import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -1339,6 +1338,7 @@ const makeAgentLoopBehavior = (
   | ModelRegistry
   | ChildProcessSpawner
   | GentPlatform
+  | RuntimeEnvironment
   | FileSystem.FileSystem
   | Path.Path
 > =>
@@ -1391,7 +1391,6 @@ const makeAgentLoopBehavior = (
       target.sessionId === sessionId && target.branchId === branchId
 
     const hostProvider = yield* makeExtensionHostContextProvider({
-      extensionRegistry,
       host,
       sessionControl: {
         queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> => {
@@ -1413,8 +1412,9 @@ const makeAgentLoopBehavior = (
         sessionId,
         branchId,
         profileCache,
+        hostProvider,
         defaults: { baseSections },
-      }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),
+      }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
     )
 
     const loopScope = yield* Effect.scope

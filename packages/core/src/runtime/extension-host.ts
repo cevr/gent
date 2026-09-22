@@ -98,7 +98,6 @@ import {
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
   RuntimeEnvironment,
-  type RuntimeEnvironmentApi,
   type UserConfig,
 } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
@@ -2032,7 +2031,6 @@ interface ExtensionSessionControlService {
 const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
 
 interface ExtensionHostContextInput {
-  readonly extensionRegistry: ExtensionRegistryService
   /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
   readonly host: ExtensionHostPlatform
   /** The loop's follow-up queue. Absent outside a loop. */
@@ -2046,15 +2044,10 @@ interface MakeExtensionHostContextRunInfo {
   readonly sessionCwd?: string
 }
 
-interface ExtensionHostContextProviderService {
-  readonly defaultExtensionRegistry: ExtensionRegistryService
+/** Builds the `ExtensionHostContext` for one run of one branch. */
+interface ExtensionHostContextProvider {
   readonly forRun: (runInfo: MakeExtensionHostContextRunInfo) => ExtensionHostContext
 }
-
-export class ExtensionHostContextProvider extends Context.Service<
-  ExtensionHostContextProvider,
-  ExtensionHostContextProviderService
->()("@gent/core/src/runtime/extension-host/ExtensionHostContextProvider") {}
 
 /** Runs `use` against the service, or dies naming the absent one. */
 type Facet<S> = <A, E, R>(use: (service: S) => Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -2084,16 +2077,11 @@ const mapInteraction = <A, E>(
     }),
   )
 
-const unavailablePlatform: RuntimeEnvironmentApi = { cwd: "", home: "", platform: "unknown" }
-
 export const makeExtensionHostContextProvider = (
   input: ExtensionHostContextInput,
-): Effect.Effect<ExtensionHostContextProviderService> =>
+): Effect.Effect<ExtensionHostContextProvider, never, RuntimeEnvironment> =>
   Effect.gen(function* () {
-    const platform = Option.getOrElse(
-      yield* Effect.serviceOption(RuntimeEnvironment),
-      () => unavailablePlatform,
-    )
+    const environment = yield* RuntimeEnvironment
     const host = input.host
     const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
     const approval = yield* facet(ApprovalService, "ApprovalService")
@@ -2226,8 +2214,8 @@ export const makeExtensionHostContextProvider = (
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
-      cwd: runInfo.sessionCwd ?? platform.cwd,
-      home: platform.home,
+      cwd: runInfo.sessionCwd ?? environment.cwd,
+      home: environment.home,
       host,
       Process,
       Files,
@@ -2284,7 +2272,7 @@ export const makeExtensionHostContextProvider = (
           mutations((service) =>
             service.createSession({
               name: params.name,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
+              cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               historyBranchId: params.historyBranchId,
@@ -2445,7 +2433,7 @@ export const makeExtensionHostContextProvider = (
       },
     })
 
-    return { defaultExtensionRegistry: input.extensionRegistry, forRun }
+    return { forRun }
   })
 
 // ── session-runtime-context ─────────────────────────────────────────────────
@@ -2463,18 +2451,20 @@ interface ExistingSessionBranch {
 
 /**
  * Resolve the turn profile for one branch: the stored session cwd selects a
- * profile from the cache; without a session or a cache, the host defaults
- * apply. A storage lookup failure falls back to the defaults as well.
+ * profile from the cache; without a session or a cache, the launch registry
+ * and the host defaults apply. A storage lookup failure falls back to them as well.
  */
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly profileCache?: SessionProfileCacheService
+  readonly hostProvider: ExtensionHostContextProvider
   readonly defaults: TurnProfileDefaults
-}): Effect.Effect<AgentLoopTurnProfile, never, ExtensionHostContextProvider | SessionStorage> =>
+}): Effect.Effect<AgentLoopTurnProfile, never, ExtensionRegistry | SessionStorage> =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
-    const hostProvider = yield* ExtensionHostContextProvider
+    const launchRegistry = yield* ExtensionRegistry
+    const hostProvider = params.hostProvider
     const sessionCwd = yield* sessionStorage.getSession(params.sessionId).pipe(
       Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
       Effect.orElseSucceed(() => Option.none<string>()),
@@ -2493,7 +2483,7 @@ export const resolveTurnProfile = (params: {
     )
     if (Option.isNone(profile)) {
       return {
-        turnExtensionRegistry: hostProvider.defaultExtensionRegistry,
+        turnExtensionRegistry: launchRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
       }

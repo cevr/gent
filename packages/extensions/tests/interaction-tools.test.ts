@@ -304,7 +304,7 @@ describe("InteractionToolsExtension via model turn", () => {
             providerLayer,
             durableApproval: true,
             cwd,
-            extraLayers: [RuntimeEnvironment.Live({ cwd, home: cwd, platform: "test" })],
+            extraLayers: [RuntimeEnvironment.Live({ cwd, home: cwd })],
           })
           const interaction = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),

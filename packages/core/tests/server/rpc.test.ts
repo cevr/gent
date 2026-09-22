@@ -454,7 +454,6 @@ describe("auth.listProviders", () => {
           const runtimeEnvironmentLive = RuntimeEnvironment.Live({
             cwd: launch,
             home,
-            platform: "darwin",
           })
           const configServiceLive = ConfigService.Live.pipe(
             Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),

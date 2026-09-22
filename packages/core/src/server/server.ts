@@ -1609,7 +1609,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
-    platform: config.platform,
   })
 
   const storageLive = makeStorageLayer(config)

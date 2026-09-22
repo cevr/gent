@@ -1606,7 +1606,6 @@ const currentHostParams = Effect.gen(function* () {
   const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
   const hostProvider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: profile.registryService,
   })
   const turnProfile = {
     turnGenerationId: profile.generationId,
@@ -3023,13 +3022,11 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }) {
-  const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
   // Outside a loop the facade has no session control, so the cancellation the
   // tool steers would die. The runtime is the same door the loop opens.
   const runtime = yield* SessionRuntime
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: profile.registryService,
     sessionControl: {
       queueFollowUp: (input) => runtime.queueFollowUp(input),
       dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
@@ -3271,7 +3268,6 @@ it.scopedLive(
           if (state === "waiting") {
             const host = yield* makeExtensionHostContextProvider({
               host: testHostFacts().host,
-              extensionRegistry: profile.registryService,
             })
             const selected = yield* captureCurrentToolBinding("approve")
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")

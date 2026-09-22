@@ -50,7 +50,6 @@ import {
   CurrentExtensionHostContext,
   type DiscoveredExtension,
   discoverExtensions,
-  ExtensionHostContextProvider,
   ExtensionRegistry,
   listModelCatalog,
   makeExtensionHostContextProvider,
@@ -159,15 +158,12 @@ const sessionId = SessionId.make("ambient-host-session")
 const branchId = BranchId.make("ambient-host-branch")
 const approvalRequest = { text: "Approve?", metadata: {} }
 
-const resolved = resolveExtensions([])
-
 const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: { getResolved: () => resolved },
   })
   return provider.forRun({ sessionId, branchId })
-})
+}).pipe(Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" })))
 
 describe("ambient extension host context", () => {
   it.live("assembles with no host services in scope", () =>
@@ -347,7 +343,6 @@ const makeCacheLayer = (params: {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: params.cwd,
     home: params.home,
-    platform: "darwin",
   })
   const configServiceLive = ConfigService.Live.pipe(
     Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
@@ -592,7 +587,6 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLive = RuntimeEnvironment.Live({
         cwd: launch,
         home,
-        platform: "darwin",
       })
       const configServiceLive = ConfigService.Live.pipe(
         Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
@@ -620,7 +614,6 @@ describe("resolveTurnProfile", () => {
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
-        const extensionRegistry = yield* ExtensionRegistry
         const profileCache = yield* SessionProfileCache
         const now = dateFromMillis(1_767_225_600_000)
         yield* sessionStorage.createSession(
@@ -633,14 +626,14 @@ describe("resolveTurnProfile", () => {
         )
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
           profileCache,
+          hostProvider,
           defaults: { baseSections: [] },
-        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
+        })
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer), Effect.scoped)
@@ -651,7 +644,6 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
-        platform: "test",
       })
       const defaults: TurnProfileDefaults = {
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
@@ -662,16 +654,15 @@ describe("resolveTurnProfile", () => {
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
-        const extensionRegistry = yield* ExtensionRegistry
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
+          hostProvider,
           defaults,
-        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
+        })
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/runtime-context-default")
         expect(resolved.turnBaseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
@@ -685,7 +676,6 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-fail",
         home: "/tmp/runtime-context-home",
-        platform: "test",
       })
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
@@ -694,24 +684,20 @@ describe("resolveTurnProfile", () => {
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
-        const extensionRegistry = yield* ExtensionRegistry
         const failingSessionStorage: SessionStorageService = {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const exit = yield* Effect.exit(
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
+            hostProvider,
             defaults: { baseSections: [] },
-          }).pipe(
-            Effect.provideService(ExtensionHostContextProvider, hostProvider),
-            Effect.provideService(SessionStorage, failingSessionStorage),
-          ),
+          }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
         )
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
@@ -742,7 +728,6 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
-        platform: "test",
       })
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
@@ -774,14 +759,14 @@ describe("resolveTurnProfile", () => {
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
           profileCache: fakeProfileCache,
+          hostProvider,
           defaults: { baseSections: [] },
-        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
+        })
         const drivers = resolved.turnExtensionRegistry.getResolved().externalDrivers
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
         expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
@@ -2136,7 +2121,6 @@ describe("runtime slots", () => {
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
-const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
 
 describe("host facet survivors after C9.5 prune", () => {
   it.live("ctx.Session.listBranches returns branches for the current session", () =>
@@ -2157,16 +2141,18 @@ describe("host facet survivors after C9.5 prune", () => {
       )
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
-        extensionRegistry: {
-          getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
-        },
       })
       const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID })
       const listed = yield* ctx.Session.listBranches
       expect(listed).toHaveLength(1)
       expect(listed[0]!.id).toBe(BRANCH_ID)
     }).pipe(
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
+      Effect.provide(
+        Layer.merge(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ),
+      ),
     ),
   )
 })
@@ -2180,9 +2166,6 @@ describe("test Files facet path parity", () => {
     Effect.gen(function* () {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
-        extensionRegistry: {
-          getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
-        },
       })
       const production = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID }).Files
       const stub = testExtensionFiles()
@@ -2206,6 +2189,7 @@ describe("test Files facet path parity", () => {
         Layer.mergeAll(
           SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           Path.layer,
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ),
       ),
     ),
@@ -3639,7 +3623,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     ExtensionRegistry.fromResolved(resolvedExtensions),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),

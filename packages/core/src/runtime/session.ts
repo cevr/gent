@@ -78,7 +78,7 @@ import {
 import type { ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./tools.js"
-import type { ConfigService } from "./config.js"
+import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 // ── event-store-live ────────────────────────────────────────────────────────
@@ -309,6 +309,7 @@ type SessionRuntimeLayerRequirements =
   | ExtensionRegistry
   | ModelRegistry
   | GentPlatform
+  | RuntimeEnvironment
   | SessionStorage
   | SessionOperationStorage
   | MessageStorage

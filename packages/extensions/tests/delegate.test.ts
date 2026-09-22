@@ -59,7 +59,7 @@ const harnessWithHome = (
     const harness = yield* createRpcHarness({
       ...e2ePreset,
       providerLayer,
-      extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home, platform: "darwin" })],
+      extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
       ...Record.filter(
         {
           configServiceLayer: Option.map(

@@ -369,6 +369,26 @@ const persistAuthTo =
       ),
     )
 
+/**
+ * A stored credential as a driver sees it. An OAuth credential carries a
+ * `persist` that writes a refreshed token back to the store.
+ */
+const toProviderAuthInfo = (
+  authStore: AuthService,
+  providerId: string,
+  info: AuthInfo,
+): ProviderAuthInfo => {
+  if (info.type === "api") return { type: "api", key: info.key }
+  return {
+    type: "oauth",
+    access: info.access,
+    refresh: info.refresh,
+    expires: info.expires,
+    accountId: info.accountId,
+    persist: (updated) => persistAuthTo(authStore, providerId)({ type: "oauth", ...updated }),
+  }
+}
+
 interface ProviderAuthService {
   readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
   readonly authorize: (
@@ -573,19 +593,9 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     ),
     Effect.map(Option.fromUndefinedOr),
   )
-  let authParam: Option.Option<ProviderAuthInfo> = Option.none()
-  if (Option.isSome(authInfo) && authInfo.value.type === "api") {
-    authParam = Option.some({ type: "api", key: authInfo.value.key })
-  } else if (Option.isSome(authInfo) && authInfo.value.type === "oauth") {
-    authParam = Option.some<ProviderAuthInfo>({
-      type: "oauth",
-      access: authInfo.value.access,
-      refresh: authInfo.value.refresh,
-      expires: authInfo.value.expires,
-      accountId: authInfo.value.accountId,
-      persist: (updated) => persistAuthTo(authStore, providerName)({ type: "oauth", ...updated }),
-    })
-  }
+  const authParam = Option.map(authInfo, (info) =>
+    toProviderAuthInfo(authStore, providerName, info),
+  )
 
   return yield* Effect.suspend(() =>
     extensionProvider.resolveModel(modelName, Option.getOrUndefined(authParam), request.hints),
@@ -663,18 +673,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       ): Effect.Effect<Option.Option<ProviderAuthInfo>, ProviderAuthError> =>
         authStore.get(providerId).pipe(
           Effect.map(Option.fromUndefinedOr),
-          Effect.map(
-            Option.map((info): ProviderAuthInfo => {
-              if (info.type === "api") return { type: "api", key: info.key }
-              return {
-                type: "oauth",
-                access: info.access,
-                refresh: info.refresh,
-                expires: info.expires,
-                accountId: info.accountId,
-              }
-            }),
-          ),
+          Effect.map(Option.map((info) => toProviderAuthInfo(authStore, providerId, info))),
           Effect.mapError(
             (e) =>
               new ProviderAuthError({
