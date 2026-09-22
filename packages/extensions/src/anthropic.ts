@@ -33,9 +33,12 @@ import {
   type ProviderHints,
 } from "@gent/core/extensions/api"
 import {
+  type CatalogSource,
+  catalogSource,
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshCredentials,
   freshEnoughAt,
@@ -44,7 +47,6 @@ import {
   recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
-import { type CatalogSource, catalogSource, driverListModels } from "./models-dev.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   FetchHttpClient,

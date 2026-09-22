@@ -2336,7 +2336,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off",
   },
   {
-    file: "packages/extensions/src/models-dev.ts",
+    file: "packages/extensions/src/providers.ts",
     scope: "next-line",
     text: "strictEffectProvide:off The catalog owns its own HTTP client at the driver boundary; it outlives no scope.",
   },

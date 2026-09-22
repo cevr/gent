@@ -42,9 +42,12 @@ import {
 } from "@gent/core/extensions/api"
 import {
   buildOpenAiCompatConfig,
+  type CatalogSource,
+  catalogSource,
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshCredentials,
   makeCredentialCache,
@@ -53,7 +56,6 @@ import {
   recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
-import { type CatalogSource, catalogSource, driverListModels } from "./models-dev.js"
 import {
   OpenAiClient as OpenAiResponsesClient,
   OpenAiLanguageModel as OpenAiResponsesLanguageModel,

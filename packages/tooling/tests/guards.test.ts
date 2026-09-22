@@ -377,7 +377,7 @@ describe("core feature independence guard", () => {
 
   test("lets an extension name the catalog host it owns", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/extensions/src/models-dev.ts",
+      "packages/extensions/src/providers.ts",
       'const MODELS_URL = "https://models.dev"',
     )
     expect(findings).toEqual([])

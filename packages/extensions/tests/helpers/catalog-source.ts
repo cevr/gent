@@ -1,7 +1,7 @@
 import { Effect, Exit, type FileSystem, Layer, Path, Scope } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
-import type { CatalogSource } from "../../src/models-dev.js"
+import type { CatalogSource } from "../../src/providers.js"
 
 const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 

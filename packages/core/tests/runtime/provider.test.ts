@@ -229,7 +229,7 @@ describe("provider retry", () => {
  * ModelRegistry now concatenates what each driver lists. Where a driver's
  * catalog comes from -- the models.dev fetch, its disk cache, its staleness --
  * is the driver's own concern and is covered by
- * `packages/extensions/tests/models-dev.test.ts`.
+ * `packages/extensions/tests/providers.test.ts`.
  */
 
 const unusedResolution = (): Effect.Effect<ProviderResolution> =>
