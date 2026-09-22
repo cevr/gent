@@ -450,10 +450,6 @@ export interface ClientShellDefinition {
    * commands report a usage hint or a failure. The next turn clears it.
    */
   readonly notify: (message: string) => void
-  /** Open a registered overlay by id. */
-  readonly openOverlay: (id: OverlayId) => void
-  /** Close any open overlay. */
-  readonly closeOverlay: () => void
   /**
    * Switch the shell to another session branch and navigate to it.
    *
@@ -635,7 +631,6 @@ export const sessionQuery = <A>(opts: {
 //   - widgets:   last (highest scope) wins by widget id; sorted by priority
 //   - commands:  last (highest scope) wins by command id; superseded
 //                keybind/slash entries are stripped from prior owners
-//   - overlays:  last (highest scope) wins by overlay id
 //   - interaction renderers: last (highest scope) wins by metadataType
 //   - composer surface: single slot, last (highest scope) wins
 //   - border labels: collected (no winner), sorted by priority
@@ -650,14 +645,7 @@ export interface InteractionRendererProps {
   readonly resolve: (result: ApprovalResult) => void
 }
 
-/** Props passed to registered overlay components. */
-export interface OverlayProps {
-  readonly open: boolean
-  readonly onClose: () => void
-}
-
 export type WidgetComponent = () => JSX.Element
-export type OverlayComponent = (props: OverlayProps) => JSX.Element
 export type InteractionRendererComponent = (props: InteractionRendererProps) => JSX.Element
 
 export type ClientRuntimeServices =
@@ -696,12 +684,6 @@ interface WidgetContribution {
   /** Lower = earlier; default 100. */
   readonly priority?: number
   readonly component: WidgetComponent
-}
-
-interface OverlayContribution {
-  readonly id: string
-  /** Receives `{ open, onClose }` props at render time. */
-  readonly component: OverlayComponent
 }
 
 interface InteractionRendererContribution {
@@ -756,7 +738,6 @@ export interface ClientContributions {
   readonly renderers?: ReadonlyArray<RendererContribution>
   readonly widgets?: ReadonlyArray<WidgetContribution>
   readonly commands?: ReadonlyArray<Command>
-  readonly overlays?: ReadonlyArray<OverlayContribution>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
   readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
@@ -790,7 +771,6 @@ export const clientContributions = (
     out.renderers = append(out.renderers, part.renderers)
     out.widgets = append(out.widgets, part.widgets)
     out.commands = append(out.commands, part.commands)
-    out.overlays = append(out.overlays, part.overlays)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
     out.borderLabels = append(out.borderLabels, part.borderLabels)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
@@ -817,11 +797,6 @@ export const clientCommandContribution = (opts: Command): ClientContributions =>
   commands: [opts],
 })
 
-export const overlayContribution = (opts: {
-  readonly id: string
-  readonly component: OverlayComponent
-}): ClientContributions => ({ overlays: [opts] })
-
 /**
  * Build an interaction renderer contribution. The component must be a function
  * accepting `InteractionRendererProps` — core owns this prop shape (it's what
@@ -845,9 +820,6 @@ export const borderLabelContribution = (opts: BorderLabelContribution): ClientCo
 export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({
   autocomplete: [opts],
 })
-
-/** Overlay identifier (registered in `OverlayContribution`). */
-type OverlayId = string
 
 /**
  * A client extension's setup is an Effect that yields its dependencies

@@ -130,6 +130,34 @@ describe("fork pane", () => {
       }),
   )
 
+  it.scopedLive("keys typed into the docked pane fill its ask line and enter sends them", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast },
+      })
+      yield* queue.drain
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
+        )),
+      )
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "fork view"),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("and then?"))
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (frame) => frame.includes("ask › and then?"), "draft"),
+      )
+      setup.mockInput.pressEnter()
+      yield* queue.drain
+      expect(server.asked).toEqual(["and then?"])
+    }),
+  )
+
   it.scopedLive("a refused fork leaves the error visible and the input ready", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()
@@ -199,10 +227,8 @@ describe("fork pane across a session switch", () => {
           Option.fromUndefinedOr(contributions.commands?.find((command) => command.id === "btw")),
         )
         const slash = Option.getOrThrow(Option.fromUndefinedOr(btw.onSlash))
-        const pane = Option.getOrThrow(Option.fromUndefinedOr(contributions.overlays?.[0]))
-        const setup = yield* Effect.promise(() =>
-          renderWithProviders(() => pane.component({ open: true, onClose: () => {} })),
-        )
+        const pane = Option.getOrThrow(Option.fromUndefinedOr(contributions.widgets?.[0]))
+        const setup = yield* Effect.promise(() => renderWithProviders(() => pane.component()))
 
         slash("why?")
         yield* Deferred.await(progressAsked).pipe(Effect.timeout("2 seconds"))

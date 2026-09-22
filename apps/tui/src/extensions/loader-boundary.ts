@@ -19,7 +19,6 @@ import {
   type ClientRuntime,
   type ClientRuntimeServices,
   type InteractionRendererComponent,
-  type OverlayComponent,
   type WidgetComponent,
   type WidgetSlot,
 } from "./client-facets.js"
@@ -125,7 +124,7 @@ const discoverTuiExtensions = (opts: {
  * id order; when two claim one key, the first keeps it and the later
  * contribution is dropped and recorded in `failures`. Nothing else is lost.
  *
- * Keyed buckets (renderers by tool name, widgets and overlays by id,
+ * Keyed buckets (renderers by tool name, widgets by id,
  * interaction renderers by metadata type) go through `resolveKeyed`. Commands
  * are passed on as sources: the host adds the session's and the server's and
  * resolves them all under `resolveCommands`. Border labels and autocomplete
@@ -164,7 +163,6 @@ export interface ResolvedTuiExtensions {
   readonly widgets: ReadonlyArray<ResolvedWidget>
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
-  readonly overlays: Map<string, OverlayComponent>
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
@@ -369,13 +367,6 @@ export const resolveTuiExtensions = (
       name: contribution.id,
     })),
   )
-  const overlays = resolveKeyed(sorted, failures, "overlay", (contributions) =>
-    itemsOrEmpty(contributions.overlays).map((contribution) => ({
-      key: contribution.id,
-      value: contribution.component,
-      name: contribution.id,
-    })),
-  )
   const interactionRenderers = resolveKeyed(
     sorted,
     failures,
@@ -396,7 +387,6 @@ export const resolveTuiExtensions = (
       source: ext.filePath,
       commands: itemsOrEmpty(ext.contributions.commands),
     })),
-    overlays,
     interactionRenderers,
     borderLabels: byPriority(
       collected((contributions) => contributions.borderLabels).map((contribution) => ({

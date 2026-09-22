@@ -194,8 +194,6 @@ describe("makeClientRuntime", () => {
             const activity = yield* ClientActivity
             const transport = yield* ClientTransport
             shell.notify("ignored")
-            shell.openOverlay("ignored")
-            shell.closeOverlay()
             shell.switchSession({ ...session, name: "ignored" })
             lifecycle.addCleanup(() => {})
             return {

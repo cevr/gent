@@ -28,7 +28,6 @@ import {
   type ActiveExtensionSession,
   type ExtensionAgentDetail,
   sessionQuery,
-  type OverlayProps,
   widgetContribution,
 } from "./client-facets"
 
@@ -410,16 +409,16 @@ const emptyLabel = (loading: boolean): string => {
   return "no agents"
 }
 
-export function AgentsPane(
-  props: OverlayProps & {
-    controller: AgentsController
-    onSelect: (row: AgentRowEntry) => void
-    /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
-    onToggle: () => void
-    /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
-    onDelete: (row: AgentRowEntry) => void
-  },
-) {
+export function AgentsPane(props: {
+  open: boolean
+  onClose: () => void
+  controller: AgentsController
+  onSelect: (row: AgentRowEntry) => void
+  /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
+  onToggle: () => void
+  /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
+  onDelete: (row: AgentRowEntry) => void
+}) {
   const { theme } = useTheme()
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())

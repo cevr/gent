@@ -25,7 +25,6 @@ import {
   ClientTransport,
   defineClientExtension,
   sessionQuery,
-  type OverlayProps,
   widgetContribution,
 } from "./client-facets"
 
@@ -374,12 +373,12 @@ const emptyLabel = (loading: boolean): string => {
   return "no windows"
 }
 
-export function ThreadPane(
-  props: OverlayProps & {
-    controller: ThreadController
-    onSelect: (window: ThreadWindow) => void
-  },
-) {
+export function ThreadPane(props: {
+  open: boolean
+  onClose: () => void
+  controller: ThreadController
+  onSelect: (window: ThreadWindow) => void
+}) {
   const { theme } = useTheme()
   const [cursor, setCursor] = createSignal(Option.none<ThreadWindow>())
 

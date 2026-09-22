@@ -575,7 +575,6 @@ type SessionOverlayState =
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
   | { readonly _tag: "model" }
   | { readonly _tag: "reasoning" }
-  | { readonly _tag: "extension"; readonly overlayId: string }
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
    * escape quits: a reader who never chose a branch has nowhere to fall back
@@ -625,7 +624,6 @@ const SessionUiEvent = Schema.TaggedUnion({
   OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
-  OpenExtensionOverlay: { overlayId: Schema.String },
   OpenBranches: { branches: Schema.Array(Branch) },
   CloseOverlay: {},
   PromptSearch: { event: PromptSearchEventSchema },
@@ -686,13 +684,6 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: event.picker },
-        },
-        effects: [],
-      }),
-      OpenExtensionOverlay: (event): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          overlay: { _tag: "extension", overlayId: event.overlayId },
         },
         effects: [],
       }),
@@ -2571,12 +2562,6 @@ export function createSessionController(props: {
       dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: true }))
     }
   })
-
-  // Wire extension overlay dispatch to session UI state
-  ext.setOverlayDispatch(
-    (id) => dispatchSessionUi(SessionUiEvent.cases.OpenExtensionOverlay.make({ overlayId: id })),
-    () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
-  )
 
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())

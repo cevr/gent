@@ -781,25 +781,15 @@ export function Session(props: SessionProps) {
 
         {(() => {
           const overlay = controller.uiState().overlay
-          switch (overlay._tag) {
-            case "auth":
-              return (
-                <Auth
-                  sessionId={props.sessionId}
-                  enforceAuth={overlay.enforceAuth}
-                  onResolved={controller.resolveAuthGate}
-                  onClose={controller.closeOverlay}
-                />
-              )
-            case "extension": {
-              const Overlay = Option.fromNullishOr(ext.overlays().get(overlay.overlayId))
-              if (Option.isNone(Overlay)) return <></>
-              const OverlayComponent = Overlay.value
-              return <OverlayComponent open={true} onClose={controller.closeOverlay} />
-            }
-            default:
-              return <></>
-          }
+          if (overlay._tag !== "auth") return <></>
+          return (
+            <Auth
+              sessionId={props.sessionId}
+              enforceAuth={overlay.enforceAuth}
+              onResolved={controller.resolveAuthGate}
+              onClose={controller.closeOverlay}
+            />
+          )
         })()}
       </box>
     </SessionControllerContext.Provider>

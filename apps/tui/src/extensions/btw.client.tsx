@@ -10,12 +10,11 @@ import {
   ClientShell,
   ClientTransport,
   defineClientExtension,
-  overlayContribution,
   sessionQuery,
   type ActiveExtensionSession,
-  type OverlayProps,
+  widgetContribution,
 } from "./client-facets.js"
-import { ChromePanel } from "../ui"
+import { ChromePanel, PickerFrame } from "../ui"
 import { useTheme } from "../theme"
 import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 
@@ -27,11 +26,9 @@ import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
  * `/btw <question>` (alias `/side`) forks the branch into a parallel child
  * session seeded with its context and opens a pane over it; `/btw` alone
  * reopens the pane on the fork this branch opened last, or forks without
- * asking. Follow-ups type into the pane's input. `^o` opens the fork as the
+ * asking. The pane docks under the composer; follow-ups type into its ask line. `^o` opens the fork as the
  * shell's session; `esc` closes the pane and leaves the fork where it is.
  */
-
-const BTW_OVERLAY_ID = "btw"
 
 interface ForkPaneController {
   /** The fork this branch opened last, as the server reports it. */
@@ -109,38 +106,64 @@ export const makeForkPane = (
     return { fork: view.value, pending, error: view.error, ask, refresh: view.refresh }
   })
 
-export function ForkPane(
-  props: OverlayProps & { controller: ForkPaneController; onOpen: () => void },
-) {
+/** Text a key types into the draft: printable, never a control sequence. */
+const typedText = (sequence: Option.Option<string>): Option.Option<string> =>
+  Option.filter(
+    sequence,
+    (text) => text.length > 0 && [...text].every((char) => char >= " " && char !== "\u007f"),
+  )
+
+/**
+ * The fork pane, docked under the composer like the thread and agents panes.
+ *
+ * The composer keeps the terminal's focus, so the pane takes its keys through
+ * the keyboard scope, as the agents filter does: a key it types or acts on
+ * never reaches the composer, and any other key (a keybind) still does.
+ */
+export function ForkPane(props: {
+  open: boolean
+  controller: ForkPaneController
+  onClose: () => void
+  onOpen: () => void
+}) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [draft, setDraft] = createSignal("")
   const fork = () => Option.getOrUndefined(props.controller.fork())
   const replying = () => Option.exists(props.controller.fork(), (view) => view.replying)
+  const ready = () => Option.isNone(props.controller.pending()) && !replying()
   useScopedKeyboard(
     (event) => {
       if (event.name === "escape") {
         props.onClose()
         return true
       }
-      if (event.ctrl === true && event.name === "o" && Option.isSome(props.controller.fork())) {
-        props.onOpen()
+      if (event.ctrl === true && event.name === "o") {
+        if (Option.isSome(props.controller.fork())) props.onOpen()
         return true
       }
+      if (event.name === "return") {
+        // A question typed while the fork replies waits in the draft.
+        if (!ready()) return true
+        const question = draft()
+        setDraft("")
+        props.controller.ask(question)
+        return true
+      }
+      if (event.name === "backspace") {
+        setDraft((current) => [...current].slice(0, -1).join(""))
+        return true
+      }
+      if (event.ctrl === true || event.meta === true) return false
+      const typed = typedText(Option.fromNullishOr(event.sequence))
+      if (Option.isNone(typed)) return false
+      setDraft((current) => current + typed.value)
+      return true
     },
-    // Not `capture`: a capturing scope stops every key, and the pane's input
-    // would never see the follow-up being typed.
     { when: () => props.open },
   )
-  const submit = () => {
-    const question = draft()
-    setDraft("")
-    props.controller.ask(question)
-  }
 
-  const width = () => Math.min(dimensions().width - 4, 100)
-  const height = () => Math.max(8, dimensions().height - 4)
-  const left = () => Math.max(0, Math.floor((dimensions().width - width()) / 2))
+  const height = () => Math.max(8, Math.floor(dimensions().height / 2))
   const title = () =>
     Option.match(props.controller.fork(), {
       onNone: () => "btw · fork",
@@ -149,7 +172,11 @@ export function ForkPane(
 
   return (
     <Show when={props.open}>
-      <ChromePanel.Root title={title()} width={width()} height={height()} left={left()} top={2}>
+      <PickerFrame
+        height={height()}
+        title={title()}
+        footer="a parallel session from here · enter ask · ^o open · esc close"
+      >
         <ChromePanel.Body>
           <Show when={fork()}>
             {(view) => (
@@ -185,24 +212,15 @@ export function ForkPane(
           </Show>
         </ChromePanel.Body>
         <ChromePanel.Section>
-          <box flexDirection="row">
-            <text style={{ fg: theme.textMuted }}>ask: </text>
-            <box flexGrow={1}>
-              <input
-                focused={props.open && Option.isNone(props.controller.pending()) && !replying()}
-                value={draft()}
-                onInput={setDraft}
-                onSubmit={submit}
-                backgroundColor="transparent"
-                focusedBackgroundColor="transparent"
-              />
-            </box>
-          </box>
+          <text style={{ fg: theme.text }} wrapMode="none">
+            <span style={{ fg: theme.textMuted }}>ask › </span>
+            {draft()}
+            <Show when={ready()}>
+              <span style={{ fg: theme.primary }}>│</span>
+            </Show>
+          </text>
         </ChromePanel.Section>
-        <ChromePanel.Footer>
-          a parallel session from here · enter ask · ^o open · esc close
-        </ChromePanel.Footer>
-      </ChromePanel.Root>
+      </PickerFrame>
     </Show>
   )
 }
@@ -237,7 +255,6 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
     )
     const show = () => {
       setOpen(true)
-      shell.openOverlay(BTW_OVERLAY_ID)
       controller.refresh()
     }
     return clientContributions(
@@ -254,20 +271,17 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
           if (args.trim().length > 0) controller.ask(args)
         },
       }),
-      overlayContribution({
-        id: BTW_OVERLAY_ID,
-        component: (props) => (
+      widgetContribution({
+        id: "btw.pane",
+        slot: "below-input",
+        component: () => (
           <ForkPane
-            {...props}
-            onClose={() => {
-              setOpen(false)
-              props.onClose()
-            }}
+            open={open()}
             controller={controller}
+            onClose={() => setOpen(false)}
             onOpen={() => {
               Option.map(controller.fork(), (fork) => {
                 setOpen(false)
-                props.onClose()
                 shell.switchSession({
                   sessionId: fork.sessionId,
                   branchId: fork.branchId,

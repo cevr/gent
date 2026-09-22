@@ -14,7 +14,6 @@ import {
   makeClientShellLayer,
   makeClientTransportLayer,
   makeClientWorkspaceLayer,
-  type OverlayComponent,
 } from "./client-facets.js"
 import {
   type Accessor,
@@ -67,8 +66,6 @@ interface ClientRuntimeDeps {
 
 const noopShell: Omit<ClientShellDefinition, "cast"> = {
   notify: () => {},
-  openOverlay: () => {},
-  closeOverlay: () => {},
   switchSession: () => {},
 }
 
@@ -117,15 +114,12 @@ interface ExtensionUIContextValue {
   readonly commands: Accessor<ReadonlyArray<Command>>
   /** The session view supplies its own commands; they resolve at builtin scope. */
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
-  readonly overlays: Accessor<Map<string, OverlayComponent>>
   // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
   readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
-  /** Wire overlay dispatch from the session controller */
-  readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   /** ManagedRuntime providing FileSystem, Path, ClientTransport — used by
@@ -137,7 +131,6 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   renderers: new Map(),
   widgets: [],
   commandSources: [],
-  overlays: new Map(),
   interactionRenderers: new Map(),
   borderLabels: [],
   autocompleteItems: [],
@@ -161,16 +154,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     ReadonlyArray<AutocompleteContribution>
   >([])
 
-  // Overlay dispatch — wired by session controller after mount
-  const [overlayDispatch, setOverlayDispatchSignal] = createSignal<{
-    open: (id: string) => void
-    close: () => void
-  }>({ open: () => {}, close: () => {} })
-
-  const setOverlayDispatch = (open: (id: string) => void, close: () => void) => {
-    setOverlayDispatchSignal({ open, close })
-  }
-
   // Provider-scoped cleanup registry. Widget setups that detach Solid
   // roots or subscribe to pulses register their disposers here; the
   // `onCleanup` below runs them in order when the provider unmounts.
@@ -185,7 +168,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // (FileSystem, Path) with the TUI client services Effect-typed
   // extensions may yield: `ClientTransport` (typed RPC client + event
   // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
-  // (notify, overlays, session switch). The loader's `invokeSetup` runs each
+  // (notify, session switch). The loader's `invokeSetup` runs each
   // setup against this runtime.
   const clientRuntime: ClientRuntime = makeClientRuntime({
     transport: {
@@ -201,8 +184,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     workspace: { cwd: workspace.cwd, home: workspace.home },
     shell: {
       notify: (message) => client.setError(message),
-      openOverlay: (id) => overlayDispatch().open(id),
-      closeOverlay: () => overlayDispatch().close(),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
     },
@@ -357,13 +338,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
         widgets: () => resolved().widgets,
         commands: () => resolvedCommands().commands,
         setSessionCommands,
-        overlays: () => resolved().overlays,
         interactionRenderers: () => resolved().interactionRenderers,
         borderLabels: () => resolved().borderLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,
-        setOverlayDispatch,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
         clientRuntime,
       }}

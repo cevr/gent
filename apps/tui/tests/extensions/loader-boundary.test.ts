@@ -21,8 +21,6 @@ import {
   type ExtensionClientModule,
   interactionRendererContribution,
   NoActiveSessionError,
-  overlayContribution,
-  type OverlayProps,
   rendererContribution,
   type WidgetComponent,
   widgetContribution,
@@ -82,7 +80,6 @@ const widget =
   (label: string): WidgetComponent =>
   () =>
     label
-const overlay = (label: string) => (_props: OverlayProps) => label
 const absent = Option.getOrUndefined(Option.none())
 const toolProps: ToolRendererProps = {
   toolCall: {
@@ -105,7 +102,6 @@ const interactionProps = {
   }),
   resolve: () => {},
 }
-const overlayProps: OverlayProps = { open: true, onClose: () => {} }
 describe("resolveTuiExtensions", () => {
   test("client contribution constructors enforce slot-specific component contracts", () => {
     const good = widgetContribution({
@@ -117,8 +113,8 @@ describe("resolveTuiExtensions", () => {
     widgetContribution({
       id: "bad-widget",
       slot: "below-input",
-      // @ts-expect-error — widgets receive no props; overlays own open/onClose props
-      component: (_props: OverlayProps) => "bad",
+      // @ts-expect-error — widgets receive no props
+      component: (_props: { readonly open: boolean }) => "bad",
     })
     expect(good.widgets?.[0]?.id).toBe("typed-widget")
   })
@@ -226,35 +222,6 @@ describe("resolveTuiExtensions", () => {
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
     expect(defaultRenderer.value(interactionProps)).toBe("default")
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
-  })
-
-  test("overlay surfaces use scope precedence and a same-scope collision drops the later one", () => {
-    const resolved = resolveTuiExtensions([
-      make(
-        "builtin-overlay",
-        "builtin",
-        overlayContribution({ id: "modal", component: overlay("builtin") }),
-      ),
-      make(
-        "project-overlay",
-        "project",
-        overlayContribution({ id: "modal", component: overlay("project") }),
-      ),
-    ])
-
-    const modal = Option.fromNullishOr(resolved.overlays.get("modal"))
-    expect(Option.isSome(modal)).toBe(true)
-    if (Option.isNone(modal)) return
-    expect(modal.value(overlayProps)).toBe("project")
-
-    const collided = resolveTuiExtensions([
-      make("a", "user", overlayContribution({ id: "dup", component: overlay("a") })),
-      make("b", "user", overlayContribution({ id: "dup", component: overlay("b") })),
-    ])
-    const dup = Option.fromNullishOr(collided.overlays.get("dup"))
-    expect(Option.isSome(dup)).toBe(true)
-    if (Option.isSome(dup)) expect(dup.value(overlayProps)).toBe("a")
-    expect(collided.failures.map((failure) => failure.id)).toEqual(["b"])
   })
 
   test("border labels remain collected and priority sorted", () => {
@@ -1061,7 +1028,6 @@ import {
   defineClientExtension,
   clientContributions,
   clientCommandContribution,
-  overlayContribution,
   rendererContribution,
   widgetContribution,
 } from "../../../src/extensions/client-facets"
@@ -1071,7 +1037,6 @@ export default defineClientExtension("@test/custom-read", {
     rendererContribution(["my_custom_tool"], () => "custom-tool-renderer"),
     widgetContribution({ id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" }),
     clientCommandContribution({ id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} }),
-    overlayContribution({ id: "test-overlay", component: (_props) => "test-overlay" }),
   )),
 })`,
     )
@@ -1137,23 +1102,20 @@ describe("loadTuiExtensions", () => {
       rmSync(emptyProject, { recursive: true, force: true })
     }),
   )
-  it.scopedLive(
-    "user extensions can add visible renderer, widget, command, and overlay surfaces",
-    () =>
-      Effect.gen(function* () {
-        yield* integrationFixture
-        const resolved = yield* Effect.promise(() =>
-          loadTuiExtensions({
-            builtins: builtinClientModules,
-            userDir: USER_DIR,
-            projectDir: join(TEST_DIR, "no-project"),
-          }),
-        )
-        expect(resolved.renderers.has("my_custom_tool")).toBe(true)
-        expect(resolved.widgets.some((widget) => widget.id === "test-widget")).toBe(true)
-        expect(commandsOf(resolved).some((command) => command.id === "test-cmd")).toBe(true)
-        expect(resolved.overlays.has("test-overlay")).toBe(true)
-      }),
+  it.scopedLive("user extensions can add visible renderer, widget, and command surfaces", () =>
+    Effect.gen(function* () {
+      yield* integrationFixture
+      const resolved = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: USER_DIR,
+          projectDir: join(TEST_DIR, "no-project"),
+        }),
+      )
+      expect(resolved.renderers.has("my_custom_tool")).toBe(true)
+      expect(resolved.widgets.some((widget) => widget.id === "test-widget")).toBe(true)
+      expect(commandsOf(resolved).some((command) => command.id === "test-cmd")).toBe(true)
+    }),
   )
   it.scopedLive(
     "discovery ignores hidden and test-only files but still loads prebuilt modules deterministically",
@@ -1373,17 +1335,14 @@ export default defineClientExtension("@test/b", {
   })
 })
 describe("session UI state", () => {
-  test("extension overlays replace the current overlay and close cleanly", () => {
+  test("a picker replaces the current overlay and closes cleanly", () => {
     const withMermaid = transitionSessionUi(SessionUiState.initial(), { _tag: "OpenMermaid" })
-    const withExtension = transitionSessionUi(withMermaid.state, {
-      _tag: "OpenExtensionOverlay",
-      overlayId: "my-ext:panel",
+    const withPicker = transitionSessionUi(withMermaid.state, {
+      _tag: "OpenSettingsPicker",
+      picker: "model",
     })
-    const closed = transitionSessionUi(withExtension.state, { _tag: "CloseOverlay" })
-    expect(withExtension.state.overlay).toEqual({
-      _tag: "extension",
-      overlayId: "my-ext:panel",
-    })
+    const closed = transitionSessionUi(withPicker.state, { _tag: "CloseOverlay" })
+    expect(withPicker.state.overlay).toEqual({ _tag: "model" })
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 })
