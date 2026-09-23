@@ -2475,6 +2475,42 @@ const packageSurface = (
 const pathOf = (finding: { readonly file: string; readonly message: string }): string =>
   `${finding.file} ${finding.message.split(": ")[0]}`
 
+describe("host entry point", () => {
+  // A host name needs a product caller: test support (tests, e2e fixtures,
+  // testbeds, lint fixtures) reads past it.
+  const HOST_FILE = "packages/core/src/host.ts"
+  const hostSource = `export { Auth, AuthApi } from "./runtime/provider.js"\n`
+  const reading = `import { Auth, AuthApi } from "@gent/core/host"\n`
+
+  test("a name only an e2e fixture, a testbed or a lint fixture reads is reported", () => {
+    for (const file of [
+      "packages/e2e/src/pty-fixture.ts",
+      "testbeds/gamut/gamut.ts",
+      "packages/tooling/fixtures/apps/server/src/launch.valid.ts",
+      "apps/tui/tests/headless-cli-exit.test.ts",
+    ]) {
+      expect(
+        messages(
+          findingsFor([
+            { file: HOST_FILE, text: hostSource },
+            { file, text: reading },
+          ]),
+        ),
+        file,
+      ).toEqual([expect.stringContaining('"Auth"'), expect.stringContaining('"AuthApi"')])
+    }
+  })
+
+  test("a name a product file reads is live", () => {
+    expect(
+      findingsFor([
+        { file: HOST_FILE, text: hostSource },
+        { file: "apps/server/src/main.ts", text: reading },
+      ]),
+    ).toEqual([])
+  })
+})
+
 describe("chained entry points", () => {
   const PROTOCOL_FILE = "packages/core/src/protocol.ts"
   const SDK_INDEX = "packages/sdk/src/index.ts"

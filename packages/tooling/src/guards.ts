@@ -1,4 +1,7 @@
 import { Option, Schema } from "effect"
+// A write or a caller in test support proves a reader works, not that
+// production supplies it; the lint rule reads the same definition.
+import { isTestSupport } from "./gent-rules"
 
 /** What every guard reports: a place in a file, and what is wrong there. */
 export interface Finding {
@@ -1192,22 +1195,6 @@ interface VariableUse {
   readonly file: string
   readonly line: number
 }
-
-const isTestFile = (file: string): boolean =>
-  /\.test\.[cm]?[jt]sx?$/.test(file) || /(?:^|\/)tests\//.test(file)
-
-/**
- * Test support: the tests, the e2e fixtures, the core harness, the lint
- * fixtures and the testbeds, which launch gent the way an operator does. A
- * write there proves a reader works, not that production supplies
- * the variable, and a name there is an assertion, not a read.
- */
-const isTestSupport = (file: string): boolean =>
-  isTestFile(file) ||
-  file.startsWith("packages/e2e/") ||
-  file.startsWith("testbeds/") ||
-  file.includes("/test-utils/") ||
-  file.includes("/fixtures/")
 
 /** The name each match captured, in whichever alternative captured it. */
 const namesMatching = (line: string, pattern: RegExp): ReadonlyArray<string> =>
@@ -2791,7 +2778,7 @@ const mentions = (facts: ExportFacts, surface: ScannedSurface, name: string): bo
   })
 
 const mayConsume = (file: string, surface: ScannedSurface): boolean =>
-  (surface.testsCount || !isTestFile(file)) &&
+  (surface.testsCount || !isTestSupport(file)) &&
   !surface.outsideOf.some((prefix) => file.startsWith(prefix))
 
 const messageFor = (file: string, declaration: Declaration): string =>
