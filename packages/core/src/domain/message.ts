@@ -123,7 +123,9 @@ const ToolInteractionFields = {
  *   line it sits in, so `tailLine` equals the head's last line when the cut
  *   falls inside a single line. `field` is absent when the output is plain text.
  * - `Items`: the array keeps its head items, then its tail items from the
- *   1-based `tailItem`; `items` is the whole array's length.
+ *   1-based `tailItem`; `items` is the whole array's length. `files` is the
+ *   count of distinct `file` values over the whole array, present when its
+ *   items name files, as a search result's matches do.
  */
 export const OutputCut = Schema.TaggedUnion({
   Text: {
@@ -136,6 +138,7 @@ export const OutputCut = Schema.TaggedUnion({
     field: Schema.String,
     items: Schema.Finite,
     tailItem: Schema.Finite,
+    files: Schema.optional(Schema.Finite),
   },
 })
 export type OutputCut = typeof OutputCut.Type
@@ -818,6 +821,9 @@ const OPERATION_BUDGET = 8_192
 /** The most of the budget the input takes; the output takes what is left. */
 const OPERATION_INPUT_SHARE = 4_096
 
+/** The most a tool name takes, encoded: a name is a label, not a body. */
+const TOOL_NAME_BUDGET = 256
+
 /** The marker line between a cut string's head and tail. */
 const CUT_MARKER = "…"
 
@@ -892,6 +898,7 @@ const itemsCutCost = (field: string): number =>
       field,
       items: Number.MAX_SAFE_INTEGER,
       tailItem: Number.MAX_SAFE_INTEGER,
+      files: Number.MAX_SAFE_INTEGER,
     }),
   ).length + 1
 
@@ -1014,7 +1021,23 @@ const scalarItems = (values: ReadonlyArray<unknown>): Option.Option<ReadonlyArra
 
 interface ItemsExcerpt {
   readonly items: ReadonlyArray<Item>
-  readonly cut: Option.Option<{ readonly items: number; readonly tailItem: number }>
+  readonly cut: Option.Option<{
+    readonly items: number
+    readonly tailItem: number
+    readonly files?: number
+  }>
+}
+
+/** Distinct `file` values over `items`; `None` when no item names a file. */
+const distinctFiles = (items: ReadonlyArray<Item>): Option.Option<number> => {
+  const files = new Set<string>()
+  for (const item of items) {
+    if (!Predicate.isObject(item)) continue
+    const file = item["file"]
+    if (Predicate.isString(file)) files.add(file)
+  }
+  if (files.size === 0) return Option.none()
+  return Option.some(files.size)
 }
 
 /** `items` whole within `budget`, else the head items and tail items that fit, each whole. */
@@ -1041,7 +1064,14 @@ const itemsWithin = (
   }
   return {
     items: [...items.slice(0, headEnd), ...items.slice(tailStart)],
-    cut: Option.some({ items: items.length, tailItem: tailStart + 1 }),
+    cut: Option.some({
+      items: items.length,
+      tailItem: tailStart + 1,
+      ...Option.match(distinctFiles(items), {
+        onNone: () => ({}),
+        onSome: (files) => ({ files }),
+      }),
+    }),
   }
 }
 
@@ -1056,8 +1086,8 @@ const noOutput: BoundedOutput = { output: Option.getOrUndefined(Option.none()), 
 /** A top-level output field that is cut to fit rather than kept whole or dropped. */
 interface CuttableField {
   readonly key: string
-  /** The whole value's encoded cost, for cheapest-first order. */
-  readonly cost: number
+  /** The least share that keeps the value whole: key, value, and room for a cut record. */
+  readonly need: number
   /** The value within `share` of the budget, key and cut record counted; `None` when not even its marker fits. */
   readonly fit: (share: number) => Option.Option<{
     readonly value: string | ReadonlyArray<Item>
@@ -1066,37 +1096,54 @@ interface CuttableField {
 }
 
 /** A string field: whole, or its head and tail around a marker line. */
-const textField = (key: string, text: string): CuttableField => ({
-  key,
-  cost: costUpTo(text, encodedTwice, OPERATION_BUDGET),
-  fit: (share) =>
-    Option.map(
-      excerptWithin(
-        text,
-        share - fieldCost(key, "", encodedTwice) - textCutCost(Option.some(key)),
-        encodedTwice,
-      ),
-      (excerpt) => ({
+const textField = (key: string, text: string): CuttableField => {
+  const overhead = fieldCost(key, "", encodedTwice) + textCutCost(Option.some(key))
+  return {
+    key,
+    need: overhead + costUpTo(text, encodedTwice, OPERATION_BUDGET),
+    fit: (share) =>
+      Option.map(excerptWithin(text, share - overhead, encodedTwice), (excerpt) => ({
         value: excerpt.text,
         cut: Option.map(excerpt.cut, (cut) => OutputCut.cases.Text.make({ field: key, ...cut })),
-      }),
-    ),
-})
+      })),
+  }
+}
 
 /** An array field: every item, or its head and tail items, each whole. */
-const itemsField = (key: string, items: ReadonlyArray<Item>): CuttableField => ({
-  key,
-  cost: costUpTo(encodeJson(items), encodedTwice, OPERATION_BUDGET),
-  fit: (share) => {
-    const room = share - fieldCost(key, [], encodedTwice) - itemsCutCost(key)
-    if (room < 0) return Option.none()
-    const excerpt = itemsWithin(items, room, encodedTwice)
-    return Option.some({
-      value: excerpt.items,
-      cut: Option.map(excerpt.cut, (cut) => OutputCut.cases.Items.make({ field: key, ...cut })),
-    })
-  },
-})
+const itemsField = (key: string, items: ReadonlyArray<Item>): CuttableField => {
+  const overhead = fieldCost(key, [], encodedTwice) + itemsCutCost(key)
+  return {
+    key,
+    // Each item with its comma, as `itemsWithin` counts them.
+    need:
+      overhead +
+      Math.min(
+        OPERATION_BUDGET,
+        costUpTo(encodeJson(items), encodedTwice, OPERATION_BUDGET) - 2 + items.length,
+      ),
+    fit: (share) => {
+      const room = share - overhead
+      if (room < 0) return Option.none()
+      const excerpt = itemsWithin(items, room, encodedTwice)
+      return Option.some({
+        value: excerpt.items,
+        cut: Option.map(excerpt.cut, (cut) => OutputCut.cases.Items.make({ field: key, ...cut })),
+      })
+    },
+  }
+}
+
+/**
+ * An operation's output, planned once: `room` is the least budget that keeps
+ * it whole, cut records and their array counted, so the input grows only into
+ * space the output does not need. `fit` bounds it within a budget.
+ */
+interface OutputPlan {
+  readonly room: number
+  readonly fit: (budget: number) => BoundedOutput
+}
+
+const noOutputPlan: OutputPlan = { room: 0, fit: () => noOutput }
 
 /**
  * An operation's output as its collapsed row reads it, within `budget` encoded
@@ -1107,24 +1154,29 @@ const itemsField = (key: string, items: ReadonlyArray<Item>): CuttableField => (
  * is cut like a string. Nested values stay on the branch.
  */
 // oxlint-disable-next-line effect/noNullish -- ToolInteraction.output is an UndefinedOr wire field; absent output stays absent.
-const boundedOutput = (output: string | undefined, budget: number): BoundedOutput => {
-  if (Predicate.isUndefined(output)) return noOutput
+const planOutput = (output: string | undefined): OutputPlan => {
+  if (Predicate.isUndefined(output)) return noOutputPlan
   const decoded = decodeToolOutput(output)
   if (Option.isNone(decoded) || Predicate.isString(decoded.value)) {
     const text = Option.getOrElse(Option.filter(decoded, Predicate.isString), () => output)
-    return Option.match(excerptWithin(text, budget - 2 - textCutCost(Option.none()), encodedOnce), {
-      onNone: () => noOutput,
-      onSome: (excerpt) => ({
-        output: excerpt.text,
-        cuts: Option.toArray(Option.map(excerpt.cut, (cut) => OutputCut.cases.Text.make(cut))),
-      }),
-    })
+    // The output string's quotes and the room for the record of its cut.
+    const overhead = 2 + textCutCost(Option.none())
+    return {
+      room: overhead + costUpTo(text, encodedOnce, OPERATION_BUDGET),
+      fit: (budget) =>
+        Option.match(excerptWithin(text, budget - overhead, encodedOnce), {
+          onNone: () => noOutput,
+          onSome: (excerpt) => ({
+            output: excerpt.text,
+            cuts: Option.toArray(Option.map(excerpt.cut, (cut) => OutputCut.cases.Text.make(cut))),
+          }),
+        }),
+    }
   }
   const value = decoded.value
-  if (!Predicate.isObject(value) || Array.isArray(value)) return noOutput
+  if (!Predicate.isObject(value) || Array.isArray(value)) return noOutputPlan
   // The output string's quotes, its braces, and the `cuts` array around the records.
-  let left = budget - 2 - costUpTo("{}", encodedTwice, Infinity) - encodeJson({ cuts: [] }).length
-  const kept: Record<string, Scalar | ReadonlyArray<Item>> = {}
+  const frame = 2 + costUpTo("{}", encodedTwice, Infinity) + encodeJson({ cuts: [] }).length
   const numbers = Object.entries(value)
     .filter(
       (entry): entry is [string, number | boolean] =>
@@ -1132,32 +1184,44 @@ const boundedOutput = (output: string | undefined, budget: number): BoundedOutpu
     )
     .map(([key, field]) => ({ key, field, cost: fieldCost(key, field, encodedTwice) }))
     .toSorted((a, b) => a.cost - b.cost)
-  for (const entry of numbers) {
-    if (entry.cost > left) break
-    left -= entry.cost
-    kept[entry.key] = entry.field
-  }
+  // Cheapest first: when every field's need fits, each one's even share of
+  // what is left covers it, so the whole output stays whole.
   const cuttable = Object.entries(value)
     .flatMap(([key, field]): ReadonlyArray<CuttableField> => {
       if (Predicate.isString(field)) return [textField(key, field)]
       if (!Array.isArray(field)) return []
       return Option.toArray(Option.map(scalarItems(field), (items) => itemsField(key, items)))
     })
-    .toSorted((a, b) => a.cost - b.cost)
-  const cuts: Array<OutputCut> = []
-  for (const [index, entry] of cuttable.entries()) {
-    // Each field's share of what is left: its key, its quotes or brackets, its
-    // comma, and room for the record of its cut.
-    const fitted = entry.fit(Math.floor(left / (cuttable.length - index)))
-    if (Option.isNone(fitted)) continue
-    kept[entry.key] = fitted.value.value
-    left -= fieldCost(entry.key, fitted.value.value, encodedTwice)
-    if (Option.isSome(fitted.value.cut)) {
-      cuts.push(fitted.value.cut.value)
-      left -= encodeJson(fitted.value.cut.value).length + 1
-    }
+    .toSorted((a, b) => a.need - b.need)
+  const sum = (costs: ReadonlyArray<number>) => costs.reduce((total, cost) => total + cost, 0)
+  return {
+    room:
+      frame + sum(numbers.map((entry) => entry.cost)) + sum(cuttable.map((entry) => entry.need)),
+    fit: (budget) => {
+      let left = budget - frame
+      if (left < 0) return noOutput
+      const kept: Record<string, Scalar | ReadonlyArray<Item>> = {}
+      for (const entry of numbers) {
+        if (entry.cost > left) break
+        left -= entry.cost
+        kept[entry.key] = entry.field
+      }
+      const cuts: Array<OutputCut> = []
+      for (const [index, entry] of cuttable.entries()) {
+        // Each field's share of what is left: its key, its quotes or brackets,
+        // its comma, and room for the record of its cut.
+        const fitted = entry.fit(Math.floor(left / (cuttable.length - index)))
+        if (Option.isNone(fitted)) continue
+        kept[entry.key] = fitted.value.value
+        left -= fieldCost(entry.key, fitted.value.value, encodedTwice)
+        if (Option.isSome(fitted.value.cut)) {
+          cuts.push(fitted.value.cut.value)
+          left -= encodeJson(fitted.value.cut.value).length + 1
+        }
+      }
+      return { output: encodeJson(kept), cuts }
+    },
   }
-  return { output: encodeJson(kept), cuts }
 }
 
 interface OperationRaw {
@@ -1175,37 +1239,41 @@ interface OperationRaw {
 
 /**
  * One operation as the snapshot carries it: within `OPERATION_BUDGET` encoded
- * characters, its fixed fields and summary first, then the input, then the
- * output in what is left. The input takes up to `OPERATION_INPUT_SHARE`, or
- * all the whole output leaves: an edit's body is its diff strings, and its
- * output is a path and a count.
+ * characters. The fixed fields come first: the tool name clipped to
+ * `TOOL_NAME_BUDGET`, the summary already clipped, and the id whole when it
+ * fits, else its head. Then the input, then the output in what is left. The
+ * input takes up to `OPERATION_INPUT_SHARE`, or all the room the whole output
+ * does not need: an edit's body is its diff strings, and its output is a path
+ * and a count.
  */
 const fitOperation = (raw: OperationRaw): ToolOperation => {
-  const fixed: ToolOperation = {
-    id: raw.id,
-    toolName: raw.toolName,
+  const unnamed: ToolOperation = {
+    id: ToolCallId.make(""),
+    toolName: headWithin(raw.toolName, TOOL_NAME_BUDGET, encodedOnce),
     status: raw.status,
     input: Option.getOrUndefined(Option.none()),
     summary: raw.summary,
     output: Option.getOrUndefined(Option.none()),
     durationMs: raw.durationMs,
   }
-  // `"input":` and `"output":` with their commas, and the fixed fields.
+  // `"input":` and `"output":` with their commas.
   const labels = encodeJson("input").length + encodeJson("output").length + 4
+  const idRoom = OPERATION_BUDGET - encodeJson(unnamed).length - labels
+  const fixed: ToolOperation = {
+    ...unnamed,
+    id: ToolCallId.make(headWithin(raw.id, idRoom, encodedOnce)),
+  }
   let left = OPERATION_BUDGET - encodeJson(fixed).length - labels
-  const wholeOutput = Option.match(Option.fromUndefinedOr(raw.output), {
-    onNone: () => 0,
-    onSome: (output) => encodeJson(output).length,
-  })
+  const plan = planOutput(raw.output)
   const input = boundedInput(
     raw.input,
-    Math.min(left, Math.max(OPERATION_INPUT_SHARE, left - wholeOutput)),
+    Math.min(left, Math.max(OPERATION_INPUT_SHARE, left - plan.room)),
   )
   left -= Option.match(Option.fromUndefinedOr(input), {
     onNone: () => 0,
     onSome: (kept) => encodeJson(kept).length,
   })
-  const { output, cuts } = boundedOutput(raw.output, left)
+  const { output, cuts } = plan.fit(left)
   if (cuts.length === 0) return { ...fixed, input, output }
   return { ...fixed, input, output, cuts }
 }

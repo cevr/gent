@@ -1635,8 +1635,9 @@ describe("FX transcript treatment", () => {
         (next) => next.includes("matches in") && next.includes("1 replacement"),
         "reloaded large ops",
       )
-      // Every match counts; the files between head and tail are not known.
-      expect(frame).toMatch(/200 matches in \d+\+ files/)
+      // Every match and every file counts, the ones between head and tail too.
+      expect(frame).toContain("200 matches in 10 files")
+      expect(frame).toContain("+7 more files")
       expect(frame).toContain("src/module-0.ts")
       // The diff strings do not fit, so the edit draws the summary its tool wrote.
       expect(frame).toContain("/workspace/src/huge.ts · 1 replacement")
@@ -1682,31 +1683,48 @@ describe("FX transcript treatment", () => {
     }),
   )
 
-  it.live("a declined command reads as declined, not as a failed exit", () =>
-    Effect.gen(function* () {
-      const { live } = yield* cellBeforeAndAfterReload("assistant-declined", [
-        {
-          id: "op-bash-declined",
-          toolName: "bash",
-          input: { command: "git checkout HEAD -- README.md" },
-          summary: "exit 1 · 1 line",
-          output: encodeJson({
-            stdout: "Command blocked: git checkout that discards working-tree changes",
-            stderr: "",
-            exitCode: 1,
-            declined: true,
-          }),
-        },
-      ])
-      const frame = yield* drawnCell(
-        "assistant-declined",
-        live,
-        (next) => next.includes("Command blocked"),
-        "declined op",
-      )
-      expect(frame).toContain("declined")
-      expect(frame).not.toContain("exit 1")
-    }),
+  it.live(
+    "a blocked command reads as declined and a background one as running on, not as exits",
+    () =>
+      Effect.gen(function* () {
+        const { live } = yield* cellBeforeAndAfterReload("assistant-declined", [
+          {
+            id: "op-bash-declined",
+            toolName: "bash",
+            input: { command: "git checkout HEAD -- README.md" },
+            summary: "exit 1 · 1 line",
+            output: encodeJson({
+              stdout: "Command blocked: git checkout that discards working-tree changes",
+              stderr: "",
+              exitCode: 1,
+              status: "blocked",
+            }),
+          },
+          {
+            id: "op-bash-background",
+            toolName: "bash",
+            input: { command: "bun run dev" },
+            summary: "started in background",
+            output: encodeJson({
+              stdout: "Command started in background: `bun run dev`",
+              stderr: "",
+              exitCode: 0,
+              status: "background",
+            }),
+          },
+        ])
+        const frame = yield* drawnCell(
+          "assistant-declined",
+          live,
+          (next) => next.includes("Command blocked"),
+          "declined op",
+        )
+        expect(frame).toContain("declined")
+        expect(frame).not.toContain("exit 1")
+        // A background command has not ended: it has no exit code yet.
+        expect(frame).toContain("in background")
+        expect(frame).not.toContain("exit 0")
+      }),
   )
 
   it.live("shows cell operation receipts in tree and detail frames", () =>

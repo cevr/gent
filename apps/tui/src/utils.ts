@@ -714,7 +714,10 @@ export function formatRowCounts(
   // A zero count says nothing: a cell with no output shows only its code.
   const shown = all.filter((entry) => entry.count > 0)
   if (shown.length === 0) return ""
-  return `${shown.map((entry) => `${entry.arrow} ${entry.count}`).join(" ")} lines`
+  // One count of one line is one line; two counts are at least two lines.
+  let noun = "lines"
+  if (shown.length === 1 && shown[0]?.count === 1) noun = "line"
+  return `${shown.map((entry) => `${entry.arrow} ${entry.count}`).join(" ")} ${noun}`
 }
 
 // ── Working icon ──

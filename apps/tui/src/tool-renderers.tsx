@@ -426,15 +426,18 @@ interface BashOutput {
   readonly stdout: string
   readonly stderr: string
   readonly exitCode: number
-  /** The guardrail asked and the user said no: the command never ran. */
-  readonly declined: boolean
+  /**
+   * `blocked`: the guardrail asked and the user said no, so the command never
+   * ran. `background`: it runs on past the call. Neither has a real exit code.
+   */
+  readonly status: Option.Option<"blocked" | "background">
 }
 
 const BashOutputSchema = Schema.Struct({
   stdout: Schema.optional(Schema.String),
   stderr: Schema.optional(Schema.String),
   exitCode: Schema.Finite,
-  declined: Schema.optional(Schema.Boolean),
+  status: Schema.optional(Schema.Literals(["blocked", "background"])),
 })
 
 function parseBashOutput(
@@ -444,7 +447,7 @@ function parseBashOutput(
     stdout: decoded["stdout"] ?? "",
     stderr: decoded["stderr"] ?? "",
     exitCode: decoded["exitCode"],
-    declined: decoded["declined"] ?? false,
+    status: Option.fromUndefinedOr(decoded["status"]),
   }))
 }
 
@@ -478,16 +481,29 @@ function BashToolRenderer(props: ToolRendererProps) {
   const exitCodeColor = () => {
     const d = data()
     if (Option.isNone(d)) return theme.textMuted
-    if (d.value.declined) return theme.warning
+    if (Option.contains(d.value.status, "blocked")) return theme.warning
+    if (Option.contains(d.value.status, "background")) return theme.info
     if (d.value.exitCode === 0) return theme.success
     return theme.error
   }
 
-  // A declined command never ran: it has no exit code and no lines to count.
+  // A blocked command never ran and a background one has not ended: neither
+  // has an exit code or a line count to draw.
+  const status = () => Option.flatMap(data(), (d) => d.status)
   const Outcome = () => (
     <Show
-      when={!Option.exists(data(), (d) => d.declined)}
-      fallback={<span style={{ fg: exitCodeColor() }}>declined</span>}
+      when={Option.isNone(status())}
+      fallback={
+        <span style={{ fg: exitCodeColor() }}>
+          {Option.match(
+            Option.filter(status(), (value) => value === "blocked"),
+            {
+              onNone: () => "in background",
+              onSome: () => "declined",
+            },
+          )}
+        </span>
+      }
     >
       <span style={{ fg: exitCodeColor() }}>exit {Option.getOrUndefined(data())?.exitCode}</span>
       <span style={{ fg: theme.textMuted }}> · {plural(output().total, "line")}</span>
@@ -1105,8 +1121,8 @@ interface GrepOutput {
   readonly truncated: boolean
   /** Matches in the whole result; more than `matches` holds when a reload cut them to fit. */
   readonly total: number
-  /** A reload kept only the head and tail matches, so files between them may be missing. */
-  readonly cut: boolean
+  /** Files in the whole result, the ones between a cut's head and tail too. */
+  readonly files: number
 }
 
 const GrepMatchSchema = Schema.Struct({
@@ -1126,7 +1142,10 @@ function parseGrepOutput(call: ToolCall): Option.Option<GrepOutput> {
     matches: d.matches,
     truncated: d.truncated ?? false,
     total: Option.match(cut, { onNone: () => d.matches.length, onSome: (value) => value.items }),
-    cut: Option.isSome(cut),
+    files: Option.getOrElse(
+      Option.flatMap(cut, (value) => Option.fromUndefinedOr(value.files)),
+      () => new Set(d.matches.map((match) => match.file)).size,
+    ),
   }))
 }
 
@@ -1146,17 +1165,6 @@ function groupByFile(matches: readonly GrepMatch[]): Map<string, GrepMatch[]> {
     }
   }
   return groups
-}
-
-/** Files the kept matches name; a cut may hide more between head and tail. */
-const filesLabel = (count: number, cut: boolean): string => {
-  if (cut) return `${count}+ files`
-  return plural(count, "file")
-}
-
-const moreFilesLabel = (count: number, cut: boolean): string => {
-  if (cut) return "more files"
-  return `+${plural(count, "more file")}`
 }
 
 function GrepToolRenderer(props: ToolRendererProps) {
@@ -1190,8 +1198,7 @@ function GrepToolRenderer(props: ToolRendererProps) {
                 <span style={{ fg: theme.success, bold: true }}>{d().total}</span>
                 <span style={{ fg: theme.textMuted }}>
                   {" "}
-                  {countNoun(d().total, "match", "matches")} in{" "}
-                  {filesLabel(fileNames().length, d().cut)}
+                  {countNoun(d().total, "match", "matches")} in {plural(d().files, "file")}
                 </span>
                 <Show when={d().truncated}>
                   <span style={{ fg: theme.warning }}> (truncated)</span>
@@ -1200,10 +1207,10 @@ function GrepToolRenderer(props: ToolRendererProps) {
               <For each={collapsedFiles()}>
                 {(file) => <text style={{ fg: theme.textMuted }}> {truncatePath(file)}</text>}
               </For>
-              <Show when={fileNames().length > 3}>
+              <Show when={d().files > collapsedFiles().length}>
                 <text style={{ fg: theme.textMuted }}>
                   {" "}
-                  ... {moreFilesLabel(fileNames().length - 3, d().cut)}
+                  ... +{plural(d().files - collapsedFiles().length, "more file")}
                 </text>
               </Show>
             </box>

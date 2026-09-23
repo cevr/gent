@@ -883,44 +883,47 @@ describe("message part projection", () => {
     toolName: string,
     input: Readonly<Record<string, string>>,
     output: string,
+    options: { readonly id?: string; readonly running?: boolean } = {},
   ) => {
     const sessionId = SessionId.make("session-projection")
     const branchId = BranchId.make("branch-projection")
     const cell = ToolCallId.make("tc-cell-op")
-    const op = ToolCallId.make("tc-op")
+    const op = ToolCallId.make(options.id ?? "tc-op")
+    const started = EventEnvelope.make({
+      id: EventId.make(1),
+      createdAt: 1,
+      event: AgentEvent.cases.ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId: op,
+        toolName,
+        input,
+        parentToolCallId: cell,
+      }),
+    })
+    const succeeded = EventEnvelope.make({
+      id: EventId.make(2),
+      createdAt: 2,
+      event: AgentEvent.cases.ToolCallSucceeded.make({
+        sessionId,
+        branchId,
+        toolCallId: op,
+        toolName,
+        summary: "done",
+        output,
+        parentToolCallId: cell,
+      }),
+    })
+    // A running op has no terminal receipt yet.
+    const receipts = [started]
+    if (options.running !== true) receipts.push(succeeded)
     const projected = projectMessagesWithToolInteractions(
       [
         makeMessage("a", "assistant", [
           Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
         ]),
       ],
-      toolCallReceipts([
-        EventEnvelope.make({
-          id: EventId.make(1),
-          createdAt: 1,
-          event: AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: op,
-            toolName,
-            input,
-            parentToolCallId: cell,
-          }),
-        }),
-        EventEnvelope.make({
-          id: EventId.make(2),
-          createdAt: 2,
-          event: AgentEvent.cases.ToolCallSucceeded.make({
-            sessionId,
-            branchId,
-            toolCallId: op,
-            toolName,
-            summary: "done",
-            output,
-            parentToolCallId: cell,
-          }),
-        }),
-      ]),
+      toolCallReceipts(receipts),
     )
     const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
     return operation
@@ -999,7 +1002,8 @@ describe("message part projection", () => {
     const [cut] = operation?.cuts ?? []
     expect(cut?._tag).toBe("Items")
     if (cut?._tag !== "Items") return
-    expect(cut).toMatchObject({ field: "matches", items: 200 })
+    // Ten files hold the 200 matches; the cut counts them all, not only the kept ones.
+    expect(cut).toMatchObject({ field: "matches", items: 200, files: 10 })
     const tailCount = 200 - cut.tailItem + 1
     const headCount = output.matches.length - tailCount
     expect(headCount).toBeGreaterThan(0)
@@ -1050,6 +1054,96 @@ describe("message part projection", () => {
     )
     expect(operation?.input).toEqual(input)
     expect(encodeValue(operation).length).toBeLessThanOrEqual(8_192)
+  })
+
+  test("an op with a long call id and a long tool name stays within the op budget", () => {
+    const outputs = {
+      none: encodeValue({}),
+      text: "plain text result\n".repeat(1_000),
+      bash: encodeValue({ stdout: "out\n".repeat(3_000), stderr: "", exitCode: 0 }),
+      grep: encodeValue({
+        matches: Array.from({ length: 300 }, (_, index) => ({
+          file: `src/f${index % 7}.ts`,
+          line: index,
+          content: `hit ${index}`,
+        })),
+        truncated: false,
+      }),
+    }
+    const input = { path: "/workspace/src/a.ts", oldString: "x".repeat(9_000) }
+    const ids = { short: "tc-op", long: `tc-${"i".repeat(3_000)}`, huge: `tc-${"i".repeat(9_000)}` }
+    const names = { short: "grep", long: `tool-${"n".repeat(9_000)}` }
+    const cases = Object.entries(ids).flatMap(([idKind, id]) =>
+      Object.entries(names).flatMap(([nameKind, toolName]) =>
+        Object.entries(outputs).flatMap(([outputKind, output]) =>
+          [false, true].map((running) => ({
+            idKind,
+            id,
+            nameKind,
+            toolName,
+            output,
+            running,
+            outputKind,
+          })),
+        ),
+      ),
+    )
+    for (const each of cases) {
+      const operation = projectOperation(each.toolName, input, each.output, {
+        id: each.id,
+        running: each.running,
+      })
+      const path = `${each.idKind} id, ${each.nameKind} name, ${each.outputKind}, running ${each.running}`
+      expect(encodeValue(operation).length, path).toBeLessThanOrEqual(8_192)
+      const id = String(operation?.id)
+      const toolName = String(operation?.toolName)
+      // An id that fits stays whole: the live feed matches results to ops by it.
+      if (each.idKind !== "huge") expect(id, path).toBe(each.id)
+      if (each.idKind === "huge") expect(each.id.startsWith(id), path).toBe(true)
+      if (each.nameKind === "short") expect(toolName, path).toBe(each.toolName)
+      if (each.nameKind === "long") {
+        expect(each.toolName.startsWith(toolName), path).toBe(true)
+        expect(toolName.length, path).toBeLessThan(each.toolName.length)
+      }
+    }
+  })
+
+  test("an id that leaves only a few characters drops the input and output rather than overflow", () => {
+    const input = { path: "/workspace/src/a.ts" }
+    const bash = encodeValue({ stdout: "hello", stderr: "", exitCode: 0 })
+    // Id lengths across the edge where the id fits whole with 0 to 60 characters left.
+    for (let length = 8_020; length <= 8_100; length += 1) {
+      const id = `tc-${"i".repeat(length)}`
+      const operation = projectOperation("bash", input, bash, { id })
+      expect(encodeValue(operation).length, `id length ${length}`).toBeLessThanOrEqual(8_192)
+    }
+  })
+
+  test("an input that grows into the output room leaves a small body whole", () => {
+    const bash = encodeValue({ stdout: "hello\nworld", stderr: "", exitCode: 0 })
+    const grep = encodeValue({
+      matches: [
+        { file: "src/a.ts", line: 1, content: "hit one" },
+        { file: "src/b.ts", line: 2, content: "hit two" },
+      ],
+      truncated: false,
+    })
+    // Input sizes across the edge where the input takes all the room the whole
+    // output leaves; the step is narrower than a cut record, the space at risk.
+    for (let filler = 7_700; filler <= 8_100; filler += 10) {
+      const input = { path: "/workspace/src/a.ts", oldString: "x".repeat(filler) }
+      const shell = projectOperation("bash", input, bash)
+      expect(Schema.decodeUnknownSync(BashOutputJson)(shell?.output), `bash, ${filler}`).toEqual(
+        Schema.decodeSync(BashOutputJson)(bash),
+      )
+      expect(shell?.cuts, `bash, filler ${filler}`).toBeUndefined()
+      const search = projectOperation("grep", input, grep)
+      expect(Schema.decodeUnknownSync(GrepOutputJson)(search?.output), `grep, ${filler}`).toEqual(
+        Schema.decodeSync(GrepOutputJson)(grep),
+      )
+      expect(search?.cuts, `grep, filler ${filler}`).toBeUndefined()
+      expect(encodeValue(search).length).toBeLessThanOrEqual(8_192)
+    }
   })
 
   test("projects Gent transcript parts without exposing persisted field names", () => {
