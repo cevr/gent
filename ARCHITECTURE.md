@@ -178,7 +178,7 @@ commands      queries/events
 
 Process topology is secondary. Default CLI topology is not.
 
-Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients use one host-local server lock at `~/.gent/server.lock`; workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
+Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients share one server per database, decided by the lock files beside `data.db` (see Shared Server Discovery); workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
 
 ## Transport Boundary
 
@@ -872,7 +872,12 @@ Production rule:
 
 ## Shared Server Discovery
 
-`packages/sdk/src/server.ts` owns shared-server discovery. It stores one host-local identity record at `~/.gent/server.lock`, not one registry file per workspace or database. Clients only attach after probing `/_gent/identity` and matching the full server identity tuple, so stale pidfiles and PID reuse do not signal unrelated processes.
+`packages/sdk/src/server.ts` owns shared-server discovery. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
+
+- `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
+- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. `gent server stop` sends SIGTERM only after the same probe; `--all` removes an entry whose kernel lock is free.
+
+A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 
 `packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 

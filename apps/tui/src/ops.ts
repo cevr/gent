@@ -1,5 +1,15 @@
 import { Database } from "bun:sqlite"
-import { Config, Console, DateTime, Effect, FileSystem, Match, Option, Schema } from "effect"
+import {
+  Config,
+  Console,
+  DateTime,
+  Effect,
+  FileSystem,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect"
 import {
   classifyLogFile,
   dataPaths,
@@ -186,6 +196,12 @@ export const inspectLogs = (
 /** The doctor's server line, from the SDK's reading of the lock. */
 export const inspectServer = (status: ServerLockStatus): ServerHealth => {
   if (status._tag === "None") return { status: "none", summary: "No shared server." }
+  if (status._tag === "Unnamed") {
+    return {
+      status: "alive",
+      summary: "A process holds the server lock but has not named itself yet (still starting?)",
+    }
+  }
   const { pid, serverId, rpcUrl } = status.entry
   if (status._tag === "Alive") {
     return { status: "alive", summary: `Shared server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
@@ -451,6 +467,10 @@ const serverStatus = Command.make("status", {}, () =>
       yield* Console.log("No shared server.")
       return
     }
+    if (status._tag === "Unnamed") {
+      yield* Console.log("A process holds the server lock but has not named itself yet.")
+      return
+    }
 
     yield* Console.log("Shared server:\n")
     yield* Console.log(
@@ -481,9 +501,11 @@ const serverStop = Command.make(
       const line = Match.value(result).pipe(
         Match.tagsExhaustive({
           None: () => "No shared server.",
+          Unnamed: () =>
+            "A process holds the server lock but names no PID to signal; nothing was stopped.",
           NotRunning: () => "No live shared server to stop on this host.",
           Removed: ({ entry }) =>
-            `Shared server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock.`,
+            `Shared server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock entry.`,
           NotOwned: ({ entry }) =>
             `Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`,
           Stopped: ({ entry }) =>
@@ -504,6 +526,9 @@ const readDoctorExtensionHealth = (
   status: ServerLockStatus,
 ): Effect.Effect<ExtensionDoctorHealth> => {
   if (status._tag === "None") return Effect.succeed(extensionHealthUnavailable("No shared server."))
+  if (status._tag === "Unnamed") {
+    return Effect.succeed(extensionHealthUnavailable("The shared server has not named itself yet."))
+  }
   if (status._tag === "Stale") {
     return Effect.succeed(extensionHealthUnavailable("Shared server lock is stale."))
   }
@@ -527,10 +552,13 @@ export const doctor = Command.make("doctor", {}, () =>
   }),
 )
 
+/** A process holds the kernel lock, named or not: the database is in use. */
+const serverHoldsLock = Predicate.or(Predicate.isTagged("Alive"), Predicate.isTagged("Unnamed"))
+
 const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
     const home = yield* readHome
-    if ((yield* serverLock.status(home))._tag === "Alive") {
+    if (serverHoldsLock(yield* serverLock.status(home))) {
       yield* Console.error(
         "Error: shared server is running. Stop it with `gent server stop` first.",
       )
