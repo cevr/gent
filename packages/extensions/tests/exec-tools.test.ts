@@ -175,6 +175,12 @@ describe("injectGitTrailers", () => {
     )
   })
 
+  test("an escaped quote in ANSI-C quoting does not hide a later commit", () => {
+    expect(inject("git commit -m $'x8\\'s' && git commit -m x9")).toBe(
+      `git commit ${trailer} -m $'x8\\'s' && git commit ${trailer} -m x9`,
+    )
+  })
+
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
     expect(inject(cmd)).toBe(cmd)
@@ -200,6 +206,7 @@ describe("injectGitTrailers", () => {
         `${git} commit -q --allow-empty -m "revert git commit abc"`,
         `${git} commit -q --allow-empty -m 'fix git commit hook'`,
         `${git} commit -q --allow-empty -F - <<EOF\nsee git commit docs\nEOF`,
+        `${git} commit -q --allow-empty -m $'it\\'s done' && ${git} commit -q --allow-empty -m after`,
         `git log --format=%B%x00`,
       ].join("\n")
       const result = yield* runBashCommand(inject(script), Option.none()).pipe(Effect.scoped)
@@ -209,6 +216,8 @@ describe("injectGitTrailers", () => {
         .map((message) => message.trim())
         .filter((message) => message.length > 0)
       expect(messages).toEqual([
+        "after\n\nSession-Id: s1",
+        "it's done\n\nSession-Id: s1",
         "see git commit docs\n\nSession-Id: s1",
         "fix git commit hook\n\nSession-Id: s1",
         "revert git commit abc\n\nSession-Id: s1",
@@ -547,6 +556,18 @@ describe("classifyBashCommand", () => {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     expect(classifyBashCommand("echo 'git status' | xargs -I{} sh -c '{}'").level).toBe("safe")
+  })
+
+  test("an escaped quote in ANSI-C quoting does not hide a later command", () => {
+    for (const command of [
+      "echo $'a\\'b'; git reset --hard",
+      "git commit -m $'don\\'t' && git push --force",
+      "bash -c $'git status\\ngit reset --hard'",
+      "git reset $'--\\x68ard'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo $'it\\'s'").level).toBe("safe")
   })
 
   test("quoted text and heredoc notes that describe git work are data", () => {

@@ -429,15 +429,24 @@ const sourceWord = (
   }
 }
 
-/** Add the character at `index`; `quoted` when a quote around it keeps an insertion inside the word. */
-const addChar = (reader: CommandReader, index: number, quoted: boolean) => {
-  reader.wordText += reader.source.text.charAt(index)
-  reader.wordMap.push(sourceOffset(reader.source, index))
-  reader.wordSafe.push(quoted && sourceSafe(reader.source, index))
+/**
+ * Add `text` as what the source character at `index` stands for (an escape
+ * maps to its last character); `quoted` when a quote around it keeps an
+ * insertion inside the word.
+ */
+const addText = (reader: CommandReader, text: string, index: number, quoted: boolean) => {
+  for (const unit of text.split("")) {
+    reader.wordText += unit
+    reader.wordMap.push(sourceOffset(reader.source, index))
+    reader.wordSafe.push(quoted && sourceSafe(reader.source, index))
+  }
   reader.wordEnd = sourceOffset(reader.source, index) + 1
   reader.wordEndSafe = sourceSafe(reader.source, index)
   reader.inWord = true
 }
+
+const addChar = (reader: CommandReader, index: number, quoted: boolean) =>
+  addText(reader, reader.source.text.charAt(index), index, quoted)
 
 const addRange = (reader: CommandReader, start: number, end: number, quoted: boolean) => {
   for (let index = start; index < end && index < reader.source.text.length; index++) {
@@ -534,6 +543,53 @@ const readDoubleQuoted = (reader: CommandReader, from: number): number => {
   return index
 }
 
+/** One ANSI-C escape of `$'…'`: `\n`, `\'`, octal, `\x`, `\u`, `\U` or a `\c` control character. */
+const ANSI_C_ESCAPE =
+  /^\\(?:([abeEfnrtv\\'"?])|([0-7]{1,3})|x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|c(.))/s
+
+const ANSI_C_LETTERS = new Map([
+  ["a", "\x07"],
+  ["b", "\b"],
+  ["e", "\x1b"],
+  ["E", "\x1b"],
+  ["f", "\f"],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+  ["v", "\v"],
+])
+
+/** The character an ANSI-C escape stands for. */
+const ansiCChar = (escape: RegExpExecArray): string => {
+  // One group matches; the others are empty.
+  const [, letter = "", octal = "", hex = "", unicode = "", wide = "", control = ""] = escape
+  if (letter !== "")
+    return Option.getOrElse(Option.fromUndefinedOr(ANSI_C_LETTERS.get(letter)), () => letter)
+  if (control !== "") return String.fromCharCode(control.charCodeAt(0) & 31)
+  let code = Number.parseInt(`${hex}${unicode}${wide}`, 16)
+  if (octal !== "") code = Number.parseInt(octal, 8)
+  if (code > 0x10ffff) return "\ufffd"
+  return String.fromCodePoint(code)
+}
+
+/** Read `$'…'` text from `from`: a backslash escape, `\'` included, does not close it. Returns the index of the closing quote. */
+const readAnsiCQuoted = (reader: CommandReader, from: number): number => {
+  const text = reader.source.text
+  let index = from
+  while (index < text.length && text.charAt(index) !== "'") {
+    const escape = Option.fromNullishOr(ANSI_C_ESCAPE.exec(text.slice(index, index + 10)))
+    if (Option.isSome(escape)) {
+      const length = escape.value[0].length
+      addText(reader, ansiCChar(escape.value), index + length - 1, true)
+      index += length
+    } else {
+      addChar(reader, index, true)
+      index++
+    }
+  }
+  return index
+}
+
 const readSingleQuoted = (reader: CommandReader, from: number): number => {
   let index = from
   while (index < reader.source.text.length && reader.source.text.charAt(index) !== "'") {
@@ -583,14 +639,16 @@ const readHeredocBodies = (reader: CommandReader, from: number): number => {
 /** A quoted run: `'…'`, `"…"`, and the ANSI-C and locale forms `$'…'` and `$"…"`. */
 const readQuote = (reader: CommandReader, index: number): Option.Option<number> => {
   const text = reader.source.text
+  const dollar = text.charAt(index) === "$"
   let open = index
-  if (text.charAt(index) === "$") open++
+  if (dollar) open++
   const quote = text.charAt(open)
   if (quote !== "'" && quote !== '"') return Option.none()
   addQuote(reader, open)
   let close = open + 1
-  if (quote === "'") close = readSingleQuoted(reader, close)
-  else close = readDoubleQuoted(reader, close)
+  if (quote === '"') close = readDoubleQuoted(reader, close)
+  else if (dollar) close = readAnsiCQuoted(reader, close)
+  else close = readSingleQuoted(reader, close)
   addQuote(reader, close)
   return Option.some(close + 1)
 }
