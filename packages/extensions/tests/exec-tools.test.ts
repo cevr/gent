@@ -23,6 +23,7 @@ import {
   BashTool,
   classifyBashCommand,
   injectGitTrailers,
+  runBashCommand,
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
@@ -99,47 +100,106 @@ describe("splitCdCommand", () => {
 })
 
 describe("injectGitTrailers", () => {
-  test('git commit -m "msg" → injects --trailer', () => {
-    const result = injectGitTrailers('git commit -m "fix bug"', SessionId.make("sess-123"))
-    expect(result).toContain('--trailer "Session-Id: sess-123"')
-    expect(result).toContain("git commit")
+  const trailer = "--trailer=Session-Id:s1"
+  const inject = (command: string) => injectGitTrailers(command, SessionId.make("s1"))
+
+  test("a commit gets the session trailer right after the commit word", () => {
+    expect(inject('git commit -m "fix bug"')).toBe(`git commit ${trailer} -m "fix bug"`)
   })
 
   test("a commit after git global options gets the trailer", () => {
-    expect(injectGitTrailers("git -C sub commit -m a", SessionId.make("s1"))).toBe(
-      'git -C sub commit --trailer "Session-Id: s1" -m a',
-    )
+    expect(inject("git -C sub commit -m a")).toBe(`git -C sub commit ${trailer} -m a`)
+    expect(inject("git --no-pager commit -m a")).toBe(`git --no-pager commit ${trailer} -m a`)
+    expect(inject('git -C "my dir" commit -m a')).toBe(`git -C "my dir" commit ${trailer} -m a`)
   })
 
   test("a commit that passes its own trailer keeps it; the other commits get one", () => {
-    expect(
-      injectGitTrailers(
-        'git commit --trailer "X: 1" -m a && git commit -m b',
-        SessionId.make("s1"),
-      ),
-    ).toBe('git commit --trailer "X: 1" -m a && git commit --trailer "Session-Id: s1" -m b')
+    expect(inject('git commit --trailer "X: 1" -m a && git commit -m b')).toBe(
+      `git commit --trailer "X: 1" -m a && git commit ${trailer} -m b`,
+    )
   })
 
   test("every commit in a chained command gets the trailer", () => {
-    expect(injectGitTrailers("git commit -m a && git commit -m b", SessionId.make("s1"))).toBe(
-      'git commit --trailer "Session-Id: s1" -m a && git commit --trailer "Session-Id: s1" -m b',
+    expect(inject("git commit -m a && git commit -m b")).toBe(
+      `git commit ${trailer} -m a && git commit ${trailer} -m b`,
     )
+    expect(inject("git add a.ts; git commit -m a | cat")).toBe(
+      `git add a.ts; git commit ${trailer} -m a | cat`,
+    )
+  })
+
+  test("a message that mentions git commit is left as written", () => {
+    for (const command of [
+      'git commit -m "revert git commit abc"',
+      "git commit -m 'fix git commit hook'",
+      'git commit -m "$(cat <<\'EOF\'\nexplain git commit -m "quoted"\nEOF\n)"',
+    ]) {
+      const result = inject(command)
+      expect(result, command).toBe(command.replace("git commit", `git commit ${trailer}`))
+    }
+  })
+
+  test("a heredoc body that mentions git commit is left as written", () => {
+    const command = "git commit -F - <<EOF\nsee git commit docs\nEOF"
+    expect(inject(command)).toBe(`git commit ${trailer} -F - <<EOF\nsee git commit docs\nEOF`)
+  })
+
+  test("text that only mentions git commit is not a commit", () => {
+    for (const command of [
+      "echo 'run git commit later'",
+      'git log --grep "git commit"',
+      "cat <<EOF\ngit commit -m x\nEOF",
+      "ls # git commit -m x",
+    ]) {
+      expect(inject(command), command).toBe(command)
+    }
+  })
+
+  test("a commit inside a script a shell runs gets the trailer", () => {
+    expect(inject("bash -c 'git commit -m a'")).toBe(`bash -c 'git commit ${trailer} -m a'`)
+    expect(inject('echo "$(git commit -m a)"')).toBe(`echo "$(git commit ${trailer} -m a)"`)
   })
 
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
-    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+    expect(inject(cmd)).toBe(cmd)
   })
 
   test("git commit-tree → unchanged", () => {
     const cmd = "git commit-tree abc -m msg"
-    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+    expect(inject(cmd)).toBe(cmd)
   })
 
   test("already has --trailer → unchanged", () => {
     const cmd = 'git commit --trailer "Foo: bar" -m "msg"'
-    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+    expect(inject(cmd)).toBe(cmd)
   })
+
+  it.live("each rewritten commit runs in bash and records the message and trailer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const git = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false"
+      const script = [
+        `git init -q ${dir}/r && cd ${dir}/r`,
+        `${git} commit -q --allow-empty -m "revert git commit abc"`,
+        `${git} commit -q --allow-empty -m 'fix git commit hook'`,
+        `${git} commit -q --allow-empty -F - <<EOF\nsee git commit docs\nEOF`,
+        `git log --format=%B%x00`,
+      ].join("\n")
+      const result = yield* runBashCommand(inject(script), Option.none()).pipe(Effect.scoped)
+      expect(result.exitCode, result.stderr).toBe(0)
+      const messages = result.stdout
+        .split("\0")
+        .map((message) => message.trim())
+        .filter((message) => message.length > 0)
+      expect(messages).toEqual([
+        "see git commit docs\n\nSession-Id: s1",
+        "fix git commit hook\n\nSession-Id: s1",
+        "revert git commit abc\n\nSession-Id: s1",
+      ])
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
 })
 
 describe("stripBackground", () => {
@@ -332,6 +392,53 @@ describe("classifyBashCommand", () => {
   test("destructive and external patterns win over the read-only exemption", () => {
     expect(classifyBashCommand("cat x; rm -rf /").level).toBe("destructive")
     expect(classifyBashCommand("ls && git push").level).toBe("external")
+  })
+
+  test("a flag after a redirection operator stays in its command", () => {
+    for (const command of [
+      "git push &>/dev/null --force",
+      "git reset &>/dev/null --hard",
+      "git reset &>>log --hard",
+      "git push >| log --force",
+      "git reset --hard |& cat",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a script a shell reads from stdin is classified", () => {
+    for (const command of [
+      "bash <<< 'git push --force'",
+      "bash <<<'git reset --hard'",
+      "sh <<EOF\ngit push --force\nEOF",
+      "sh <<-'EOF'\n\tgit reset --hard\n\tEOF",
+      "echo 'git reset --hard' | bash",
+      "bash -o pipefail -c 'git reset --hard'",
+      "bash -lc 'git reset --hard'",
+      'eval "git reset --hard"',
+      'eval git "reset --hard"',
+      'echo "$(git reset --hard)"',
+      "cat <<EOF\n$(git reset --hard)\nEOF",
+      "diff <(git reset --hard) b",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("quoted text and heredoc notes that describe git work are data", () => {
+    for (const command of [
+      "git commit -m 'undo git reset --hard'",
+      'git commit -m "docs: explain why git push --force is dangerous"',
+      'git commit -m "make every git restore ask"',
+      "cat > notes.md <<EOF\nnever run git reset --hard\nEOF",
+      "cat > notes.md <<'EOF'\n$(git reset --hard) is literal here\nEOF",
+      "echo 'git push --force'",
+      "git log --grep 'reset --hard'",
+      "ls # git reset --hard",
+      "git commit -m \"$(cat <<'EOF'\nexplain git reset --hard\nEOF\n)\"",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
   })
 })
 
