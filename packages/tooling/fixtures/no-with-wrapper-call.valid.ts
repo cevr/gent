@@ -26,3 +26,7 @@ export const provideThing =
     effect.pipe(Effect.annotateLogs({ label }))
 
 export const withFallback = (primary: string, fallback: string): string => primary || fallback
+
+export const withRetries = Effect.fn("withRetries")(function* (count: number) {
+  return yield* Effect.succeed(count)
+})

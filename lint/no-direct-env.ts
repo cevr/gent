@@ -115,8 +115,9 @@ const isExtensionFilename = (filename: string): boolean => {
   )
 }
 
-/** A relative path that escapes into core internals. */
-const INTERNAL_RELATIVE = /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
+/** Core source, and the harness inside it, as seen in a resolved absolute path. */
+const CORE_SOURCE_PATH = /\/packages\/core\/src\//
+const TEST_UTILS_PATH = /\/packages\/core\/src\/test-utils\//
 const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
 const PROTOCOL_ENTRY = /^@gent\/core\/protocol(?:\.js)?$/
 const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
@@ -126,6 +127,17 @@ const importSourceOf = (node: AstNode): string | undefined => {
   const source = getNodeField(node, "source")
   if (source === undefined) return undefined
   return getStringField(source, "value")
+}
+
+/** The absolute path a relative specifier names, or undefined for a package specifier. */
+const resolvedRelativeSource = (filename: string, source: string): string | undefined => {
+  if (!source.startsWith("./") && !source.startsWith("../")) return undefined
+  const segments = filename.replaceAll("\\", "/").split("/").slice(0, -1)
+  for (const part of source.split("/")) {
+    if (part === "..") segments.pop()
+    if (part !== ".." && part !== "." && part !== "") segments.push(part)
+  }
+  return segments.join("/")
 }
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
@@ -329,9 +341,36 @@ const curriedParams = (fn: AstNode | undefined): ReadonlyArray<ReadonlyArray<Ast
   return levels
 }
 
+const EFFECT_FN_NAMES = new Set(["fn", "fnUntraced"])
+
+const isEffectFnCallee = (callee: AstNode | undefined): boolean => {
+  if (callee?.type !== "MemberExpression") return false
+  const object = getNodeField(callee, "object")
+  const property = getNodeField(callee, "property")
+  return (
+    object?.type === "Identifier" &&
+    getStringField(object, "name") === "Effect" &&
+    EFFECT_FN_NAMES.has(getStringField(property ?? callee, "name") ?? "")
+  )
+}
+
+/**
+ * The function a definition runs. `Effect.fn(body)`, `Effect.fn("name")(body)`,
+ * and the `fnUntraced` forms yield their generator body; anything else yields itself.
+ */
+const definitionFunction = (init: AstNode | undefined): AstNode | undefined => {
+  if (init?.type !== "CallExpression") return init
+  const callee = getNodeField(init, "callee")
+  const traced =
+    isEffectFnCallee(callee) ||
+    (callee?.type === "CallExpression" && isEffectFnCallee(getNodeField(callee, "callee")))
+  if (!traced) return init
+  return callExpressionArgs(init).find(isFunctionNode)
+}
+
 /** Why a `withX` definition is a wrapper helper, or undefined when it is not one. */
 const withWrapperDefinitionKind = (fn: AstNode | undefined): "effect" | "callback" | undefined => {
-  const levels = curriedParams(fn)
+  const levels = curriedParams(definitionFunction(fn))
   const annotations = (params: ReadonlyArray<AstNode>) =>
     params.map((param) => getNodeField(param, "typeAnnotation"))
   if (levels.some((params) => annotations(params).some(isEffectTypeAnnotation))) return "effect"
@@ -456,9 +495,10 @@ const plugin: Plugin = {
      *   only the two authoring entries; a TUI client extension also reads
      *   `protocol`. A shipped extension is never more privileged than a user
      *   extension, so `host`, `test-utils`, any other `@gent/core` path, and a
-     *   relative path into core internals are all rejected.
+     *   relative path that resolves into `packages/core/src/` are all rejected.
      * - Product code (anything that is not a test file, `packages/e2e/`, or the
-     *   harness in `packages/core/src/test-utils/`) never reads `test-utils`.
+     *   harness in `packages/core/src/test-utils/`) never reads `test-utils`,
+     *   by package specifier or by a relative path that resolves into it.
      *
      * Exempt: the two authoring entries themselves, which assemble the public
      * API from core internals, and the TUI's client extension loader, which is
@@ -473,9 +513,12 @@ const plugin: Plugin = {
         if (!extensionFile && !productFile) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
 
-        const extensionMessage = (source: string): string | undefined => {
-          if (INTERNAL_RELATIVE.test(source)) {
-            return `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`
+        const extensionMessage = (
+          source: string,
+          resolved: string | undefined,
+        ): string | undefined => {
+          if (resolved !== undefined && CORE_SOURCE_PATH.test(resolved)) {
+            return `Extensions must import from "@gent/core/extensions/api", not core source by relative path. Forbidden: "${source}"`
           }
           if (!source.startsWith("@gent/core/")) return undefined
           if (AUTHORING_ENTRY.test(source)) return undefined
@@ -486,9 +529,13 @@ const plugin: Plugin = {
         const report = (node: AstNode) => {
           const source = importSourceOf(node)
           if (source === undefined) return
+          const resolved = resolvedRelativeSource(filename, source)
+          const readsTestUtils =
+            TEST_UTILS_ENTRY.test(source) ||
+            (resolved !== undefined && TEST_UTILS_PATH.test(resolved))
           let message: string | undefined
-          if (extensionFile) message = extensionMessage(source)
-          if (message === undefined && productFile && TEST_UTILS_ENTRY.test(source)) {
+          if (extensionFile) message = extensionMessage(source, resolved)
+          if (message === undefined && productFile && readsTestUtils) {
             message = `Product code must not import the test entry. Forbidden: "${source}"`
           }
           if (message !== undefined) context.report({ message, node })
@@ -540,7 +587,8 @@ const plugin: Plugin = {
      * - `withX(callback)` and `withX(arg, callback)` invert control. Expose an
      *   Effect value or provider and continue with `.pipe(...)`.
      * - A `withX` definition that takes an `Effect.Effect` parameter (at any
-     *   curried level) or a callback parameter is the helper those calls need.
+     *   curried level, and inside `Effect.fn` or `Effect.fnUntraced`) or a
+     *   callback parameter is the helper those calls need.
      *
      * The callback and definition checks skip `tests/`, where a local `withX`
      * fixture helper is allowed.

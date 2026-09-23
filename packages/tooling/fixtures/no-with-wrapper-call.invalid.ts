@@ -29,3 +29,11 @@ export const withCurriedThing =
     effect.pipe(Effect.annotateLogs({ value }))
 
 export const withCallbackThing = <A>(use: (thing: string) => A) => use("thing")
+
+export const withScope = Effect.fn("withScope")(function* (effect: Effect.Effect<void>) {
+  return yield* effect
+})
+
+export const withUntracedScope = Effect.fnUntraced(function* (effect: Effect.Effect<void>) {
+  return yield* effect
+})

@@ -99,17 +99,18 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
     valid: "packages/extensions/src/core-entry-boundary.valid.ts",
-    // protocol, host, test-utils, a core path, a relative escape, a re-export,
-    // an export-all of host, and a dynamic import
-    expectedCount: 8,
+    // protocol, host, test-utils, a core path, two relative paths that resolve
+    // into core source, a re-export, an export-all of host, and a dynamic import
+    expectedCount: 9,
   },
   {
     // A client extension also reads protocol; the loader is host code.
     rule: "gent/core-entry-boundary",
     invalid: "apps/tui/src/extensions/core-entry-boundary.invalid.ts",
     valid: "apps/tui/src/extensions/loader-boundary.ts",
-    // a protocol subpath, host, test-utils, a core re-export, a dynamic import
-    expectedCount: 5,
+    // a protocol subpath, host, test-utils, a relative path to core's host,
+    // a core re-export, a dynamic import
+    expectedCount: 6,
   },
   {
     // A reference extension is held to the same two entries.
@@ -124,7 +125,23 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/core-entry-boundary",
     invalid: "packages/sdk/src/core-entry-boundary.invalid.ts",
     valid: "packages/sdk/tests/core-entry-boundary.valid.ts",
-    // an import and a re-export of test-utils; the host import is allowed
+    // an import and a re-export of test-utils, and a relative path that
+    // resolves into core's test-utils; the host import is allowed
+    expectedCount: 3,
+  },
+  {
+    // Core product code reaches the harness by relative path; still rejected.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",
+    valid: "packages/core/src/runtime/core-entry-boundary.valid.ts",
+    // an import and a re-export that resolve into core's test-utils
+    expectedCount: 2,
+  },
+  {
+    // The harness itself reads its sibling files and core internals.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",
+    valid: "packages/core/src/test-utils/core-entry-boundary.valid.ts",
     expectedCount: 2,
   },
   {
@@ -208,8 +225,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     valid: "no-with-wrapper-call.valid.ts",
     // Calls: withX(innerCall()), withX(...)(innerCall()), withX(innerCall(), arg),
     // withX(arrow), withX(arg, function). Definitions: an Effect parameter,
-    // a curried Effect parameter, a callback parameter.
-    expectedCount: 8,
+    // a curried Effect parameter, a callback parameter, and an Effect parameter
+    // inside Effect.fn and inside Effect.fnUntraced.
+    expectedCount: 10,
   },
   {
     rule: "gent/no-inert-it",
