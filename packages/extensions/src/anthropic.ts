@@ -1149,7 +1149,7 @@ export const makeAnthropicCredentialCache = (
  * - mcp_ tool name prefix on outgoing payloads
  * - mcp_ tool name strip on incoming responses
  * - System identity injection
- * - Cache control on system messages
+ * - Prompt-cache markers (`markCacheBreakpoints`)
  *
  * This keeps all Claude Code keychain conventions in the extension,
  * out of the generic provider boundary.
@@ -1532,8 +1532,125 @@ export const transformPayload = (
     result["messages"] = messagesAfterRelocate
     result["system"] = yield* buildSystemArray(messagesAfterRelocate)
 
-    return result
+    return markCacheBreakpoints(result, "first-user")
   })
+
+// ── Prompt caching ──
+
+/**
+ * Anthropic caches a prompt prefix only up to a block that carries
+ * `cache_control`, and the SDK sets one only from a per-part
+ * `options.anthropic.cacheControl`. The prefix renders `tools` →
+ * `system` → `messages`, and a request takes at most 4 markers.
+ *
+ * Markers, in priority order, while the limit allows:
+ *   1. the end of the stable prefix: the last system block, or on the
+ *      Claude Code path the first user message (the system prompt moves
+ *      there, and the billing and identity blocks take no marker);
+ *   2. the last cacheable block of the last message, so each step reads
+ *      the previous step's conversation back from the cache;
+ *   3. the last tool, so the tool list stays cached when the system
+ *      prompt changes.
+ *
+ * Markers already on the payload count toward the limit. A marker does
+ * not change the cached bytes, so the tail marker moves forward each
+ * step, which is the documented multi-turn pattern.
+ */
+type CachePrefixEnd = "system" | "first-user"
+
+const CACHE_BREAKPOINT_LIMIT = 4
+const EPHEMERAL_CACHE: JsonRecord = { type: "ephemeral" }
+/** Content block types that take `cache_control`. Thinking blocks and empty text do not. */
+const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
+  "text",
+  "image",
+  "document",
+  "search_result",
+  "tool_use",
+  "tool_result",
+])
+
+const hasCacheMarker = (block: JsonRecord): boolean => isRecord(block["cache_control"])
+
+const isCacheableBlock = (block: JsonRecord): boolean =>
+  CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
+
+const countCacheMarkers = (payload: JsonRecord): number => {
+  let count = 0
+  const countBlocks = (blocks: JsonValue) => {
+    if (!isRecordArray(blocks)) return
+    for (const block of blocks) if (hasCacheMarker(block)) count += 1
+  }
+  countBlocks(payload["tools"])
+  countBlocks(payload["system"])
+  if (isRecordArray(payload["messages"])) {
+    for (const message of payload["messages"]) countBlocks(message["content"])
+  }
+  return count
+}
+
+/** The blocks with `index` marked; `None` when there is no such block or it has a marker already. */
+const markBlockAt = (
+  blocks: ReadonlyArray<JsonRecord>,
+  index: number,
+): Option.Option<ReadonlyArray<JsonRecord>> =>
+  Option.fromUndefinedOr(blocks[index]).pipe(
+    Option.filter((block) => !hasCacheMarker(block)),
+    Option.map((block) => {
+      const next = blocks.slice()
+      next[index] = { ...block, cache_control: EPHEMERAL_CACHE }
+      return next
+    }),
+  )
+
+const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>) =>
+  markBlockAt(blocks, blocks.findLastIndex(isCacheableBlock))
+
+/** The payload with `cache_control` on the stable prefix, the conversation tail and the tool list. */
+const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): JsonRecord => {
+  const result = { ...payload }
+  let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
+  const messages: Array<JsonRecord> = []
+  if (isRecordArray(payload["messages"])) messages.push(...payload["messages"])
+
+  const spend = (
+    marked: Option.Option<ReadonlyArray<JsonRecord>>,
+    set: (blocks: ReadonlyArray<JsonRecord>) => void,
+  ) => {
+    if (budget <= 0 || Option.isNone(marked)) return
+    set(marked.value)
+    budget -= 1
+  }
+  const markMessage = (index: number) => {
+    const message = Option.fromUndefinedOr(messages[index])
+    if (Option.isNone(message)) return
+    // The SDK always sends block arrays; a string content takes no marker.
+    const content = message.value["content"]
+    if (!isRecordArray(content)) return
+    spend(markLastCacheable(content), (marked) => {
+      messages[index] = { ...message.value, content: marked }
+    })
+  }
+
+  if (prefixEnd === "system") {
+    if (isRecordArray(payload["system"])) {
+      spend(markLastCacheable(payload["system"]), (system) => {
+        result["system"] = system
+      })
+    }
+  } else {
+    markMessage(messages.findIndex((message) => message["role"] === "user"))
+  }
+  markMessage(messages.length - 1)
+  if (isRecordArray(payload["tools"])) {
+    const tools = payload["tools"]
+    spend(markBlockAt(tools, tools.length - 1), (marked) => {
+      result["tools"] = marked
+    })
+  }
+  if (isRecordArray(payload["messages"])) result["messages"] = messages
+  return result
+}
 
 // ── Response Transforms (incoming) ──
 
@@ -1650,6 +1767,40 @@ const makeKeychainClientLayer = (
       return service
     }),
   )
+
+/**
+ * Wraps an AnthropicClient so each API-key request carries prompt-cache
+ * markers. The Claude Code path marks its payload in `transformPayload`.
+ */
+const promptCacheClientLayer: Layer.Layer<
+  AnthropicClient.AnthropicClient,
+  never,
+  AnthropicClient.AnthropicClient
+> = Layer.effect(
+  AnthropicClient.AnthropicClient,
+  Effect.gen(function* () {
+    const inner = yield* AnthropicClient.AnthropicClient
+    const withMarkers = <Options extends { readonly payload: CreateMessageOptions["payload"] }>(
+      options: Options,
+    ) =>
+      Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+        Effect.orDie,
+        Effect.map((payload) => ({
+          ...options,
+          payload: encodeMessagePayload(
+            decodeMessagePayload(markCacheBreakpoints(payload, "system")),
+          ),
+        })),
+      )
+    return AnthropicClient.AnthropicClient.of({
+      client: inner.client,
+      streamRequest: inner.streamRequest,
+      createMessage: (options) => Effect.flatMap(withMarkers(options), inner.createMessage),
+      createMessageStream: (options) =>
+        Effect.flatMap(withMarkers(options), inner.createMessageStream),
+    })
+  }),
+)
 
 // ── keychain transform ──────────────────────────────────────────────────────
 
@@ -1946,9 +2097,10 @@ const buildAnthropicConfig = (
  * are not on the hook for.
  */
 const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, apiKey: string) => {
-  const clientLayer = AnthropicClient.layer({
-    apiKey: Redacted.make(apiKey),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  const clientLayer = promptCacheClientLayer.pipe(
+    Layer.provide(AnthropicClient.layer({ apiKey: Redacted.make(apiKey) })),
+    Layer.provide(FetchHttpClient.layer),
+  )
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
 }
 

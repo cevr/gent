@@ -69,7 +69,7 @@ import {
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
-import { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
+import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 
 // ── anthropic/anthropic-keychain.test ───────────────────────────────────────
@@ -2115,6 +2115,12 @@ const runContextRequest = (
   )
 }
 
+/** A request body without its `cache_control` markers, which are not part of the cached bytes. */
+const withoutCacheMarkers = (body: string) =>
+  body
+    .replaceAll(/"cache_control":(?:null|\{[^}]*\}),/g, "")
+    .replaceAll(/,"cache_control":(?:null|\{[^}]*\})/g, "")
+
 describe("Anthropic chronological context", () => {
   it.live(
     "retains initial instructions and tool history across later updates on every request path",
@@ -2191,11 +2197,20 @@ describe("Anthropic chronological context", () => {
                 Option.getOrThrow(Option.fromUndefinedOr(request.body)),
               ),
             )
-            const first = Option.getOrThrow(Option.fromUndefinedOr(bodies[0]))
             const next = Option.getOrThrow(Option.fromUndefinedOr(bodies[1]))
             const noInitial = Option.getOrThrow(Option.fromUndefinedOr(bodies[2]))
-            expect(next.system).toEqual(first.system)
-            expect(next.messages.slice(0, first.messages.length)).toEqual([...first.messages])
+            // The tail marker moves forward each request; it is not part of the cached bytes.
+            const unmarked = yield* Effect.forEach(state.captured, (request) =>
+              Schema.decodeEffect(requestCodec)(
+                withoutCacheMarkers(Option.getOrThrow(Option.fromUndefinedOr(request.body))),
+              ),
+            )
+            const firstUnmarked = Option.getOrThrow(Option.fromUndefinedOr(unmarked[0]))
+            const nextUnmarked = Option.getOrThrow(Option.fromUndefinedOr(unmarked[1]))
+            expect(nextUnmarked.system).toEqual(firstUnmarked.system)
+            expect(nextUnmarked.messages.slice(0, firstUnmarked.messages.length)).toEqual([
+              ...firstUnmarked.messages,
+            ])
             expect(next.messages.at(-1)).toMatchObject({
               role: "user",
               content: [
@@ -2564,6 +2579,143 @@ describe("buildAnthropicModelDriver — reasoning effort", () => {
         effort: "high",
       })
       expect(yield* sentFor("claude-opus-4-6", makeOAuthInfo())).toEqual({ effort: "high" })
+    }),
+  )
+})
+const CacheBlock = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  cache_control: Schema.optional(Schema.NullOr(Schema.Struct({ type: Schema.String }))),
+})
+type CacheBlock = typeof CacheBlock.Type
+const CachedRequest = Schema.fromJsonString(
+  Schema.Struct({
+    tools: Schema.optional(Schema.Array(CacheBlock)),
+    system: Schema.optional(Schema.Array(CacheBlock)),
+    messages: Schema.Array(
+      Schema.Struct({ role: Schema.String, content: Schema.Array(CacheBlock) }),
+    ),
+  }),
+)
+const ReadTool = Tool.make("read", {
+  description: "Read a file.",
+  parameters: Schema.Struct({ path: Schema.String }),
+  success: Schema.String,
+})
+/** One request with a tool list and a tool round trip; `options` go on each user-side part. */
+const cachingConversation = (options: Prompt.ProviderOptions) =>
+  Prompt.make([
+    { role: "system", content: "Stable instructions." },
+    { role: "user", content: [{ type: "text", text: "Read a.txt.", options }] },
+    {
+      role: "assistant",
+      content: [
+        Prompt.makePart("tool-call", {
+          id: "call_read",
+          name: "read",
+          params: { path: "a.txt" },
+          providerExecuted: false,
+        }),
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        Prompt.makePart("tool-result", {
+          id: "call_read",
+          name: "read",
+          result: "alpha",
+          isFailure: false,
+          providerExecuted: false,
+          options,
+        }),
+      ],
+    },
+    { role: "user", content: [{ type: "text", text: "Now summarize it." }] },
+  ])
+const runCachingRequest = (
+  model: Layer.Layer<LanguageModel.LanguageModel>,
+  state: FakeFetchState,
+  options: Prompt.ProviderOptions,
+) =>
+  LanguageModel.generateText({
+    prompt: cachingConversation(options),
+    toolkit: Toolkit.make(ReadTool),
+    disableToolCallResolution: true,
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        model,
+        fakeFetchLayer(state, () => anthropicHappyResponse()),
+      ),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+  )
+
+describe("buildAnthropicModelDriver — prompt caching", () => {
+  const isMarked = (block: CacheBlock) =>
+    Option.fromNullishOr(block.cache_control).pipe(
+      Option.exists((control) => control.type === "ephemeral"),
+    )
+  const lastMarked = (blocks: ReadonlyArray<CacheBlock>) =>
+    Option.fromUndefinedOr(blocks.at(-1)).pipe(Option.exists(isMarked))
+  const markerCount = (request: typeof CachedRequest.Type) =>
+    [
+      ...(request.tools ?? []),
+      ...(request.system ?? []),
+      ...request.messages.flatMap((message) => message.content),
+    ].filter(isMarked).length
+  const callerMarker: Prompt.ProviderOptions = {
+    anthropic: { cacheControl: { type: "ephemeral" } },
+  }
+  const sentFor = (authInfo: ProviderAuthInfo, options: Prompt.ProviderOptions = {}) =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+        {
+          _tag: "Durable",
+          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          at: yield* Clock.currentTimeMillis,
+          invalidated: false,
+        },
+      )
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
+      const state = makeFakeFetchState()
+      yield* runCachingRequest(model, state, options)
+      return yield* Schema.decodeEffect(CachedRequest)(
+        Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
+      )
+    })
+
+  it.live("an API-key request marks the system prompt, the conversation tail and the tools", () =>
+    Effect.gen(function* () {
+      const request = yield* sentFor(makeApiAuthInfo("sk-test"))
+      expect(lastMarked(request.system ?? [])).toBe(true)
+      expect(lastMarked(request.messages.at(-1)?.content ?? [])).toBe(true)
+      expect(lastMarked(request.tools ?? [])).toBe(true)
+      expect(markerCount(request)).toBe(3)
+    }),
+  )
+
+  // The billing and identity blocks take no marker; the system prompt moves into the first user message.
+  it.live("a Claude Code request marks the first user message, the tail and the tools", () =>
+    Effect.gen(function* () {
+      const request = yield* sentFor(makeOAuthInfo())
+      expect((request.system ?? []).some(isMarked)).toBe(false)
+      expect(lastMarked(request.messages[0]?.content ?? [])).toBe(true)
+      expect(lastMarked(request.messages.at(-1)?.content ?? [])).toBe(true)
+      expect(lastMarked(request.tools ?? [])).toBe(true)
+      expect(markerCount(request)).toBe(3)
+    }),
+  )
+
+  // Anthropic answers 400 above four markers.
+  it.live("markers the caller set count toward the limit of four on either auth path", () =>
+    Effect.gen(function* () {
+      for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+        expect(markerCount(yield* sentFor(authInfo, callerMarker))).toBe(4)
+      }
     }),
   )
 })
