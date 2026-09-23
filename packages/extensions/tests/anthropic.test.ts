@@ -17,8 +17,6 @@ import {
   isLongContextError,
   MODEL_CONFIG,
   parseOAuthResponse,
-  repairToolPairs,
-  supports1mContext,
   SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
   transformResponseContent,
@@ -145,7 +143,6 @@ const decodeSystemBlocks = Schema.decodeUnknownSync(
 const decodeToolChoice = Schema.decodeUnknownSync(
   Schema.Struct({ type: Schema.String, name: Schema.String }),
 )
-const decodeContentBlocks = Schema.decodeUnknownSync(Schema.Array(WireContentBlock))
 
 // ── transformPayload ──
 
@@ -336,94 +333,6 @@ describe("transformStreamEvent", () => {
   })
 })
 
-// ── repairToolPairs (opencode parity B) ──
-
-describe("repairToolPairs", () => {
-  test("drops orphan tool_use blocks (no matching downstream tool_result)", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "trying" },
-          { type: "tool_use", id: "tc-1", name: "echo", input: {} },
-          { type: "tool_use", id: "tc-2", name: "echo", input: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }],
-      },
-    ]
-    const repaired = repairToolPairs(messages)
-    const assistantContent = decodeContentBlocks(repaired[0]?.["content"])
-    // tool_use tc-2 is dropped; tc-1 + the text block survive.
-    expect(assistantContent).toHaveLength(2)
-    expect(assistantContent.find((b) => b["id"] === "tc-1")).toBeDefined()
-    expect(assistantContent.find((b) => b["id"] === "tc-2")).toBeUndefined()
-  })
-
-  test("drops orphan tool_result blocks (no matching upstream tool_use)", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          { type: "tool_result", tool_use_id: "tc-orphan", content: "stale" },
-          { type: "text", text: "follow-up" },
-        ],
-      },
-    ]
-    const repaired = repairToolPairs(messages)
-    const userContent = decodeContentBlocks(repaired[0]?.["content"])
-    expect(userContent).toHaveLength(1)
-    expect(userContent[0]!["type"]).toBe("text")
-  })
-
-  test("removes a message whose content fully empties out after filtering", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tc-only", name: "echo", input: {} }],
-      },
-      { role: "user", content: [{ type: "text", text: "hi" }] },
-    ]
-    const repaired = repairToolPairs(messages)
-    expect(repaired).toHaveLength(1)
-    expect(repaired[0]!["role"]).toBe("user")
-  })
-
-  test("returns input unchanged when every pair matches", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tc-1", name: "echo", input: {} }],
-      },
-      {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }],
-      },
-    ]
-    const repaired = repairToolPairs(messages)
-    // Same reference — no defensive copy when nothing to repair.
-    expect(repaired).toBe(messages)
-  })
-
-  test("ignores messages whose content is a string (no tool blocks possible)", () => {
-    const messages = [
-      { role: "user", content: "plain text" },
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tc-1", name: "echo", input: {} }],
-      },
-    ]
-    // No tool_result for tc-1, so the assistant's tool_use is orphaned
-    // and gets dropped — but the string-content user message rides
-    // through untouched.
-    const repaired = repairToolPairs(messages)
-    expect(repaired).toHaveLength(1)
-    expect(repaired[0]!["content"]).toBe("plain text")
-  })
-})
-
 // ── system relocation (opencode parity A) ──
 
 describe("transformPayload — system content relocation", () => {
@@ -548,12 +457,9 @@ describe("transformPayload — system content relocation", () => {
           ],
         },
       ],
-      // Provide the matching upstream tool_use blocks so repairToolPairs
-      // doesn't drop the tool_result entries.
       tools: [],
     }
-    // Add an upstream assistant turn so the tool_result blocks survive
-    // the orphan check.
+    // A valid history: each tool_result has its tool_use upstream.
     const payloadWithPair = {
       ...payload,
       messages: [
@@ -1022,10 +928,10 @@ describe("keychainTransformClient — long-context beta retry", () => {
           })
           .pipe(Effect.orDie),
       )
-      // claude-opus-4-6 emits 2 long-context betas
-      // (context-1m-2025-08-07 + interleaved-thinking-2025-05-14).
-      // Initial attempt + 2 narrowing attempts = 3 captures.
-      expect(fakeState.captured).toHaveLength(3)
+      // claude-opus-4-6 emits one long-context beta
+      // (interleaved-thinking-2025-05-14; context-1m is never sent).
+      // Initial attempt + 1 narrowing attempt = 2 captures.
+      expect(fakeState.captured).toHaveLength(2)
       expect(response.status).toBe(400)
     }),
   )
@@ -1776,42 +1682,6 @@ describe("getModelOverride", () => {
   })
 })
 
-describe("supports1mContext", () => {
-  test("opus 4.6+ supports 1m", () => {
-    expect(supports1mContext("claude-opus-4-6")).toBe(true)
-    expect(supports1mContext("claude-opus-4-7")).toBe(true)
-  })
-
-  test("sonnet 4.6+ supports 1m", () => {
-    expect(supports1mContext("claude-sonnet-4-6")).toBe(true)
-  })
-
-  test("opus/sonnet below 4.6 does not", () => {
-    expect(supports1mContext("claude-opus-4-5")).toBe(false)
-    expect(supports1mContext("claude-sonnet-3-5")).toBe(false)
-  })
-
-  test("haiku is not eligible regardless of version", () => {
-    expect(supports1mContext("claude-haiku-4-7")).toBe(false)
-  })
-
-  test("date-suffix model ids are treated as x.0 (not x.<N>)", () => {
-    // Counsel  — date suffix like 20250514 reads minor>99 → effective 0,
-    // so opus-4-20250514 is treated as 4.0 (not 1m-eligible).
-    expect(supports1mContext("claude-opus-4-20250514")).toBe(false)
-  })
-
-  test("ids without a minor version and other families get no beta", () => {
-    // These models have a 1M context window by default and need no beta.
-    expect(supports1mContext("claude-sonnet-5")).toBe(false)
-    expect(supports1mContext("claude-opus-5")).toBe(false)
-    expect(supports1mContext("claude-fable-5-1")).toBe(false)
-    // A 5-family id with a minor version is still a 5-family model.
-    expect(supports1mContext("claude-opus-5-5")).toBe(false)
-    expect(supports1mContext("claude-sonnet-5-0")).toBe(false)
-  })
-})
-
 describe("getModelBetas", () => {
   test("includes every base beta for a generic sonnet model", () => {
     const betas = getModelBetas("claude-sonnet-4-5", Option.none())
@@ -1820,11 +1690,20 @@ describe("getModelBetas", () => {
     }
   })
 
-  test("opus 4.6+ also gets the long-context beta", () => {
-    const betas = getModelBetas("claude-opus-4-6", Option.none())
-    expect(betas).toContain("context-1m-2025-08-07")
-    // Plus the 4-6 override adds the effort beta.
-    expect(betas).toContain("effort-2025-11-24")
+  test("no model gets the context-1m beta: a 1M window is the default", () => {
+    for (const model of [
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-opus-4-7",
+      "claude-sonnet-4-5-20250514",
+      "claude-opus-4-20250514",
+      "claude-sonnet-5",
+      "sonnet",
+    ]) {
+      expect(getModelBetas(model, Option.none())).not.toContain("context-1m-2025-08-07")
+    }
+    // The 4-6 override still adds the effort beta.
+    expect(getModelBetas("claude-opus-4-6", Option.none())).toContain("effort-2025-11-24")
   })
 
   test("haiku omits interleaved-thinking (excluded by override)", () => {
@@ -1844,9 +1723,9 @@ describe("getModelBetas", () => {
     const betas = getModelBetas(
       "claude-opus-4-6",
       Option.none(),
-      Option.some(new Set(["context-1m-2025-08-07"])),
+      Option.some(new Set(["interleaved-thinking-2025-05-14"])),
     )
-    expect(betas).not.toContain("context-1m-2025-08-07")
+    expect(betas).not.toContain("interleaved-thinking-2025-05-14")
     // Other betas survive.
     expect(betas).toContain("oauth-2025-04-20")
   })
@@ -1859,28 +1738,6 @@ describe("getModelBetas", () => {
     )
     const occurrences = betas.filter((b) => b === "effort-2025-11-24").length
     expect(occurrences).toBe(1)
-  })
-  test("excludes context-1m for pre-4.6 models", () => {
-    const sonnet45 = getModelBetas("claude-sonnet-4-5-20250514", Option.none())
-    expect(sonnet45).not.toContain("context-1m-2025-08-07")
-    expect(sonnet45).toContain("claude-code-20250219")
-
-    const opus45 = getModelBetas("claude-opus-4-5-20250514", Option.none())
-    expect(opus45).not.toContain("context-1m-2025-08-07")
-  })
-
-  test("excludes context-1m for date-suffixed models without minor version", () => {
-    expect(getModelBetas("claude-opus-4-20250514", Option.none())).not.toContain(
-      "context-1m-2025-08-07",
-    )
-    expect(getModelBetas("claude-sonnet-4-20250514", Option.none())).not.toContain(
-      "context-1m-2025-08-07",
-    )
-  })
-
-  test("excludes context-1m for unversioned aliases", () => {
-    expect(getModelBetas("sonnet", Option.none())).not.toContain("context-1m-2025-08-07")
-    expect(getModelBetas("opus", Option.none())).not.toContain("context-1m-2025-08-07")
   })
 
   test("filters multiple excluded betas", () => {
@@ -2336,20 +2193,21 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         at: yield* Clock.currentTimeMillis,
         invalidated: false,
       })
-      // Pre-seed beta exclusions so the model's default 1M-context beta
+      // Pre-seed beta exclusions so the model's interleaved-thinking beta
       // is NOT sent. If the production beta cache used a fresh internal
       // Ref, this seeded exclusion wouldn't apply and the header would
-      // include `context-1m-2025-08-07`.
+      // include `interleaved-thinking-2025-05-14`.
       yield* Ref.set(
         betaCellRef,
-        new Map([["claude-opus-4-6", new Set(["context-1m-2025-08-07"])]]),
+        new Map([["claude-opus-4-6", new Set(["interleaved-thinking-2025-05-14"])]]),
       )
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
-      expect(sentBeta).not.toContain("context-1m-2025-08-07")
+      expect(sentBeta).not.toContain("interleaved-thinking-2025-05-14")
+      expect(sentBeta).toContain("oauth-2025-04-20")
     }),
   )
 })

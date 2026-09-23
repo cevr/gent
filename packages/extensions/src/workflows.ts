@@ -13,7 +13,7 @@ import {
   request,
 } from "@gent/core/extensions/api"
 
-export const WORKFLOWS_EXTENSION_ID = ExtensionId.make("@gent/workflows")
+const WORKFLOWS_EXTENSION_ID = ExtensionId.make("@gent/workflows")
 
 const planRecipe = (input: string, outputPath: string) => {
   if (input.length === 0) {

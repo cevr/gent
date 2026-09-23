@@ -20,7 +20,10 @@ import {
   Stream,
   Schema as S,
 } from "effect"
+import * as EffectEntry from "effect"
 import { describe, expect, it, test } from "effect-bun-test"
+import * as ExtensionApiEntry from "../../src/extensions/api"
+import * as BranchToolsEntry from "../../src/extensions/branch-tools"
 import {
   type CallRecord,
   createRpcHarness,
@@ -1010,11 +1013,8 @@ export default defineExtension({
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const launch = yield* fs.makeTempDirectoryScoped()
-      // Under the repository, so the extension file resolves `effect`.
-      const home = yield* fs.makeTempDirectoryScoped({
-        directory: path.resolve(import.meta.dir, "../../.."),
-        prefix: ".tmp-profile-files-",
-      })
+      // The loader binds `effect`, so the extension file needs no node_modules.
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-files-" })
       const extensionDir = path.join(home, ".gent", "extensions")
       yield* fs.makeDirectory(extensionDir, { recursive: true })
       const extensionFile = path.join(extensionDir, "probe.ts")
@@ -2938,6 +2938,115 @@ describe("client request origin", () => {
         ),
       ),
     ),
+  )
+})
+
+// ── extension entries ────────────────────────────────────────────────────────
+
+/** Each specifier the loader binds, with the module this process runs for it. */
+const boundEntries = {
+  "@gent/core/extensions/api": ExtensionApiEntry,
+  "@gent/core/extensions/branch-tools": BranchToolsEntry,
+  effect: EffectEntry,
+}
+
+// gent/no-dynamic-imports: allow the test reads the exports of an extension file it wrote
+const importFile = (file: string) => Effect.promise(() => import(file))
+
+/**
+ * The compiled binary has no node_modules. A user extension outside the
+ * repository resolves the public entries only because the loader binds them,
+ * and it gets the modules this process runs, not copies.
+ */
+describe("extension entries", () => {
+  it.scopedLive(
+    "a user extension outside the repository imports every public entry and registers its tool",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        // The system temp directory: no node_modules above it.
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-entries-" })
+        const userDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(userDir, { recursive: true })
+        const specifiers = Object.keys(boundEntries)
+        const extensionFile = path.join(userDir, "entries.ts")
+        yield* fs.writeFileString(
+          extensionFile,
+          [
+            ...specifiers.map((specifier, index) => `import * as E${index} from "${specifier}"`),
+            `export const bound = { ${specifiers.map((specifier, index) => `${encodeJson(specifier)}: E${index}`).join(", ")} }`,
+            `const api = E${specifiers.indexOf("@gent/core/extensions/api")}`,
+            `const { Effect, Schema } = E${specifiers.indexOf("effect")}`,
+            "export default api.defineExtension({",
+            '  id: "@user/entries",',
+            "  setup: Effect.gen(function* () {",
+            "    const host = yield* api.ExtensionHost",
+            '    yield* host.register("tool", api.tool({ id: "entries_probe", description: "probe", params: Schema.Struct({}), output: Schema.String, execute: () => Effect.succeed("ok") }))',
+            "  }),",
+            "})",
+          ].join("\n"),
+        )
+
+        const discovered = yield* discoverExtensions({
+          userDir,
+          projectDir: "/nonexistent/gent-entries-project",
+        })
+        expect(discovered.failed).toEqual([])
+        const loaded = yield* Effect.forEach(discovered.loaded, (entry) =>
+          setupExtension(entry, home, home),
+        )
+        expect(
+          loaded.map((extension) => ({
+            id: String(extension.manifest.id),
+            tools: extension.contributions.tools?.map((tool) => String(getToolId(tool))),
+          })),
+        ).toEqual([{ id: "@user/entries", tools: ["entries_probe"] }])
+
+        const bound: object = (yield* importFile(extensionFile)).bound
+        for (const [specifier, entryModule] of Object.entries(boundEntries)) {
+          const imported: object = Reflect.get(bound, specifier)
+          expect(Object.keys(imported).sort()).toEqual(Object.keys(entryModule).sort())
+          for (const [name, value] of Object.entries(entryModule)) {
+            const same = Reflect.get(imported, name) === value
+            expect({ specifier, name, same }).toEqual({
+              specifier,
+              name,
+              same: true,
+            })
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(fsLayer)),
+  )
+
+  it.scopedLive("an internal entry and the client entry do not resolve for a user extension", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-entries-internal-" })
+      const userDir = path.join(home, ".gent", "extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      const writeImporter = (file: string, specifier: string, name: string) =>
+        fs.writeFileString(
+          path.join(userDir, file),
+          [
+            'import { Effect } from "effect"',
+            `import { ${name} } from "${specifier}"`,
+            `export default { manifest: { id: "@user/${file}" }, setup: Effect.sync(() => void ${name}) }`,
+          ].join("\n"),
+        )
+      yield* writeImporter("host.ts", "@gent/core/host", "BunPlatformLive")
+      yield* writeImporter("protocol.ts", "@gent/core/protocol", "SessionId")
+      const discovered = yield* discoverExtensions({
+        userDir,
+        projectDir: "/nonexistent/gent-entries-project",
+      })
+      expect(discovered.loaded).toEqual([])
+      expect(discovered.failed.map((failure) => failure.error)).toEqual([
+        expect.stringContaining("Cannot find package '@gent/core'"),
+        expect.stringContaining("Cannot find package '@gent/core'"),
+      ])
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(fsLayer)),
   )
 })
 

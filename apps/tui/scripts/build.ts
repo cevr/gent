@@ -33,6 +33,10 @@ const buildResult = await Bun.build({
     target: "bun-darwin-arm64",
     outfile: join(binDir, "gent"),
     autoloadBunfig: false,
+    // An extension resolves only the entries the loaders bind. Without this,
+    // an unbound package (`@gent/core/host`, a typo) is fetched from the npm
+    // registry at import time.
+    execArgv: ["--no-install"],
   },
 })
 

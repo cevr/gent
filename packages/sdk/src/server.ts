@@ -47,7 +47,7 @@ import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BunHttpServer } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
-import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/unstable/ai"
 import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
@@ -1011,6 +1011,8 @@ const buildOwnedServer = (
         (error) => new GentConnectionError({ message: `invalid GENT_LOG_LEVEL: ${error.message}` }),
       ),
     )
+    // A user extension imports the same effect modules the shipped ones do.
+    yield* platform.bindModules(BuiltinExtensionModules)
     const serverRoot = yield* buildServerRoot({
       observability: GentObservability(options.cwd, logLevel, yield* resolveLogDir),
       dependencies: {

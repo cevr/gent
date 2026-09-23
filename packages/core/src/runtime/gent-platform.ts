@@ -79,7 +79,19 @@ export class SignalError extends Schema.TaggedError<SignalError>()("SignalError"
 
 type GentPlatformHashAlgorithm = "sha256" | "md5"
 
+/**
+ * A module a file loaded at runtime may import: its exports, read when a file
+ * first imports it. A promise lets the module be imported on first use.
+ */
+export type RuntimeModuleSource = () => object | Promise<object>
+
 interface GentPlatformApi {
+  /**
+   * Resolve each bare specifier to the given module for every file loaded
+   * after this call, whatever its directory. A specifier binds once per
+   * process; a later bind of the same specifier is ignored.
+   */
+  readonly bindModules: (modules: ReadonlyMap<string, RuntimeModuleSource>) => Effect.Effect<void>
   readonly randomId: Effect.Effect<string>
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
@@ -103,6 +115,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
       Effect.gen(function* () {
         const counter = yield* Ref.make(0)
         return GentPlatform.of({
+          bindModules: () => Effect.void,
           randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
             Effect.map((n) => `${prefix}-${String(n).padStart(8, "0")}`),
           ),
@@ -262,8 +275,8 @@ export const runProcess = (
 // ── write-file-atomic ───────────────────────────────────────────────────────
 
 /**
- * Replaces the file at `path` with `content` through a staged sibling. The
- * text lands in a temporary file in the target directory, which is then
+ * Replaces the file at `path` with `content` through a staged sibling. A
+ * string is written as UTF-8; bytes are written as given. The content lands in a temporary file in the target directory, which is then
  * renamed over the file, so a reader (or a crash) never sees a half-written
  * file. The one atomic write: core's config and every extension use it.
  *
@@ -278,9 +291,15 @@ export const runProcess = (
  * credential passes 0600), else the mode of the file it replaces, else the
  * default for a new file.
  */
+/** A string's UTF-8 bytes; bytes as given. */
+const contentBytes = (content: string | Uint8Array): Uint8Array => {
+  if (Predicate.isString(content)) return new TextEncoder().encode(content)
+  return content
+}
+
 export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   path: string,
-  content: string,
+  content: string | Uint8Array,
   options?: { readonly mode?: number },
 ) {
   const fs = yield* FileSystem.FileSystem
@@ -351,7 +370,9 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
         yield* Effect.scoped(
           Effect.gen(function* () {
             const file = yield* fs.open(staging, { flag: "w" })
-            yield* file.writeAll(new TextEncoder().encode(content))
+            const bytes = contentBytes(content)
+            // An empty write reports zero bytes written, which writeAll fails; the staged file is already empty.
+            if (bytes.length > 0) yield* file.writeAll(bytes)
             yield* file.sync
           }),
         )

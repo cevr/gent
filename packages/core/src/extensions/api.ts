@@ -78,7 +78,6 @@ export type {
   ModelDriverContribution,
   ProviderAuthorizationResult,
   ProviderHints,
-  ProviderResolution,
   StoredOAuthCredentials,
   UpdateStoredOAuth,
 } from "../domain/driver.js"

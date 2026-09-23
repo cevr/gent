@@ -5,6 +5,21 @@ import {
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import * as EffectAiAnthropic from "@effect/ai-anthropic"
+import * as EffectAiOpenAi from "@effect/ai-openai"
+import * as EffectAiOpenAiCompat from "@effect/ai-openai-compat"
+import * as EffectPlatformBun from "@effect/platform-bun"
+import * as EffectRoot from "effect"
+import * as EffectAi from "effect/unstable/ai"
+import * as EffectAiError from "effect/unstable/ai/AiError"
+import * as EffectPrompt from "effect/unstable/ai/Prompt"
+import * as EffectResponse from "effect/unstable/ai/Response"
+import * as EffectTool from "effect/unstable/ai/Tool"
+import * as EffectHttp from "effect/unstable/http"
+import * as EffectHttpClientError from "effect/unstable/http/HttpClientError"
+import * as EffectProcess from "effect/unstable/process"
+import * as EffectChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
+import * as EffectSql from "effect/unstable/sql"
 import { CellBranchTools, CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
@@ -82,3 +97,34 @@ export const BuiltinExtensions: ReadonlyArray<
     artifactIdentity: BuiltinArtifactIdentity.value,
   }
 })
+
+// ── builtin peer modules ────────────────────────────────────────────────────
+
+/**
+ * Every `effect`, `effect/*` and `@effect/*` specifier a shipped extension
+ * imports, bound to the module this build bundles. A host binds them before it
+ * loads user extensions, so a user extension can import what a shipped one
+ * does, and gets the same instances. The keys are exactly the specifiers the
+ * shipped extensions import; `tests/index.test.ts` derives that set from their
+ * sources and fails when the two differ.
+ */
+export const BuiltinExtensionModules: ReadonlyMap<string, () => object> = new Map<
+  string,
+  () => object
+>([
+  ["@effect/ai-anthropic", () => EffectAiAnthropic],
+  ["@effect/ai-openai", () => EffectAiOpenAi],
+  ["@effect/ai-openai-compat", () => EffectAiOpenAiCompat],
+  ["@effect/platform-bun", () => EffectPlatformBun],
+  ["effect", () => EffectRoot],
+  ["effect/unstable/ai", () => EffectAi],
+  ["effect/unstable/ai/AiError", () => EffectAiError],
+  ["effect/unstable/ai/Prompt", () => EffectPrompt],
+  ["effect/unstable/ai/Response", () => EffectResponse],
+  ["effect/unstable/ai/Tool", () => EffectTool],
+  ["effect/unstable/http", () => EffectHttp],
+  ["effect/unstable/http/HttpClientError", () => EffectHttpClientError],
+  ["effect/unstable/process", () => EffectProcess],
+  ["effect/unstable/process/ChildProcessSpawner", () => EffectChildProcessSpawner],
+  ["effect/unstable/sql", () => EffectSql],
+])

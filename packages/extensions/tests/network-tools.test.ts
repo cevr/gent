@@ -184,6 +184,22 @@ describe("WebSearchTool", () => {
     }),
   )
 
+  it.live("an SSE error frame surfaces the Exa message, not a no-results reply", () =>
+    Effect.gen(function* () {
+      const failure = yield* failureOf(
+        search(
+          clientLayer(() =>
+            sseResponse([
+              emptyFrame,
+              { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "rate limited" } },
+            ]),
+          ),
+        ),
+      )
+      expect(Option.getOrThrow(failure).message).toBe("Exa MCP error: rate limited")
+    }),
+  )
+
   it.live("an SSE body with no usable frame falls back to a no-results message", () =>
     Effect.gen(function* () {
       const result = yield* search(clientLayer(() => sseResponse([emptyFrame])))
