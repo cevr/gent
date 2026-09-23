@@ -24,10 +24,9 @@ import { AgentName, BranchId, ModelDriverRef, SessionId } from "@gent/core/proto
 import { AllBuiltinAgents } from "../../../../packages/extensions/tests/helpers/builtin-agents.js"
 import {
   type ClientActivitySnapshot,
-  ClientTransport,
-  makeClientActivityLayer,
-  makeClientLifecycleLayer,
-  makeClientTransportLayer,
+  ClientContext,
+  type ClientContextDeps,
+  makeClientContextLayer,
 } from "../../src/extensions/client-facets"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
@@ -154,15 +153,24 @@ describe("file finder db dir", () => {
   )
 })
 
+/** A `ClientContext` layer over a test transport; `deps` replaces any default. */
+const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
+  makeClientContextLayer({
+    transport: makeClientTestTransport({ currentSession: () => Option.none() }),
+    workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
+    shell: { cast: createMockRuntime().cast },
+    ...deps,
+  })
+
 // ── ../driver-transport.test ────────────────────────────────────────────────
 
 /**
- * `/driver` routes through `ClientTransport.driverList/driverSet/driverClear`.
+ * `/driver` routes through `transport.driverList/driverSet/driverClear`.
  *
  * The transport seals every shell RPC failure into a
  * `ClientTransportRequestError` that names the RPC and keeps the server's
  * tagged error as `cause`; the slash command reports that failure through
- * `ClientShell.notify`, and a change that lands reports nothing.
+ * `shell.notify`, and a change that lands reports nothing.
  */
 
 class DriverRejected extends Schema.TaggedError<DriverRejected>()("DriverRejected", {
@@ -210,16 +218,18 @@ const runDriverSlash = (
     return notices
   })
 
-describe("driver routing through ClientTransport", () => {
+describe("driver routing through the client transport", () => {
   it.live(
     "driverSet keeps the server's tagged error as the cause of ClientTransportRequestError",
     () => {
       const rejected = new DriverRejected({ driverId: "model:nope" })
       const transport = makeClientTestTransport({ currentSession: () => Option.none() })
       const client = createMockClient({ driver: { set: () => Effect.fail(rejected) } })
-      const layer = makeClientTransportLayer({ ...transport, client, runtime: createMockRuntime() })
+      const layer = contextLayer({
+        transport: { ...transport, client, runtime: createMockRuntime() },
+      })
       return Effect.gen(function* () {
-        const service = yield* ClientTransport
+        const { transport: service } = yield* ClientContext
         const error = yield* service
           .driverSet({ agentName, driver: ModelDriverRef.make({ id: "model:nope" }) })
           .pipe(Effect.flip)
@@ -405,10 +415,7 @@ describe("Herdr integration", () => {
         Scope.close(scope, Exit.void),
       )
       const context = yield* Layer.buildWithScope(
-        Layer.mergeAll(
-          makeClientActivityLayer(snapshot),
-          makeClientLifecycleLayer({ addCleanup: (fn) => cleanups.push(fn) }),
-        ),
+        contextLayer({ activity: snapshot, lifecycle: { addCleanup: (fn) => cleanups.push(fn) } }),
         scope,
       )
       yield* builtinHerdr.setup.pipe(
@@ -507,13 +514,6 @@ describe("Herdr integration", () => {
         )
         expect(result).toBeDefined()
       }
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          makeClientActivityLayer(),
-          makeClientLifecycleLayer({ addCleanup: () => {} }),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(contextLayer())),
   )
 })

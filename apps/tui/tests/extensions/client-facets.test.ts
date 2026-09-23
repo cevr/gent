@@ -2,14 +2,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import { createMemo, createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import {
-  ClientActivity,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
-  ClientWorkspace,
-  sessionQuery,
-} from "../../src/extensions/client-facets"
+import { ClientContext, sessionQuery } from "../../src/extensions/client-facets"
 import { makeClientRuntime } from "../../src/extensions/host"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { createMockRuntime } from "../render-harness-boundary"
@@ -167,7 +160,7 @@ describe("sessionQuery", () => {
 /**
  * `makeClientRuntime` is the one runtime every client-extension surface
  * loads against. A surface gives it a transport, a workspace, and
- * `cast`; everything else defaults so headless and tests do not
+ * `cast`; everything else defaults so a test does not
  * restate no-op callbacks.
  */
 
@@ -177,7 +170,7 @@ const runCast = { cast: mockRuntime.cast }
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
 
 describe("makeClientRuntime", () => {
-  it.live("transport, workspace and cast alone resolve every client service", () => {
+  it.live("transport, workspace and cast alone resolve every client facet", () => {
     const runtime = makeClientRuntime({
       transport: makeClientTestTransport({ currentSession: () => Option.some(session) }),
       workspace,
@@ -188,11 +181,7 @@ describe("makeClientRuntime", () => {
         runRuntimeEffectBoundary(
           runtime,
           Effect.gen(function* () {
-            const shell = yield* ClientShell
-            const ws = yield* ClientWorkspace
-            const lifecycle = yield* ClientLifecycle
-            const activity = yield* ClientActivity
-            const transport = yield* ClientTransport
+            const { shell, workspace: ws, lifecycle, activity, transport } = yield* ClientContext
             shell.notify("ignored")
             shell.switchSession({ ...session, name: "ignored" })
             lifecycle.addCleanup(() => {})
@@ -228,9 +217,7 @@ describe("makeClientRuntime", () => {
         runRuntimeEffectBoundary(
           runtime,
           Effect.gen(function* () {
-            const shell = yield* ClientShell
-            const lifecycle = yield* ClientLifecycle
-            const activity = yield* ClientActivity
+            const { shell, lifecycle, activity } = yield* ClientContext
             shell.notify("hello")
             lifecycle.addCleanup(() => {})
             return activity.snapshot().state

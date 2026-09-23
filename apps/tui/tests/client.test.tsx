@@ -71,7 +71,7 @@ import { ExtensionId, InteractionRequestId, RequestId } from "@gent/core-interna
 import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
 import { useSessionFeed } from "../src/session"
 import { useExtensionUI } from "../src/extensions/host"
-import { type ClientRuntime, ClientShell } from "../src/extensions/client-facets"
+import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
 
 // ── agent-lifecycle.test ────────────────────────────────────────────────────
 
@@ -1101,7 +1101,7 @@ describe("ClientProvider session lifecycle", () => {
         Effect.promise(() =>
           runRuntimeEffectBoundary(
             clientRuntime,
-            ClientShell.use((shell) => Effect.sync(() => shell.notify(message))),
+            ClientContext.use(({ shell }) => Effect.sync(() => shell.notify(message))),
           ),
         )
       client.applySessionSnapshot({

@@ -20,9 +20,7 @@ import { useTheme } from "../theme"
 import {
   clientCommandContribution,
   clientContributions,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
+  ClientContext,
   defineClientExtension,
   sessionQuery,
   widgetContribution,
@@ -269,9 +267,9 @@ export const makeThreadController = (
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<number, { readonly message: string }>,
-): Effect.Effect<ThreadController, never, ClientTransport | ClientShell | ClientLifecycle> =>
+): Effect.Effect<ThreadController, never, ClientContext> =>
   Effect.gen(function* () {
-    const transport = yield* ClientTransport
+    const { transport } = yield* ClientContext
     const [open, setOpen] = createSignal(false)
 
     /** The branch a session contributes: the shell's branch for its own session, else the active one. */
@@ -486,9 +484,7 @@ export function ThreadPane(props: {
 
 export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const shell = yield* ClientShell
-    const lifecycle = yield* ClientLifecycle
+    const { transport, shell, lifecycle } = yield* ClientContext
 
     const controller = yield* makeThreadController(
       (sessionId) =>

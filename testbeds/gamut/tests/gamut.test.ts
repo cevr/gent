@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import {
   decodeState,
   isSettled,
+  openTurnSessions,
   encodeState,
   paneIdFromSplit,
   presetConfigJson,
@@ -145,5 +147,44 @@ describe("a settled pane", () => {
         "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n",
       ),
     ).toBe(false)
+  })
+})
+
+describe("gamut open turns", () => {
+  const withEvents = (rows: ReadonlyArray<readonly [string, string]>) => {
+    const db = new Database(":memory:")
+    db.run("CREATE TABLE events (id INTEGER PRIMARY KEY, session_id TEXT, event_tag TEXT)")
+    for (const [session, tag] of rows)
+      db.run("INSERT INTO events (session_id, event_tag) VALUES (?, ?)", [session, tag])
+    return db
+  }
+  test("a child that received its task and has not finished is open", () => {
+    const db = withEvents([
+      ["parent", "MessageReceived"],
+      ["parent", "StreamStarted"],
+      ["parent", "TurnCompleted"],
+      ["child", "MessageReceived"],
+      ["child", "StreamStarted"],
+    ])
+    expect(openTurnSessions(db)).toEqual(["child"])
+  })
+  test("turns that completed or failed are closed", () => {
+    const db = withEvents([
+      ["done", "MessageReceived"],
+      ["done", "StreamStarted"],
+      ["done", "MessageReceived"],
+      ["done", "TurnCompleted"],
+      ["failed", "MessageReceived"],
+      ["failed", "ErrorOccurred"],
+    ])
+    expect(openTurnSessions(db)).toEqual([])
+  })
+  test("a wake message after the last turn reopens the session", () => {
+    const db = withEvents([
+      ["parent", "MessageReceived"],
+      ["parent", "TurnCompleted"],
+      ["parent", "MessageReceived"],
+    ])
+    expect(openTurnSessions(db)).toEqual(["parent"])
   })
 })
