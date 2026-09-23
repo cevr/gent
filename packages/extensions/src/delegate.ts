@@ -8,16 +8,19 @@
  * child and returns its handle at admission, never its answer: the child
  * reports through the delegate's own `turnAfter` hook, as a message on the
  * parent branch that wakes it. The same hook stops a parent's running children
- * when the parent's turn is interrupted. The parent's next turn and every
- * `delegate.list` reconcile what a crash left.
+ * when the parent's turn is interrupted. The parent's first turn in a
+ * process and every `delegate.list` reconcile what a crash left.
  */
 import {
   Cause,
+  Context,
   Effect,
+  Layer,
   Option,
   type PlatformError,
   Predicate,
   Record,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -29,6 +32,7 @@ import {
   BranchId,
   defineExtension,
   defineRequests,
+  defineResource,
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
@@ -415,6 +419,67 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   )
 })
 
+/**
+ * Branches this process has reconciled on a turn. Reconcile repairs what a
+ * crash or a failed hook left; the turnAfter hook delivers every completion
+ * otherwise. So a branch's turns reconcile once per process, and again after
+ * any delivery fails: a failure invalidates every mark, because the failed
+ * hook may not know which parent it was writing to. A generation keeps a
+ * reconcile that raced the failure from marking its branch clean. Without the
+ * gate every model step replays each running child's event log.
+ * `delegate.list` and `delegate.children` still reconcile on each call.
+ */
+class ReconciledBranches extends Context.Service<
+  ReconciledBranches,
+  {
+    /** The current generation, read before a reconcile starts. */
+    readonly generation: Effect.Effect<number>
+    readonly has: (key: string) => Effect.Effect<boolean>
+    /** Marks the branch only when no failure invalidated the marks since `generation`. */
+    readonly add: (key: string, generation: number) => Effect.Effect<void>
+    readonly invalidate: Effect.Effect<void>
+  }
+>()("@gent/extensions/src/delegate/ReconciledBranches") {}
+
+interface ReconciledState {
+  readonly generation: number
+  readonly keys: ReadonlySet<string>
+}
+
+const ReconciledBranchesResource = defineResource({
+  id: "@gent/delegate/reconciled-branches",
+  scope: "process",
+  layer: Layer.effect(
+    ReconciledBranches,
+    Effect.map(Ref.make<ReconciledState>({ generation: 0, keys: new Set() }), (state) =>
+      ReconciledBranches.of({
+        generation: Effect.map(Ref.get(state), (current) => current.generation),
+        has: (key) => Effect.map(Ref.get(state), (current) => current.keys.has(key)),
+        add: (key, generation) =>
+          Ref.update(state, (current) => {
+            if (current.generation !== generation) return current
+            return { generation, keys: new Set([...current.keys, key]) }
+          }),
+        invalidate: Ref.update(state, (current) => ({
+          generation: current.generation + 1,
+          keys: new Set<string>(),
+        })),
+      }),
+    ),
+  ),
+})
+
+/** The turn-time reconcile: once per branch per process, again after a failed delivery or reconcile. */
+const reconcileOnce = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const reconciled = yield* ReconciledBranches
+  const key = `${ctx.sessionId}:${ctx.branchId}`
+  if (yield* reconciled.has(key)) return
+  const generation = yield* reconciled.generation
+  yield* reconcile()
+  yield* reconciled.add(key, generation)
+})
+
 // ── admission ───────────────────────────────────────────────────────────────
 
 interface AdmitParams {
@@ -793,6 +858,26 @@ export const DelegateRpc = defineRequests(DELEGATE_EXTENSION_ID, {
 
 // ── extension ───────────────────────────────────────────────────────────────
 
+/**
+ * How to work with children. A section, not tool guidelines: in a cell turn
+ * the model sees only the cell tool, so tool guidelines stay behind
+ * `tools(id)`. A child cannot delegate, so its turns do not get it.
+ */
+const CHILDREN_SECTION = {
+  id: "children",
+  priority: 12,
+  content: `# Children
+
+- Delegate independent, self-contained work to children: start each with delegate.start, from one cell when you work in one, then end your turn. Each child's result arrives as a message that wakes you.
+- A fresh child has no conversation history, so give it a complete task; a forked child starts from your context. Do a single lookup, edit, or command inline.`,
+}
+
+const childrenSection = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  if (ctx.turn?.agent.deniedTools?.includes("delegate.start") === true) return []
+  return [CHILDREN_SECTION]
+})
+
 /** Child admission and control: start, send, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
@@ -801,6 +886,7 @@ export const DelegateExtension = defineExtension({
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("request", DelegateRpc.Children)
+    yield* host.register("resource", ReconciledBranchesResource)
     // Every turn end is read twice: as a child's receipt for its parent, and
     // as a parent's interrupt for its children.
     yield* host.on("turnAfter", (input) =>
@@ -809,20 +895,25 @@ export const DelegateExtension = defineExtension({
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.completion.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+            // A completion must not be lost: the parent's next turn reconciles again.
+            Effect.andThen(
+              Effect.flatMap(ReconciledBranches, (reconciled) => reconciled.invalidate),
+            ),
           ),
         ),
       ),
     )
     // A crash between a child's receipt and its hook leaves an undelivered
-    // entry; the parent's next turn picks it up.
+    // entry; the parent's first turn in the new process picks it up.
     yield* host.on("turnProjection", () =>
-      reconcile().pipe(
+      reconcileOnce.pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.reconcile.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
           ),
         ),
-        Effect.as({}),
+        Effect.andThen(childrenSection),
+        Effect.map((promptSections) => ({ promptSections })),
       ),
     )
   }),

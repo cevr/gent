@@ -215,7 +215,7 @@ const HandoffParams = Schema.Struct({
   }),
   reason: Schema.optionalKey(
     Schema.String.annotate({
-      description: "Why handoff is needed (e.g. context window filling up)",
+      description: "Why the user wants the handoff",
     }),
   ),
 })
@@ -231,10 +231,10 @@ const HandoffResult = Schema.Struct({
 export const HandoffTool = tool({
   id: "handoff",
   description:
-    "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
+    "Create a new session with distilled context from the current one. Blocks until the user confirms. Context pressure is not a reason: the runtime compacts the window by itself.",
   promptSnippet: "Transfer context to a new session",
   promptGuidelines: [
-    "ONLY use when context is getting large and you need a clean slate",
+    "ONLY use when the user asks for a handoff (the /handoff command); never on your own because the context is large",
     "Include all essential context — the new session starts fresh",
   ],
   params: HandoffParams,

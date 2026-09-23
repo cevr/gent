@@ -429,6 +429,35 @@ describe("BashTool execution", () => {
   )
 
   it.live(
+    "runs in the session directory, not the server directory",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* provideBun(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem
+              const sessionDir = yield* fs.realPath(
+                yield* fs.makeTempDirectoryScoped({ prefix: "gent-bash-session-" }),
+              )
+              yield* fs.makeDirectory(`${sessionDir}/sub`)
+              const ctx = { ...stubCtx, cwd: sessionDir }
+              const plain = yield* runToolWithCtx(BashTool, { command: "pwd" }, ctx)
+              const relative = yield* runToolWithCtx(BashTool, { command: "pwd", cwd: "sub" }, ctx)
+              const split = yield* runToolWithCtx(BashTool, { command: "cd sub && pwd" }, ctx)
+              return { sessionDir, plain, relative, split }
+            }),
+          ),
+        )
+
+        expect(result.sessionDir).not.toBe(process.cwd())
+        expect(result.plain.stdout.trim()).toBe(result.sessionDir)
+        expect(result.relative.stdout.trim()).toBe(`${result.sessionDir}/sub`)
+        expect(result.split.stdout.trim()).toBe(`${result.sessionDir}/sub`)
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live(
     "splits cd + command into cwd and executes",
     () =>
       Effect.gen(function* () {

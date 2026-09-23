@@ -267,7 +267,7 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
 const SendSessionTool = tool({
   id: "session.send",
   description:
-    "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list or read_session. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
+    "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
   params: SendSessionParams,
   output: SendSessionResult,
   execute: Effect.fn("SendSessionTool.execute")(function* (params: typeof SendSessionParams.Type) {
@@ -338,11 +338,27 @@ const SendSessionTool = tool({
 
 // ── extension ───────────────────────────────────────────────────────────────
 
+/** `session.send` is how sessions talk; the section is its owner's, shown wherever the tool may run. */
+const SESSIONS_SECTION = {
+  id: "sessions",
+  priority: 14,
+  content: `# Sessions
+
+- Sessions talk with session.send: correct a running child, answer a child's question, or ask your parent when you are blocked on a decision. A message wakes an idle session.`,
+}
+
 export const SessionToolsExtension = defineExtension({
   id: SESSION_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadSessionTool, RenameSessionTool, SendSessionTool)
+    yield* host.on("turnProjection", () =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        if (ctx.turn?.agent.deniedTools?.includes(SendSessionTool.id) === true) return {}
+        return { promptSections: [SESSIONS_SECTION] }
+      }),
+    )
     yield* host.on("systemPrompt", (input) => {
       if (input.interactive === false) {
         return Effect.succeed(input.basePrompt)

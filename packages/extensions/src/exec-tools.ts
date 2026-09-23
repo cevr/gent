@@ -688,13 +688,18 @@ export const BashTool = tool({
     // Inject git commit trailers for session traceability
     command = injectGitTrailers(command, ctx.sessionId)
 
-    // Split cd + command patterns into cwd + command
-    let cwd = Option.fromNullishOr(params.cwd)
+    // Split cd + command patterns into cwd + command. One server serves
+    // every workspace, so the directory resolves against the session's
+    // cwd, never the server process directory.
+    // A `cd` in the command resolves against `params.cwd`, as bash would.
+    const path = yield* Path.Path
+    let directory = path.resolve(ctx.cwd, params.cwd ?? ".")
     const split = splitCdCommand(command)
     if (Option.isSome(split)) {
-      cwd = Option.some(split.value.cwd)
+      directory = path.resolve(directory, split.value.cwd)
       command = split.value.command
     }
+    const cwd = Option.some(directory)
 
     // Guardrail check — one durable approval per flagged call
     const risk = classifyBashCommand(command)
