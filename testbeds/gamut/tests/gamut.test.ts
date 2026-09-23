@@ -4,6 +4,7 @@ import {
   decodeState,
   failureText,
   isSettled,
+  latestEventId,
   openTurnSessions,
   encodeState,
   parseCount,
@@ -95,10 +96,16 @@ describe("gamut state file", () => {
     pane: "wZ:p9",
     binary: "/checkout/apps/tui/bin/gent",
     preset: "sol-luna",
+    sendMark: 7,
   }
 
   test("round trips every field", () => {
     expect(decodeState(encodeState(state))).toEqual(state)
+  })
+
+  test("a state file from before any send reads its send mark as zero", () => {
+    const { sendMark: _mark, ...older } = state
+    expect(decodeState(JSON.stringify(older)).sendMark).toBe(0)
   })
 
   test("a missing field is refused rather than read as undefined", () => {
@@ -229,11 +236,34 @@ describe("gamut open turns", () => {
     expect(openTurnSessions(db)).toEqual([])
   })
   test("the record says whether any turn has started", () => {
-    expect(runRecord(withEvents([]))).toEqual({ started: false, open: [] })
-    expect(runRecord(withEvents([["s", "MessageReceived"]]))).toEqual({
+    expect(runRecord(withEvents([]), 0)).toEqual({ started: false, open: [] })
+    expect(runRecord(withEvents([["s", "MessageReceived"]]), 0)).toEqual({
       started: true,
       open: ["s"],
     })
+  })
+  // `send` marks the newest event id before it types; the message it sends
+  // is stored after that mark, so a turn the previous prompt finished does
+  // not count as the new one having run.
+  test("a turn at or before the send mark does not count as started", () => {
+    const db = withEvents([
+      ["s", "MessageReceived"],
+      ["s", "TurnCompleted"],
+    ])
+    expect(runRecord(db, 2)).toEqual({ started: false, open: [] })
+    db.run("INSERT INTO events (session_id, event_tag) VALUES ('s', 'MessageReceived')")
+    expect(runRecord(db, 2)).toEqual({ started: true, open: ["s"] })
+  })
+  test("the send mark is the newest event id, zero before any event", () => {
+    expect(latestEventId(withEvents([]))).toBe(0)
+    expect(
+      latestEventId(
+        withEvents([
+          ["s", "MessageReceived"],
+          ["s", "TurnCompleted"],
+        ]),
+      ),
+    ).toBe(2)
   })
   test("a wake message after the last turn reopens the session", () => {
     const db = withEvents([

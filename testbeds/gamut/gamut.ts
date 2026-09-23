@@ -125,6 +125,12 @@ export interface GamutState {
   readonly pane: string
   readonly binary: string
   readonly preset: string
+  /**
+   * The newest event id when `send` last typed a message (zero until then).
+   * `wait` counts only a turn newer than it, so the turn the previous prompt
+   * finished cannot pass for the one just sent.
+   */
+  readonly sendMark: number
 }
 
 export const encodeState = (state: GamutState): string => `${JSON.stringify(state, null, 2)}\n`
@@ -145,6 +151,7 @@ export const decodeState = (text: string): GamutState => {
     pane: field("pane"),
     binary: field("binary"),
     preset: field("preset"),
+    sendMark: typeof record["sendMark"] === "number" ? record["sendMark"] : 0,
   }
 }
 
@@ -353,7 +360,15 @@ const prepareAndLaunch = async (
     await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data}`.text()
   const pane = paneIdFromSplit(split)
 
-  const state: GamutState = { root, work, data, pane, binary: BINARY, preset: presetName }
+  const state: GamutState = {
+    root,
+    work,
+    data,
+    pane,
+    binary: BINARY,
+    preset: presetName,
+    sendMark: 0,
+  }
   await Bun.write(STATE_FILE, encodeState(state))
 
   await $`herdr pane run ${pane} ${shellQuote(BINARY)} -p ${shellQuote(prompt)}`.quiet()
@@ -465,6 +480,8 @@ export const testSummary = (output: string): string => {
 
 const send = async (text: string) => {
   const state = await readState()
+  // Mark before typing: the message is stored after this id.
+  await Bun.write(STATE_FILE, encodeState({ ...state, sendMark: latestEventIn(state.data) }))
   // The pane is running the TUI, not a shell: the text goes into the composer
   // verbatim and Enter submits it. No shell quoting — that would be typed too.
   await $`herdr pane send-text ${state.pane} ${text}`.quiet()
@@ -504,22 +521,34 @@ export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
       .all() as Array<{ session_id: string }>
   ).map((row) => row.session_id)
 
-export const runRecord = (db: Database): RunRecord => ({
+/** A turn has started after `sendMark` (an event id), and which turns are open. */
+export const runRecord = (db: Database, sendMark: number): RunRecord => ({
   started:
-    db.query(`SELECT 1 FROM events WHERE event_tag = 'MessageReceived' LIMIT 1`).get() !== null,
+    db
+      .query(`SELECT 1 FROM events WHERE event_tag = 'MessageReceived' AND id > ? LIMIT 1`)
+      .get(sendMark) !== null,
   open: openTurnSessions(db),
 })
 
-const runRecordIn = (dataDir: string): RunRecord => {
+/** The newest event id, zero before any event. */
+export const latestEventId = (db: Database): number =>
+  (db.query(`SELECT COALESCE(MAX(id), 0) AS id FROM events`).get() as { id: number }).id
+
+const readRunDb = <A>(dataDir: string, absent: A, read: (db: Database) => A): A => {
   const dbPath = join(dataDir, "data.db")
-  if (!existsSync(dbPath)) return { started: false, open: [] }
+  if (!existsSync(dbPath)) return absent
   const db = new Database(dbPath, { readonly: true })
   try {
-    return runRecord(db)
+    return read(db)
   } finally {
     db.close()
   }
 }
+
+const runRecordIn = (dataDir: string, sendMark: number): RunRecord =>
+  readRunDb(dataDir, { started: false, open: [] }, (db) => runRecord(db, sendMark))
+
+const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestEventId)
 
 /**
  * Whether the run is finished: a turn has started, every turn has ended, and
@@ -552,7 +581,7 @@ const wait = async (timeoutSeconds: number) => {
   let record: RunRecord = { started: false, open: [] }
   while (Date.now() < deadline) {
     const text = await $`herdr pane read ${state.pane} --lines 12`.text()
-    record = runRecordIn(state.data)
+    record = runRecordIn(state.data, state.sendMark)
     settledReads = isSettled(text, record) ? settledReads + 1 : 0
     // Two reads in a row: a background child's result starts a new turn by
     // itself, and a message just sent may not be stored yet.
