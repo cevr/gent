@@ -56,6 +56,7 @@ import { maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { SqlClient } from "effect/unstable/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 
 // ── bash command parsing ────────────────────────────────────────────────────
 
@@ -2636,7 +2637,7 @@ describe("BashTool execution", () => {
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
         expect(message.sourceId).toBe("bash:tc-restart:failure")
-        expect(message.content).toContain("Background command interrupted by server restart")
+        expect(message.content).toContain("did not finish before the previous server stopped")
         expect(message.content).not.toContain("Background command completed")
       }).pipe(withProcessTimeout),
     processTestTimeout,
@@ -2871,5 +2872,154 @@ describe("background bash after session deletion", () => {
         expect(answered._tag).toBe("Failure")
       }).pipe(Effect.timeout("8 seconds")),
     10_000,
+  )
+})
+
+// ── background bash across a restart ───────────────────────────────────────
+
+describe("a background job the server stopped", () => {
+  it.live(
+    "is marked interrupted when its fiber stops, not left running under this process",
+    () =>
+      Effect.gen(function* () {
+        const ctx = { ...stubCtx, toolCallId: ToolCallId.make("tc-stopped-fiber") }
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-stopped-${millis}.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const scope = yield* Scope.make()
+        const firstProfile = yield* Layer.buildWithScope(makeProcessLayer(storageLayer), scope)
+        const started = yield* runToolWithCtx(
+          BashTool,
+          { command: "sleep 2", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provideContext(firstProfile))
+        expect(started.exitCode).toBe(0)
+        // The resource closes in a server that keeps running: no reconcile
+        // of another generation will ever reach this row.
+        yield* Scope.close(scope, Exit.void)
+
+        const claim = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId: ctx.toolCallId,
+            command: "sleep 2",
+            cwd: Option.none(),
+          })
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        expect(claim._tag).toBe("Terminal")
+        if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "tells the branch once when it opens after a restart, and the notice starts a turn",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-restart-" })
+        const storagePath = `${directory}/gent.db`
+        // The job waits for a file nobody writes, so it is running when the
+        // first process stops.
+        const command = `while ! test -f ${directory}/never; do sleep 0.02; done`
+        const lostNotice = "did not finish before the previous server stopped"
+        const textOf = (message: { readonly parts: ReadonlyArray<Prompt.Part> }) =>
+          message.parts
+            .map((part) => {
+              if (part.type === "text") return part.text
+              return ""
+            })
+            .join("")
+        const noticesIn = <M extends { readonly parts: ReadonlyArray<Prompt.Part> }>(
+          messages: ReadonlyArray<M>,
+        ) => messages.filter((message) => textOf(message).includes(lostNotice))
+
+        // First process: the turn starts the job and ends; then the server stops.
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+              toolCallStep("bash", { command, run_in_background: true }),
+              textStep("background command started"),
+            ])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              storagePath,
+              cwd: directory,
+            })
+            yield* client.message.send({ sessionId, branchId, content: "start the job" })
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                snapshot.messages.some((message) => message.role === "tool"),
+              5_000,
+              "the job started and the turn ended",
+            )
+            return { sessionId, branchId }
+          }),
+        )
+
+        // Second process: opening the session tells the branch, and the
+        // notice starts a turn.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+              textStep("the job was lost"),
+            ])
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
+            )
+            const snapshot = yield* waitFor(
+              client.session.getSnapshot(target),
+              (current) =>
+                current.runtime._tag === "Idle" &&
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some(
+                      (part) => part.type === "text" && part.text === "the job was lost",
+                    ),
+                ),
+              5_000,
+              "the notice started a turn",
+            )
+            yield* controls.waitForCall(0)
+            const notices = noticesIn(snapshot.messages)
+            expect(notices).toHaveLength(1)
+            expect(notices[0]?.role).toBe("user")
+            expect(notices[0]?.id).toContain(":bash:")
+            expect(notices[0]?.id).toMatch(/:failure$/)
+            expect(notices.map(textOf).join("")).toContain(`$ ${command}`)
+          }),
+        )
+
+        // Third process: the key is taken, so no second notice and no turn.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+              textStep("should not run"),
+            ])
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
+            )
+            yield* client.session.getSnapshot(target)
+            // Absence has no event to wait for: a repeated notice would start
+            // the first model call within this window.
+            const answered = yield* Effect.exit(
+              controls.waitForCall(0).pipe(Effect.timeout("1 second")),
+            )
+            expect(answered._tag).toBe("Failure")
+            const snapshot = yield* client.session.getSnapshot(target)
+            expect(noticesIn(snapshot.messages)).toHaveLength(1)
+          }),
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 })
