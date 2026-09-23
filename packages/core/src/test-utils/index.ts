@@ -60,9 +60,8 @@ import {
   matchesEventFilter,
 } from "../domain/event.js"
 import type { LanguageModel } from "effect/unstable/ai"
-import { BunServices } from "@effect/platform-bun"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { buildServerRoot } from "../server/server-root.js"
+import { buildServerRoot, ServerRootPlatformLayer } from "../server/server-root.js"
 import { Gent } from "@gent/sdk"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -236,7 +235,6 @@ export const testIdentity = (dbPath: string = ":memory:") => ({
   hostname: "test-host",
   dbPath,
   buildFingerprint: "test-fingerprint",
-  startedAt: 0,
 })
 
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
@@ -710,7 +708,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     identity: testIdentity(config.storagePath),
   })
   return Layer.unwrap(root.pipe(Effect.map((built) => built.coreServicesLive))).pipe(
-    Layer.provide(BunServices.layer),
+    Layer.provide(ServerRootPlatformLayer),
   )
 }
 

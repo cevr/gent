@@ -1553,7 +1553,6 @@ export interface DependenciesConfig {
    * persistence and leave the location to a default.
    */
   state: StateLocation
-  disabledExtensions?: ReadonlyArray<string>
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
   failOnExtensionFailure: boolean
   /** Language model layer override. When set, replaces the auth-backed live resolver.
@@ -1645,7 +1644,6 @@ export const createDependencies = (config: DependenciesConfig) => {
         platform: config.platform,
         shell: config.shell,
         osVersion: config.osVersion,
-        disabledExtensions: config.disabledExtensions,
         extensions: config.extensions,
         failOnExtensionFailure: config.failOnExtensionFailure,
       }),

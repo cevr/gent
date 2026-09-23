@@ -25,7 +25,7 @@ import {
   SessionStorage,
 } from "@gent/core-internal/storage/storage.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
-import { BunFileSystem, BunHttpServer, BunServices } from "@effect/platform-bun"
+import { BunHttpServer } from "@effect/platform-bun"
 import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core-internal/runtime/tools.js"
@@ -41,8 +41,11 @@ import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-mod
 import type { LanguageModel } from "effect/unstable/ai"
 import { GentObservability } from "./logger.js"
 import { GentConnectionError } from "@gent/core/protocol"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import { buildServerRoot, StateLocation } from "@gent/core-internal/server/server-root.js"
+import {
+  buildServerRoot,
+  ServerRootPlatformLayer,
+  StateLocation,
+} from "@gent/core-internal/server/server-root.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
 
@@ -686,8 +689,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
 
 // ── Types ──
 
-type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
-type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
+type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 
 export const StateSpec = Schema.Union([
   Schema.TaggedStruct("Sqlite", {
@@ -871,15 +873,9 @@ const resolveLanguageModelLayer = (
 
 // ── Platform layers ──
 
-const PlatformBaseLayer = Layer.mergeAll(
-  BunServices.layer,
-  BunFileSystem.layer,
-  BunGentPlatformLive,
-)
-const LocalPlatformLayer = Layer.merge(
-  PlatformBaseLayer,
-  BuildFingerprint.Live.pipe(Layer.provide(PlatformBaseLayer)),
-)
+/** Built once per `resolveServer`; the owned server's root and listener share it. */
+const LocalPlatformLayer = Layer.provideMerge(BuildFingerprint.Live, ServerRootPlatformLayer)
+type LocalPlatform = Layer.Success<typeof LocalPlatformLayer>
 
 // ── Helpers ──
 
@@ -953,140 +949,134 @@ const buildOwnedServer = (
   options: GentServerOptions,
   stateSpec: StateSpec,
   providerSpec: ProviderSpec,
-): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.provide(
-    Effect.gen(function* () {
-      const scope = yield* Effect.scope
-      const platform = yield* GentPlatform
-      const osInfo = yield* platform.osInfo
-      const pid = yield* platform.pid
-      const homeDirectory = yield* platform.homeDirectory
-      const requestedPort = Option.getOrElse(Option.fromNullishOr(options.port), () => 0)
-      const httpServerCtx = yield* Layer.buildWithScope(
-        BunHttpServer.layer({ port: requestedPort, idleTimeout: 0 }),
-        scope,
-      ).pipe(
-        Effect.mapError(
-          (error) =>
-            new GentConnectionError({ message: `server listener failed: ${String(error)}` }),
+): Effect.Effect<GentServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope
+    const platform = yield* GentPlatform
+    const osInfo = yield* platform.osInfo
+    const pid = yield* platform.pid
+    const homeDirectory = yield* platform.homeDirectory
+    const requestedPort = Option.getOrElse(Option.fromNullishOr(options.port), () => 0)
+    const httpServerCtx = yield* Layer.buildWithScope(
+      BunHttpServer.layer({ port: requestedPort, idleTimeout: 0 }),
+      scope,
+    ).pipe(
+      Effect.mapError(
+        (error) => new GentConnectionError({ message: `server listener failed: ${String(error)}` }),
+      ),
+    )
+    const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
+    const port = Match.value(httpServer.address).pipe(
+      Match.tag("TcpAddress", (address) => address.port),
+      Match.orElse(() => 0),
+    )
+    if (port === 0) {
+      return yield* new GentConnectionError({
+        message: "server listener did not bind a concrete TCP port",
+      })
+    }
+    const url = `http://127.0.0.1:${port}/rpc`
+    const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
+    const home = resolveHome(stateSpec, homeDirectory)
+    const serverId = yield* Option.match(Option.fromNullishOr(options.serverId), {
+      onNone: () => platform.randomId,
+      onSome: Effect.succeed,
+    })
+    const buildFingerprint = yield* (yield* BuildFingerprint).resolved
+
+    const languageModelLayer = resolveLanguageModelLayer(providerSpec)
+    const dbPath = yield* Match.value(stateSpec).pipe(
+      Match.tagsExhaustive({
+        Memory: () => Effect.succeed(Option.none<string>()),
+        Sqlite: (sqliteSpec) => Effect.asSome(resolveDbPath(home, sqliteSpec)),
+      }),
+    )
+    const serverRoot = yield* buildServerRoot({
+      observability: GentObservability(options.cwd),
+      dependencies: {
+        cwd: options.cwd,
+        // One broken user extension is reported, not fatal: the rest of the profile runs.
+        failOnExtensionFailure: false,
+        home,
+        platform: osInfo.platform,
+        osVersion: osInfo.release,
+        shell: options.shell,
+        authDirectory: options.authDirectory,
+        state: Option.match(dbPath, {
+          onNone: () => StateLocation.cases.Memory.make({}),
+          onSome: (path) => StateLocation.cases.Disk.make({ dbPath: path }),
+        }),
+        extensions: options.extensions ?? BuiltinExtensions,
+        branchTools: options.branchTools ?? CellBranchTools,
+        languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
+      },
+      identity: {
+        serverId,
+        pid,
+        hostname: osInfo.hostname,
+        dbPath: Option.getOrElse(dbPath, () => ":memory:"),
+        buildFingerprint,
+      },
+    }).pipe(
+      Effect.mapError(
+        (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
+      ),
+    )
+
+    const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
+      Layer.provide(Layer.succeedContext(httpServerCtx)),
+      Layer.provide(serverRoot.coreServicesLive),
+    )
+
+    yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
+
+    // Seed debug session if requested
+    if (options.debug === true) {
+      yield* seedDebugSession(options.cwd).pipe(
+        provideWorkspaceIdHeader(Headers.fromInput(workspaceHeaders)),
+        Effect.provideContext(serverRoot.coreServices),
+        Effect.catchEager((error) =>
+          Effect.logWarning("Debug session seeding failed").pipe(
+            Effect.annotateLogs({ error: String(error) }),
+          ),
         ),
       )
-      const httpServer = Context.get(httpServerCtx, HttpServer.HttpServer)
-      const port = Match.value(httpServer.address).pipe(
-        Match.tag("TcpAddress", (address) => address.port),
-        Match.orElse(() => 0),
-      )
-      if (port === 0) {
-        return yield* new GentConnectionError({
-          message: "server listener did not bind a concrete TCP port",
-        })
-      }
-      const url = `http://127.0.0.1:${port}/rpc`
-      const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
-      const home = resolveHome(stateSpec, homeDirectory)
-      const serverId = yield* Option.match(Option.fromNullishOr(options.serverId), {
-        onNone: () => platform.randomId,
-        onSome: Effect.succeed,
-      })
-      const buildFingerprint = yield* (yield* BuildFingerprint).resolved
+    }
 
-      const languageModelLayer = resolveLanguageModelLayer(providerSpec)
-      const dbPath = yield* Match.value(stateSpec).pipe(
-        Match.tagsExhaustive({
-          Memory: () => Effect.succeed(Option.none<string>()),
-          Sqlite: (sqliteSpec) => Effect.asSome(resolveDbPath(home, sqliteSpec)),
+    const idleSpec = Option.fromNullishOr(options.idleShutdown)
+    let awaitShutdown: Effect.Effect<void> = Effect.never
+    if (Option.isSome(idleSpec)) {
+      const shutdown = yield* Deferred.make<void>()
+      yield* Effect.forkScoped(
+        runIdleWatcher({
+          idleMs: idleSpec.value.idleMs,
+          connectionCount: serverRoot.connectionTracker.count,
+          shutdown,
         }),
       )
-      const serverRoot = yield* buildServerRoot({
-        observability: GentObservability(options.cwd),
-        dependencies: {
-          cwd: options.cwd,
-          // One broken user extension is reported, not fatal: the rest of the profile runs.
-          failOnExtensionFailure: false,
-          home,
-          platform: osInfo.platform,
-          osVersion: osInfo.release,
-          shell: options.shell,
-          authDirectory: options.authDirectory,
-          state: Option.match(dbPath, {
-            onNone: () => StateLocation.cases.Memory.make({}),
-            onSome: (path) => StateLocation.cases.Disk.make({ dbPath: path }),
-          }),
-          extensions: options.extensions ?? BuiltinExtensions,
-          branchTools: options.branchTools ?? CellBranchTools,
-          languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
-        },
-        identity: {
-          serverId,
-          pid,
-          hostname: osInfo.hostname,
-          dbPath: Option.getOrElse(dbPath, () => ":memory:"),
-          buildFingerprint,
-        },
-      }).pipe(
-        Effect.mapError(
-          (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
-        ),
-      )
+      awaitShutdown = Deferred.await(shutdown)
+    }
 
-      const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
-        Layer.provide(Layer.succeedContext(httpServerCtx)),
-        Layer.provide(serverRoot.coreServicesLive),
-        Layer.provide(LocalPlatformLayer),
-      )
+    const server: GentServer = GentServer.cases.Owned.make({
+      url,
+      workspaceId: workspaceIdForCwd(options.cwd),
+    })
+    // An in-process client opens no socket, so it registers here instead.
+    // The count drops again when the client's own scope closes.
+    const tracker = serverRoot.connectionTracker
+    const trackInProcessClient = Effect.acquireRelease(tracker.increment, () => tracker.decrement)
 
-      yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
+    ownedInternals.set(server, {
+      handlerContext: serverRoot.rpcHandlersContext,
+      port,
+      serverId,
+      headers: workspaceHeaders,
+      awaitShutdown,
+      trackInProcessClient,
+    })
 
-      // Seed debug session if requested
-      if (options.debug === true) {
-        yield* seedDebugSession(options.cwd).pipe(
-          provideWorkspaceIdHeader(Headers.fromInput(workspaceHeaders)),
-          Effect.provideContext(serverRoot.coreServices),
-          Effect.catchEager((error) =>
-            Effect.logWarning("Debug session seeding failed").pipe(
-              Effect.annotateLogs({ error: String(error) }),
-            ),
-          ),
-        )
-      }
-
-      const idleSpec = Option.fromNullishOr(options.idleShutdown)
-      let awaitShutdown: Effect.Effect<void> = Effect.never
-      if (Option.isSome(idleSpec)) {
-        const shutdown = yield* Deferred.make<void>()
-        yield* Effect.forkScoped(
-          runIdleWatcher({
-            idleMs: idleSpec.value.idleMs,
-            connectionCount: serverRoot.connectionTracker.count,
-            shutdown,
-          }),
-        )
-        awaitShutdown = Deferred.await(shutdown)
-      }
-
-      const server: GentServer = GentServer.cases.Owned.make({
-        url,
-        workspaceId: workspaceIdForCwd(options.cwd),
-      })
-      // An in-process client opens no socket, so it registers here instead.
-      // The count drops again when the client's own scope closes.
-      const tracker = serverRoot.connectionTracker
-      const trackInProcessClient = Effect.acquireRelease(tracker.increment, () => tracker.decrement)
-
-      ownedInternals.set(server, {
-        handlerContext: serverRoot.rpcHandlersContext,
-        port,
-        serverId,
-        headers: workspaceHeaders,
-        awaitShutdown,
-        trackInProcessClient,
-      })
-
-      return server
-    }),
-    LocalPlatformLayer,
-  )
+    return server
+  })
 
 // ── Probe an existing server via identity endpoint ──
 
@@ -1133,11 +1123,7 @@ export const resolveServer = (
 
 const resolveServerInternal = (
   options: GentServerOptions,
-): Effect.Effect<
-  GentServer,
-  GentConnectionError,
-  Scope.Scope | LayerOutput<typeof LocalPlatformLayer>
-> =>
+): Effect.Effect<GentServer, GentConnectionError, Scope.Scope | LocalPlatform> =>
   Effect.gen(function* () {
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()

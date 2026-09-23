@@ -22,8 +22,7 @@ export { StateLocation } from "./server.js"
 
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
-type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
-type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
+type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 type DependenciesLayer = ReturnType<typeof createDependencies>
 type DependencyError = Layer.Error<DependenciesLayer>
 type ServerRootServices =
@@ -35,9 +34,7 @@ interface ServerRootConfig {
   readonly dependencies: DependenciesConfig
   /** Logger, log level, and tracer for this root; the composition root owns the vendor wiring. */
   readonly observability: Layer.Layer<never, never, FileSystem>
-  readonly identity: Omit<ServerIdentityApi, "startedAt"> & {
-    readonly startedAt?: number
-  }
+  readonly identity: Omit<ServerIdentityApi, "startedAt">
 }
 
 interface BuiltServerRoot {
@@ -48,28 +45,30 @@ interface BuiltServerRoot {
   readonly rpcHandlersContext: Context.Context<BuiltRpcHandlers>
 }
 
-const ServerRootPlatformLayer = Layer.mergeAll(
+/**
+ * The Bun platform a root provides once, around `buildServerRoot` and anything
+ * else it builds, so one server owns one `GentPlatform`.
+ */
+export const ServerRootPlatformLayer = Layer.mergeAll(
   BunFileSystem.layer,
   BunServices.layer,
   BunGentPlatformLive,
 )
 
+type ServerRootPlatform = Layer.Success<typeof ServerRootPlatformLayer>
+
 export const buildServerRoot = (
   config: ServerRootConfig,
-): Effect.Effect<BuiltServerRoot, DependencyError, Scope.Scope | FileSystem> =>
+): Effect.Effect<BuiltServerRoot, DependencyError, Scope.Scope | ServerRootPlatform> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     const depsLive = createDependencies(config.dependencies).pipe(
-      Layer.provide(ServerRootPlatformLayer),
       Layer.provide(config.observability),
     )
-    // `startedAt` varies per restart, so the identity route must not serve it:
-    // registry validation compares the stable half. Split it off once here.
-    const { startedAt: configuredStartedAt, ...stableIdentity } = config.identity
-    const identity = {
-      ...stableIdentity,
-      startedAt: configuredStartedAt ?? (yield* Clock.currentTimeMillis),
-    }
+    // `startedAt` varies per restart, so the identity route serves only the
+    // stable half, which registry validation compares.
+    const stableIdentity = config.identity
+    const identity = { ...stableIdentity, startedAt: yield* Clock.currentTimeMillis }
 
     const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
     const connectionTracker = Context.get(connectionTrackerCtx, ConnectionTracker)
