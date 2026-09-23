@@ -3,28 +3,36 @@
  *
  * Demonstrates the public authoring loop:
  *   - process-scoped extension state (a Ref behind the extension's own Tag).
- *     One Ref serves the whole process, so every session sees the same notes.
- *     Key the state by `ExtensionContext.sessionId` to keep notes per session.
+ *     One Ref serves the whole process, so the notes are keyed by
+ *     `ExtensionContext.sessionId`: each session reads only its own.
  *   - one model-callable tool
  *   - one slash-presented request
  *   - one turn projection hook
  */
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, HashMap, Layer, Option, Ref, Schema } from "effect"
 import {
   defineExtension,
   defineResource,
+  ExtensionContext,
   ExtensionHost,
   request,
   tool,
+  type SessionId,
 } from "@gent/core/extensions/api"
 
-interface NotesState {
-  readonly notes: ReadonlyArray<string>
-}
+/** Every session's notes, keyed by the session that wrote them. */
+type NotesState = HashMap.HashMap<SessionId, ReadonlyArray<string>>
 
 class SessionNotesState extends Context.Service<SessionNotesState, Ref.Ref<NotesState>>()(
   "@gent/examples/extensions/session-notes/SessionNotesState",
 ) {}
+
+/** The current session's notes. */
+const currentNotes = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const state = yield* Ref.get(yield* SessionNotesState)
+  return Option.getOrElse(HashMap.get(state, ctx.sessionId), (): ReadonlyArray<string> => [])
+})
 
 const NoteInput = Schema.Struct({
   text: Schema.String.annotate({ description: "Note text to remember" }),
@@ -37,17 +45,21 @@ const NoteOutput = Schema.Struct({
 
 export const AddNoteTool = tool({
   id: "session_note_add",
-  description: "Remember a short note, shared by every session in this process",
+  description: "Remember a short note for this session",
   params: NoteInput,
   output: NoteOutput,
   promptSnippet: "Remember notes that may help later turns.",
   execute: ({ text }) =>
     Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
       const state = yield* SessionNotesState
-      return yield* Ref.modify(state, (current) => [
-        { count: current.notes.length + 1, latest: text },
-        { notes: [...current.notes, text] },
-      ])
+      return yield* Ref.modify(state, (current) => {
+        const notes = [
+          ...Option.getOrElse(HashMap.get(current, ctx.sessionId), (): ReadonlyArray<string> => []),
+          text,
+        ]
+        return [{ count: notes.length, latest: text }, HashMap.set(current, ctx.sessionId, notes)]
+      })
     }),
 })
 
@@ -63,9 +75,9 @@ export const SessionNotesSummary = request({
   output: Schema.String,
   execute: () =>
     Effect.gen(function* () {
-      const snapshot = yield* Ref.get(yield* SessionNotesState)
-      if (snapshot.notes.length === 0) return "No session notes yet."
-      return snapshot.notes.map((note, index) => `${index + 1}. ${note}`).join("\n")
+      const notes = yield* currentNotes
+      if (notes.length === 0) return "No session notes yet."
+      return notes.map((note, index) => `${index + 1}. ${note}`).join("\n")
     }),
 })
 
@@ -78,21 +90,21 @@ export default defineExtension({
       defineResource({
         id: "example/session-notes/state",
         scope: "process",
-        layer: Layer.effect(SessionNotesState, Ref.make<NotesState>({ notes: [] })),
+        layer: Layer.effect(SessionNotesState, Ref.make<NotesState>(HashMap.empty())),
       }),
     )
     yield* host.register("tool", AddNoteTool)
     yield* host.register("request", SessionNotesSummary)
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
-        const snapshot = yield* Ref.get(yield* SessionNotesState)
-        if (snapshot.notes.length === 0) return {}
+        const notes = yield* currentNotes
+        if (notes.length === 0) return {}
         return {
           promptSections: [
             {
               id: "session-notes",
               priority: 20,
-              content: snapshot.notes.map((note) => `- ${note}`).join("\n"),
+              content: notes.map((note) => `- ${note}`).join("\n"),
             },
           ],
           toolPolicy: { include: ["session_note_add"] },

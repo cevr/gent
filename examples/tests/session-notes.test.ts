@@ -79,6 +79,17 @@ describe("session notes reference extension", () => {
         yield* Fiber.join(first)
         expect(yield* summary()).toBe("1. ship the authoring loop")
 
+        // Notes belong to the session that wrote them; another session in the same process has none.
+        const other = yield* client.session.create({ cwd: "/tmp" })
+        const otherSummary = yield* client.extension.request({
+          sessionId: other.sessionId,
+          branchId: other.branchId,
+          extensionId: notes!.extensionId,
+          capabilityId: notes!.capabilityId,
+          input: {},
+        })
+        expect(otherSummary).toBe("No session notes yet.")
+
         // The event stream replays the first turn, so the second completion is the second one seen.
         const second = yield* turnCompleted(2)
         yield* client.message.send({ sessionId, branchId, content: "what did I note?" })
