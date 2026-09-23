@@ -177,11 +177,8 @@ const program = Effect.gen(function* () {
     )
   }
 
-  const reportOnly: string[] = []
   for (const finding of findUnconsumedExports(exportFacts)) {
-    const line = `${finding.file}:${finding.line}: ${finding.message}`
-    if (finding.enforced) pushFailure(line)
-    else reportOnly.push(line)
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 
   for (const finding of findUnadaptedSeams(sourceTexts, adaptedSeams)) {
@@ -200,11 +197,6 @@ const program = Effect.gen(function* () {
 
   for (const finding of yield* packageSurfaceFindings()) {
     pushFailure(`${finding.path}: ${finding.message}`)
-  }
-
-  if (reportOnly.length > 0) {
-    yield* Console.warn("Gent guardrails report-only findings:")
-    yield* Effect.forEach(reportOnly, (line) => Console.warn(`  ${line}`), { discard: true })
   }
 
   if (failures.length === 0) return

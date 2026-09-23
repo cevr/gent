@@ -317,13 +317,6 @@ export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
  */
 export const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
-/**
- * Files allowed to import a feature. Empty, and meant to stay so: a core file
- * that needs a concrete feature should take it as input. Kept as a seam so
- * adding an exemption is a deliberate, reviewed edit rather than a silent one.
- */
-export const ASSEMBLY_SITES: ReadonlyArray<string> = []
-
 const CORE_SRC_PREFIX = "packages/core/src/"
 
 const IMPORT_PATTERN = /^\s*(?:import|export)\b[^"']*from\s*["']([^"']+)["']/
@@ -335,15 +328,13 @@ const TABLE_PATTERN = (prefix: string) => new RegExp(`\\b${prefix}[a-z_]+\\b`)
  * Find every import in `file` that reaches into a feature directory it is not
  * allowed to know about.
  *
- * Returns nothing for files outside core, for a feature's own sources, and for
- * the assembly sites.
+ * Returns nothing for files outside core and for a feature's own sources.
  */
 export const findCoreFeatureIndependenceFindings = (
   file: string,
   text: string,
 ): ReadonlyArray<FeatureIndependenceFinding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
-  if (ASSEMBLY_SITES.includes(file)) return []
   const ownSegments = file.slice(CORE_SRC_PREFIX.length).split("/")
   if (FEATURE_DIRECTORIES.some((feature) => ownSegments.includes(feature))) return []
 
@@ -361,7 +352,7 @@ export const findCoreFeatureIndependenceFindings = (
     findings.push({
       file,
       line: index + 1,
-      message: `core must not import the "${named.value}" feature (${specifier.value}); carry it through an agnostic seam, or add this file to ASSEMBLY_SITES if it assembles an application`,
+      message: `core must not import the "${named.value}" feature (${specifier.value}); carry it through an agnostic seam`,
     })
   }
 
@@ -522,8 +513,6 @@ export const findIdentityEncodes = (
   text: string,
 ): ReadonlyArray<IdentityEncodeFinding> => {
   if (!SHIPPED_SOURCE.test(file)) return []
-  if (file === GUARDS_FILE) return []
-
   const lines = text.split("\n")
   const encoders: string[] = []
   for (const line of lines) {
@@ -1075,12 +1064,6 @@ export const findUnmatchedOverrideGlobs = (
 /** `"<name>": {` inside the plugin's `rules` object literal. */
 const RULE_KEY = /^\s{4}"([a-z0-9-]+)":\s*\{/
 
-/**
- * Rules defined in the plugin but deliberately not enabled at the root, each
- * with the reason. An entry here is a claim; prefer deleting the rule.
- */
-const UNENABLED_RULES_WITH_REASON: ReadonlyMap<string, string> = new Map()
-
 export const findUnenabledPluginRules = (
   pluginFile: string,
   pluginText: string,
@@ -1094,7 +1077,6 @@ export const findUnenabledPluginRules = (
     if (Option.isNone(name)) continue
     const rule = name.value
     if (rootRules.has(`gent/${rule}`)) continue
-    if (UNENABLED_RULES_WITH_REASON.has(rule)) continue
     findings.push({
       file: pluginFile,
       line: index + 1,
@@ -1234,41 +1216,16 @@ export interface PlatformDuplicationFinding {
   readonly message: string
 }
 
-interface BannedPattern {
-  readonly pattern: RegExp
-  readonly message: string
-}
-
-const sourceFile = (file: string): boolean =>
-  /^(?:packages|apps|examples\/extensions)\//.test(file) &&
+/** Shipped source under `packages/` and `apps/`: not tests, fixtures or build output. */
+const shippedSourceFile = (file: string): boolean =>
+  /^(?:packages|apps)\//.test(file) &&
   /\.(?:[cm]?[jt]sx?)$/.test(file) &&
   file !== GUARDS_FILE &&
   !file.includes("/tests/") &&
   !file.includes("/fixtures/") &&
   !file.includes("/dist/")
 
-const activeSourceFile = (file: string): boolean =>
-  /^(?:packages|apps)\//.test(file) && sourceFile(file)
-
-const referenceExtensionFile = (file: string): boolean =>
-  file.startsWith("examples/extensions/") && sourceFile(file)
-
-const platformLayerPattern: BannedPattern = {
-  pattern: /\b(?:BunPlatformLive|BunGentPlatformLive)\b/,
-  message: "Bun platform layers may only be provided by platform roots",
-}
-
-const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /@gent\/extensions\/src\//,
-    message:
-      "Reference extensions must stand alone instead of importing shipped extension internals",
-  },
-  {
-    pattern: /(?:^|\s)from\s+["'](?:\.\.\/){2,}/,
-    message: "Reference extensions must not reach out of examples/extensions with relative imports",
-  },
-]
+const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
 
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
@@ -1285,58 +1242,25 @@ const platformProviderRootFiles = new Set([
 ])
 
 /**
- * `apps/server/src/main.ts` is a launcher, not a composition root. It reads
- * the environment and calls `Gent.server`. Reaching for core or a platform
- * layer there rebuilds the second root the SDK server primitive replaced.
+ * Bun platform layers are provided by the platform roots alone. What a
+ * launcher or a reference extension may import is its manifest's business:
+ * the `gent/declared-workspace-imports` lint rule reads it.
  */
-const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /@gent\/core\//,
-    message:
-      "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
-  },
-  {
-    pattern: /@gent\/extensions/,
-    message:
-      "The server launcher does not name extensions; Gent.server defaults to the builtin set",
-  },
-  {
-    pattern: /\bbuildServerRoot\b/,
-    message: "The server launcher calls Gent.server, never buildServerRoot",
-  },
-]
-
-const launcherFiles = new Set(["apps/server/src/main.ts"])
-
-const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
-  const patterns: BannedPattern[] = []
-  if (!platformProviderRootFiles.has(file)) patterns.push(platformLayerPattern)
-  if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
-  return patterns
-}
-
 export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
 ): ReadonlyArray<PlatformDuplicationFinding> => {
-  const findings: PlatformDuplicationFinding[] = []
-
-  if (!sourceFile(file)) return findings
-
-  const patterns: BannedPattern[] = []
-  if (activeSourceFile(file)) patterns.push(...patternsForFile(file))
-  if (referenceExtensionFile(file)) patterns.push(...bannedReferenceExtensionPatterns)
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    const line = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
-    for (const { pattern, message } of patterns) {
-      if (pattern.test(line)) {
-        findings.push({ file, line: index + 1, message })
-      }
-    }
-  }
-
-  return findings
+  if (!shippedSourceFile(file) || platformProviderRootFiles.has(file)) return []
+  return text.split("\n").flatMap((line, index) => {
+    if (!PLATFORM_LAYER.test(line)) return []
+    return [
+      {
+        file,
+        line: index + 1,
+        message: "Bun platform layers may only be provided by platform roots",
+      },
+    ]
+  })
 }
 
 // ── a deleted surface stays deleted ─────────────────────────────────────────
@@ -1618,7 +1542,7 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
 const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
 
 const inRetiredScope = (file: string, scope: RetiredSurface["scope"]): boolean => {
-  if (scope === "shipped") return activeSourceFile(file)
+  if (scope === "shipped") return shippedSourceFile(file)
   return SHIPPED_AND_TESTS.test(file) && file !== GUARDS_FILE
 }
 
@@ -2145,15 +2069,11 @@ export interface ExportConsumerFinding {
   readonly file: string
   readonly line: number
   readonly message: string
-  /** `false` for a surface still being read for findings; those warn, not fail. */
-  readonly enforced: boolean
 }
 
 /** One scanned surface: where its names are declared and who may consume them. */
 interface ScannedSurface {
   readonly prefix: string
-  /** Directories inside the prefix whose exports are another surface's business. */
-  readonly exempt: ReadonlyArray<string>
   /** Files whose mentions never count: the declaring package's own source, for an entry point. */
   readonly outsideOf: ReadonlyArray<string>
   /** Whether a test file's mention keeps a name alive. */
@@ -2162,156 +2082,124 @@ interface ScannedSurface {
   readonly ownFileCounts: boolean
   /** The import specifier an entry point is consumed through; `None` for a module surface. */
   readonly specifier: Option.Option<string>
-  /** Whether a finding fails the guardrails or is only reported. */
-  readonly enforced: boolean
 }
 
 const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   {
     prefix: "packages/core/src/extensions/api.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/extensions/api"),
-    enforced: true,
   },
   {
     prefix: "packages/core/src/extensions/branch-tools.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/extensions/branch-tools"),
-    enforced: true,
   },
   {
     prefix: "packages/core/src/protocol.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/protocol"),
-    enforced: true,
   },
   {
     // A host export exists for the processes that compose a server; a name
     // only tests read is harness setup and belongs behind a test-utils operation.
     prefix: "packages/core/src/host.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: false,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/host"),
-    enforced: true,
   },
   {
     // The test entry point, listed before the harness directory it re-exports.
     prefix: "packages/core/src/test-utils/index.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/test-utils"),
-    enforced: true,
   },
   {
     // Its own surface, listed before `packages/core/src/` so the prefix scan
     // reaches it first. Read with the Schema-aware rule: a layer's config type
     // and a control handle's type sit beside the builder that returns them.
     prefix: "packages/core/src/test-utils/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/core/src/",
-    exempt: ["packages/core/src/extensions/", "packages/core/src/protocol.ts"],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/sdk/src/index.ts",
-    exempt: [],
     outsideOf: ["packages/sdk/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/sdk"),
-    enforced: true,
   },
   {
     prefix: "packages/sdk/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/extensions/src/client.ts",
-    exempt: [],
     outsideOf: ["packages/extensions/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/extensions/client"),
-    enforced: true,
   },
   {
     prefix: "packages/extensions/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/tooling/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/e2e/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     // The TUI is a leaf: nothing imports it, so every export it declares is
     // read from inside `apps/tui` or by its tests, or by nothing at all.
     prefix: "apps/tui/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     // The server app is a launcher and a leaf: it reads the environment and
     // calls `Gent.server`. Nothing imports it, so a name it exports is read by
     // its own tests or by nothing at all.
     prefix: "apps/server/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
 ]
 
@@ -2349,10 +2237,7 @@ const ALLOWLIST: ReadonlyMap<string, string> = new Map([
 ])
 
 const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
-  Option.filter(
-    Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix))),
-    (surface) => !surface.exempt.some((prefix) => file.startsWith(prefix)),
-  )
+  Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix)))
 
 /** A declared name, and the surface whose rule decides whether it is consumed. */
 export interface Declaration {
@@ -2960,7 +2845,6 @@ export const findUnconsumedExports = (
         file,
         line: declaration.line,
         message: messageFor(file, declaration),
-        enforced: declaration.surface.enforced,
       })
     }
   }

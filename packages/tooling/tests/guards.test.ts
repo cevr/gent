@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
   adaptedSeamsIn,
-  ASSEMBLY_SITES,
   collectExportFacts,
   type ExportFacts,
   findAliasTestLayers,
@@ -334,12 +333,6 @@ describe("core feature independence guard", () => {
       'import { CellExecution } from "./cell-execution.js"',
     )
     expect(findings).toEqual([])
-  })
-
-  test("allows the sites that assemble an application", () => {
-    for (const site of ASSEMBLY_SITES) {
-      expect(findCoreFeatureIndependenceFindings(site, CELL_IMPORT)).toEqual([])
-    }
   })
 
   test("ignores files outside core", () => {
@@ -946,38 +939,6 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
-  test("flags private imports in reference extension examples", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "examples/extensions/example.ts",
-        [
-          'import { Builtin } from "@gent/extensions/src/todo"',
-          'import { helper } from "../../packages/core/src/domain/helper"',
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "examples/extensions/example.ts",
-        line: 1,
-        message:
-          "Reference extensions must stand alone instead of importing shipped extension internals",
-      },
-      {
-        file: "examples/extensions/example.ts",
-        line: 2,
-        message:
-          "Reference extensions must not reach out of examples/extensions with relative imports",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "examples/extensions/session-notes.ts",
-        'import { defineExtension } from "@gent/core/extensions/api"',
-      ),
-    ).toEqual([])
-  })
-
   test("flags Bun platform layers in shipped extensions", () => {
     // No shipped extension is exempt, the Anthropic driver included.
     expect(
@@ -1021,54 +982,6 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/src/server/server-root.ts",
         "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags a server launcher that composes instead of calling Gent.server", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
-        [
-          'import { buildServerRoot } from "@gent/core/host"',
-          'import { BuiltinExtensions } from "@gent/extensions"',
-          "const root = yield* buildServerRoot(config)",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "apps/server/src/main.ts",
-        line: 1,
-        message:
-          "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
-      },
-      // The same line names the builder too — both rules report it.
-      {
-        file: "apps/server/src/main.ts",
-        line: 1,
-        message: "The server launcher calls Gent.server, never buildServerRoot",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 2,
-        message:
-          "The server launcher does not name extensions; Gent.server defaults to the builtin set",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 3,
-        message: "The server launcher calls Gent.server, never buildServerRoot",
-      },
-    ])
-
-    // The launcher reading its environment and calling the SDK is clean.
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
-        [
-          'import { Gent } from "@gent/sdk"',
-          "const server = yield* Gent.server(launch.options)",
-        ].join("\n"),
       ),
     ).toEqual([])
   })
@@ -1683,7 +1596,6 @@ void Orphan
       },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("@gent/core/extensions/branch-tools")
   })
 
@@ -1719,7 +1631,6 @@ describe("the TUI app surface", () => {
       { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`orphan`")
   })
 
@@ -1791,7 +1702,6 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings).toHaveLength(1)
     expect(findings[0]?.file).toBe(SDK_FILE)
     expect(findings[0]?.line).toBe(3)
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`plantedDeadSdkExport`")
   })
 
@@ -1903,7 +1813,6 @@ const use = Effect.gen(function* () {
 `
     const findings = findingsFor([{ file: "packages/extensions/src/wake/index.ts", text: source }])
     expect(findings.map((finding) => finding.line)).toEqual([1, 2])
-    expect(findings.every((finding) => finding.enforced)).toBe(true)
   })
 
   test("a service another extension module yields keeps its export", () => {
@@ -1940,7 +1849,6 @@ export const handoff = tool({ run: () => "HandoffError happened" })
       },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`HandoffError`")
     expect(findings[0]?.message).toContain("delete it")
   })
@@ -2001,12 +1909,11 @@ export const signal = () => {
     ).toEqual([])
   })
 
-  test("a constant nothing names, not even its own file, is reported and enforced", () => {
+  test("a constant nothing names, not even its own file, is reported", () => {
     const findings = findingsFor([
       { file: TEST_UTILS_FILE, text: `export const DebugSlowLanguageModelDelayMs = 250\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`DebugSlowLanguageModelDelayMs`")
   })
 
@@ -2060,7 +1967,6 @@ describe("public extension API entry point", () => {
     expect(findings).toHaveLength(1)
     expect(findings[0]?.file).toBe(API_FILE)
     expect(findings[0]?.line).toBe(6)
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain('"CapabilityNotFoundError"')
   })
 
@@ -2151,7 +2057,6 @@ const x: Api.ToolCapability = Api.tool({})`,
         text: `import { GentObservability } from "@gent/sdk"`,
       },
     ])
-    expect(findings.map((finding) => finding.enforced)).toEqual([true])
     expect(findings[0]?.message).toContain('"GentObservability"')
     expect(findings[0]?.message).toContain("@gent/sdk")
   })
@@ -2180,7 +2085,6 @@ const x: Api.ToolCapability = Api.tool({})`,
         text: `import { WakeRpc } from "@gent/extensions/client.js"`,
       },
     ])
-    expect(findings.map((finding) => finding.enforced)).toEqual([true])
     expect(findings[0]?.message).toContain('"WakeEntry"')
     expect(findings[0]?.message).toContain("@gent/extensions/client")
   })
