@@ -22,7 +22,12 @@ import {
   resolveAgentDriver,
   RunSpecSchema,
 } from "../../src/domain/agent"
-import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
+import {
+  ConfigService,
+  isProjectExtensionDirectoryTrusted,
+  RuntimeEnvironment,
+  UserConfig,
+} from "../../src/runtime/config"
 import { test } from "bun:test"
 
 // ── user configuration ──────────────────────────────────────────────────────
@@ -49,58 +54,46 @@ describe("user configuration", () => {
   })
 
   describe("trustedProjects", () => {
-    const trustedProjects = ["/trusted/project"]
-
-    /** Trust is user-owned and hand-edited; a driver write must leave it alone. */
-    const checkTrustPreservation = Effect.gen(function* () {
-      const cfg = yield* ConfigService
-      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
-      yield* cfg.setDriverOverride(
-        AgentName.make("cowork"),
-        DriverRef.make({ id: "anthropic-proxy" }),
-      )
-      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
-      yield* cfg.clearDriverOverride(AgentName.make("cowork"))
-      expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
-    })
-
-    it.live("in-memory driver writes preserve user trust", () =>
-      checkTrustPreservation.pipe(
-        Effect.provide(ConfigService.Test(new UserConfig({ trustedProjects }))),
-      ),
-    )
-
-    it.scopedLive("only user config grants trust and live updates preserve it on disk", () =>
+    it.scopedLive("only user config grants trust and driver writes preserve it on disk", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const cwd = yield* fs.makeTempDirectoryScoped()
         const home = yield* fs.makeTempDirectoryScoped()
         const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const directories = {
+          userDir: path.join(path.dirname(userConfigPath), "extensions"),
+          projectDir: path.join(path.dirname(projectConfigPath), "extensions"),
+        }
+        const projectRoot = yield* fs.realPath(cwd)
         yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
         // The project asks for its own trust; only the user config may grant it.
-        yield* fs.writeFileString(projectConfigPath, encodeJson({ trustedProjects: [cwd] }))
-        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.writeFileString(projectConfigPath, encodeJson({ trustedProjects: [projectRoot] }))
         const live = ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
           Layer.provide(BunServices.layer),
         )
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
-          expect((yield* cfg.get()).trustedProjects).toBeUndefined()
-          expect((yield* cfg.getFresh(cwd)).config.trustedProjects).toBeUndefined()
+          expect(yield* isProjectExtensionDirectoryTrusted(directories)).toBe(false)
           // Trust arrives the way it really does: the user edits the file.
           yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects }))
-          expect((yield* cfg.getFresh(cwd)).config.trustedProjects).toEqual(trustedProjects)
-          yield* checkTrustPreservation
-          expect((yield* cfg.getFresh(cwd)).config.trustedProjects).toEqual(trustedProjects)
-          const persistedText = yield* fs.readFileString(userConfigPath)
-          const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
-            persistedText,
+          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects: [projectRoot] }))
+          expect(yield* isProjectExtensionDirectoryTrusted(directories)).toBe(true)
+          // Trust is user-owned and hand-edited; a driver write must leave it alone.
+          yield* cfg.setDriverOverride(
+            AgentName.make("cowork"),
+            DriverRef.make({ id: "anthropic-proxy" }),
           )
-          // The driver write rewrote the file and kept the hand-edited trust.
-          expect(persisted.trustedProjects).toEqual(trustedProjects)
+          expect(yield* isProjectExtensionDirectoryTrusted(directories)).toBe(true)
+          yield* cfg.clearDriverOverride(AgentName.make("cowork"))
+          expect(yield* isProjectExtensionDirectoryTrusted(directories)).toBe(true)
+          const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+            yield* fs.readFileString(userConfigPath),
+          )
+          // The driver writes rewrote the file and kept the hand-edited trust.
+          expect(persisted.trustedProjects).toEqual([projectRoot])
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -345,7 +338,7 @@ describe("user configuration", () => {
         const home = yield* fs.makeTempDirectoryScoped()
         const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-        yield* fs.writeFileString(userConfigPath, '{"trustedProjects":["/keep/me"]}')
+        yield* fs.writeFileString(userConfigPath, '{"disabledExtensions":["@x/keep"]}')
         const live = ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
           Layer.provide(BunServices.layer),
@@ -353,12 +346,12 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           // The user edits the file while gent runs and leaves a trailing comma.
-          const broken = '{"trustedProjects":["/keep/me", "/new"],}'
+          const broken = '{"disabledExtensions":["@x/keep", "@x/new"],}'
           yield* fs.writeFileString(userConfigPath, broken)
           const fresh = yield* cfg.getFresh(cwd)
           expect(fresh.failures.map((failure) => failure.path)).toEqual([userConfigPath])
           // Reads keep the last user config that loaded.
-          expect(fresh.config.trustedProjects).toEqual(["/keep/me"])
+          expect(fresh.config.disabledExtensions).toEqual(["@x/keep"])
           const outcome = yield* Effect.exit(
             cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" })),
           )
@@ -389,16 +382,16 @@ describe("user configuration", () => {
         const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
-          // The user grants trust by hand while gent runs; nothing reads it yet.
-          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects: ["/keep/me"] }))
+          // The user edits the file by hand while gent runs; nothing reads it yet.
+          yield* fs.writeFileString(userConfigPath, encodeJson({ disabledExtensions: ["@x/keep"] }))
           yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
           const persisted = yield* decodeUserConfig(yield* fs.readFileString(userConfigPath))
-          expect(persisted.trustedProjects).toEqual(["/keep/me"])
+          expect(persisted.disabledExtensions).toEqual(["@x/keep"])
           expect(persisted.driverOverrides?.[AgentName.make("main")]).toEqual(
             DriverRef.make({ id: "anthropic" }),
           )
           // The write also refreshes the snapshot reads use.
-          expect((yield* cfg.get()).trustedProjects).toEqual(["/keep/me"])
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["@x/keep"])
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )

@@ -1183,12 +1183,23 @@ interface ValueOptions {
   readonly attached?: string
   /** A `-name` word is one long option, not a cluster of letters (`arch -arm64`, `-arch x`). */
   readonly singleDash?: boolean
+  /** Letters of the options that take no value. A runner asks on an option its table does not name. */
+  readonly flags?: string
+  /** Long names of the options that take no value, or only one after `=`. */
+  readonly longFlags?: ReadonlyArray<string>
 }
 
-/** Options that take a value: the letters, and the long names separated by spaces. */
-const options = (short: string, long = ""): ValueOptions => ({
+const names = (text: string) => text.split(" ").filter((name) => name.length > 0)
+
+/**
+ * Options that take a value: the letters, and the long names separated by
+ * spaces; then the flags, which take none, in the same two forms.
+ */
+const options = (short: string, long = "", flags = "", longFlags = ""): ValueOptions => ({
   short,
-  long: long.split(" ").filter((name) => name.length > 0),
+  long: names(long),
+  flags,
+  longFlags: names(longFlags),
 })
 
 /** Where an option's value starts: argument `word`, from character `from`. */
@@ -1259,7 +1270,11 @@ const readLongOption = (
   let next = index + 1
   if (equals !== -1) {
     value = Option.some({ word: index, from: equals + 1 })
-  } else if ((valued.long ?? []).some((option) => abbreviates(name, option))) {
+  } else if (
+    // An exact flag name wins over a valued name it abbreviates (`--tag`, `--tagstring`).
+    !(valued.longFlags ?? []).includes(name) &&
+    (valued.long ?? []).some((option) => abbreviates(name, option))
+  ) {
     value = Option.some({ word: index + 1, from: 0 })
     next = index + 2
   }
@@ -1577,6 +1592,44 @@ const inputShellStarts = (
     }
     return runCommands(resolved, other).some((wrapped) => wrapped.length > 0)
   })
+}
+
+/** Whether `valued` names `option`, as an option that takes a value or as a flag. */
+const knowsOption = (valued: ValueOptions, option: ParsedOption) => {
+  if (!option.long) {
+    return `${valued.short ?? ""}${valued.attached ?? ""}${valued.flags ?? ""}`.includes(
+      option.name,
+    )
+  }
+  const known = [...(valued.long ?? []), ...(valued.longFlags ?? [])]
+  return known.some((name) => abbreviates(option.name, name))
+}
+
+/**
+ * A runner that starts the command after its leading options, given an
+ * option its table does not name: whether that option takes the next word
+ * is not known, so neither is the command. It asks.
+ */
+const unknownOptionRuns = ({
+  path,
+  words,
+  spec: { valued, runs },
+}: ResolvedCommand): SegmentRuns => {
+  const starts = runs.some(
+    (run) =>
+      (run._tag === "Command" && run.after.length === 0) ||
+      run._tag === "Joined" ||
+      run._tag === "Stdin",
+  )
+  if (!starts) return NO_RUNS
+  const { options: read } = parseWords(words, valued, "leading")
+  return Option.match(
+    Arr.findFirst(read, (option) => !knowsOption(valued, option)),
+    {
+      onNone: () => NO_RUNS,
+      onSome: ({ name }) => unreadableRun(`an option of ${path} the guard does not know: ${name}`),
+    },
+  )
 }
 
 /** What a `Joined`, `OptionScript`, `Stdin` or `InputShell` run runs beyond the commands it starts. */
@@ -2731,7 +2784,10 @@ const commandRuns = (invocation: Invocation): SegmentRuns => {
   if (name === "source" || name === ".")
     return scriptFileRuns(invocation.segment, Option.fromUndefinedOr(words[1]))
   const resolved = resolveCommand(words)
-  const runs = resolved.spec.runs.map((run) => specRuns(invocation, resolved, run))
+  const runs = [
+    unknownOptionRuns(resolved),
+    ...resolved.spec.runs.map((run) => specRuns(invocation, resolved, run)),
+  ]
   if (name === "git") runs.push(gitRuns(invocation))
   return mergeRuns(runs)
 }
@@ -2868,226 +2924,48 @@ const killsHard = (args: ReadonlyArray<string>) =>
   })
 
 /**
- * A SQL statement that drops or truncates: any `DROP <object>` (a table, a
- * function, a user, and `ALTER TABLE … DROP COLUMN`), and `TRUNCATE` with or
- * without `TABLE` (Postgres and MySQL make it optional). The name after
- * `TRUNCATE` is not a `(`: MySQL's `TRUNCATE(x, d)` rounds a number. It is
- * read in the raw text, comments and strings included: a false match asks.
+ * A word that deletes, drops or truncates, or that builds and runs SQL the
+ * guard cannot see (`PREPARE`, `EXECUTE`, `EXEC`, `sp_executesql`, a `DO`
+ * block), in any case. No statement is parsed: a comment, a string, a body
+ * or a WHERE does not change the answer, so `DELETE … WHERE id = 1` and
+ * `SELECT 'drop'` ask too.
  */
-const SQL_DROP = /\b(drop\s+(?:materialized\s+)?[a-z_]+)|\b(truncate)(?:\s+table)?\s+(?!\()\S/i
+const SQL_DESTRUCTIVE =
+  /\b(delete|drop|truncate|prepare|execute|exec|sp_executesql)\b|\b(do)\s+(?:\$|e?')/i
 
-/** How a SQL client's dialect writes comments, strings and quoted names. */
-interface SqlDialect {
-  /** A backslash escapes the next character in a `'` or `"` string (MySQL). Postgres `E'…'` always. */
-  readonly backslash: boolean
-  /** `$tag$ … $tag$` quotes text (Postgres, DuckDB). */
-  readonly dollar: boolean
-  /** `#` starts a line comment (MySQL). */
-  readonly hash: boolean
-  /** `--` starts a line comment only before a blank or the end (MySQL). */
-  readonly dashBlank: boolean
-  /** Block comments nest (Postgres). */
-  readonly nested: boolean
-  /** `[name]` quotes a name (SQLite). */
-  readonly brackets: boolean
-  /** `E'…'` strings read backslash escapes (Postgres). */
-  readonly escapeStrings: boolean
-  /** A `/*!` comment holds code the server runs (MySQL). */
-  readonly executable: boolean
-}
+/** A client command that runs a file: psql `\i`, `\ir`, `\include`; MySQL `\.`, `source`; SQLite `.read`. */
+const SQL_FILE_COMMAND =
+  /\\(?:i|ir|include|include_relative|\.)\s|(?:^|[;\n])\s*(?:source|\.read)\s/i
 
-const POSTGRES: SqlDialect = {
-  backslash: false,
-  dollar: true,
-  hash: false,
-  dashBlank: false,
-  nested: true,
-  brackets: false,
-  escapeStrings: true,
-  executable: false,
-}
-const SQLITE: SqlDialect = {
-  ...POSTGRES,
-  dollar: false,
-  nested: false,
-  brackets: true,
-  escapeStrings: false,
-}
-/** MySQL reads a backslash as an escape unless `NO_BACKSLASH_ESCAPES` is set: both are read. */
-const MYSQL: ReadonlyArray<SqlDialect> = [true, false].map((backslash) => ({
-  backslash,
-  dollar: false,
-  hash: true,
-  dashBlank: true,
-  nested: false,
-  brackets: false,
-  escapeStrings: false,
-  executable: true,
-}))
-
-/** The end of the quoted text that starts at `at` with `quote`, past its closing quote; doubling escapes it. */
-const quotedEnd = (sql: string, at: number, quote: string, backslash: boolean): number => {
-  let index = at + 1
-  while (index < sql.length) {
-    const char = sql.charAt(index)
-    if (backslash && char === "\\") {
-      index += 2
-    } else if (char !== quote) {
-      index++
-    } else if (sql.charAt(index + 1) === quote) {
-      index += 2
-    } else {
-      return index + 1
-    }
-  }
-  return sql.length
-}
-
-/** The end of the block comment that starts at `at`, past its close. */
-const blockCommentEnd = (sql: string, at: number, nested: boolean): number => {
-  let depth = 0
-  let index = at
-  while (index < sql.length) {
-    if (sql.startsWith("/*", index)) {
-      if (depth === 0 || nested) depth++
-      index += 2
-    } else if (sql.startsWith("*/", index)) {
-      depth--
-      index += 2
-      if (depth === 0) return index
-    } else {
-      index++
-    }
-  }
-  return sql.length
-}
-
-/** `index`, or `fallback` when a search found nothing. */
-const foundOr = (index: number, fallback: number) => {
-  if (index === -1) return fallback
-  return index
-}
-
-/** A comment or quoted text: where it ends, and the text it reads as. */
-interface SqlSpan {
-  readonly end: number
-  readonly text: string
-}
-
-/** A comment that starts at `at`: `--`, MySQL's `#`, or a block comment other than MySQL's `/*!`. */
-const sqlComment = (sql: string, at: number, dialect: SqlDialect): Option.Option<SqlSpan> => {
-  const two = sql.slice(at, at + 2)
-  const dashes = two === "--" && (!dialect.dashBlank || /^\s?$/.test(sql.charAt(at + 2)))
-  if (dashes || (dialect.hash && two.startsWith("#"))) {
-    return Option.some({ end: foundOr(sql.indexOf("\n", at), sql.length), text: " " })
-  }
-  if (two !== "/*" || (dialect.executable && sql.charAt(at + 2) === "!")) return Option.none()
-  return Option.some({ end: blockCommentEnd(sql, at, dialect.nested), text: " " })
-}
-
-/** Where the string, quoted name or dollar-quoted text that starts at `at` ends. */
-const sqlQuotedEnd = (sql: string, at: number, dialect: SqlDialect): Option.Option<number> => {
-  const char = sql.charAt(at)
-  const wordBefore = /[\w$]/.test(sql.charAt(at - 1))
-  if (/^[eE]'/.test(sql.slice(at, at + 2)) && !wordBefore && dialect.escapeStrings) {
-    return Option.some(quotedEnd(sql, at + 1, "'", true))
-  }
-  if (char === "'" || char === '"') return Option.some(quotedEnd(sql, at, char, dialect.backslash))
-  if (char === "`") return Option.some(quotedEnd(sql, at, "`", false))
-  if (char === "[" && dialect.brackets) {
-    return Option.some(foundOr(sql.indexOf("]", at), sql.length - 1) + 1)
-  }
-  if (char !== "$" || !dialect.dollar || wordBefore) return Option.none()
-  return Option.map(Option.fromNullishOr(/^\$(?:[A-Za-z_]\w*)?\$/.exec(sql.slice(at))), ([tag]) => {
-    const close = sql.indexOf(tag, at + tag.length)
-    return foundOr(close, sql.length - tag.length) + tag.length
-  })
+/** `text`, and each text after a letter of its leading short option cluster (`-XcDELETE`). */
+const sqlTexts = (text: string): ReadonlyArray<string> => {
+  const letters = /^-[A-Za-z]+/.exec(text)?.[0].length ?? 0
+  return [text, ...Array.from({ length: Math.max(letters - 2, 0) }, (_, at) => text.slice(at + 2))]
 }
 
 /**
- * The comment or quoted text that starts at `at`; none when none starts
- * there. An unclosed one runs to the end.
+ * A SQL client whose SQL the guard cannot see asks: a file it runs (`-f`,
+ * `--file`, `-init`, a client file command, a `<` redirect) or input the
+ * guard cannot read. Else it asks when its text holds a word of
+ * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
+ * readable input.
  */
-const sqlSpan = (sql: string, at: number, dialect: SqlDialect): Option.Option<SqlSpan> =>
-  Option.orElse(sqlComment(sql, at, dialect), () =>
-    Option.map(sqlQuotedEnd(sql, at, dialect), (end) => ({ end, text: " x " })),
+const sqlRisk: CommandRisk = ({ texts, parsed, invocation: { segment } }) => {
+  const input = segmentInputs(segment)
+  const sql = [...texts, ...input.scripts.map((word) => word.text)].flatMap(sqlTexts)
+  const fromFile =
+    hasShort(parsed, "f") ||
+    hasLong(parsed, "file", "init") ||
+    segment.reads.length > 0 ||
+    input.unreadable.length > 0 ||
+    sql.some((text) => SQL_FILE_COMMAND.test(text))
+  if (fromFile) return destructive("SQL the guard cannot read: a file or unreadable input")
+  return Arr.findFirst(sql, (text) =>
+    Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
+      destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
+    ),
   )
-
-/** `sql` as `dialect` reads it: each comment a blank, each string or quoted name the word `x`. */
-const sqlCode = (sql: string, dialect: SqlDialect): string => {
-  let code = ""
-  let index = 0
-  while (index < sql.length) {
-    const span = sqlSpan(sql, index, dialect)
-    if (Option.isNone(span)) {
-      code += sql.charAt(index)
-      index++
-    } else {
-      code += span.value.text
-      index = span.value.end
-    }
-  }
-  return code
 }
-
-/**
- * A statement that starts with `DELETE`: at the start of the text, after
- * `;`, after `(` (a query inside another), after the `)` that closes a WITH
- * query, or in a trigger or block body (`BEGIN`, `THEN`, `ELSE`, `DO`). Its
- * target list may take any shape (`DELETE s . t FROM …`, `DELETE t1, t2`).
- * `ON DELETE`, `AFTER DELETE` and `GRANT DELETE` are not statements.
- */
-const SQL_DELETE = /(?:^|[;()]|\b(?:begin|then|else|do)\b)\s*delete\b/gi
-const SQL_SCOPE = /[();]|\bwhere\b/gi
-
-/**
- * Whether a `DELETE` statement in `code` has no `WHERE` of its own: none before its
- * statement ends at `;`, or at the `)` that closes the query around it
- * (`WITH x AS (DELETE FROM t RETURNING *) SELECT … WHERE …`), and none inside
- * a parenthesis of its own.
- */
-const deletesAll = (code: string): boolean =>
-  Array.from(code.matchAll(SQL_DELETE)).some((match) => {
-    let depth = 0
-    for (const token of code.slice(match.index + match[0].length).matchAll(SQL_SCOPE)) {
-      const text = token[0].toLowerCase()
-      if (text === "(") {
-        depth++
-      } else if (text === ")") {
-        if (depth === 0) return true
-        depth--
-      } else if (text === ";") {
-        return true
-      } else if (depth === 0) {
-        return false
-      }
-    }
-    return true
-  })
-
-/**
- * A SQL client that drops, truncates or deletes everything, in one of its
- * arguments or its input; each is a script of its own. A short option's
- * value may be attached (`-cDELETE FROM t`).
- */
-const sqlRisk =
-  (dialects: ReadonlyArray<SqlDialect>): CommandRisk =>
-  ({ texts, invocation }) => {
-    const input = segmentInputs(invocation.segment).scripts.map((word) => word.text)
-    const scripts = [...texts, ...input].flatMap((text) => {
-      if (/^-[A-Za-z]./.test(text)) return [text, text.slice(2)]
-      return [text]
-    })
-    return Arr.findFirst(scripts, (script) => {
-      const dropped = Option.fromNullishOr(SQL_DROP.exec(script))
-      if (Option.isSome(dropped)) {
-        const [, drop, truncate] = dropped.value
-        return destructive((drop ?? truncate ?? "").toUpperCase().replace(/\s+/g, " "))
-      }
-      const all = dialects.some((dialect) => deletesAll(sqlCode(script, dialect)))
-      return destructiveWhen(all, "DELETE FROM without WHERE")
-    })
-  }
 
 /**
  * Files that hold keys or secrets: anything under `.ssh`, `.gnupg` or `.aws`,
@@ -3174,85 +3052,128 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
   Object.entries({
     // Keywords, and commands that run the command after them as it is.
     // Multicall binaries: the next word is the applet (`busybox rm -rf x`).
-    ...each(
-      ["!", "{", "if", "then", "elif", "else", "do", "while", "until", "time", "busybox"],
-      runner(),
-    ),
-    ...each(["toybox", "nohup", "setsid", "chronic", "unbuffer", "command", "builtin"], runner()),
+    ...each(["!", "{", "if", "then", "elif", "else", "do", "while", "until"], runner()),
+    ...each(["busybox", "toybox", "nohup", "builtin"], runner()),
+    // bash's `time -p`, and GNU and BSD `/usr/bin/time -o FILE -f FORMAT`.
+    time: runner(options("fo", "format output", "aplqv", "append portability verbose quiet")),
+    setsid: runner(options("", "", "cfw", "ctty fork wait")),
+    chronic: runner(options("", "", "ev")),
+    unbuffer: runner(options("", "", "p")),
+    command: runner(options("", "", "pvV")),
     coproc: runner({}, { named: true }),
     // `function f { … }`: the word after the name opens the body.
     function: runner({}, { positionals: 1 }),
     sudo: spec(
       options(
-        "CDghpRrTtUu",
+        "cCDghpRrTtUu",
         "user group close-from chdir host prompt role type command-timeout other-user chroot",
+        "AbBEeHiKklnNPSsVvh",
+        "askpass background bell preserve-env edit set-home login remove-timestamp reset-timestamp list non-interactive preserve-groups stdin shell validate",
       ),
       [command(), inputShell("si", ["shell", "login"])],
       rootRmRisk,
     ),
-    doas: spec(options("uC"), [command(), inputShell("s")], rootRmRisk),
+    doas: spec(options("uC", "", "nsL"), [command(), inputShell("s")], rootRmRisk),
     // `-S` splits its value into the command it runs.
-    env: spec(options("CPSu", "unset chdir split-string"), [
-      command(),
-      optionScript("S", ["split-string"], true),
-    ]),
-    exec: runner(options("a")),
-    pkexec: runner(options("", "user")),
+    env: spec(
+      options(
+        "aCLPSUu",
+        "argv0 unset chdir split-string",
+        "iv0",
+        "ignore-environment null debug ignore-signal default-signal block-signal list-signal-handling",
+      ),
+      [command(), optionScript("S", ["split-string"], true)],
+    ),
+    exec: runner(options("a", "", "cl")),
+    pkexec: runner(options("", "user", "", "disable-internal-agent keep-cwd")),
     // macOS `arch -arm64 cmd`, `arch -arch x86_64 -e VAR=v cmd`.
-    arch: runner({ long: ["arch", "e", "d"], singleDash: true }),
+    arch: runner({
+      long: ["arch", "e", "d"],
+      longFlags: names("arm64 arm64e x86_64 x86_64h i386 32 64 c h"),
+      singleDash: true,
+    }),
     unshare: runner(
       options(
         "SGRw",
         "setuid setgid root wd propagation map-user map-group map-users map-groups setgroups",
+        "cCfimnpTuUr",
+        "fork mount uts ipc net pid user cgroup time map-root-user map-current-user kill-child mount-proc keep-caps",
       ),
     ),
     "systemd-run": runner(
       options(
         "HMCpuE",
         "host machine capsule property unit setenv description slice uid gid nice working-directory service-type on-active on-boot on-startup on-unit-active on-unit-inactive on-calendar timer-property path-property socket-property",
+        "dGPqStr",
+        "user system scope pty pipe quiet wait collect same-dir shell no-block no-ask-password remain-after-exit send-sighup",
       ),
     ),
     // `sg group cmd` and `sg group -c cmd` run a shell script. Shadow's sg
     // runs only the first word; the words after it are read too, in case
     // another sg joins them.
     sg: spec(options("c"), [joined(1), optionScript("c")]),
-    ...each(["nice", "gnice"], runner(options("n", "adjustment"))),
-    ionice: runner(options("cnpPu", "class classdata pid pgid uid")),
+    // `nice -10 cmd`: an old form of `-n 10`.
+    ...each(["nice", "gnice"], runner(options("n", "adjustment", "0123456789"))),
+    ionice: runner(options("cnpPu", "class classdata pid pgid uid", "t", "ignore")),
     ...each(
       ["timeout", "gtimeout"],
-      runner(options("sk", "signal kill-after"), { positionals: 1 }),
+      runner(options("sk", "signal kill-after", "v", "verbose preserve-status foreground"), {
+        positionals: 1,
+      }),
     ),
     stdbuf: runner(options("ioe", "input output error")),
-    caffeinate: runner(options("tw")),
-    flock: spec(options("cEw", "command timeout conflict-exit-code"), [
-      command({ positionals: 1 }),
-      optionScript("c", ["command"]),
-    ]),
-    strace: runner(options("abeEIoOpPsSuX", "output attach user env")),
-    ltrace: runner(options("aeFnopsu", "output")),
-    chroot: runner(options("", "userspec groups"), { positionals: 1 }),
-    taskset: runner({}, { positionals: 1 }),
-    runuser: spec(options("cgGsuw", "command group supp-group shell user"), [
-      command(),
-      optionScript("c", ["command"]),
-    ]),
+    caffeinate: runner(options("tw", "", "dimsu")),
+    flock: spec(
+      options(
+        "cEw",
+        "command timeout conflict-exit-code",
+        "enosuxF",
+        "shared exclusive nonblock nb unlock close no-fork verbose",
+      ),
+      [command({ positionals: 1 }), optionScript("c", ["command"])],
+    ),
+    strace: runner(
+      options("abeEIoOpPsSuX", "output attach user env", "cCdDfFhiknqrtTvVwxyzZ", "summary-only"),
+    ),
+    ltrace: runner(options("aeFnopsu", "output", "bcCdfhiLrStTV")),
+    chroot: runner(options("", "userspec groups", "", "skip-chdir"), { positionals: 1 }),
+    taskset: runner(options("", "", "acp", "all-tasks cpu-list pid"), { positionals: 1 }),
+    runuser: spec(
+      options(
+        "cgGsuw",
+        "command group supp-group shell user",
+        "flmpP",
+        "login preserve-environment pty fast",
+      ),
+      [command(), optionScript("c", ["command"])],
+    ),
     // BSD `script [-q] file command…`.
-    script: spec(options("cEIOT", "command log-in log-out log-timing"), [
-      command({ positionals: 1 }),
-      optionScript("c", ["command"]),
-    ]),
+    script: spec(
+      options(
+        "cEIOT",
+        "command log-in log-out log-timing",
+        "adefFkqr",
+        "append return flush quiet force",
+      ),
+      [command({ positionals: 1 }), optionScript("c", ["command"])],
+    ),
     // With no `-c`, `su` starts the user's shell, and it runs its input.
     su: spec(options("cgGsw", "command session-command"), [
       optionScript("c", ["command", "session-command"]),
       inputShell(""),
     ]),
     "nix-shell": spec(options("AIp", "run command attr"), [optionScript("", ["run", "command"])]),
-    dotenv: runner(options("ecv")),
+    dotenv: runner(options("ecpv", "", "o", "debug no-expand override")),
     // `-e`, `-i` and `-l` take only an attached value; so do `--max-lines`,
     // `--replace` and `--eof`, after `=`.
     xargs: spec(
       {
-        ...options("aEdILnPsJRS", "arg-file delimiter max-args max-procs max-chars"),
+        ...options(
+          "aEdILnPsJRS",
+          "arg-file delimiter max-args max-procs max-chars process-slot-var",
+          "0oprtx",
+          "null no-run-if-empty verbose interactive open-tty exit show-limits eof replace max-lines",
+        ),
         attached: "eil",
       },
       [Run.cases.Stdin.make({})],
@@ -3260,7 +3181,9 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     parallel: spec(
       options(
         "aCdEIjLnNPSs",
-        `arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay ${PARALLEL_REPLACE_OPTIONS.join(" ")}`,
+        `arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay nice ${PARALLEL_REPLACE_OPTIONS.join(" ")}`,
+        "0gkmqrtuvX",
+        "keep-order bar progress eta quote ungroup line-buffer lb group dry-run null no-run-if-empty xargs tag files pipe plus shuf tty silent verbose will-cite no-notice",
       ),
       [Run.cases.Stdin.make({})],
     ),
@@ -3271,10 +3194,18 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     fd: spec({}, [Run.cases.FindExec.make({ actions: ["-x", "-X", "--exec", "--exec-batch"] })]),
     eval: spec({}, [joined()]),
-    ssh: spec(options("bcDEeFIiJLlmOopQRSWwB"), [joined(1)]),
-    watch: spec(options("n", "interval"), [joined()]),
+    ssh: spec(options("bcDEeFIiJLlmOopQRSWwB", "", "46AaCfGgKkMNnqsTtVvXxYy"), [joined(1)]),
+    watch: spec(
+      options(
+        "n",
+        "interval",
+        "bcdegprtwx",
+        "beep color differences errexit chgexit precise no-title no-wrap exec",
+      ),
+      [joined()],
+    ),
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
-    trap: spec({}, [joined(0, 1)]),
+    trap: spec(options("", "", "lp"), [joined(0, 1)]),
     // Package managers and runners.
     pnpm: spec(options("CF", `filter dir ${PUBLISH_OPTIONS}`)),
     npm: spec(options("w", `workspace prefix userconfig cache ${PUBLISH_OPTIONS}`)),
@@ -3284,13 +3215,19 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       ...spec(options("pZ", "package manifest-path registry token config index color")),
       toolchain: true,
     },
-    ...each(["pnpm exec", "yarn exec"], runner()),
+    "pnpm exec": runner(
+      options("", "resume-from", "r", "recursive parallel report-summary workspace-root"),
+    ),
+    "yarn exec": runner(),
     // `npx -c '<script>'` runs a shell script.
     ...each(
       ["npm exec", "npm x", "npx"],
-      spec(options("pc", "package call"), [command(), optionScript("c", ["call"])]),
+      spec(
+        options("pcw", "package call workspace", "qy", "yes no no-install quiet workspaces ws"),
+        [command(), optionScript("c", ["call"])],
+      ),
     ),
-    ...each(["bunx", "bun x"], runner(options("p", "package"))),
+    ...each(["bunx", "bun x"], runner(options("p", "package", "", "bun silent verbose"))),
     ...each(
       ["pnpm publish", "npm publish", "yarn publish", "yarn npm publish", "bun publish"],
       PUBLISH,
@@ -3323,8 +3260,15 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
     uv: spec(options("", "directory project")),
-    "uv run": runner(options("", "with python package env-file extra group")),
-    "op run": runner(options("", "env-file")),
+    "uv run": runner(
+      options(
+        "",
+        "with python package env-file extra group",
+        "mqv",
+        "module frozen locked no-sync no-project isolated all-extras no-dev script quiet verbose",
+      ),
+    ),
+    "op run": runner(options("", "env-file", "", "no-masking")),
     ...each(["mise exec", "mise x"], runner({}, { after: ["--"] })),
     "direnv exec": runner({}, { positionals: 1 }),
     ...each(["nix develop", "nix shell"], runner({}, { after: ["-c", "--command"] })),
@@ -3418,11 +3362,31 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "dd (raw disk write)",
       ),
     ),
-    psql: risky(sqlRisk([POSTGRES])),
-    ...each(["mysql", "mariadb"], risky(sqlRisk(MYSQL))),
-    sqlite3: risky(sqlRisk([SQLITE])),
-    // DuckDB takes dollar quotes and double-quoted names: read as both.
-    duckdb: risky(sqlRisk([POSTGRES, SQLITE])),
+    // The options that take a value, so that one is not read as `-f` or `--file`.
+    psql: spec(
+      options(
+        "cdfhLoOpPTUv",
+        "command dbname file host log-file output port pset username variable set",
+      ),
+      [],
+      sqlRisk,
+    ),
+    ...each(
+      ["mysql", "mariadb"],
+      spec(
+        { ...options("eDhPSu", "execute database host port socket user"), attached: "p" },
+        [],
+        sqlRisk,
+      ),
+    ),
+    ...each(
+      ["sqlite3", "duckdb"],
+      spec(
+        { long: names("cmd init separator newline nullvalue c s f"), singleDash: true },
+        [],
+        sqlRisk,
+      ),
+    ),
   }),
 )
 
