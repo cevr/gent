@@ -1436,7 +1436,8 @@ const makeAgentLoopBehavior = (
           return dequeueFollowUpOn(input).pipe(provideLoopClient)
         },
         send: (input) => submitUserMessage(input).pipe(provideLoopClient),
-        steer: (command) => steerLoop(command).pipe(provideLoopClient),
+        steer: (command, clientRequest) =>
+          steerLoop(command, clientRequest).pipe(provideLoopClient),
       },
     })
 
@@ -2458,6 +2459,7 @@ const buildAgentLoopActorHandlers = (config: {
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       commandId: ActorCommandId,
       command: SteerCommandType,
+      clientRequest: Option.Option<ClientRequestGrant>,
     ) {
       yield* ensureTarget(command)
       yield* markWrite
@@ -2502,10 +2504,8 @@ const buildAgentLoopActorHandlers = (config: {
           // and steered second would race a turn that ended in between.
           // `startTurn` re-reads the state under its own permit, so it is a
           // no-op when a turn did begin meanwhile.
-          const { result: before } = yield* admitWithOrigin(
-            item,
-            Option.fromUndefinedOr(command.clientRequest),
-            (admitted) => handle.inbox.steer(admitted),
+          const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
+            handle.inbox.steer(admitted),
           )
           if (command.wake !== true || before._tag !== "Idle") return
           const next = yield* handle.inbox.takeIfIdle
@@ -2543,7 +2543,11 @@ const buildAgentLoopActorHandlers = (config: {
           }).pipe(provideActorWorkspace),
       ),
       Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
-        applySteer(operation.commandId, operation.command).pipe(provideActorWorkspace),
+        applySteer(
+          operation.commandId,
+          operation.command,
+          Option.fromUndefinedOr(operation.clientRequest),
+        ).pipe(provideActorWorkspace),
       ),
       RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
         ({ operation }: HandlerRequest<RespondInteractionInput>) =>

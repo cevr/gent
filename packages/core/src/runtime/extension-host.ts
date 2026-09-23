@@ -2427,7 +2427,11 @@ interface ExtensionSessionControlService {
   }) => Effect.Effect<boolean, Error>
   /** One user message on another branch's loop. */
   readonly send: (input: SendUserMessagePayload) => Effect.Effect<void, Error>
-  readonly steer: (command: SteerCommandType) => Effect.Effect<void, Error>
+  /** Steer a branch; `clientRequest` is the grant of the client request it runs under. */
+  readonly steer: (
+    command: SteerCommandType,
+    clientRequest?: ClientRequestGrant,
+  ) => Effect.Effect<void, Error>
 }
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
@@ -2745,15 +2749,17 @@ export const makeExtensionHostContextProvider = (
                     yield* requireTarget("send", target)
                     const requestId = steered.requestId ?? RequestId.make(yield* host.randomId)
                     yield* control((loop) =>
-                      loop.steer({
-                        _tag: "Interject",
-                        ...target,
-                        requestId,
-                        message: steered.content,
-                        metadata: steered.metadata,
-                        wake: steered.wake,
-                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
-                      }),
+                      loop.steer(
+                        {
+                          _tag: "Interject",
+                          ...target,
+                          requestId,
+                          message: steered.content,
+                          metadata: steered.metadata,
+                          wake: steered.wake,
+                        },
+                        clientRequestGrant(runInfo, target),
+                      ),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
               }),

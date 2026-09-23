@@ -102,6 +102,7 @@ import {
   messagePartsDisplayText,
 } from "../../src/domain/message"
 import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
+import { omitUndefined } from "../../src/domain/guards"
 import {
   type ModelDriverContribution,
   ProviderAuthInfo,
@@ -2793,9 +2794,9 @@ describe("client request origin", () => {
           queueFollowUp: hold,
           dequeueFollowUp: () => Effect.succeed(false),
           send: () => Effect.void,
-          steer: (command) => {
+          steer: (command, clientRequest) => {
             if (command._tag !== "Interject") return Effect.void
-            return hold(command)
+            return hold(omitUndefined({ metadata: command.metadata, clientRequest }))
           },
         },
       })

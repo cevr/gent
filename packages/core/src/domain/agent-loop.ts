@@ -413,6 +413,12 @@ const SteerFields = {
   ...WorkspaceFields,
   commandId: ActorCommandId,
   command: SteerCommand,
+  /**
+   * The client request an interjection was sent under; see
+   * `ClientRequestGrant`. Only the loop's own facade sets it: the public
+   * `SteerCommand` a client sends has no field for it.
+   */
+  clientRequest: Schema.optional(ClientRequestGrant),
 }
 
 const RespondInteractionFields = {
@@ -646,11 +652,15 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
  * is the durability guarantee (Steer survives crash + redeliver) and
  * is NOT what's being relaxed here.
  */
-export const steerLoop = Effect.fn("AgentLoop.client.steer")(function* (command: SteerCommandType) {
+export const steerLoop = Effect.fn("AgentLoop.client.steer")(function* (
+  command: SteerCommandType,
+  clientRequest?: ClientRequestGrant,
+) {
   const payload = {
     workspaceId: yield* CurrentWorkspaceId,
     commandId: ActorCommandId.make(command.requestId),
     command,
+    clientRequest,
   }
   const ref = yield* loopRefFor(command.sessionId, command.branchId)
   yield* ref.send(AgentLoop.Steer.make(payload))
