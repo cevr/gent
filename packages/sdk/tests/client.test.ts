@@ -13,11 +13,12 @@ import { GentPlatform, workspaceHeadersForCwd, workspaceIdForCwd } from "@gent/c
 import { narrowR } from "../../core/tests/helpers/effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { Gent, makeNamespacedClient } from "../src/client"
+import { Gent } from "../src/client"
 import type { Message as DomainMessage } from "../src/index"
 import {
   type GentRpcClient,
   GentRpcs,
+  makeNamespacedClient,
   BranchId,
   MessageId,
   SessionId,

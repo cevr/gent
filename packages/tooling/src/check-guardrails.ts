@@ -22,6 +22,7 @@ import {
   findUnadaptedSeams,
   findUnadmittedChildSessionWriters,
   findUnconsumedExports,
+  findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
   findMissingLockIncludes,
@@ -31,6 +32,7 @@ import {
   isSteeringFile,
   OxlintConfigSchema,
   type PackageJson,
+  type WorkspaceManifest,
 } from "./guards"
 
 const trackedFileNames = Effect.promise(() =>
@@ -206,6 +208,22 @@ const program = Effect.gen(function* () {
 
   // The lint config must not name a file or a rule that is gone.
   for (const finding of yield* lintConfigFindings(trackedFiles, sourceTexts)) {
+    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
+  }
+
+  // Every workspace package imports only the workspace packages it declares.
+  const manifestDirs = trackedFiles
+    .filter((file) => /^(?:packages|apps)\/[^/]+\/package\.json$/.test(file))
+    .map((file) => file.slice(0, -"/package.json".length))
+  const manifests = yield* Effect.forEach(
+    manifestDirs,
+    Effect.fn("Tooling.readManifest")(function* (dir: string) {
+      const manifest: WorkspaceManifest = yield* readJsonFile(`${dir}/package.json`)
+      const entry: readonly [string, WorkspaceManifest] = [dir, manifest]
+      return entry
+    }),
+  )
+  for (const finding of findUndeclaredWorkspaceImports(new Map(manifests), sourceTexts)) {
     pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
   }
 

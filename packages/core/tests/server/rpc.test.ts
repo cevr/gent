@@ -43,8 +43,7 @@ import {
   ExternalDriverRef,
   ModelDriverRef,
 } from "../../src/domain/agent"
-import { Gent } from "@gent/sdk"
-import { createE2ELayer, createRpcHarness } from "../../src/test-utils/harness"
+import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   BranchId,
@@ -144,7 +143,7 @@ describe("RPC contract schemas", () => {
  * Driver routing RPCs — `driver.list` / `driver.set` / `driver.clear`
  * acceptance tests.
  *
- * Drives the full transport boundary (Gent.test → RpcServer → handler →
+ * Drives the full transport boundary (createRpcClient → RpcServer → handler →
  * ConfigService + ExtensionRegistry) so the tests catch wiring bugs the
  * unit tests on `ConfigService.setDriverOverride` don't cover.
  */
@@ -154,7 +153,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const before = yield* client.driver.list()
         expect(before).toBeInstanceOf(DriverListResult)
         expect(before.drivers[0]?._tag).toBeDefined()
@@ -172,7 +171,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
@@ -192,7 +191,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
@@ -208,7 +207,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
@@ -229,7 +228,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         yield* client.driver.clear({ agentName: AgentName.make("does-not-exist") })
         const after = yield* client.driver.list()
         expect(after.overrides).toEqual({})
@@ -420,7 +419,7 @@ describe("auth.listProviders", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
       }).pipe(Effect.timeout("4 seconds")),
@@ -457,7 +456,7 @@ describe("auth.listProviders", () => {
             Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
           )
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(
+          const { client } = yield* createRpcClient(
             createE2ELayer({
               ...e2ePreset,
               providerLayer,
@@ -490,7 +489,7 @@ describe("auth.listProviders", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const externalDriver = drivers.find((d) => d._tag === "External")
         if (Predicate.isUndefined(externalDriver)) return
@@ -510,7 +509,7 @@ describe("auth.listProviders", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const session = yield* client.session.create({})
         yield* client.session.delete({ sessionId: session.sessionId })
         const exit = yield* Effect.exit(
@@ -532,7 +531,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -551,7 +550,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -570,7 +569,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -589,7 +588,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -615,7 +614,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -696,7 +695,7 @@ describe("interaction.respondInteraction", () => {
         ])
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -745,7 +744,7 @@ describe("interaction.respondInteraction", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -827,7 +826,7 @@ describe("interaction.respondInteraction", () => {
         ])
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -886,7 +885,7 @@ describe("interaction.respondInteraction", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -938,7 +937,7 @@ describe("interaction.respondInteraction", () => {
             toolCallStep("approval_probe", { text: "approve deploy?" }),
             textStep(finalReply),
           ])
-          const { client } = yield* Gent.test(
+          const { client } = yield* createRpcClient(
             createE2ELayer({
               ...e2ePreset,
               providerLayer,

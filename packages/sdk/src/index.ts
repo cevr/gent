@@ -14,6 +14,7 @@ export type {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   GentClientRpcError,
+  GentNamespacedClient,
   Message,
   MessageSegment,
   ProjectedMessage,
@@ -22,7 +23,7 @@ export type {
 } from "@gent/core/protocol"
 
 // Client constructors
-export { Gent, type GentClientBundle, type GentNamespacedClient } from "./client.js"
+export { Gent, type GentClientBundle } from "./client.js"
 export type { GentRuntime } from "./runtime-boundary.js"
 export type { IdleShutdownSpec } from "./server.js"
 

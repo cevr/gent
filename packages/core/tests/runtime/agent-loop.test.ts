@@ -59,6 +59,7 @@ import {
 } from "../../src/domain/agent"
 import {
   createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   ensureStorageParents,
   RecordingEventStore,
@@ -208,7 +209,6 @@ import {
 import * as AiError from "effect/unstable/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
 import { Database } from "bun:sqlite"
-import { Gent } from "@gent/sdk"
 import type { LanguageModel } from "effect/unstable/ai"
 import { narrowR } from "../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -2475,7 +2475,7 @@ describe("turn record", () => {
           toolCallStep("resume_probe", { label: "one" }),
           textStep("DONE-AFTER-TOOL"),
         ])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer: provider.layer,
@@ -2531,7 +2531,7 @@ describe("turn record", () => {
         ])
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -2554,7 +2554,7 @@ describe("turn record", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -2609,7 +2609,7 @@ describe("turn record", () => {
         ])
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -2640,7 +2640,7 @@ describe("turn record", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -2691,7 +2691,7 @@ describe("turn record", () => {
         ])
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -2733,7 +2733,7 @@ describe("turn record", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,

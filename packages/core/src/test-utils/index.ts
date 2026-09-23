@@ -9,6 +9,7 @@ export {
   captureTurnTools,
   collectTestContributions,
   createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   type E2ELayerConfig,
   ensureStorageParents,

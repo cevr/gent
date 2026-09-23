@@ -22,6 +22,7 @@ import {
   findUnadaptedSeams,
   findUnadmittedChildSessionWriters,
   findUnconsumedExports,
+  findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
   findMissingLockIncludes,
@@ -2713,6 +2714,39 @@ describe("a namesake does not vouch for an export", () => {
       },
       usedElsewhere,
     ])
+    expect(findings).toEqual([])
+  })
+})
+
+// ── undeclared-workspace-imports.test ───────────────────────────────────────
+
+describe("undeclared workspace imports", () => {
+  const manifests = new Map([
+    ["packages/core", { name: "@gent/core" }],
+    ["packages/sdk", { name: "@gent/sdk", dependencies: { "@gent/core": "workspace:*" } }],
+  ])
+  const sdkImport = ["@gent", "sdk"].join("/")
+  const coreImport = ["@gent", "core", "protocol"].join("/")
+
+  test("a core file that imports the SDK is a finding", () => {
+    const findings = findUndeclaredWorkspaceImports(
+      manifests,
+      new Map([["packages/core/src/test-utils/harness.ts", `import { Gent } from "${sdkImport}"`]]),
+    )
+    expect(findings.map((finding) => [finding.file, finding.line])).toEqual([
+      ["packages/core/src/test-utils/harness.ts", 1],
+    ])
+  })
+
+  test("a declared dependency, a self import, and a fixture tree pass", () => {
+    const findings = findUndeclaredWorkspaceImports(
+      manifests,
+      new Map([
+        ["packages/sdk/src/client.ts", `import { GentRpcs } from "${coreImport}"`],
+        ["packages/core/tests/entry.test.ts", `import { waitFor } from "@gent/core/test-utils"`],
+        ["packages/core/fixtures/app.ts", `import { Gent } from "${sdkImport}"`],
+      ]),
+    )
     expect(findings).toEqual([])
   })
 })

@@ -3149,3 +3149,68 @@ export const findPackageSurfaceFindings = (
       ],
     }),
   )
+
+// ---------------------------------------------------------------------------
+// Workspace imports a package does not declare
+// ---------------------------------------------------------------------------
+
+/** The manifest fields that name a workspace package and what it depends on. */
+export interface WorkspaceManifest {
+  readonly name: string
+  readonly dependencies?: Readonly<Record<string, string>>
+  readonly devDependencies?: Readonly<Record<string, string>>
+  readonly peerDependencies?: Readonly<Record<string, string>>
+}
+
+export interface UndeclaredImportFinding {
+  readonly file: string
+  readonly line: number
+  readonly message: string
+}
+
+/** The package an `@gent/...` specifier names: `@gent/core/protocol` → `@gent/core`. */
+const WORKSPACE_SPECIFIER = /(?:\bfrom|\bimport)\s*\(?\s*["'](@gent\/[a-z0-9-]+)(?:\/[^"']*)?["']/g
+
+const declaredWorkspaceNames = (manifest: WorkspaceManifest): ReadonlySet<string> =>
+  new Set([
+    manifest.name,
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+  ])
+
+/**
+ * A file that imports a workspace package its own manifest does not declare.
+ * Turbo orders and caches tasks by the declared graph, so an undeclared edge
+ * lets a cached typecheck replay green after the imported package broke it.
+ * Core's test harness once called `@gent/sdk`, which depends on core: a cycle
+ * no manifest showed. `manifests` is keyed by package directory
+ * (`packages/core`). Fixture trees and the guard tests hold source as data, not imports.
+ */
+export const findUndeclaredWorkspaceImports = (
+  manifests: ReadonlyMap<string, WorkspaceManifest>,
+  sourceTexts: ReadonlyMap<string, string>,
+): ReadonlyArray<UndeclaredImportFinding> => {
+  const findings: Array<UndeclaredImportFinding> = []
+  for (const [file, text] of sourceTexts) {
+    if (file.includes("/fixtures/")) continue
+    // The guard tests hold source text as string literals; none is an import.
+    if (file.startsWith("packages/tooling/tests/guards")) continue
+    const owner = Option.fromNullishOr([...manifests].find(([dir]) => file.startsWith(`${dir}/`)))
+    if (Option.isNone(owner)) continue
+    const [dir, manifest] = owner.value
+    const declared = declaredWorkspaceNames(manifest)
+    for (const [index, line] of text.split("\n").entries()) {
+      for (const match of line.matchAll(WORKSPACE_SPECIFIER)) {
+        const imported = Option.fromNullishOr(match[1])
+        if (Option.isNone(imported) || declared.has(imported.value)) continue
+        findings.push({
+          file,
+          line: index + 1,
+          message: `imports \`${imported.value}\`, which ${dir}/package.json does not declare; declare it without a cycle, or move the code to a package that does`,
+        })
+      }
+    }
+  }
+  return findings
+}

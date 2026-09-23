@@ -50,6 +50,7 @@ import {
   EventStore,
   CurrentWorkspaceId,
   WorkspaceId,
+  createRpcClient,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -143,7 +144,6 @@ import {
   ListChildren,
   StartChild,
 } from "../src/delegate.js"
-import { Gent } from "@gent/sdk"
 import { SqlClient } from "effect/unstable/sql"
 import { CompactionExtension } from "../src/compaction.js"
 
@@ -3182,7 +3182,7 @@ it.scopedLive(
             durableApproval: true,
           }),
         )
-        const { client } = yield* Gent.test(Layer.succeedContext(context))
+        const { client } = yield* createRpcClient(Layer.succeedContext(context))
         const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
         const workspaceId = yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient

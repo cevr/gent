@@ -70,7 +70,8 @@ import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "../runtime/t
 import { SessionRuntime } from "../runtime/session.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
 import { LanguageModelLayers } from "./language-model.js"
-import { StateLocation } from "../server/server.js"
+import { makeInProcessClient, RpcHandlersLive, StateLocation } from "../server/server.js"
+import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
 import { Branch, type Message, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
 import {
@@ -93,7 +94,6 @@ import {
 import type { LanguageModel } from "effect/unstable/ai"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import { buildServerRoot, ServerRootPlatformLayer } from "../server/server-root.js"
-import { Gent } from "@gent/sdk"
 
 // ── extension-host-context ──────────────────────────────────────────────────
 
@@ -784,7 +784,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 
 /**
  * In-process integration layer: the E2E root with the stub tool runner and
- * the scripted debug model. Use with `Gent.test()`.
+ * the scripted debug model. Use with `createRpcClient()`.
  */
 
 interface InProcessLayerConfig {
@@ -814,15 +814,15 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 
 /**
  * RPC acceptance harness — exercises the full per-request scope path that
- * production uses (`Gent.test → RpcServer → registry dispatch → handler`).
+ * production uses (`createRpcClient → RpcServer → registry dispatch → handler`).
  *
  * Use this for new extension RPC tests instead of hand-composing
- * `Gent.test(createE2ELayer({...}))` + a session-create call. Direct-runtime
+ * `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
  * tests via `makeActorRuntimeLayer` bypass the per-request scope boundary
  * production uses; this harness asserts that boundary.
  *
  * The harness is intentionally thin: it folds the four lines every RPC test
- * already writes (build E2E layer → Gent.test → session.create → return
+ * already writes (build E2E layer → createRpcClient → session.create → return
  * client + ids) into a single yield. Pass `cwd` to override the default
  * `/tmp` working directory.
  *
@@ -854,10 +854,23 @@ interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
     const { cwd, ...layerConfig } = config
-    const layer = createE2ELayer(layerConfig)
-    const { client, runtime } = yield* Gent.test(layer)
+    const { client } = yield* createRpcClient(createE2ELayer(layerConfig))
     const { sessionId, branchId } = yield* client.session.create({
       cwd: cwd ?? "/tmp",
     })
-    return { client, runtime, sessionId, branchId }
+    return { client, sessionId, branchId }
+  })
+
+/**
+ * An in-process RPC client over `handlersLayer`: the production handlers, the
+ * workspace middleware, and a namespaced client, with no socket. The SDK's
+ * `Gent.test` is the same path for callers outside core.
+ */
+export const createRpcClient = <E, R>(
+  handlersLayer: Layer.Layer<Layer.Services<typeof RpcHandlersLive>, E, R>,
+) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+    const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(process.cwd()))
+    return { client }
   })

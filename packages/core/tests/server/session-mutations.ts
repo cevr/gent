@@ -22,8 +22,7 @@ import {
   SqliteStorage,
   StorageError,
 } from "../../src/storage/storage"
-import { createE2ELayer } from "../../src/test-utils/harness"
-import { Gent } from "@gent/sdk"
+import { createE2ELayer, createRpcClient } from "../../src/test-utils/harness"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
@@ -33,7 +32,7 @@ export const datePlusMillis = (date: Date, millis: number): Date =>
 export const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep(reply)])
-    return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+    return yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
   })
 
 const rpcTestWorkspaceId = WorkspaceId.make("c".repeat(64))
