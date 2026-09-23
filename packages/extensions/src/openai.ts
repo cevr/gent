@@ -357,6 +357,18 @@ const HTML_SUCCESS = `<!doctype html>
   </body>
 </html>`
 
+const HTML_ESCAPES = new Map([
+  ["&", "&amp;"],
+  ["<", "&lt;"],
+  [">", "&gt;"],
+  ['"', "&quot;"],
+  ["'", "&#39;"],
+])
+
+/** The error text comes from the query string, so it is escaped before it goes into HTML. */
+const escapeHtml = (text: string): string =>
+  text.replace(/[&<>"']/g, (char) => HTML_ESCAPES.get(char) ?? char)
+
 const HTML_ERROR = (error: string) => `<!doctype html>
 <html>
   <head>
@@ -364,7 +376,7 @@ const HTML_ERROR = (error: string) => `<!doctype html>
   </head>
   <body>
     <h1>Authorization Failed</h1>
-    <p>${error}</p>
+    <p>${escapeHtml(error)}</p>
   </body>
 </html>`
 
@@ -395,6 +407,17 @@ const buildCallbackRoutes = (
       const error = Option.fromNullishOr(url.searchParams.get("error"))
       const errorDescription = url.searchParams.get("error_description")
 
+      // The state is checked first: a request that does not carry this
+      // flow's state is not the provider's redirect, so its error text is
+      // not trusted.
+      if (stateParam !== expectedState) {
+        const errorMsg = "Invalid state"
+        yield* Deferred.fail(
+          deferred,
+          new OAuthError({ reason: "state-mismatch", message: errorMsg }),
+        )
+        return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
+      }
       if (Option.isSome(error)) {
         const errorMsg = errorDescription ?? error.value
         yield* Deferred.fail(
@@ -408,14 +431,6 @@ const buildCallbackRoutes = (
         yield* Deferred.fail(
           deferred,
           new OAuthError({ reason: "missing-code", message: errorMsg }),
-        )
-        return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
-      }
-      if (stateParam !== expectedState) {
-        const errorMsg = "Invalid state"
-        yield* Deferred.fail(
-          deferred,
-          new OAuthError({ reason: "state-mismatch", message: errorMsg }),
         )
         return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
       }
@@ -494,7 +509,12 @@ const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.
     const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
     const deferred = yield* Deferred.make<PendingCallbackPayload, OAuthError>()
 
-    yield* Effect.forkScoped(startRedirectServer(state, deferred))
+    // Nothing joins the server fiber, so a failed start (port 1455 in use,
+    // for example) fails the deferred; otherwise `callback()` waits forever.
+    yield* startRedirectServer(state, deferred).pipe(
+      Effect.tapError((error) => Deferred.fail(deferred, error)),
+      Effect.forkScoped,
+    )
 
     const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
       Effect.gen(function* () {
@@ -1417,6 +1437,8 @@ export const buildOpenAIModelDriver = (
         // abandoned flow leaves the redirect HTTP server resident
         // until extension teardown. The fiber both clears the map
         // entry and closes the OAuth scope (tears down the listener).
+        // It is detached: `authorize` returns at once, and a child fiber
+        // would stop with it. `callback` interrupts it.
         const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
           Effect.flatMap(() =>
             Effect.gen(function* () {
@@ -1424,7 +1446,7 @@ export const buildOpenAIModelDriver = (
               yield* close
             }),
           ),
-          Effect.forkChild,
+          Effect.forkDetach,
         )
         pendingCallbacks.set(ctx.authorizationId, {
           flow,

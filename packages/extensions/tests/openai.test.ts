@@ -47,6 +47,7 @@ import {
   type FakeFetchState,
   makeFakeFetchState,
   oneGenerate,
+  waitFor,
 } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/protocol"
 
@@ -2219,6 +2220,118 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
       if (exit._tag === "Failure") {
         expect(exit.cause.toString()).toContain("missing or expired")
       }
+    }),
+  )
+})
+describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
+  type PendingCallbacks = Parameters<typeof buildOpenAIModelDriver>[1]
+  const makeDriver = (pending: PendingCallbacks) =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        pending,
+        Option.none(),
+        testCatalogSource(),
+      )
+      const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
+      const callback = Option.fromUndefinedOr(driver.auth?.callback)
+      if (Option.isNone(authorize) || Option.isNone(callback)) {
+        return yield* Effect.die(new Error("OpenAI driver auth hooks missing"))
+      }
+      return { authorize: authorize.value, callback: callback.value }
+    })
+  const authContext = (methodIndex: number, authorizationId: string) => ({
+    sessionId: SessionId.make("s1"),
+    methodIndex,
+    authorizationId,
+    persist: () => Effect.void,
+  })
+
+  it.live("drops an abandoned login after five minutes", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize } = yield* makeDriver(pending)
+      const fetchState = makeFakeFetchState()
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          // Production runs `authorize` in its own request fiber, which ends when it returns.
+          const request = yield* Effect.forkChild(authorize(authContext(1, "abandoned")))
+          yield* Fiber.join(request)
+          expect(pending.has("abandoned")).toBe(true)
+          yield* TestClock.adjust("5 minutes")
+          yield* Effect.yieldNow.pipe(
+            Effect.repeat({ until: () => !pending.has("abandoned"), times: 100 }),
+          )
+          expect(pending.has("abandoned")).toBe(false)
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+          Effect.provide(
+            fakeFetchLayer(fetchState, () => ({
+              status: 200,
+              body: '{"device_auth_id":"device-auth-1","user_code":"ABCD-1234","interval":"1"}',
+            })),
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.scopedLive("a redirect server that cannot bind fails the waiting callback", () =>
+    Effect.gen(function* () {
+      // Hold the redirect port so the login's own server cannot bind it.
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Option.liftThrowable(() =>
+            // oxlint-disable-next-line effect/noGlobals -- Plays a foreign process that already holds the port.
+            Bun.serve({ port: 1455, fetch: () => new Response("busy") }),
+          )(),
+        ),
+        (server) =>
+          Option.match(server, {
+            onNone: () => Effect.void,
+            onSome: (held) => Effect.promise(() => held.stop(true)),
+          }),
+      )
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      yield* authorize(authContext(0, "blocked"))
+      const exit = yield* Effect.exit(callback({ ...authContext(0, "blocked") })).pipe(
+        Effect.timeout("3 seconds"),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("redirect server failed")
+    }),
+  )
+
+  it.live("escapes the provider's error text on the redirect page", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const authorization = yield* authorize(authContext(0, "escaped"))
+      if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
+      const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
+      const query = new URLSearchParams({
+        state,
+        error: "access_denied",
+        error_description: "<script>alert(1)</script>",
+      })
+      // The redirect server starts on its own fiber; retry until it listens.
+      const page = yield* waitFor(
+        HttpClient.get(`http://localhost:1455/auth/callback?${query.toString()}`).pipe(
+          Effect.flatMap((response) => response.text),
+          // oxlint-disable-next-line effect/noInlineProvide -- The browser's side of the redirect is this operation's HTTP client.
+          Effect.provide(FetchHttpClient.layer),
+        ),
+        () => true,
+        2_000,
+        "redirect server",
+      )
+      expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
+      expect(page).not.toContain("<script>alert")
+      // Completes the flow: stops the timer and closes the redirect server.
+      yield* Effect.exit(callback(authContext(0, "escaped")))
     }),
   )
 })
