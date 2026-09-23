@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Clock, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import {
   InteractionStorage,
   type InteractionStorageService,
@@ -484,6 +484,115 @@ describe("Interaction Request", () => {
       const error = yield* Effect.flip(interaction.present({ text: "Approve?" }, branch))
       expect(error._tag).toBe("InteractionOwnerMissingError")
       expect(yield* is.listOpen(branch)).toEqual([])
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("a call whose kept answer no longer fits asks again in its own queued place", () =>
+    Effect.gen(function* () {
+      const storage = callbacksFor(yield* InteractionStorage)
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage,
+      })
+      const branch = { sessionId: SessionId.make("s-own"), branchId: BranchId.make("b-own") }
+      yield* ensureStorageParents(branch)
+      const a = ToolCallId.make("call-a")
+      const b = ToolCallId.make("call-b")
+      const step = interaction.beginStep(branch, [a, b])
+      const runA = (first: string, between: Effect.Effect<void> = Effect.void) =>
+        interaction.ownCall(
+          branch,
+          a,
+        )(
+          Effect.gen(function* () {
+            yield* interaction.present({ text: first }, branch)
+            yield* between
+            return yield* interaction.present({ text: "A2" }, branch)
+          }),
+        )
+      const runB = interaction.ownCall(branch, b)(interaction.present({ text: "B1" }, branch))
+      // Run 1: A asks its first question and parks.
+      yield* step
+      const x = yield* pendingId(yield* runA("A1").pipe(Effect.exit))
+      yield* interaction.storeResolution(x, { approved: true })
+      // Run 2: A takes and keeps its first answer; B asks next; A then
+      // queues its second ask behind B's question.
+      yield* step
+      const gate = yield* Deferred.make<void>()
+      const secondRun = yield* runA("A1", Deferred.await(gate)).pipe(Effect.exit, Effect.forkChild)
+      const y = yield* pendingId(yield* runB.pipe(Effect.exit))
+      yield* Deferred.completeWith(gate, Effect.void)
+      expect(yield* pendingId(yield* Fiber.join(secondRun))).toBe(y)
+      yield* interaction.storeResolution(y, { approved: true })
+      // Run 3: B takes its answer. A's first question changed, so its kept
+      // answer goes; the queued place it meets is its own, not another call's.
+      yield* step
+      expect(Exit.isSuccess(yield* runB.pipe(Effect.exit))).toBe(true)
+      const third = yield* runA("A1 changed").pipe(Effect.exit, Effect.timeoutOption("2 seconds"))
+      expect(Option.isSome(third)).toBe(true)
+      if (Option.isNone(third)) return
+      const z = yield* pendingId(third.value)
+      expect(yield* interaction.pendingRequestId(branch)).toBe(z)
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("a request left open by an ended turn is settled when a new step asks", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const branch = { sessionId: SessionId.make("s-stale"), branchId: BranchId.make("b-stale") }
+      yield* ensureStorageParents(branch)
+      const before = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const stale = yield* pendingId(
+        yield* asCall(
+          before,
+          branch,
+          "old-call",
+        )(before.present({ text: "Old?" }, branch)).pipe(Effect.exit),
+      )
+      // The process stops before the turn settles its request.
+      const dismissed: InteractionRequestId[] = []
+      const after = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: (requestId) => Effect.sync(() => dismissed.push(requestId)),
+        storage: callbacksFor(is),
+      })
+      for (const record of yield* is.listOpen(branch)) yield* after.rehydrate(record)
+      const fresh = yield* pendingId(
+        yield* asCall(
+          after,
+          branch,
+          "new-call",
+        )(after.present({ text: "New?" }, branch)).pipe(Effect.exit),
+      )
+      expect(fresh).not.toBe(stale)
+      expect(dismissed).toEqual([stale])
+      expect((yield* is.listOpen(branch)).map((record) => record.requestId)).toEqual([fresh])
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("an answer that comes after its request closed is not kept", () =>
+    Effect.gen(function* () {
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(yield* InteractionStorage),
+      })
+      const branch = { sessionId: SessionId.make("s-late"), branchId: BranchId.make("b-late") }
+      yield* ensureStorageParents(branch)
+      const closed = yield* pendingId(
+        yield* asCall(
+          interaction,
+          branch,
+        )(interaction.present({ text: "Go?" }, branch)).pipe(Effect.exit),
+      )
+      yield* interaction.endTurn(branch)
+      yield* interaction.storeResolution(closed, { approved: true })
+      expect(yield* interaction.answered(closed)).toBe(false)
     }).pipe(Effect.provide(storageLive)),
   )
 

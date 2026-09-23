@@ -195,7 +195,7 @@ export interface InteractionService {
   /**
    * Open a step on a branch; `callIds` are the calls it runs. An answer or a
    * place in the queue whose owner is not one of them is dropped by the next
-   * call that asks.
+   * call that asks. An answer whose owner parked in this step stays for it.
    */
   readonly beginStep: (branch: BranchRef, callIds: ReadonlyArray<ToolCallId>) => Effect.Effect<void>
   /**
@@ -274,7 +274,9 @@ interface BranchInteractions {
   readonly open: Option.Option<OpenRequest>
   /** Owners that parked on the open request, in the order they asked. */
   readonly queue: ReadonlyArray<InteractionOwner>
-  /** The calls of the step that runs now. */
+  /** The calls of the step that runs now, including those that already ended. */
+  readonly step: ReadonlySet<ToolCallId>
+  /** The calls of the step that still run. */
   readonly running: ReadonlySet<ToolCallId>
   readonly taken: ReadonlyArray<TakenAnswer>
 }
@@ -289,6 +291,7 @@ interface InteractionState {
 const emptyBranch: BranchInteractions = {
   open: Option.none(),
   queue: [],
+  step: new Set(),
   running: new Set(),
   taken: [],
 }
@@ -322,6 +325,7 @@ const putBranch = (
   if (
     Option.isNone(branch.open) &&
     branch.queue.length === 0 &&
+    branch.step.size === 0 &&
     branch.running.size === 0 &&
     branch.taken.length === 0
   )
@@ -482,10 +486,12 @@ export const makeInteractionService = (
      * A call that asks as itself. It takes the answer it kept or the answer
      * that belongs to it, when the question is the same; it waits while
      * another running call may still take the open answer; it parks behind
-     * an open question; and it asks when the slot is free and no earlier
-     * owner is queued. A call never waits on itself: an open request from
-     * another ask of the same call is settled. `None` from a step means look
-     * again.
+     * an open question, and behind an answer whose owner parked in this
+     * step; and it asks when the slot is free and no earlier owner is
+     * queued. A call never waits on itself: an open request from another
+     * ask of the same call is settled, and a queued place of the same call
+     * is its own. A request whose owner is not in the step is settled.
+     * `None` from a step means look again.
      */
     const presentNative = Effect.fn("InteractionService.presentNative")(function* (
       params: ApprovalRequest,
@@ -535,8 +541,8 @@ export const makeInteractionService = (
             ]
           },
         )
-      /** An open question nobody answered yet: park on it, in the queue. */
-      const onUnanswered = (
+      /** An open question this call cannot take now: park on it, in the queue. */
+      const parkBehind = (
         current: InteractionState,
         branch: BranchInteractions,
         open: OpenRequest,
@@ -566,7 +572,13 @@ export const makeInteractionService = (
         // cannot take that request, and it is the only one that could.
         if ((mine && !sameQuestion) || sameCall) return drop(current, branch, open)
         const decision = current.decisions.get(open.requestId)
-        if (Predicate.isUndefined(decision)) return onUnanswered(current, branch, open, mine)
+        if (Predicate.isUndefined(decision)) {
+          // An owner outside this step belongs to a turn that ended without
+          // settling its request (a crash in between); nothing will answer it.
+          if (Option.exists(open.owner, (other) => !branch.step.has(other.toolCallId)))
+            return drop(current, branch, open)
+          return parkBehind(current, branch, open, mine)
+        }
         if (Option.isNone(open.owner) || mine) {
           // A row stored before owners were recorded goes to the first ask of its question.
           if (!sameQuestion) return drop(current, branch, open)
@@ -579,21 +591,29 @@ export const makeInteractionService = (
           const keep = config.storage.take(open.requestId).pipe(Effect.andThen(signal))
           return [Effect.as(keep, Option.some(decision)), taken]
         }
-        if (branch.running.has(open.owner.value.toolCallId)) return [wait, current]
-        // No running call can take it: settle it and look again.
+        const answeredOwner = open.owner.value.toolCallId
+        if (branch.running.has(answeredOwner)) return [wait, current]
+        // An owner that parked in this step takes its answer when the step
+        // runs again: the answer stays, and this call parks behind it.
+        if (branch.step.has(answeredOwner)) return parkBehind(current, branch, open, mine)
+        // No call of this step can take it: settle it and look again.
         return drop(current, branch, open)
       }
       const onFree = (current: InteractionState, branch: BranchInteractions, wait: Next): Step => {
         const head = Option.fromUndefinedOr(branch.queue[0])
-        if (Option.isSome(head) && !isOwner(head, asker)) {
+        // A place held by another ask of this same call is this call's own place.
+        const ownPlace = Option.exists(head, (entry) => entry.toolCallId === owner.toolCallId)
+        if (Option.isSome(head) && !ownPlace) {
           // An earlier owner asks first; one whose call ended lost its place.
           if (branch.running.has(head.value.toolCallId)) return [wait, current]
           return [lookAgain, putBranch(current, key, { ...branch, queue: branch.queue.slice(1) })]
         }
+        let rest = branch.queue
+        if (ownPlace) rest = rest.slice(1)
         const claimed = putBranch(current, key, {
           ...branch,
           open: Option.some({ requestId, owner: asker, paramsJson, admitted: false }),
-          queue: withoutOwner(branch.queue, asker),
+          queue: withoutOwner(rest, asker),
         })
         return [ask({ params, paramsJson, requestId, owner: asker, branch: branchRef }), claimed]
       }
@@ -681,10 +701,17 @@ export const makeInteractionService = (
         Effect.gen(function* () {
           const decisionJson = yield* encodeInteractionDecision(decision)
           yield* config.storage.decide(requestId, decisionJson)
-          yield* Ref.update(state, (current) => ({
-            ...current,
-            decisions: new Map(current.decisions).set(requestId, decision),
-          }))
+          // A request that closed after the caller looked keeps no answer:
+          // storage ignores it too, and nothing would ever take it.
+          yield* Ref.update(state, (current) => {
+            const open = Array.from(current.branches.values()).some((branch) =>
+              Option.exists(branch.open, (value) => value.requestId === requestId),
+            )
+            if (!open) return current
+            return { ...current, decisions: new Map(current.decisions).set(requestId, decision) }
+          })
+          // A call that waits for this answer in place takes it now.
+          yield* signal
         }),
 
       present: Effect.fn("InteractionService.present")(function* (
@@ -831,7 +858,12 @@ export const makeInteractionService = (
           const stays = (entry: TakenAnswer) => running.has(entry.owner.toolCallId)
           return [
             branch.taken.filter((entry) => !stays(entry)),
-            putBranch(current, key, { ...branch, running, taken: branch.taken.filter(stays) }),
+            putBranch(current, key, {
+              ...branch,
+              step: new Set(callIds),
+              running,
+              taken: branch.taken.filter(stays),
+            }),
           ]
         }).pipe(Effect.flatMap(release)),
 

@@ -1983,6 +1983,78 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
+    "a sibling that asks after the first answer came leaves that answer to its call",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const firstAnswered = yield* Deferred.make<void>()
+          // `late` asks only after the answer to `early` is in, while the step
+          // still runs. `early` parked on its question and no longer runs.
+          const extension = orderedApprovalExtension((params) =>
+            Effect.gen(function* () {
+              if (params.label === "late") yield* Deferred.await(firstAnswered)
+              return yield* approveAs(params)
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "ordered_approval", input: { label: "early", text: "First?" } },
+              { toolName: "ordered_approval", input: { label: "late", text: "Second?" } },
+            ),
+            textStep("both answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          // Answer each dialog the moment it shows, without waiting for a park.
+          const answers = new Map([
+            ["First?", "one"],
+            ["Second?", "two"],
+          ])
+          yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.runForEach((presented) =>
+              client.interaction
+                .respondInteraction({
+                  sessionId,
+                  branchId,
+                  requestId: presented.requestId,
+                  approved: true,
+                  notes: Option.getOrElse(
+                    Option.fromUndefinedOr(answers.get(presented.text)),
+                    () => "unexpected",
+                  ),
+                })
+                .pipe(Effect.andThen(Deferred.completeWith(firstAnswered, Effect.void))),
+            ),
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "two calls ask" })
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "both answered",
+          }).pipe(Effect.timeout("5 seconds"))
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("early=one"))).toBe(true)
+          expect(results.some((result) => result.includes("late=two"))).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
     "a call that asks two questions gets both answers",
     () =>
       Effect.scoped(
