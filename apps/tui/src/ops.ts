@@ -6,17 +6,11 @@ import {
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
   Gent,
-  getLocalHostname,
-  isPidAlive,
   LOG_DIR,
-  probeServerLockEntryIdentity,
-  readServerLock,
-  removeServerLock,
-  type ServerLockEntry,
-  signalIfIdentityOwned,
-  validateServerLockEntry,
+  serverLock,
+  type ServerLockStatus,
 } from "@gent/sdk"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { Command, Flag } from "effect/unstable/cli"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -189,25 +183,15 @@ export const inspectLogs = (
     }
   })
 
-/** The entry is the SDK's decoded lock record; `readServerLock` already rejected malformed files. */
-export const inspectServer = (
-  entry: Option.Option<ServerLockEntry>,
-): Effect.Effect<ServerHealth, never, GentPlatform> =>
-  Effect.gen(function* () {
-    if (Option.isNone(entry)) {
-      return { status: "none", summary: "No shared server." }
-    }
-    const { pid, serverId, rpcUrl } = entry.value
-    const platform = yield* GentPlatform
-    const alive = yield* platform.signal(pid, 0).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    )
-    if (alive) {
-      return { status: "alive", summary: `Shared server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
-    }
-    return { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${serverId}` }
-  })
+/** The doctor's server line, from the SDK's reading of the lock. */
+export const inspectServer = (status: ServerLockStatus): ServerHealth => {
+  if (status._tag === "None") return { status: "none", summary: "No shared server." }
+  const { pid, serverId, rpcUrl } = status.entry
+  if (status._tag === "Alive") {
+    return { status: "alive", summary: `Shared server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
+  }
+  return { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${serverId}` }
+}
 
 const extensionHealthUnavailable = (summary: string): ExtensionDoctorHealth => ({
   status: "unavailable",
@@ -242,11 +226,11 @@ export const extensionHealthFromSnapshot = (
 
 export const makeDoctorReport = (
   home: string,
-  serverEntry: Option.Option<ServerLockEntry>,
+  serverStatus: ServerLockStatus,
   extensions?: ExtensionDoctorHealth,
 ): Effect.Effect<DoctorReport, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
-    const server = yield* inspectServer(serverEntry)
+    const server = inspectServer(serverStatus)
     const defaultExtensions = () => {
       let summary = "No live shared server."
       if (server.status === "alive") summary = "Extension health was not queried."
@@ -462,10 +446,8 @@ export const sessions = Command.make(
 
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
-    const home = yield* readHome
-    const entry = Option.fromNullishOr(yield* readServerLock(home))
-
-    if (Option.isNone(entry)) {
+    const status = yield* serverLock.status(yield* readHome)
+    if (status._tag === "None") {
       yield* Console.log("No shared server.")
       return
     }
@@ -476,11 +458,11 @@ const serverStatus = Command.make("status", {}, () =>
     )
     yield* Console.log("─".repeat(120))
 
-    const validation = yield* validateServerLockEntry(entry.value)
-    let status = "alive"
-    if (!validation.valid) status = `dead (${validation.reason})`
+    let label = "alive"
+    if (status._tag === "Stale") label = "dead"
+    const { entry } = status
     yield* Console.log(
-      `${String(entry.value.pid).padEnd(8)} ${status.padEnd(10)} ${entry.value.serverId.padEnd(40)} ${entry.value.dbPath.padEnd(40)} ${entry.value.rpcUrl}`,
+      `${String(entry.pid).padEnd(8)} ${label.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
     )
   }),
 )
@@ -489,46 +471,28 @@ const serverStop = Command.make(
   "stop",
   {
     all: Flag.boolean("all").pipe(
-      Flag.withDescription("Stop all registered servers"),
+      Flag.withDescription("Also remove the lock of a server that is no longer running"),
       Flag.withDefault(false),
     ),
   },
   ({ all }) =>
     Effect.gen(function* () {
-      const home = yield* readHome
-      const thisHost = yield* getLocalHostname
-      const entry = Option.fromNullishOr(yield* readServerLock(home))
-
-      if (Option.isNone(entry)) {
-        yield* Console.log("No shared server.")
-        return
-      }
-
-      if (entry.value.hostname !== thisHost || (!all && !(yield* isPidAlive(entry.value.pid)))) {
-        yield* Console.log("No live shared server to stop on this host.")
-        return
-      }
-
-      // Signal target — identity-probe before SIGTERM so PID reuse after a
-      // crash never kills an unrelated process (same boundary as SDK attach).
-      const outcome = yield* signalIfIdentityOwned(entry.value, probeServerLockEntryIdentity)
-      if (outcome === "signaled") {
-        yield* Console.log(`Sent SIGTERM to PID ${entry.value.pid} (${entry.value.serverId})`)
-      } else {
-        yield* Console.log(
-          `Skipped PID ${entry.value.pid} (${entry.value.serverId}): identity probe failed`,
-        )
-      }
-
-      // Wait for the process to exit, then cleanup the server lock.
-      yield* Effect.sleep("2 seconds")
-
-      if (yield* isPidAlive(entry.value.pid)) {
-        yield* Console.log("\nShared server is still running after SIGTERM.")
-      } else {
-        yield* removeServerLock(home, entry.value.serverId)
-        yield* Console.log("\nShared server stopped and cleaned up.")
-      }
+      const result = yield* serverLock.stop(yield* readHome, { removeStale: all })
+      const line = Match.value(result).pipe(
+        Match.tagsExhaustive({
+          None: () => "No shared server.",
+          NotRunning: () => "No live shared server to stop on this host.",
+          Removed: ({ entry }) =>
+            `Shared server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock.`,
+          NotOwned: ({ entry }) =>
+            `Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`,
+          Stopped: ({ entry }) =>
+            `Sent SIGTERM to PID ${entry.pid} (${entry.serverId})\n\nShared server stopped and cleaned up.`,
+          StillRunning: ({ entry }) =>
+            `Sent SIGTERM to PID ${entry.pid} (${entry.serverId})\n\nShared server is still running after SIGTERM.`,
+        }),
+      )
+      yield* Console.log(line)
     }),
 )
 
@@ -537,35 +501,28 @@ export const server = Command.make("server", {}, () =>
 ).pipe(Command.withSubcommands([serverStatus, serverStop]))
 
 const readDoctorExtensionHealth = (
-  entry: ServerLockEntry,
-): Effect.Effect<ExtensionDoctorHealth, never, GentPlatform> =>
-  Effect.gen(function* () {
-    const validation = yield* validateServerLockEntry(entry)
-    if (!validation.valid) {
-      let reason = "Shared server is not local to this host."
-      if (validation.reason === "dead-pid") reason = "Shared server lock is stale."
-      return extensionHealthUnavailable(reason)
-    }
-
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
-        yield* bundle.runtime.lifecycle.waitForReady
-        const snapshot = yield* bundle.client.extension.listStatus({})
-        return extensionHealthFromSnapshot(snapshot)
-      }),
-    ).pipe(Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))))
-  })
+  status: ServerLockStatus,
+): Effect.Effect<ExtensionDoctorHealth> => {
+  if (status._tag === "None") return Effect.succeed(extensionHealthUnavailable("No shared server."))
+  if (status._tag === "Stale") {
+    return Effect.succeed(extensionHealthUnavailable("Shared server lock is stale."))
+  }
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const bundle = yield* Gent.client(status.entry.rpcUrl, { cwd: process.cwd() })
+      yield* bundle.runtime.lifecycle.waitForReady
+      const snapshot = yield* bundle.client.extension.listStatus({})
+      return extensionHealthFromSnapshot(snapshot)
+    }),
+  ).pipe(Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))))
+}
 
 export const doctor = Command.make("doctor", {}, () =>
   Effect.gen(function* () {
     const home = yield* readHome
-    const entry = Option.fromNullishOr(yield* readServerLock(home))
-    const extensions = yield* Option.match(entry, {
-      onNone: () => Effect.succeed(extensionHealthUnavailable("No shared server.")),
-      onSome: readDoctorExtensionHealth,
-    })
-    const report = yield* makeDoctorReport(home, entry, extensions)
+    const status = yield* serverLock.status(home)
+    const extensions = yield* readDoctorExtensionHealth(status)
+    const report = yield* makeDoctorReport(home, status, extensions)
     yield* Console.log(formatDoctorReport(report))
   }),
 )
@@ -573,8 +530,7 @@ export const doctor = Command.make("doctor", {}, () =>
 const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
     const home = yield* readHome
-    const entry = Option.fromNullishOr(yield* readServerLock(home))
-    if (Option.isSome(entry) && (yield* validateServerLockEntry(entry.value)).valid) {
+    if ((yield* serverLock.status(home))._tag === "Alive") {
       yield* Console.error(
         "Error: shared server is running. Stop it with `gent server stop` first.",
       )

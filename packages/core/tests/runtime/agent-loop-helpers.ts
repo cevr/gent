@@ -163,9 +163,7 @@ export const makeAgentLoopService = Effect.gen(function* () {
           message,
           agentOverride: input.agentName,
           // Actor operation payloads require optional fields explicitly.
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           runSpec: input.runSpec,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           interactive: input.interactive,
         }
         if (Predicate.isNotUndefined(input.runSpec))
@@ -220,11 +218,8 @@ export const runAgentLoop = (
           workspaceId: DefaultWorkspaceId,
           message,
           // Actor operation payloads require optional fields explicitly.
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           agentOverride: options?.agentOverride,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           runSpec: options?.runSpec,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           interactive: options?.interactive,
         }
         yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
@@ -251,11 +246,8 @@ export const submitAgentLoop = (
           workspaceId: DefaultWorkspaceId,
           message,
           // Actor operation payloads require optional fields explicitly.
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           agentOverride: options?.agentOverride,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           runSpec: options?.runSpec,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           interactive: options?.interactive,
         }
         yield* ref.execute(AgentLoopActor.Submit.make(payload))

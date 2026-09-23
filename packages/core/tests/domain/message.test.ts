@@ -395,6 +395,27 @@ describe("message part projection", () => {
     expect(messagePartsReasoning(parts)).toBe("think")
   })
 
+  test("image projection keeps every image in order and empty parts project to nothing", () => {
+    const parts = [
+      Prompt.textPart({ text: "Before" }),
+      Prompt.filePart({ data: "abc", mediaType: "image/gif" }),
+      Prompt.toolCallPart({
+        id: ToolCallId.make("tc1"),
+        name: "read",
+        params: {},
+        providerExecuted: false,
+      }),
+      Prompt.filePart({ data: "xyz", mediaType: "image/webp" }),
+    ]
+
+    expect(messagePartsImages(parts)).toEqual([
+      { mediaType: "image/gif" },
+      { mediaType: "image/webp" },
+    ])
+    expect(messagePartsText([])).toBe("")
+    expect(messagePartsImages([])).toEqual([])
+  })
+
   test("pairs duplicate provider tool ids with the result before the next duplicate call", () => {
     const firstCall = Prompt.toolCallPart({
       id: ToolCallId.make("tc-1"),

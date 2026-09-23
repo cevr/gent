@@ -16,11 +16,12 @@ import {
   type BranchId,
   type DriverListResult,
   type EventEnvelope,
+  type ImagePartProjection,
   type Message,
   type Session,
   SessionId,
 } from "@gent/core/protocol"
-import type { GentClientRpcError, GentNamespacedClient, GentRuntime, ImageInfo } from "@gent/sdk"
+import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
@@ -623,7 +624,7 @@ export interface InteractionRendererProps {
  */
 export interface MessageRowProps {
   readonly content: string
-  readonly images: ReadonlyArray<ImageInfo>
+  readonly images: ReadonlyArray<ImagePartProjection>
   readonly interjection: boolean
   readonly pendingMode?: "queued" | "steer"
   /** The message's `metadata.details`, for the renderer to decode. */
@@ -734,7 +735,6 @@ type MutableClientContributions = {
   -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
 }
 
-// eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
 const append = <A>(
   // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
   left: ReadonlyArray<A> | undefined,

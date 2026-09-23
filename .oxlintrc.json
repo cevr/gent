@@ -158,13 +158,6 @@
       }
     },
     {
-      "files": ["packages/sdk/src/namespaced-client.ts"],
-      "rules": {
-        "effect/noAs": "off",
-        "effect/noRuntimeTypeof": "off"
-      }
-    },
-    {
       "files": ["packages/sdk/src/server.ts"],
       "rules": {
         "effect/noNodeBuiltinImport": "off"

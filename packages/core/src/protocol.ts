@@ -38,7 +38,12 @@ export {
   dateFromMillis,
   projectMessage,
 } from "./domain/message.js"
-export { messagePartsImages, messagePartsReasoning, messagePartsText } from "./domain/message.js"
+export {
+  type ImagePartProjection,
+  messagePartsImages,
+  messagePartsReasoning,
+  messagePartsText,
+} from "./domain/message.js"
 export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/message.js"
 export { type ModelContextMetrics } from "./domain/agent-loop.js"

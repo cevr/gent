@@ -1047,8 +1047,8 @@ export const sealRuntimeLoadedEffect = <A, R = never>(opts: {
       ),
     ),
   )
-  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The load membrane re-seals the extension effect after normalizing its failure channel.
-  return sealed as Effect.Effect<A, ExtensionLoadError, R> // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
+  // oxlint-disable-next-line effect/noAs -- The load membrane re-seals the extension effect after normalizing its failure channel.
+  return sealed as Effect.Effect<A, ExtensionLoadError, R>
 }
 
 // ── extension-package-shape ─────────────────────────────────────────────────

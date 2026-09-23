@@ -45,9 +45,8 @@ import { defineExtension } from "../extensions/api.js"
 import { ApprovalService, type SessionProfileCache } from "../runtime/extension-host.js"
 import { ConfigService } from "../runtime/config.js"
 import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/tools.js"
-import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { LanguageModelLayers } from "./language-model.js"
-import { createDependencies, StateLocation } from "../server/server.js"
+import { StateLocation } from "../server/server.js"
 import { Branch, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
 import { BranchStorage, type InteractionStorage, SessionStorage } from "../storage/storage.js"
@@ -61,9 +60,8 @@ import {
   matchesEventFilter,
 } from "../domain/event.js"
 import type { LanguageModel } from "effect/unstable/ai"
-import { BunServices } from "@effect/platform-bun"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { buildServerRoot } from "../server/server-root.js"
+import { buildServerRoot, ServerRootPlatformLayer } from "../server/server-root.js"
 import { Gent } from "@gent/sdk"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -222,10 +220,10 @@ export const testExtensionHostContext = (
 // ── test-root ───────────────────────────────────────────────────────────────
 
 /**
- * What every test composition root shares: a `/tmp` environment, the stub
- * service layers, a deterministic server identity, and an agents/tools
- * extension. The roots below (extension harness, E2E layer, in-process layer)
- * are deltas over these.
+ * What the test composition root shares with its presets: a `/tmp`
+ * environment, a deterministic server identity, and an agents extension.
+ * `createE2ELayer` is the one root; the in-process layer and the RPC harness
+ * are presets over it.
  */
 
 export const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
@@ -236,72 +234,16 @@ export const testIdentity = (dbPath: string = ":memory:") => ({
   hostname: "test-host",
   dbPath,
   buildFingerprint: "test-fingerprint",
-  startedAt: 0,
 })
 
-/** Fresh stub layers per call: `ApprovalService.Test()` carries a decision queue. */
-export const testOverrides = () => ({
-  authLayer: Auth.Test(),
-  approvalLayer: ApprovalService.Test(),
-  configServiceLayer: ConfigService.Test(),
-  modelRegistryLayer: ModelRegistry.Test(),
-})
-
-export const testAgentsExtension = (
-  agents: ReadonlyArray<AgentDefinition>,
-  tools: ReadonlyArray<ToolCapability> = [],
-) =>
+const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
     id: "test-agents",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
       yield* host.register("agent", ...agents)
-      yield* host.register("tool", ...tools)
     }),
   })
-
-// ── extension-harness ───────────────────────────────────────────────────────
-
-/** Test helpers for extension tool execution. */
-
-export interface ToolTestLayerConfig {
-  /**
-   * The branch-tool feature this harness installs. Defaults to
-   * `noBranchTools`; a test exercising a real feature names it.
-   */
-  readonly branchTools?: BranchToolFeature<never>
-  /** Agents to register */
-  readonly agents: ReadonlyArray<AgentDefinition>
-  /** Extensions to load */
-  readonly extensions?: ReadonlyArray<GentExtension<ExtensionSetupServices>>
-  /** Extra tools to register (authored via `tool({...})`). */
-  readonly tools?: ReadonlyArray<ToolCapability>
-  /** Extra layers to merge (e.g., additional service overrides) */
-  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
-  /** Keep running when an extension fails to load. Only for tests about that failure path. */
-  readonly allowFailedExtensions?: boolean
-}
-
-/**
- * Create a test layer for extension tool execution.
- *
- * Provides core services needed by most tools. Tools that need platform
- * services (FileSystem, Path) should compose with BunServices.layer.
- */
-export const createToolTestLayer = (config: ToolTestLayerConfig) =>
-  createDependencies({
-    ...testEnvironment,
-    state: StateLocation.cases.Memory.make({}),
-    languageModelLayerOverride: LanguageModelLayers.debug(),
-    extensions: [testAgentsExtension(config.agents, config.tools), ...(config.extensions ?? [])],
-    failOnExtensionFailure: config.allowFailedExtensions !== true,
-    branchTools: config.branchTools ?? noBranchTools,
-    overrides: {
-      ...testOverrides(),
-      toolRunnerLayer: ToolRunner.Test(),
-      extraLayers: config.extraLayers,
-    },
-  }).pipe(Layer.provide(BunPlatformLive), Layer.orDie)
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
@@ -764,7 +706,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     identity: testIdentity(config.storagePath),
   })
   return Layer.unwrap(root.pipe(Effect.map((built) => built.coreServicesLive))).pipe(
-    Layer.provide(BunServices.layer),
+    Layer.provide(ServerRootPlatformLayer),
   )
 }
 

@@ -9,15 +9,13 @@ import {
   findBlanketEslintDisables,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
-  findDiagnosticSuppressionAnchors,
   findE2eFixtureImportFindings,
-  findHookGuardOrder,
+  findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
-  findProcessRunnerFindings,
   findReadersWithoutWriters,
-  findRetiredReconcilerFindings,
+  findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
@@ -95,15 +93,13 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
   const sourceOnly = [
     ...findPlatformDuplicationViolations(file, text),
     ...findCoreFeatureIndependenceFindings(file, text),
-    ...findRetiredReconcilerFindings(file, text),
+    ...findRetiredSurfaces(file, text),
     ...findCoreVendorModelPins(file, text),
     ...findAliasTestLayers(file, text),
     ...findE2eFixtureImportFindings(file, text),
     ...findUnadmittedChildSessionWriters(file, text),
     ...findIdentityEncodes(file, text),
-    ...findProcessRunnerFindings(file, text),
     ...findTuiSessionIdentityReads(file, text),
-    ...findDiagnosticSuppressionAnchors(file, text),
   ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
   return [...blanket, ...suppressions, ...sourceOnly]
 }
@@ -118,7 +114,7 @@ const projectFileFailures = (
   text: string,
   trackedFiles: ReadonlyArray<string>,
 ): ReadonlyArray<string> =>
-  [...findSteeringFilePaths(file, text, trackedFiles), ...findHookGuardOrder(file, text)].map(
+  [...findSteeringFilePaths(file, text, trackedFiles), ...findHookWithoutGuards(file, text)].map(
     (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
   )
 

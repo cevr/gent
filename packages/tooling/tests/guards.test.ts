@@ -8,14 +8,14 @@ import {
   findBannedEslintDisableBlocks,
   findBlanketEslintDisables,
   findCoreFeatureIndependenceFindings,
-  findDiagnosticSuppressionAnchors,
+  findCoreVendorModelPins,
   findE2eFixtureImportFindings,
-  findHookGuardOrder,
+  findHookWithoutGuards,
+  findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
-  findProcessRunnerFindings,
   findReadersWithoutWriters,
-  findRetiredReconcilerFindings,
+  findRetiredSurfaces,
   findSteeringFilePaths,
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
@@ -29,9 +29,7 @@ import {
   HOOK_FILE,
   isSteeringFile,
   type PackageJson,
-  REMOVED_IDENTIFIERS,
-  RETIRED_IDENTIFIERS,
-  RETIRED_MODULES,
+  RETIRED_SURFACES,
 } from "../src/guards"
 import { Option } from "effect"
 
@@ -384,119 +382,98 @@ describe("core feature independence guard", () => {
   })
 })
 
-// ── core-process-runner.test ────────────────────────────────────────────────
+// ── core-identity-encode.test ───────────────────────────────────────────────
 
-describe("process runner guard", () => {
-  test("flags every removed identifier once per line", () => {
-    for (const name of REMOVED_IDENTIFIERS) {
-      const findings = findProcessRunnerFindings(
-        "packages/core/src/runtime/extension-host.ts",
-        `const runner = ${name}`,
-      )
-      expect(findings.length).toBe(1)
-      expect(findings[0]?.message).toContain(name)
-    }
+const ENCODER = "const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))"
+
+const identityLines = (file: string, ...lines: ReadonlyArray<string>) =>
+  findIdentityEncodes(file, [ENCODER, ...lines].join("\n")).map((finding) => finding.line)
+
+describe("identity encode guard", () => {
+  test("reports an encode stored under a camelCase identity name", () => {
+    const file = "apps/tui/src/message-list.tsx"
+    expect(identityLines(file, "const identity = encodeJson(m)")).toEqual([2])
+    expect(identityLines(file, "const messageIdentity = encodeJson(m)")).toEqual([2])
+    expect(identityLines(file, "const dedupeKey = encodeJson(m)")).toEqual([2])
+    expect(identityLines(file, "const cache_key = encodeJson(m)")).toEqual([2])
   })
 
-  test("flags a test that builds the removed layer", () => {
-    const findings = findProcessRunnerFindings(
-      "packages/core/tests/runtime/session.test.ts",
-      'import { ProcessRunnerLive } from "../../src/runtime/run-process"',
-    )
-    expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/tests/runtime/session.test.ts:1",
-    ])
+  test("reports an encode compared or collected on the same line", () => {
+    const file = "packages/core/src/runtime/turn.ts"
+    expect(identityLines(file, "if (encodeJson(a) === encodeJson(b)) return")).toEqual([2])
+    expect(identityLines(file, "if (seen.has(encodeJson(m))) continue")).toEqual([2])
+    expect(identityLines(file, "seen.add(encodeJson(m))")).toEqual([2])
   })
 
-  test("scans apps source as well as packages", () => {
+  test("leaves display encodes and fixed-order projections alone", () => {
+    const file = "apps/tui/src/message-list.tsx"
+    expect(identityLines(file, "yield* Effect.log(encodeJson(entry))")).toEqual([])
+    expect(identityLines(file, "const text = encodeJson(result)")).toEqual([])
+    expect(identityLines(file, "const keyboardHint = 1")).toEqual([])
     expect(
-      findProcessRunnerFindings("apps/tui/src/services/boundary.ts", "yield* ProcessRunner").length,
-    ).toBe(1)
-  })
-
-  test("leaves InProcessRunner and runProcess alone", () => {
+      identityLines(file, "const toolIdentity = (c: ToolCall) => encodeJson(toolFingerprint(c))"),
+    ).toEqual([])
+    expect(identityLines(file, "const identity = encodeJson([call.id, call.status])")).toEqual([])
     expect(
-      findProcessRunnerFindings(
-        "packages/core/src/server/server.ts",
-        'import { InProcessRunner } from "../runtime/agent/agent-runner.js"',
-      ),
+      identityLines(file, 'const identity = encodeJson(["tool", 1, true, call?.id, null])'),
     ).toEqual([])
     expect(
-      findProcessRunnerFindings(
-        "packages/core/src/runtime/extension-host.ts",
-        "runProcess: (command, args, options) => runProcess(command, args, options)",
-      ),
+      identityLines(file, "const key = encodeJson([s._tag, toolFingerprint(s.toolCall)])"),
     ).toEqual([])
   })
 
-  test("ignores docs, plans and the tooling package itself", () => {
-    expect(findProcessRunnerFindings("ARCHITECTURE.md", "ProcessRunner")).toEqual([])
-    expect(findProcessRunnerFindings("plans/arch-core.md", "ProcessRunnerLive")).toEqual([])
-    expect(findProcessRunnerFindings("packages/tooling/src/guards.ts", "ProcessRunner")).toEqual([])
+  test("reports an array literal that carries a whole object", () => {
+    const file = "apps/tui/src/message-list.tsx"
+    expect(identityLines(file, "const identity = encodeJson([item])")).toEqual([2])
+    expect(identityLines(file, "const identity = encodeJson([item.id, { a: 1 }])")).toEqual([2])
+    expect(identityLines(file, "const identity = encodeJson([item.id, rest(item)])")).toEqual([2])
+  })
+
+  test("checks each encode on a line, so a safe one does not hide an unsafe one", () => {
+    const file = "packages/core/src/runtime/turn.ts"
+    expect(identityLines(file, "if (encodeJson([a.id]) === encodeJson(b)) return")).toEqual([2])
     expect(
-      findProcessRunnerFindings("packages/tooling/tests/guards.test.ts", "ProcessRunner"),
+      identityLines(file, "if (encodeJson(aFingerprint(a)) === encodeJson(b)) return"),
+    ).toEqual([2])
+    expect(identityLines(file, "if (encodeJson([a.id]) === encodeJson([b.id])) return")).toEqual([])
+  })
+
+  test("scans shipped source only", () => {
+    expect(
+      identityLines("packages/core/tests/x.test.ts", "const identity = encodeJson(m)"),
     ).toEqual([])
+    expect(identityLines("ARCHITECTURE.md", "const identity = encodeJson(m)")).toEqual([])
   })
 })
 
-// ── core-retired-reconciler.test ────────────────────────────────────────────
+// ── core-vendor-model-pins.test ─────────────────────────────────────────────
 
-describe("retired reconciler guard", () => {
-  test("flags a shipped file that imports a retired module", () => {
-    const findings = findRetiredReconcilerFindings(
-      "packages/core/src/runtime/extension-host.ts",
-      'import { ResourceGraphHost } from "./extensions/resource-host/resource-graph-host.js"',
+describe("vendor model pin guard", () => {
+  test("reports a provider-qualified model id in core source", () => {
+    const findings = findCoreVendorModelPins(
+      "packages/core/src/runtime/turn.ts",
+      ["const a = 1", 'const model = "anthropic/claude-haiku-4-5-20251001"'].join("\n"),
     )
-    expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/runtime/extension-host.ts:1",
-    ])
-    expect(findings[0]?.message).toContain("resource-graph-host")
-  })
-
-  test("flags every retired identifier once per line", () => {
-    for (const name of RETIRED_IDENTIFIERS) {
-      const findings = findRetiredReconcilerFindings(
-        "packages/extensions/src/cell/cell-dispatch.ts",
-        `const value = ${name}.make()`,
-      )
-      expect(findings.length).toBe(1)
-      expect(findings[0]?.message).toContain(name)
-    }
-  })
-
-  test("matches whole identifiers only", () => {
-    const findings = findRetiredReconcilerFindings(
-      "packages/core/src/domain/extension.ts",
-      "export const ResourceId = Schema.NonEmptyString.pipe(Schema.brand('ResourceId'))",
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("matches retired modules by basename, not by substring", () => {
-    for (const module of RETIRED_MODULES) {
-      expect(
-        findRetiredReconcilerFindings(
-          "apps/server/src/main.ts",
-          `import { x } from "../../packages/core/src/${module}.js"`,
-        ).length,
-      ).toBe(1)
-    }
+    expect(findings.map((finding) => finding.line)).toEqual([2])
+    expect(findings[0]?.message).toContain("anthropic/claude-haiku-4-5-20251001")
     expect(
-      findRetiredReconcilerFindings(
-        "packages/core/src/runtime/extension-host.ts",
-        'import { buildResourceLayer } from "./extensions/resource-host/resource-layer.js"',
-      ),
-    ).toEqual([])
+      findCoreVendorModelPins(
+        "packages/core/src/server/server.ts",
+        "ModelId.make('openai/gpt-5.1')",
+      ).length,
+    ).toBe(1)
   })
 
-  test("ignores tests and docs", () => {
+  test("the declaration site, other packages and non-vendor paths are not reported", () => {
+    const pin = 'const model = "anthropic/claude-haiku-4-5"'
+    expect(findCoreVendorModelPins("packages/core/src/domain/agent.ts", pin)).toEqual([])
+    expect(findCoreVendorModelPins("packages/extensions/src/anthropic.ts", pin)).toEqual([])
     expect(
-      findRetiredReconcilerFindings(
-        "packages/core/tests/runtime/extension-host.test.ts",
-        "const host = ResourceGraphHost",
-      ),
+      findCoreVendorModelPins("packages/core/src/runtime/turn.ts", 'const path = "src/index.ts"'),
     ).toEqual([])
-    expect(findRetiredReconcilerFindings("ARCHITECTURE.md", "ResourceGraphHost")).toEqual([])
+    expect(
+      findCoreVendorModelPins("packages/core/src/runtime/turn.ts", "const id = `openai/${model}`"),
+    ).toEqual([])
   })
 })
 
@@ -606,7 +583,7 @@ describe("e2e fixture import guard", () => {
 
   test("ignores e2e helpers that are not test files", () => {
     expect(
-      findE2eFixtureImportFindings("packages/e2e/tests/test-failure-boundary.ts", noFixtureSource),
+      findE2eFixtureImportFindings("packages/e2e/src/pty-fixture.ts", noFixtureSource),
     ).toEqual([])
   })
 
@@ -654,10 +631,7 @@ describe("e2e fixture import guard", () => {
   })
 })
 
-// ── hook-guard-order.test ───────────────────────────────────────────────────
-
-const messagesOf = (text: string, file = HOOK_FILE): ReadonlyArray<string> =>
-  findHookGuardOrder(file, text).map((finding) => finding.message)
+// ── hook-runs-guards.test ───────────────────────────────────────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
   ["pre-commit:", "  parallel: false", "  jobs:", ...jobs].join("\n")
@@ -670,49 +644,47 @@ const LINT = [
 ]
 const TEST = ["    - name: test", "      run: bun run test"]
 
-describe("pre-commit guard order", () => {
-  test("allows the guards as the first job", () => {
-    expect(messagesOf(hook(...GUARDS, ...LINT, ...TEST))).toEqual([])
-  })
-
-  test("flags the guards running after another job", () => {
-    const messages = messagesOf(hook(...LINT, ...GUARDS, ...TEST))
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("1 job(s) into the pre-commit hook")
-  })
-
-  test("reports the guards job at its own line", () => {
-    const findings = findHookGuardOrder(HOOK_FILE, hook(...LINT, ...GUARDS))
-    // 3 header lines + 3 lint lines, so the guards entry is line 7.
-    expect(findings[0]?.line).toBe(7)
+describe("pre-commit hook runs the guards", () => {
+  test("accepts the guards job in any position, under any name", () => {
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...GUARDS, ...LINT, ...TEST))).toEqual([])
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST, ...GUARDS))).toEqual([])
+    const renamed = ["    - name: fast-checks", "      run: bun run guards"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...renamed, ...LINT))).toEqual([])
   })
 
   test("flags a hook with no guards job", () => {
-    const messages = messagesOf(hook(...LINT, ...TEST))
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("runs no `bun run guards` job")
+    const findings = findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.message).toContain("runs no `bun run guards` job")
   })
 
-  test("finds the job by its command, not its name", () => {
-    const renamed = ["    - name: fast-checks", "      run: bun run guards"]
-    expect(messagesOf(hook(...renamed, ...LINT))).toEqual([])
+  test("a guards job under another hook does not count", () => {
+    const text = ["pre-push:", "  jobs:", ...GUARDS, "pre-commit:", "  jobs:", ...LINT].join("\n")
+    expect(findHookWithoutGuards(HOOK_FILE, text)).toHaveLength(1)
+    expect(
+      findHookWithoutGuards(
+        HOOK_FILE,
+        ["pre-commit:", "  jobs:", ...LINT, "pre-push:", ...GUARDS].join("\n"),
+      ),
+    ).toHaveLength(1)
   })
 
-  test("reads the pre-commit block only", () => {
-    const text = [
-      "pre-push:",
-      "  jobs:",
-      "    - name: guards",
-      "      run: bun run guards",
-      "pre-commit:",
-      "  jobs:",
-      ...LINT,
-    ].join("\n")
-    expect(messagesOf(text)).toHaveLength(1)
+  test("a comment that names the guards command does not count", () => {
+    const comment = ["    # Run bun run guards before committing."]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...comment, ...LINT))).toHaveLength(1)
+    const trailing = ["    - name: lint", "      run: bun run lint:fix # then bun run guards"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...trailing))).toHaveLength(1)
+    const named = ["    - name: bun run guards", "      run: bun run lint:fix"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...named))).toHaveLength(1)
+  })
+
+  test("accepts the guards command as one step of a compound run", () => {
+    const chained = ["    - name: checks", "      run: bun run guards && bun run lint:fix"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...chained))).toEqual([])
   })
 
   test("leaves every other file alone", () => {
-    expect(findHookGuardOrder("package.json", hook(...LINT, ...TEST))).toEqual([])
+    expect(findHookWithoutGuards("package.json", hook(...LINT, ...TEST))).toEqual([])
   })
 })
 
@@ -910,7 +882,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/tests/runtime/example.test.ts",
-        "const name = 'TurnEvent'",
+        "const id = Bun.randomUUIDv7()",
       ),
     ).toEqual([])
   })
@@ -999,56 +971,6 @@ describe("platform duplication guards", () => {
         line: 1,
         message:
           "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
-      },
-    ])
-  })
-
-  test("flags deleted runtime bridge names in active source", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "const a = ExtensionRuntime",
-          "const b = ExtensionTurnControl",
-          "const c = TurnEvent",
-          "const d = TurnEventUsage",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message: "ExtensionRuntime marker service is deleted; use explicit services",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 2,
-        message: "ExtensionTurnControl mailbox is deleted; use the session runtime protocol",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 3,
-        message: "TurnEvent duplicates Effect AI response parts",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 4,
-        message: "TurnEvent duplicates Effect AI response parts",
-      },
-    ])
-  })
-
-  test("flags deleted storage subtag adapter", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/storage/example.ts",
-        "const layer = subTagLayers(base)",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/storage/example.ts",
-        line: 1,
-        message: "Storage subtag adapter is deleted; use SqliteStorage composition roots",
       },
     ])
   })
@@ -1272,27 +1194,11 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
-  test("flags deleted public actor rpc path", () => {
-    expect(findPlatformDuplicationViolations("packages/core/src/server/rpcs/actor.ts", "")).toEqual(
-      [
-        {
-          file: "packages/core/src/server/rpcs/actor.ts",
-          line: 1,
-          message: "Public actor RPC surface is deleted; use product RPCs",
-        },
-      ],
-    )
-
-    expect(
-      findPlatformDuplicationViolations("packages/core/src/server/rpcs/product.ts", ""),
-    ).toEqual([])
-  })
-
   test("does not flag the guard source itself", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/tooling/src/guards.ts",
-        ["ExtensionRuntime", "ctx.extension.request(ref)", "subTagLayers(base)"].join("\n"),
+        ["const id = Bun.randomUUIDv7()", "Layer.provide(BunPlatformLive)"].join("\n"),
       ),
     ).toEqual([])
   })
@@ -1321,7 +1227,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/src/server/rpc.ts",
-        ["export class BranchInfo {}", "const runtime = ExtensionRuntime"].join("\n"),
+        ["export class BranchInfo {}", "const id = Bun.randomUUIDv7()"].join("\n"),
       ),
     ).toEqual([
       {
@@ -1332,99 +1238,9 @@ describe("platform duplication guards", () => {
       {
         file: "packages/core/src/server/rpc.ts",
         line: 2,
-        message: "ExtensionRuntime marker service is deleted; use explicit services",
+        message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
       },
     ])
-  })
-
-  test("flags stale in-process extension rpc comments and calls", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/example.ts",
-        ["ctx.extension.request(ref)", "// typed RPC helpers"].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/example.ts",
-        line: 1,
-        message: "In-process extension RPC is deleted; yield services or use public transport",
-      },
-      {
-        file: "packages/extensions/src/example.ts",
-        line: 2,
-        message: "Host contexts no longer expose typed RPC helpers",
-      },
-    ])
-  })
-
-  test("flags reintroduced GentSpan tracer", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "const span = GentSpan.start()",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message: "GentSpan tracer is deleted; use @effect/opentelemetry via Tracer service",
-      },
-    ])
-  })
-
-  test("flags destructive storage schema reset", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/storage/example.ts",
-        "yield* resetIncompatibleStorageSchema()",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/storage/example.ts",
-        line: 1,
-        message: "Destructive schema reset is deleted; use SqliteMigrator migrations",
-      },
-    ])
-  })
-
-  test("flags LiveFile JSON KV pattern", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "const layer = AuthStorage.LiveFile(path)",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFileSystem",
-      },
-    ])
-  })
-
-  test("flags reintroduced EventStore.Live = EventStore.Memory alias", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/example.ts",
-        "EventStore.Live = EventStore.Memory",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/example.ts",
-        line: 1,
-        message:
-          "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
-      },
-    ])
-
-    // Direct EventStore.Memory references are legitimate (memory persistence
-    // mode, test harness) and must not trip the guard.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/server.ts",
-        "persistenceMode === 'memory' ? EventStore.Memory : Layer.provide(EventStoreLive, ...)",
-      ),
-    ).toEqual([])
   })
 
   test("flags Bun platform providers outside platform roots", () => {
@@ -1447,216 +1263,6 @@ describe("platform duplication guards", () => {
         "const PlatformLayer = Layer.mergeAll(BunCronRuntimeLive, BunGentPlatformLive)",
       ),
     ).toEqual([])
-  })
-
-  test("flags deleted agent-loop dispatch infrastructure", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/agent/example.ts",
-        [
-          "const loops = loopsRef",
-          "const semaphores = mutationSemaphoresRef",
-          "type Event = LoopDriverEvent",
-          "type Handle = LoopHandle",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 1,
-        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 2,
-        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 3,
-        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 4,
-        message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
-      },
-    ])
-  })
-
-  test("flags deleted runtime composer scope brands", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/agent/example.ts",
-        [
-          "const erased = eraseLayer(layer)",
-          "const restored = restoreErasedLayer(erased)",
-          "type Parent = ServerProfile",
-          "type Child = CwdProfile",
-          "type Leaf = EphemeralProfile",
-          "const service = ServerProfileService",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 1,
-        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 2,
-        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 3,
-        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 4,
-        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 5,
-        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-      },
-      {
-        file: "packages/core/src/runtime/agent/example.ts",
-        line: 6,
-        message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/child-agents.ts",
-        "const layer = Layer.provideMerge(parent, child)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags deleted runtime composer module paths", () => {
-    expect(findPlatformDuplicationViolations("packages/core/src/runtime/composer.ts", "")).toEqual([
-      {
-        file: "packages/core/src/runtime/composer.ts",
-        line: 1,
-        message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
-      },
-    ])
-    expect(
-      findPlatformDuplicationViolations("packages/core/src/runtime/scope-brands.ts", ""),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/scope-brands.ts",
-        line: 1,
-        message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
-      },
-    ])
-    expect(
-      findPlatformDuplicationViolations("packages/core/src/runtime/child-agents.ts", ""),
-    ).toEqual([])
-  })
-
-  test("flags deleted provider test statics outside language-model utilities", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/providers/example.ts",
-        [
-          "const a = Provider.Sequence([])",
-          "const b = Provider.Signal(reply)",
-          "const c = Provider.Debug()",
-          "const d = Provider.Failing(error)",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/providers/example.ts",
-        line: 1,
-        message:
-          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
-      },
-      {
-        file: "packages/core/src/providers/example.ts",
-        line: 2,
-        message:
-          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
-      },
-      {
-        file: "packages/core/src/providers/example.ts",
-        line: 3,
-        message:
-          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
-      },
-      {
-        file: "packages/core/src/providers/example.ts",
-        line: 4,
-        message:
-          "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/test-utils/language-model.ts",
-        "const a = Provider.Sequence([])",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags deleted auth and sdk worker module paths", () => {
-    expect(
-      findPlatformDuplicationViolations("packages/core/src/domain/auth-storage.ts", ""),
-    ).toEqual([
-      {
-        file: "packages/core/src/domain/auth-storage.ts",
-        line: 1,
-        message: "Legacy auth domain module is deleted; use domain/auth",
-      },
-    ])
-    expect(findPlatformDuplicationViolations("packages/core/src/runtime/provider.ts", "")).toEqual(
-      [],
-    )
-    expect(findPlatformDuplicationViolations("packages/sdk/src/server-registry.ts", "")).toEqual([
-      {
-        file: "packages/sdk/src/server-registry.ts",
-        line: 1,
-        message:
-          "SDK worker registry/http split is deleted; use server lock and server entrypoints",
-      },
-    ])
-    expect(findPlatformDuplicationViolations("packages/sdk/src/server.ts", "")).toEqual([])
-  })
-
-  test("flags deleted worker port preallocation and lifecycle symbols", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/sdk/src/example.ts",
-        [
-          "const port = findOpenPort()",
-          "const host = WORKER_HOST",
-          "type S = WorkerLifecycleState",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/sdk/src/example.ts",
-        line: 1,
-        message: "Worker port preallocation is deleted; use server-selected ports",
-      },
-      {
-        file: "packages/sdk/src/example.ts",
-        line: 2,
-        message: "Worker port preallocation is deleted; use server-selected ports",
-      },
-      {
-        file: "packages/sdk/src/example.ts",
-        line: 3,
-        message: "WorkerLifecycleState is deleted; use the server lifecycle contract",
-      },
-    ])
   })
 
   test("flags deleted Bun.Glob fallback", () => {
@@ -1694,21 +1300,6 @@ describe("platform duplication guards", () => {
         "const id = Bun.randomUUIDv7()",
       ),
     ).toEqual([])
-  })
-
-  test("flags deleted extension reactions bucket in active source", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/example.ts",
-        "export const Ext = defineExtension({ id: 'x', reactions: {} })",
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/example.ts",
-        line: 1,
-        message: "Extension lifecycle authoring uses hooks; the reactions bucket is deleted",
-      },
-    ])
   })
 
   test("flags host process and OS facts outside the platform adapter", () => {
@@ -2134,6 +1725,183 @@ describe("platform duplication guards", () => {
   })
 })
 
+// ── retired-surfaces.test ───────────────────────────────────────────────────
+
+/** One planted case per retired surface: file, text, and the matched text. */
+const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
+  ["packages/core/src/runtime/extension-host.ts", "const runner = ProcessRunner", "ProcessRunner"],
+  [
+    "packages/core/src/runtime/extension-host.ts",
+    "const l = ProcessRunnerLive",
+    "ProcessRunnerLive",
+  ],
+  ["apps/tui/src/services/boundary.ts", "yield* ProcessRunnerService", "ProcessRunnerService"],
+  ["packages/core/src/runtime/x.ts", "makeProcessRunner()", "makeProcessRunner"],
+  ["packages/extensions/src/cell/cell.ts", "ResourceGraphHost.make()", "ResourceGraphHost"],
+  ["packages/core/src/runtime/x.ts", "ResourceGraphPublication.make()", "ResourceGraphPublication"],
+  ["packages/core/src/runtime/x.ts", "ResourceLeases.make()", "ResourceLeases"],
+  ["packages/core/src/runtime/x.ts", "ResourceGenerationId.make()", "ResourceGenerationId"],
+  ["packages/core/src/runtime/x.ts", "ResourceDescriptor.make()", "ResourceDescriptor"],
+  ["packages/core/src/runtime/x.ts", "ResourceRevision.make()", "ResourceRevision"],
+  ["packages/core/src/runtime/x.ts", "planResourceGraph()", "planResourceGraph"],
+  ["packages/core/src/runtime/x.ts", "diffResourceGraph()", "diffResourceGraph"],
+  ["packages/core/src/runtime/x.ts", "LiveAgentLoopTurnProfile", "LiveAgentLoopTurnProfile"],
+  [
+    "packages/core/src/runtime/x.ts",
+    "runAgentLoopTurnProfileOrLegacy()",
+    "runAgentLoopTurnProfileOrLegacy",
+  ],
+  [
+    "apps/server/src/main.ts",
+    'import { x } from "../core/src/resource-graph.js"',
+    "resource-graph",
+  ],
+  [
+    "apps/server/src/main.ts",
+    'import { x } from "./resource-graph-host.js"',
+    "resource-graph-host",
+  ],
+  ["apps/server/src/main.ts", 'import { x } from "./resource-leases"', "resource-leases"],
+  ["apps/server/src/main.ts", 'export { x } from "./resource-lifecycle.ts"', "resource-lifecycle"],
+  ["apps/server/src/main.ts", 'import { x } from "./live-profile.js"', "live-profile"],
+  ["packages/core/src/runtime/x.ts", "const a = ExtensionRuntime", "ExtensionRuntime"],
+  ["packages/core/src/runtime/x.ts", "const b = ExtensionTurnControl", "ExtensionTurnControl"],
+  ["packages/core/src/runtime/x.ts", "const c = TurnEvent", "TurnEvent"],
+  ["packages/core/src/runtime/x.ts", "const d = TurnEventUsage", "TurnEventUsage"],
+  ["packages/core/src/storage/x.ts", "const layer = subTagLayers(base)", "subTagLayers("],
+  ["packages/extensions/src/x.ts", "ctx.extension.request(ref)", "ctx.extension"],
+  ["packages/extensions/src/x.ts", "// typed RPC helpers", "typed RPC helpers"],
+  ["packages/core/src/runtime/x.ts", "const span = GentSpan.start()", "GentSpan"],
+  [
+    "packages/core/src/storage/x.ts",
+    "yield* resetIncompatibleStorageSchema()",
+    "resetIncompatibleStorageSchema",
+  ],
+  ["packages/core/src/runtime/x.ts", "const layer = AuthStorage.LiveFile(path)", "LiveFile"],
+  [
+    "packages/core/src/server/x.ts",
+    "EventStore.Live = EventStore.Memory",
+    "EventStore.Live = EventStore.Memory",
+  ],
+  ["packages/core/src/runtime/x.ts", "const loops = loopsRef", "loopsRef"],
+  ["packages/core/src/runtime/x.ts", "const s = mutationSemaphoresRef", "mutationSemaphoresRef"],
+  ["packages/core/src/runtime/x.ts", "type Event = LoopDriverEvent", "LoopDriverEvent"],
+  ["packages/core/src/runtime/x.ts", "type Handle = LoopHandle", "LoopHandle"],
+  ["packages/core/src/runtime/x.ts", "const erased = eraseLayer(layer)", "eraseLayer"],
+  ["packages/core/src/runtime/x.ts", "restoreErasedLayer(erased)", "restoreErasedLayer"],
+  ["packages/core/src/runtime/x.ts", "type Parent = ServerProfile", "ServerProfile"],
+  ["packages/core/src/runtime/x.ts", "type Child = CwdProfile", "CwdProfile"],
+  ["packages/core/src/runtime/x.ts", "type Leaf = EphemeralProfile", "EphemeralProfile"],
+  ["packages/core/src/runtime/x.ts", "const s = ServerProfileService", "ServerProfileService"],
+  ["packages/core/src/runtime/x.ts", "brandServerScope(x)", "brandServerScope"],
+  ["packages/core/src/runtime/x.ts", "brandCwdScope(x)", "brandCwdScope"],
+  ["packages/core/src/runtime/x.ts", "brandEphemeralScope(x)", "brandEphemeralScope"],
+  ["packages/sdk/src/x.ts", "sdkBoundary(x)", "sdkBoundary"],
+  ["packages/sdk/src/x.ts", "runSdkBoundary(x)", "runSdkBoundary"],
+  ["packages/sdk/src/x.ts", "type B = SdkBoundary", "SdkBoundary"],
+  ["apps/server/src/x.ts", 'env["GENT_TRACE_ID"]', "GENT_TRACE_ID"],
+  ["apps/server/src/x.ts", 'env["GENT_PARENT_SPAN_ID"]', "GENT_PARENT_SPAN_ID"],
+  ["apps/server/src/x.ts", "positiveIntegerOr(x)", "positiveIntegerOr"],
+  ["apps/server/src/x.ts", "tcpPortOr(x)", "tcpPortOr"],
+  ["apps/server/src/x.ts", "knownModeOr(x)", "knownModeOr"],
+  ["apps/server/src/x.ts", "new LaunchConfigError()", "LaunchConfigError"],
+  ["packages/extensions/src/x.ts", "type Q = AnyQueryContribution", "AnyQueryContribution"],
+  ["packages/extensions/src/x.ts", "type C = CapabilityContribution", "CapabilityContribution"],
+  ["packages/core/src/providers/x.ts", "Provider.Sequence([])", "Provider.Sequence"],
+  ["packages/core/src/providers/x.ts", "Provider.Signal(reply)", "Provider.Signal"],
+  ["packages/core/src/providers/x.ts", "Provider.Debug()", "Provider.Debug"],
+  ["packages/core/src/providers/x.ts", "Provider.Failing(error)", "Provider.Failing"],
+  ["packages/sdk/src/x.ts", "const port = findOpenPort()", "findOpenPort"],
+  ["packages/sdk/src/x.ts", "const host = WORKER_HOST", "WORKER_HOST"],
+  ["packages/sdk/src/x.ts", "type S = WorkerLifecycleState", "WorkerLifecycleState"],
+  ["packages/extensions/src/x.ts", "defineExtension({ id: 'x', reactions: {} })", "reactions:"],
+]
+
+const RETIRED_PATHS: ReadonlyArray<string> = [
+  "packages/core/src/server/rpcs/actor.ts",
+  "packages/core/src/domain/auth-storage.ts",
+  "packages/core/src/domain/auth-store.ts",
+  "packages/core/src/domain/auth-method.ts",
+  "packages/core/src/runtime/composer.ts",
+  "packages/core/src/runtime/scope-brands.ts",
+  "packages/sdk/src/server-registry.ts",
+  "packages/sdk/src/worker-http.ts",
+]
+
+describe("retired surface guard", () => {
+  test("every planted retired name, import, and path is reported once", () => {
+    for (const [file, text, matched] of RETIRED_CASES) {
+      const findings = findRetiredSurfaces(file, text)
+      expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([`${file}:1`])
+      expect(findings[0]?.message.startsWith(`"${matched}"`)).toBe(true)
+    }
+    for (const file of RETIRED_PATHS) {
+      expect(findRetiredSurfaces(file, "").map((finding) => finding.line)).toEqual([1])
+    }
+  })
+
+  test("every row has a planted case", () => {
+    const rowsHit = new Set<number>()
+    for (const [file, text] of RETIRED_CASES) {
+      RETIRED_SURFACES.forEach((row, index) => {
+        if (
+          row.on !== "path" &&
+          findRetiredSurfaces(file, text).some((f) => f.message.endsWith(row.message))
+        )
+          rowsHit.add(index)
+      })
+    }
+    for (const file of RETIRED_PATHS) {
+      RETIRED_SURFACES.forEach((row, index) => {
+        if (row.on === "path" && row.match.test(file)) rowsHit.add(index)
+      })
+    }
+    expect(rowsHit.size).toBe(RETIRED_SURFACES.length)
+  })
+
+  test("a test file is reported only for the process-runner row", () => {
+    expect(
+      findRetiredSurfaces(
+        "packages/core/tests/runtime/session.test.ts",
+        'import { ProcessRunnerLive } from "../../src/runtime/run-process"',
+      ).length,
+    ).toBe(1)
+    expect(
+      findRetiredSurfaces(
+        "packages/core/tests/runtime/extension-host.test.ts",
+        ["const host = ResourceGraphHost", "const name = 'TurnEvent'"].join("\n"),
+      ),
+    ).toEqual([])
+  })
+
+  test("docs, plans, the tooling tests and the guard source are not scanned", () => {
+    const text = ["ProcessRunner", "ResourceGraphHost", "ExtensionRuntime"].join("\n")
+    expect(findRetiredSurfaces("ARCHITECTURE.md", text)).toEqual([])
+    expect(findRetiredSurfaces("plans/arch-core.md", text)).toEqual([])
+    expect(findRetiredSurfaces("packages/tooling/src/guards.ts", text)).toEqual([])
+    expect(findRetiredSurfaces("packages/tooling/tests/guards.test.ts", text)).toEqual([])
+  })
+
+  test("live names that contain a retired name are left alone", () => {
+    expect(
+      findRetiredSurfaces(
+        "packages/core/src/server/server.ts",
+        [
+          'import { InProcessRunner } from "../runtime/agent/agent-runner.js"',
+          "runProcess: (command, args, options) => runProcess(command, args, options)",
+          "export const ResourceId = Schema.NonEmptyString.pipe(Schema.brand('ResourceId'))",
+          'import { buildResourceLayer } from "./extensions/resource-host/resource-layer.js"',
+          "persistenceMode === 'memory' ? EventStore.Memory : Layer.provide(EventStoreLive, ...)",
+          "const layer = Layer.provideMerge(parent, child)",
+        ].join("\n"),
+      ),
+    ).toEqual([])
+    expect(findRetiredSurfaces("packages/core/src/runtime/child-agents.ts", "")).toEqual([])
+    expect(findRetiredSurfaces("packages/core/src/runtime/provider.ts", "")).toEqual([])
+    expect(findRetiredSurfaces("packages/sdk/src/server.ts", "")).toEqual([])
+  })
+})
+
 // ── steering-file-paths.test ────────────────────────────────────────────────
 
 const TRACKED = [
@@ -2314,111 +2082,6 @@ describe("TUI session identity guard", () => {
     const text = ["  createEffect(() => {", "    const s = client.session()", "  })"].join("\n")
     expect(findTuiSessionIdentityReads("packages/core/src/runtime/thing.ts", text)).toEqual([])
     expect(findTuiSessionIdentityReads("apps/tui/tests/thing.test.ts", text)).toEqual([])
-  })
-})
-
-// ── diagnostic-suppression-anchor.test ──────────────────────────────────────
-
-const FILE_SUPPRESSION_ANCHOR = "packages/core/src/runtime/thing.ts"
-
-// Built from pieces on purpose. Spelled whole, the marker is a real directive
-// to the Effect TypeScript plugin, which then reports this line as a
-// suppression that has no effect.
-const MARKER = `@effect-diagnostics${"-next-line"}`
-const SUPPRESSION = `  // ${MARKER} anyUnknownInErrorContext:off`
-
-const messagesOfSuppressionAnchor = (
-  lines: ReadonlyArray<string>,
-  file = FILE_SUPPRESSION_ANCHOR,
-): ReadonlyArray<string> =>
-  findDiagnosticSuppressionAnchors(file, lines.join("\n")).map((finding) => finding.message)
-
-const linesOfSuppressionAnchor = (lines: ReadonlyArray<string>): ReadonlyArray<number> =>
-  findDiagnosticSuppressionAnchors(FILE_SUPPRESSION_ANCHOR, lines.join("\n")).map(
-    (finding) => finding.line,
-  )
-
-describe("diagnostic suppression anchor", () => {
-  test("allows a suppression directly above the expression", () => {
-    expect(
-      messagesOfSuppressionAnchor([SUPPRESSION, "  const sealed = Effect.suspend(effect)"]),
-    ).toEqual([])
-  })
-
-  test("allows a suppression above a multi-line expression head", () => {
-    expect(
-      messagesOfSuppressionAnchor([
-        SUPPRESSION,
-        "  Effect.provide(",
-        "    FetchHttpClient.layer,",
-        "  ),",
-      ]),
-    ).toEqual([])
-  })
-
-  test("flags a suppression a formatter detached with a blank line", () => {
-    const messages = messagesOfSuppressionAnchor([
-      SUPPRESSION,
-      "",
-      "  const sealed = Effect.suspend(effect)",
-    ])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("a blank line")
-  })
-
-  test("flags a suppression above closing punctuation alone", () => {
-    for (const closer of ["  )", "  )", "  })", "  ],", "  );"]) {
-      const messages = messagesOfSuppressionAnchor([SUPPRESSION, closer])
-      expect(messages).toHaveLength(1)
-      expect(messages[0]).toContain("closing punctuation alone")
-    }
-  })
-
-  test("flags a suppression above a bare pipe continuation", () => {
-    const messages = messagesOfSuppressionAnchor([SUPPRESSION, "  .pipe("])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("bare `.pipe(` continuation")
-  })
-
-  test("flags a suppression above a second suppression", () => {
-    const messages = messagesOfSuppressionAnchor([SUPPRESSION, SUPPRESSION, "  const x = f()"])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("a second suppression comment")
-  })
-
-  test("flags a suppression on the last line of a file", () => {
-    const messages = messagesOfSuppressionAnchor([" const x = f()", SUPPRESSION])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("ends the file")
-  })
-
-  test("reports the comment's own line", () => {
-    expect(
-      linesOfSuppressionAnchor(["const a = 1", "const b = 2", SUPPRESSION, "", "const c = 3"]),
-    ).toEqual([3])
-  })
-
-  test("allows a line that closes one call and opens the next", () => {
-    // `}).pipe(` carries the expression, so the diagnostic can land on it.
-    expect(messagesOfSuppressionAnchor([SUPPRESSION, "  }).pipe("])).toEqual([])
-  })
-
-  test("leaves the file-scoped form alone", () => {
-    const fileScoped = `// @effect-diagnostics${" nodeBuiltinImport:off"} -- fixture`
-    expect(messagesOfSuppressionAnchor([fileScoped, ""])).toEqual([])
-  })
-
-  test("reads source files only", () => {
-    expect(messagesOfSuppressionAnchor([SUPPRESSION, ""], "plans/notes.md")).toEqual([])
-  })
-
-  test("skips the guard's own source and test, which must spell the marker", () => {
-    for (const self of [
-      "packages/tooling/src/guards.ts",
-      "packages/tooling/tests/guards.test.ts",
-    ]) {
-      expect(messagesOfSuppressionAnchor([SUPPRESSION, ""], self)).toEqual([])
-    }
   })
 })
 

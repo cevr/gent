@@ -2,7 +2,12 @@ import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { ExtensionId, SessionId } from "../../src/domain/ids"
 import type { Session } from "../../src/domain/message"
-import { createToolTestLayer, ensureStorageParents } from "../../src/test-utils/index"
+import {
+  createE2ELayer,
+  ensureStorageParents,
+  type E2ELayerConfig,
+} from "../../src/test-utils/index"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { SessionStorage, type SessionStorageService } from "../../src/storage/storage"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
 import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
@@ -24,6 +29,15 @@ const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
         return [[id], next]
       }),
   } satisfies SessionStorageService)
+
+/** The server root with the stub tool runner, the scripted model, and no agents. */
+const toolLayer = (config: Pick<E2ELayerConfig, "extensionInputs" | "allowFailedExtensions">) =>
+  createE2ELayer({
+    ...config,
+    providerLayer: LanguageModelLayers.debug(),
+    agents: [],
+    toolRunner: "test",
+  })
 
 describe("ensureStorageParents", () => {
   it.live("creates a session without requiring branch storage", () =>
@@ -81,7 +95,7 @@ describe("extension tool test layer", () => {
         expect(released).toBe(0)
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- The nested scope is the test boundary whose cleanup is under test.
-        Effect.provide(createToolTestLayer({ agents: [], extensions: [extension] })),
+        Effect.provide(toolLayer({ extensionInputs: [extension] })),
         Effect.scoped,
       )
       expect(released).toBe(1)
@@ -102,11 +116,10 @@ describe("extension tool test layer", () => {
       )
     }).pipe(
       Effect.provide(
-        createToolTestLayer({
-          agents: [],
+        toolLayer({
           // The collision is the subject, so the layer keeps both failures to inspect.
           allowFailedExtensions: true,
-          extensions: ["ext-a", "ext-b"].map((id) =>
+          extensionInputs: ["ext-a", "ext-b"].map((id) =>
             defineExtension({
               id,
               setup: Effect.gen(function* () {

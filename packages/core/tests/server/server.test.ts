@@ -36,15 +36,16 @@ import {
   waitFor,
 } from "../../src/test-utils/language-model"
 import { createE2ELayer } from "../../src/test-utils/index"
-import { extractText, Gent } from "@gent/sdk"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { Gent } from "@gent/sdk"
 import {
+  messagePartsText,
   Branch,
   dateFromMillis,
   Message,
   Session,
   type SteerCommand,
 } from "../../src/domain/message"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   BranchStorage,
   MessageStorage,
@@ -1749,14 +1750,15 @@ describe("session transport contract", () => {
             client.message.list({ branchId: created.branchId }),
             (items) =>
               items.some(
-                (message) => extractText(message.parts) === "hello from the transport contract",
+                (message) =>
+                  messagePartsText(message.parts) === "hello from the transport contract",
               ),
           )
 
           expect(
             messages.some((message) => {
               if (message.role !== "user") return false
-              return extractText(message.parts) === "hello from the transport contract"
+              return messagePartsText(message.parts) === "hello from the transport contract"
             }),
           ).toBe(true)
 
@@ -1773,7 +1775,7 @@ describe("session transport contract", () => {
               state.messages.some(
                 (message) =>
                   message.role === "user" &&
-                  extractText(message.parts) === "hello from the transport contract",
+                  messagePartsText(message.parts) === "hello from the transport contract",
               ),
           )
 
@@ -1826,21 +1828,27 @@ describe("session transport contract", () => {
           // genuine routing leak.
           yield* waitFor(
             client.session.getSnapshot({ sessionId: b.sessionId, branchId: b.branchId }),
-            (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-B"),
+            (s) =>
+              s.messages.some((m) => m.role === "user" && messagePartsText(m.parts) === "msg-B"),
           )
           const snapshotA = yield* waitFor(
             client.session.getSnapshot({ sessionId: a.sessionId, branchId: a.branchId }),
-            (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-A"),
+            (s) =>
+              s.messages.some((m) => m.role === "user" && messagePartsText(m.parts) === "msg-A"),
           )
           const snapshotB = yield* client.session.getSnapshot({
             sessionId: b.sessionId,
             branchId: b.branchId,
           })
           expect(
-            snapshotA.messages.every((m) => m.role !== "user" || extractText(m.parts) !== "msg-B"),
+            snapshotA.messages.every(
+              (m) => m.role !== "user" || messagePartsText(m.parts) !== "msg-B",
+            ),
           ).toBe(true)
           expect(
-            snapshotB.messages.every((m) => m.role !== "user" || extractText(m.parts) !== "msg-A"),
+            snapshotB.messages.every(
+              (m) => m.role !== "user" || messagePartsText(m.parts) !== "msg-A",
+            ),
           ).toBe(true)
 
           // Sessions are listed under both cwds.
@@ -3163,14 +3171,16 @@ describe("Session snapshot across RPC boundaries", () => {
           const after = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (snapshot) =>
-              snapshot.messages.some((message) => extractText(message.parts) === "hello") &&
+              snapshot.messages.some((message) => messagePartsText(message.parts) === "hello") &&
               snapshot.metrics.turns > 0,
             5_000,
             "session snapshot user message and metrics",
           )
 
           expect(after.messages.length).toBeGreaterThanOrEqual(before.messages.length)
-          expect(after.messages.map((message) => extractText(message.parts))).toContain("hello")
+          expect(after.messages.map((message) => messagePartsText(message.parts))).toContain(
+            "hello",
+          )
           expect(after.metrics.turns).toBeGreaterThan(0)
           expect(after.metrics.lastInputTokens).toBeGreaterThan(0)
           expect(after.resolvedModelId).toBeDefined()

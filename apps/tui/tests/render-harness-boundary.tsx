@@ -142,7 +142,6 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     },
   } satisfies Record<string, MockNamespace>
 
-  // eslint-disable-next-line effect/noAs -- Proxy keys are runtime namespace names; the mock preserves the typed client surface used by render tests.
   return new Proxy(Object.create(null), {
     get(_target, ns: string) {
       const base = Option.getOrElse(

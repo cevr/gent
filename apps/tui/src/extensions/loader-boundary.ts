@@ -68,14 +68,12 @@ const discoverDir = (
         continue
 
       const filePath = path.join(dir, entry)
-      // oxlint-disable-next-line no-await-in-loop -- sequential: type determines action
       const info = yield* fs.stat(filePath).pipe(Effect.option)
       if (info._tag === "None") continue
 
       if (info.value.type === "File" && isClientFile(entry)) {
         results.push({ filePath, scope })
       } else if (info.value.type === "Directory") {
-        // oxlint-disable-next-line no-await-in-loop -- sequential: directory scan recurses through nested scopes
         const subEntries = yield* fs.readDirectory(filePath).pipe(Effect.orElseSucceed(() => []))
         const clientFiles = subEntries
           .filter((e) => isClientEntrypoint(e))
