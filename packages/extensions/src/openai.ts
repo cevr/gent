@@ -53,6 +53,7 @@ import {
   freshCredentials,
   makeCredentialCache,
   makeOpenAiCompatResolution,
+  postOAuthForm,
   readOptionalEnv,
   recoverUnauthorized,
   withHeaders,
@@ -283,49 +284,44 @@ const parseAuthorizationInput = (input: string): AuthorizationInput => {
   return { code: Option.some(value), state: Option.none() }
 }
 
+/**
+ * POST one grant to the token endpoint and decode the token reply. Every
+ * failure — transport, timeout, 4xx/5xx, malformed body — is an
+ * `OAuthError` with `reason`.
+ */
+const requestTokens = (
+  reason: "token-exchange-failed" | "token-refresh-failed",
+  label: string,
+  params: Record<string, string>,
+): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const response = yield* postOAuthForm(`${ISSUER}/oauth/token`, params).pipe(
+      Effect.mapError(
+        (e) => new OAuthError({ reason, message: `${label} HTTP failed: ${e.message}` }),
+      ),
+    )
+    if (response.status >= 400) {
+      return yield* new OAuthError({ reason, message: `${label} failed: ${response.status}` })
+    }
+    return yield* decodeTokenResponse(response.body).pipe(
+      Effect.mapError(
+        (e) => new OAuthError({ reason, message: `${label} response invalid: ${e.message}` }),
+      ),
+    )
+  })
+
 const exchangeCodeForTokens = (
   code: string,
   redirectUri: string,
   codeVerifier: string,
 ): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
-    const http = yield* HttpClient.HttpClient
-    const request = HttpClientRequest.post(`${ISSUER}/oauth/token`).pipe(
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-        client_id: CLIENT_ID,
-        code_verifier: codeVerifier,
-      }),
-    )
-    const response = yield* http.execute(request)
-    if (response.status >= 400) {
-      return yield* new OAuthError({
-        reason: "token-exchange-failed",
-        message: `Token exchange failed: ${response.status}`,
-      })
-    }
-    const body = yield* response.text
-    return yield* decodeTokenResponse(body).pipe(
-      Effect.mapError(
-        (e) =>
-          new OAuthError({
-            reason: "token-exchange-failed",
-            message: `Token exchange response invalid: ${e.message}`,
-          }),
-      ),
-    )
-  }).pipe(
-    Effect.catchTag("HttpClientError", (e) =>
-      Effect.fail(
-        new OAuthError({
-          reason: "token-exchange-failed",
-          message: `Token exchange HTTP failed: ${e.message}`,
-        }),
-      ),
-    ),
-  )
+  requestTokens("token-exchange-failed", "Token exchange", {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: redirectUri,
+    client_id: CLIENT_ID,
+    code_verifier: codeVerifier,
+  })
 
 const exchangeCodeWithFetch = (
   code: string,
@@ -338,41 +334,11 @@ const exchangeCodeWithFetch = (
   )
 
 const refreshAccessToken = (refreshToken: string): Effect.Effect<TokenResponse, OAuthError> =>
-  Effect.gen(function* () {
-    const http = yield* HttpClient.HttpClient
-    const request = HttpClientRequest.post(`${ISSUER}/oauth/token`).pipe(
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
-    )
-    const response = yield* http.execute(request)
-    if (response.status >= 400) {
-      return yield* new OAuthError({
-        reason: "token-refresh-failed",
-        message: `Token refresh failed: ${response.status}`,
-      })
-    }
-    const body = yield* response.text
-    return yield* decodeTokenResponse(body).pipe(
-      Effect.mapError(
-        (e) =>
-          new OAuthError({
-            reason: "token-refresh-failed",
-            message: `Token refresh response invalid: ${e.message}`,
-          }),
-      ),
-    )
+  requestTokens("token-refresh-failed", "Token refresh", {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: CLIENT_ID,
   }).pipe(
-    Effect.catchTag("HttpClientError", (e) =>
-      Effect.fail(
-        new OAuthError({
-          reason: "token-refresh-failed",
-          message: `Token refresh HTTP failed: ${e.message}`,
-        }),
-      ),
-    ),
     // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )

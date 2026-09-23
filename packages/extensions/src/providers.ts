@@ -37,7 +37,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { EncodeError, HttpClientError } from "effect/unstable/http/HttpClientError"
 import { Model as AiModel } from "effect/unstable/ai"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 
@@ -249,23 +249,28 @@ export const withHeaders = (
 
 /**
  * Convert a `ProviderAuthError` into the `HttpClientError` the SDK's
- * `transformClient` signature requires, so credential unavailability
- * reaches the caller through the standard transport channel.
+ * `transformClient` signature requires.
+ *
+ * The credential is part of building the request, so a failure to get one
+ * is an `EncodeError`: the request could not be built. The AI SDKs map it
+ * to a `NetworkError` that is NOT retryable. A `TransportError` would map to
+ * a retryable one, and the loop would run the failed refresh again on every
+ * retry, inside the credential lock.
  */
-const asTransportError = (
+const asRequestBuildError = (
   req: HttpClientRequest.HttpClientRequest,
   cause: ProviderAuthError,
 ): HttpClientError =>
   new HttpClientError({
-    reason: new TransportError({ request: req, cause, description: cause.message }),
+    reason: new EncodeError({ request: req, cause, description: cause.message }),
   })
 
-/** Fetch credentials for a request, surfacing auth failure as a transport error. */
+/** Fetch credentials for a request, surfacing auth failure as a non-retryable request error. */
 export const freshCredentials = <C>(
   creds: CredentialCache<C>,
   req: HttpClientRequest.HttpClientRequest,
 ): Effect.Effect<C, HttpClientError> =>
-  creds.getFresh.pipe(Effect.mapError((cause) => asTransportError(req, cause)))
+  creds.getFresh.pipe(Effect.mapError((cause) => asRequestBuildError(req, cause)))
 
 /**
  * Internal error driving 401 recovery. The credential cache TTL can outlive
@@ -322,6 +327,56 @@ export const recoverUnauthorized =
         ),
       ),
     )
+
+// ── oauth token endpoint ────────────────────────────────────────────────────
+
+/**
+ * An OAuth token POST runs inside the credential lock, so a hung endpoint
+ * would block every request of that provider. The timeout bounds it.
+ */
+const OAUTH_TOKEN_TIMEOUT = "15 seconds"
+
+/** A token POST that never produced a response: transport failure or timeout. */
+class OAuthTokenPostError extends Schema.TaggedError<OAuthTokenPostError>(
+  "@gent/extensions/src/providers/OAuthTokenPostError",
+)("OAuthTokenPostError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+interface OAuthTokenResponse {
+  readonly status: number
+  readonly body: string
+}
+
+/**
+ * POST a form to an OAuth token endpoint and read the reply. The status is
+ * the caller's to judge: each provider words its own failure. The HTTP
+ * client comes from context so a login flow can reuse the one it holds.
+ */
+export const postOAuthForm = (
+  url: string,
+  params: Record<string, string>,
+): Effect.Effect<OAuthTokenResponse, OAuthTokenPostError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
+    const response = yield* http.execute(
+      HttpClientRequest.post(url).pipe(HttpClientRequest.bodyUrlParams(params)),
+    )
+    const body = yield* response.text
+    return { status: response.status, body }
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: OAUTH_TOKEN_TIMEOUT,
+      orElse: () =>
+        Effect.fail(
+          new OAuthTokenPostError({ message: `${url} timed out after ${OAUTH_TOKEN_TIMEOUT}` }),
+        ),
+    }),
+    Effect.catchTag("HttpClientError", (cause) =>
+      Effect.fail(new OAuthTokenPostError({ message: cause.message, cause })),
+    ),
+  )
 
 // ── models.dev catalog ──────────────────────────────────────────────────────
 

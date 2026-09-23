@@ -1,4 +1,5 @@
 import {
+  Cause,
   Clock,
   Context,
   Crypto,
@@ -6,6 +7,7 @@ import {
   Effect,
   Encoding,
   Equal,
+  Exit,
   FileSystem,
   Layer,
   Option,
@@ -13,7 +15,6 @@ import {
   Predicate,
   Redacted,
   Ref,
-  Schedule,
   Schema,
   Stream,
   SynchronizedRef,
@@ -44,6 +45,7 @@ import {
   freshCredentials,
   freshEnoughAt,
   makeCredentialCache,
+  postOAuthForm,
   readOptionalEnv,
   recoverUnauthorized,
   withHeaders,
@@ -53,7 +55,7 @@ import {
   FetchHttpClient,
   Headers,
   HttpClient,
-  HttpClientRequest,
+  type HttpClientRequest,
   type HttpClientResponse,
 } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
@@ -976,24 +978,23 @@ const refreshViaOAuth = (
   refreshToken: string,
 ): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
   Effect.gen(function* () {
-    const http = yield* HttpClient.HttpClient
-    const request = HttpClientRequest.post(OAUTH_TOKEN_URL).pipe(
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "refresh_token",
-        client_id: OAUTH_CLIENT_ID,
-        refresh_token: refreshToken,
-      }),
+    const response = yield* postOAuthForm(OAUTH_TOKEN_URL, {
+      grant_type: "refresh_token",
+      client_id: OAUTH_CLIENT_ID,
+      refresh_token: refreshToken,
+    }).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({ message: `Direct OAuth refresh failed: ${e.message}`, cause: e }),
+      ),
     )
-    const response = yield* http.execute(request)
     if (response.status >= 400) {
-      const errText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
       return yield* new ProviderAuthError({
-        message: `Direct OAuth refresh failed: ${response.status} ${errText}`,
+        message: `Direct OAuth refresh failed: ${response.status} ${response.body}`,
       })
     }
-    const body = yield* response.text
     const now = yield* Clock.currentTimeMillis
-    const creds = parseOAuthResponse(body, refreshToken, now)
+    const creds = parseOAuthResponse(response.body, refreshToken, now)
     if (Option.isNone(creds)) {
       return yield* new ProviderAuthError({
         message: "OAuth refresh response missing access_token",
@@ -1001,28 +1002,23 @@ const refreshViaOAuth = (
     }
     return creds.value
   }).pipe(
-    Effect.timeout("15 seconds"),
-    Effect.catchEager((e) => {
-      if (Schema.is(ProviderAuthError)(e)) return Effect.fail(e)
-      let message = String(e)
-      if (e instanceof Error) message = e.message
-      return Effect.fail(
-        new ProviderAuthError({
-          message: `Direct OAuth refresh failed: ${message}`,
-          cause: e,
-        }),
-      )
-    }),
     // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(FetchHttpClient.layer),
   )
 
-const spawnClaudeCli = (): Effect.Effect<
-  void,
-  ProviderAuthError,
-  ChildProcessSpawner.ChildProcessSpawner
-> =>
+/**
+ * Run `claude -p .` so the CLI refreshes its own credentials. stdin is
+ * closed so the CLI does not wait for piped input. It runs in the home
+ * directory, not the server's, so it does not load the hooks, `CLAUDE.md`,
+ * or MCP config of whatever project started the shared server, and does
+ * not write a transcript there.
+ */
+const spawnClaudeCli = (
+  home: string,
+): Effect.Effect<void, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
   runProcess("claude", ["-p", ".", "--model", "haiku"], {
+    cwd: home,
+    stdin: "ignore",
     env: { TERM: "dumb" },
     extendEnv: true,
     timeout: Duration.millis(60_000),
@@ -1066,10 +1062,19 @@ const refreshClaudeCodeCredentials: Effect.Effect<
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > = Effect.gen(function* () {
-  const current = yield* readClaudeCodeCredentials.pipe(Effect.option)
-  if (Option.isSome(current) && current.value.refreshToken !== "") {
-    const refreshed = yield* refreshViaOAuth(current.value.refreshToken).pipe(Effect.option)
-    if (Option.isSome(refreshed)) {
+  // The reason the direct path failed. It is kept so that a failed CLI
+  // fallback reports both causes instead of only the last one.
+  let directFailure = "no stored refresh token"
+  const current = yield* Effect.exit(readClaudeCodeCredentials)
+  if (Exit.isFailure(current)) {
+    directFailure = Option.match(Cause.findErrorOption(current.cause), {
+      onNone: () => directFailure,
+      onSome: (error) => error.message,
+    })
+  }
+  if (Exit.isSuccess(current) && current.value.refreshToken !== "") {
+    const refreshed = yield* Effect.exit(refreshViaOAuth(current.value.refreshToken))
+    if (Exit.isSuccess(refreshed)) {
       // Best-effort write-back so subsequent processes pick up the
       // new token. A failure here doesn't lose the refresh — the
       // caller has it in memory.
@@ -1082,13 +1087,27 @@ const refreshClaudeCodeCredentials: Effect.Effect<
       )
       return refreshed.value
     }
+    directFailure = Option.match(Cause.findErrorOption(refreshed.cause), {
+      onNone: () => directFailure,
+      onSome: (error) => error.message,
+    })
   }
   // Direct path failed — fall back to the CLI spawn (second attempt
   // historically helps when the first invocation kicks a stale-token
   // error). The CLI refreshes its active account, which is the
   // primary one read here.
-  yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
-  return yield* readClaudeCodeCredentials
+  const platform = yield* AnthropicPlatform
+  return yield* spawnClaudeCli(platform.home).pipe(
+    Effect.retry({ times: 1 }),
+    Effect.andThen(readClaudeCodeCredentials),
+    Effect.mapError(
+      (cause) =>
+        new ProviderAuthError({
+          message: `${directFailure}; CLI fallback: ${cause.message}`,
+          cause,
+        }),
+    ),
+  )
 })
 
 // ── credential service ──────────────────────────────────────────────────────
@@ -1177,16 +1196,24 @@ const build = (
       // A keychain miss surfaces as ProviderAuthError; swallowing it
       // turns the miss into a refresh attempt instead of a failure.
       read: () => Effect.option(read),
+      // A refresh failure keeps its own reason (locked keychain, access
+      // denied, OAuth 4xx); only a refresh that returns an expired token
+      // gets the generic hint.
       refresh: () =>
         Effect.gen(function* () {
-          const refreshed = yield* Effect.option(refresh)
+          const refreshed = yield* refresh.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAuthError({
+                  message: `Claude Code credentials are unavailable: ${cause.message}`,
+                  cause,
+                }),
+            ),
+          )
           const now = yield* Clock.currentTimeMillis
-          if (Option.isSome(refreshed) && freshEnoughForUse(refreshed.value, now)) {
-            return refreshed.value
-          }
+          if (freshEnoughForUse(refreshed, now)) return refreshed
           return yield* new ProviderAuthError({
-            message:
-              "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
+            message: "Claude Code credentials are expired. Run `claude` to refresh them.",
           })
         }),
       toPersisted: (creds) => ({
@@ -1786,13 +1813,14 @@ const makeKeychainClientLayer: Layer.Layer<
  * because each call to `creds.getFresh` still consults the live
  * `Ref` cache.
  *
- * This file ships the full middleware stack: auth headers (2a),
- * 429/529 + transport retry (2b), long-context beta retry (2d), and
- * 401 recovery (2e). Layered outside-in via `pipe`, the order is:
+ * The middleware stack, layered outside-in via `pipe`:
  *   - mapRequestEffect (preprocess) — auth + cache-aware headers
- *   - long-context beta retry (innermost transformResponse)
- *   - 429/529 + transport retry (middle)
- *   - 401 recovery (outermost) — invalidate creds + retry once
+ *   - long-context beta retry (inner transformResponse)
+ *   - 401 recovery (outer) — invalidate creds + retry once
+ *
+ * There is no 429/529/5xx or transport retry here. The SDK maps those to
+ * retryable `AiError`s, and the agent loop owns that retry under the
+ * driver's policy: it honors `retry-after` and reports each attempt.
  *
  * On the long-context beta retry: the Anthropic API rejects requests
  * that include both `context-1m-2025-08-07` and `interleaved-thinking-
@@ -1805,49 +1833,15 @@ const makeKeychainClientLayer: Layer.Layer<
  * in `mapRequestEffect` (so the outgoing header reflects what we've
  * learned) and writes to it in the beta-retry `transformResponse` (so
  * the next attempt's preprocess sees the updated set).
- *
- * On retry: covers two failure classes with one budget (2 retries / 3
- * attempts at 1s exponential):
- *   1. 429/529 responses — Anthropic rate-limit + Overloaded.
- *      `HttpClient.retryTransient` covers 408/429/500/502/503/504 but
- *      NOT 529, so we re-raise both as a typed `TransientResponseError`
- *      via `HttpClient.transformResponse` and let `Effect.retry` see it.
- *   2. Transport failures (`HttpClientError` from the wire) — retried under
- *      the same budget as transient HTTP responses.
- * The catch-tag at the end folds the terminal 429/529 back into the
- * success channel; transport failures that exhaust the budget propagate
- * as `HttpClientError` (the SDK's expected error type).
  */
 
 // ── Typed errors ──
 
 /**
- * Internal error used to drive 429/529 retry through `Effect.retry`.
- * Carries the response so the catch-tag can hand the final 429/529
- * back to the caller after the retry budget is exhausted (instead of
- * surfacing as an unrelated typed failure).
- *
- * `response` is declared as `Schema.Any` because `HttpClientResponse`
- * is a class-shaped type from a vendor module and embedding its full
- * Schema would force this module to depend on undocumented internals.
- * The typed accessor `getResponse` re-narrows for the catch-tag.
- */
-class TransientResponseError extends Schema.TaggedError<TransientResponseError>(
-  "@gent/extensions/src/anthropic/TransientResponseError",
-)("TransientResponseError", {
-  response: Schema.Any,
-}) {
-  getResponse(): HttpClientResponse.HttpClientResponse {
-    return this.response
-  }
-}
-
-const isTransientStatus = (status: number): boolean => status === 429 || status === 529
-
-/**
- * Internal error driving the long-context beta retry. Same Schema.Any
- * accessor pattern as `TransientResponseError` for the same vendor-class
- * Schema reason.
+ * Internal error driving the long-context beta retry. Carries the response
+ * so the catch-tag can hand the final 400 back to the caller. `response` is
+ * `Schema.Any` because `HttpClientResponse` is a vendor class; the typed
+ * accessor `getResponse` re-narrows it.
  */
 class LongContextBetaError extends Schema.TaggedError<LongContextBetaError>(
   "@gent/extensions/src/anthropic/LongContextBetaError",
@@ -2038,37 +2032,6 @@ export const buildKeychainTransformClient =
           Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.getResponse())),
         ),
       ),
-      // Retry: 2 retries (3 attempts total) with exponential backoff
-      // starting at 1s. Retries both:
-      //   - 429/529 responses (Anthropic rate-limit + Overloaded)
-      //   - Transport failures (HttpClientError from the wire).
-      // `transformResponse` re-raises 429/529 as a typed failure so
-      // `Effect.retry` can react. The catch-tag at the end folds the
-      // terminal 429/529 back into the success channel after the budget
-      // is exhausted, keeping the public HttpClient contract intact.
-      // Genuine transport errors that exhaust the budget propagate as
-      // `HttpClientError` — the SDK's expected error type.
-      HttpClient.transformResponse((effect) =>
-        effect.pipe(
-          Effect.flatMap(
-            (
-              response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, TransientResponseError> => {
-              switch (isTransientStatus(response.status)) {
-                case true:
-                  return Effect.fail(new TransientResponseError({ response }))
-                default:
-                  return Effect.succeed(response)
-              }
-            },
-          ),
-          Effect.retry({
-            schedule: Schedule.exponential("1 second"),
-            times: 2,
-          }),
-          Effect.catchTag("TransientResponseError", (e) => Effect.succeed(e.getResponse())),
-        ),
-      ),
       recoverUnauthorized(creds),
     )
 
@@ -2132,8 +2095,8 @@ const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, ap
 
 /**
  * OAuth path: builds `AnthropicClient.layer` with `transformClient` set
- * to the keychain transform middleware (auth headers, 429/529 retry,
- * transport retry, long-context beta retry, 401 recovery). Uses
+ * to the keychain transform middleware (auth headers, long-context beta
+ * retry, 401 recovery). Uses
  * `Layer.unwrap` because the transform factory needs the credential
  * service and beta cache instances at construction time, and those
  * come from layers that the unwrapped Effect can `yield*`.

@@ -30,12 +30,13 @@ import {
 } from "../src/providers.js"
 import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
+  FetchHttpClient,
   HttpBody,
   HttpClient,
   type HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { runEffectBoundary } from "./run-effect-boundary.js"
 import { LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
@@ -178,6 +179,46 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
           expect(errOpt.value.message).toContain("unavailable")
         }
       }
+    }),
+  )
+})
+describe("OpenAICredentialService — token endpoint timeout", () => {
+  it.live("a token endpoint that never answers fails the refresh instead of holding the lock", () =>
+    Effect.gen(function* () {
+      let fetchCalls = 0
+      const hangingFetch = Object.assign(
+        () => {
+          fetchCalls += 1
+          // The endpoint accepted the socket and went silent: a fetch that never settles.
+          // oxlint-disable-next-line effect/noNewPromise, gent/no-promise-control-flow-in-tests -- The fake implements the Promise-based Fetch contract.
+          return Promise.race<Response>([])
+        },
+        { preconnect: () => {} },
+      )
+      const cellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const layer = OpenAICredentialService.layerFromRef(cellRef, {
+        type: "oauth",
+        access: "stale-access",
+        refresh: "stale-refresh",
+        expires: 0,
+        persist: () => Effect.void,
+      })
+      const exit = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const fiber = yield* Effect.forkChild(Effect.exit(svc.getFresh))
+          yield* Effect.yieldNow.pipe(Effect.repeat({ until: () => fetchCalls > 0, times: 1000 }))
+          expect(fetchCalls).toBe(1)
+          yield* TestClock.adjust("31 seconds")
+          return yield* Fiber.join(fiber)
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(Layer.merge(layer, Layer.succeed(FetchHttpClient.Fetch, hangingFetch))),
+        ),
+      ).pipe(Effect.timeout("3 seconds"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("timed out")
     }),
   )
 })
@@ -1375,9 +1416,9 @@ describe("codexTransformClient — auth headers (O2)", () => {
       }
       const err = failReasonOption.value.error
       expect(err).toBeInstanceOf(HttpClientError)
-      expect(err.reason).toBeInstanceOf(TransportError)
-      if (!(err.reason instanceof TransportError)) {
-        return yield* Effect.die(new Error("expected transport error"))
+      expect(err.reason).toBeInstanceOf(EncodeError)
+      if (!(err.reason instanceof EncodeError)) {
+        return yield* Effect.die(new Error("expected request-build error"))
       }
       const reason = err.reason
       expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
@@ -1945,9 +1986,9 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         }
         const err = failReasonOption.value.error
         expect(err).toBeInstanceOf(HttpClientError)
-        expect(err.reason).toBeInstanceOf(TransportError)
-        if (!(err.reason instanceof TransportError)) {
-          return yield* Effect.die(new Error("expected transport error"))
+        expect(err.reason).toBeInstanceOf(EncodeError)
+        if (!(err.reason instanceof EncodeError)) {
+          return yield* Effect.die(new Error("expected request-build error"))
         }
         const reason = err.reason
         expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)

@@ -36,6 +36,7 @@ import {
   Context,
   Deferred,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Match,
@@ -56,7 +57,7 @@ import {
   makeFakeFetchState,
   oneGenerate,
 } from "@gent/core/test-utils"
-import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import {
   type CredentialCache,
@@ -72,7 +73,8 @@ import { runEffectBoundary } from "./run-effect-boundary.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
-import { LanguageModel, Prompt } from "effect/unstable/ai"
+import { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
+import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 
 // ── anthropic/anthropic-keychain.test ───────────────────────────────────────
 
@@ -796,19 +798,6 @@ const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 // assert success without `as Effect<unknown, never, never>` casts.
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
   runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
-// Drives Schedule.exponential("1 second") in virtual time. Used by
-// any test path that crosses a retry sleep — primarily 2b's transient
-// retry but also 2d's parity-drift test for 429+long-context-body.
-const runWithTestClockKeychain = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> => {
-  const program = Effect.gen(function* () {
-    const fiber = yield* Effect.scoped(eff).pipe(Effect.forkChild)
-    // Walk past the exponential backoff window deterministically.
-    // 1s + 2s = 3s covers 2 retries with `Schedule.exponential("1 second")`.
-    yield* TestClock.adjust("3 seconds")
-    return yield* Fiber.join(fiber)
-  })
-  return runEffectBoundary(Effect.scoped(program).pipe(Effect.provide(TestClock.layer())))
-}
 // ── Tests ──
 describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   it.live("injects Authorization Bearer from credential service", () =>
@@ -912,7 +901,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
       expect(betas).toContain("effort-2025-11-24")
     }),
   )
-  it.live("credential-service failure surfaces as HttpClientError (transport)", () =>
+  it.live("credential-service failure surfaces as a request-build HttpClientError", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() =>
         buildCreds({
@@ -927,187 +916,57 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      // The credential failure flows through the transient retry layer
-      // (`Schedule.exponential("1 second")` + 2 retries = 3s real-clock).
-      // Drive the schedule via TestClock so the test stays instant.
       const exit = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const fiber = yield* Effect.scoped(
-            Effect.exit(
-              wrapped.post("https://api.anthropic.com/v1/messages", {
-                body: jsonBody({ model: "claude-opus-4-6" }),
-              }),
-            ),
-          ).pipe(Effect.forkChild)
-          yield* TestClock.adjust("3 seconds")
-          return yield* Fiber.join(fiber)
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
         }),
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(TestClock.layer()))
+      ).pipe(Effect.exit)
       // The fake client never saw the request — the transform short-
       // circuited at the credential read.
       expect(fakeState.captured).toHaveLength(0)
-      expect(exit._tag).toBe("Failure")
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      const error = Cause.findErrorOption(exit.cause)
+      // EncodeError maps to a non-retryable AiError; TransportError would be retried.
+      expect(Option.isSome(error) && error.value.reason._tag).toBe("EncodeError")
     }),
   )
 })
-describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
-  it.live("429 once then 200 — retry succeeds, caller sees 200", () =>
+describe("keychainTransformClient — transient failures reach the loop", () => {
+  // The agent loop owns the retry of 429, 529, 5xx, and transport failures
+  // (it honors retry-after and reports each attempt). The transform sends
+  // each request once and hands the result back.
+  const sendOnce = (responder: (call: number) => Response | TransportFailure) =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response("rate limited", { status: 429 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runWithTestClockKeychain(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
-      )
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(200)
-    }),
-  )
-  it.live("529 once then 200 — retry includes 529 (which retryTransient does not)", () =>
+      const fakeState: FakeClientState = { captured: [], responder }
+      const wrapped = buildKeychainTransformClient(
+        creds,
+        cache,
+        TEST_ENV,
+      )(makeFakeClient(fakeState))
+      const exit = yield* Effect.scoped(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
+      ).pipe(Effect.exit)
+      return { exit, captured: fakeState.captured }
+    })
+  for (const status of [429, 529, 500]) {
+    it.live(`a ${status} reaches the caller after one attempt`, () =>
+      Effect.gen(function* () {
+        const { exit, captured } = yield* sendOnce(() => new Response("busy", { status }))
+        expect(captured).toHaveLength(1)
+        expect(Exit.isSuccess(exit) && exit.value.status).toBe(status)
+      }),
+    )
+  }
+  it.live("a transport failure reaches the caller after one attempt", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response("overloaded", { status: 529 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runWithTestClockKeychain(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
-      )
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(200)
-    }),
-  )
-  it.live("3 consecutive 429 — budget exhausted, final 429 surfaces", () =>
-    Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("rate limited", { status: 429 }),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runWithTestClockKeychain(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
-      )
-      // 1 initial + 2 retries = 3 attempts
-      expect(fakeState.captured).toHaveLength(3)
-      expect(response.status).toBe(429)
-    }),
-  )
-  it.live("transport failure (HttpClientError) once then 200 is retried", () =>
-    Effect.gen(function* () {
-      // Middleware retries both TransientResponseError (429/529) and
-      // HttpClientError from the wire, preserving the resilience contract.
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          transportFailure("socket hang up"),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runWithTestClockKeychain(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
-      )
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(200)
-    }),
-  )
-  it.live("3 consecutive transport failures — budget exhausted, error propagates", () =>
-    Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => transportFailure("connection refused"),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const exit = yield* Effect.exit(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const fiber = yield* Effect.scoped(
-              wrapped.post("https://api.anthropic.com/v1/messages", {
-                body: jsonBody({ model: "claude-opus-4-6" }),
-              }),
-            ).pipe(Effect.forkChild)
-            yield* TestClock.adjust("3 seconds")
-            return yield* Fiber.join(fiber)
-          }),
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(TestClock.layer())),
-      )
-      // 1 initial + 2 retries = 3 attempts
-      expect(fakeState.captured).toHaveLength(3)
-      expect(exit._tag).toBe("Failure")
-    }),
-  )
-  it.live("non-transient 4xx (e.g. 400) does not trigger retry", () =>
-    Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response("bad request", { status: 400 }),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runWithTestClockKeychain(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
-      )
-      expect(fakeState.captured).toHaveLength(1)
-      expect(response.status).toBe(400)
+      const { exit, captured } = yield* sendOnce(() => transportFailure("socket hang up"))
+      expect(captured).toHaveLength(1)
+      expect(Exit.isFailure(exit)).toBe(true)
     }),
   )
 })
@@ -1187,42 +1046,30 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       expect(nextRequestBetas).toBe(learnedBetaCount)
     }),
   )
-  it.live("429 with long-context-shaped body still retries via outer transient layer", () =>
+  it.live("429 with long-context-shaped body passes through without narrowing betas", () =>
     Effect.gen(function* () {
-      // Long-context layer is 400-only. A 429 — even if its body string
-      // happens to match the long-context marker — flows through to the
-      // outer transient layer untouched. Two-attempt sequence: 429-LC-body
-      // → 200. Asserts the outer 429 retry kicked in (2 captures), NOT
-      // the long-context retry (which would have rebuilt headers; on a
-      // 429 there's nothing useful to narrow because the rate limit isn't
-      // beta-related).
+      // Long-context layer is 400-only. A 429 whose body happens to match
+      // the long-context marker goes back to the caller untouched: the rate
+      // limit is not beta-related, and the loop owns the 429 retry.
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
       const cache = yield* Effect.promise(() => buildBetaCache())
       const fakeState: FakeClientState = {
         captured: [],
-        responder: respondFirstWith(
-          new Response(LONG_CONTEXT_BODY, { status: 429 }),
-          new Response("ok", { status: 200 }),
-        ),
+        responder: () => new Response(LONG_CONTEXT_BODY, { status: 429 }),
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* Effect.promise(() =>
-        runWithTestClockKeychain(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
+        runOk(
+          wrapped.post("https://api.anthropic.com/v1/messages", {
+            body: jsonBody({ model: "claude-opus-4-6" }),
+          }),
         ),
       )
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(200)
-      // Crucial: header beta count unchanged between the two attempts —
-      // long-context layer did NOT narrow the set on the 429.
-      const initialBetas = fakeState.captured[0]!.headers["anthropic-beta"]!.split(",").length
-      const retryBetas = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
-      expect(retryBetas).toBe(initialBetas)
+      expect(fakeState.captured).toHaveLength(1)
+      expect(response.status).toBe(429)
+      const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.none())
+      expect(excluded.size).toBe(0)
     }),
   )
   it.live("non-long-context 400 passes through without retry", () =>
@@ -1388,6 +1235,55 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
       expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer first-access")
       expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer first-access")
     }),
+  )
+})
+describe("keychainTransformClient — credential failure through the SDK", () => {
+  it.live(
+    "a failed refresh runs once and reaches the caller as a non-retryable error with its reason",
+    () =>
+      Effect.gen(function* () {
+        let refreshes = 0
+        const creds = yield* Effect.promise(() =>
+          buildCreds({
+            read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
+            refresh: Effect.suspend(() => {
+              refreshes++
+              return Effect.fail(new ProviderAuthError({ message: "refresh token revoked" }))
+            }),
+          }),
+        )
+        const cache = yield* Effect.promise(() => buildBetaCache())
+        const state = makeFakeFetchState()
+        const clientLayer = AnthropicSdkClient.layer({
+          transformClient: buildKeychainTransformClient(creds, cache, TEST_ENV),
+        }).pipe(Layer.provide(FetchHttpClient.layer))
+        const modelLayer = AnthropicLanguageModel.layer({ model: "claude-opus-4-6" }).pipe(
+          Layer.provide(clientLayer),
+        )
+        const exit = yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
+          Effect.provide(
+            Layer.provideMerge(
+              modelLayer,
+              fakeFetchLayer(state, () => anthropicHappyResponse()),
+            ),
+          ),
+          Effect.scoped,
+          Effect.timeout("4 seconds"),
+          Effect.exit,
+        )
+        expect(state.captured).toHaveLength(0)
+        expect(refreshes).toBe(1)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (!Exit.isFailure(exit)) return
+        const error = Cause.findErrorOption(exit.cause).pipe(Option.filter(AiError.isAiError))
+        expect(Option.isSome(error)).toBe(true)
+        if (Option.isSome(error)) {
+          // Core retries only a retryable AiError; a credential failure must not be one.
+          expect(error.value.isRetryable).toBe(false)
+          expect(error.value.message).toContain("refresh token revoked")
+        }
+      }),
   )
 })
 // Suppress unused-warning for Layer/Ref imports kept for symmetry with
@@ -1609,7 +1505,8 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         const errOpt = Cause.findErrorOption(result.cause)
         expect(Option.isSome(errOpt)).toBe(true)
         if (Option.isSome(errOpt)) {
-          expect(errOpt.value.message).toContain("unavailable or expired")
+          // The refresh's own reason reaches the caller, not a generic hint.
+          expect(errOpt.value.message).toContain("OAuth 401 from refresh")
         }
       }
     }),
