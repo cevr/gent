@@ -1220,7 +1220,10 @@ type AgentLoopBehavior = {
    * the withdrawal has to reach the admission gate as well.
    */
   withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  /** The profile for one run; `openedByClient` says whether a client opened it (`turnCanAsk`). */
+  resolveTurnProfile: (run: {
+    readonly openedByClient: boolean
+  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
@@ -1390,15 +1393,17 @@ const makeAgentLoopBehavior = (
       },
     })
 
-    const resolveTurnProfile = provideAgentLoopRuntimeContext(runtimeContext)(
-      resolveSessionTurnProfile({
-        sessionId,
-        branchId,
-        profileCache,
-        hostProvider,
-        defaults: { baseSections },
-      }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
-    )
+    const resolveTurnProfile = (run: { readonly openedByClient: boolean }) =>
+      provideAgentLoopRuntimeContext(runtimeContext)(
+        resolveSessionTurnProfile({
+          sessionId,
+          branchId,
+          openedByClient: run.openedByClient,
+          profileCache,
+          hostProvider,
+          defaults: { baseSections },
+        }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
+      )
 
     const loopScope = yield* Effect.scope
     const turnInterruption = yield* makeTurnInterruption
@@ -1424,8 +1429,11 @@ const makeAgentLoopBehavior = (
       const built = yield* Ref.get(branchResources)
       if (Option.isSome(built)) return built.value
       // The branch's Resources are built over this profile's services, so
-      // the loop holds its lease until the branch closes.
-      const profile = yield* resolveTurnProfile.pipe(Scope.provide(loopScope))
+      // the loop holds its lease until the branch closes. No turn's origin
+      // reaches them.
+      const profile = yield* resolveTurnProfile({ openedByClient: true }).pipe(
+        Scope.provide(loopScope),
+      )
       return yield* Effect.uninterruptible(
         Layer.build(
           buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
@@ -2460,7 +2468,8 @@ const buildAgentLoopActorHandlers = (config: {
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             const handle = yield* ensureStarted
-            const environment = yield* handle.resolveTurnProfile
+            // A request comes from a client, which can answer.
+            const environment = yield* handle.resolveTurnProfile({ openedByClient: true })
             const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())

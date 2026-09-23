@@ -5,6 +5,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Option,
@@ -124,7 +125,7 @@ describe("wake", () => {
     ).toBe("wake at 2026-09-23T10:00:00.000Z")
   })
 
-  test("a monitor's result reads as its mode, interval, deadline and note, not JSON", () => {
+  test("a monitor's result reads as its mode, command, interval, deadline and note, not JSON", () => {
     const summary = (note: string) =>
       toolResultSummary(
         Option.some(MonitorTool),
@@ -140,10 +141,12 @@ describe("wake", () => {
           },
         },
       )
-    expect(summary("CI finished: read the log")).toBe(
-      "wake · every 60s until 2026-09-23T10:30:00.000Z · CI finished: read the log",
+    expect(summary("read the log")).toBe(
+      "wake · gh run view 1 --exit-status · every 60s until 2026-09-23T10:30:00.000Z · read the log",
     )
-    expect(summary("")).toBe("wake · every 60s until 2026-09-23T10:30:00.000Z")
+    expect(summary("")).toBe(
+      "wake · gh run view 1 --exit-status · every 60s until 2026-09-23T10:30:00.000Z",
+    )
   })
 
   it.live("a due time comes from afterSeconds or an ISO time, never both", () =>
@@ -1047,6 +1050,88 @@ describe("wake store", () => {
       const again = yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       expect(again).toBe(0)
       expect(yield* alarms.pending).toEqual(["later"])
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
+  )
+
+  it.scopedLive("a re-arm that read an alarm while it fired does not fire it a second time", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-rearm-race-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const firing = yield* Deferred.make<boolean>()
+      const release = yield* Deferred.make<boolean>()
+      const base = contextWith(home, queued)
+      // The first fire holds in its send, so the test decides when it ends.
+      const ctx: ExtensionContextService = testLeafContext({
+        ...base,
+        Session: {
+          ...base.Session,
+          send: (params) =>
+            Ref.getAndUpdate(queued, (all) => [...all, params.content]).pipe(
+              Effect.flatMap((before) => {
+                if (before.length > 0) return Effect.void
+                return Deferred.succeed(firing, true).pipe(Effect.andThen(Deferred.await(release)))
+              }),
+            ),
+        },
+      })
+      const file = `${home}/.gent/wakes/${branchId}.json`
+      // One read of the branch file, once armed, pauses after it returns: the
+      // re-arm has seen the alarm and not yet armed it.
+      const gateArmed = yield* Ref.make(false)
+      const readDone = yield* Deferred.make<boolean>()
+      const proceed = yield* Deferred.make<boolean>()
+      const fs = yield* FileSystem.FileSystem
+      const gatedFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        readFileString: (path, encoding) =>
+          fs.readFileString(path, encoding).pipe(
+            Effect.tap(() =>
+              Ref.getAndSet(gateArmed, false).pipe(
+                Effect.flatMap((armed) => {
+                  if (!armed || path !== file) return Effect.void
+                  return Deferred.succeed(readDone, true).pipe(
+                    Effect.andThen(Deferred.await(proceed)),
+                  )
+                }),
+              ),
+            ),
+          ),
+      })
+      yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+      yield* fs.writeFileString(
+        file,
+        encodeAlarms([{ _tag: "alarm", wakeId: "once", dueAt: 1_000, note: "CI should be done" }]),
+      )
+      const alarms = yield* WakeAlarms
+      const rearm = rearmPendingAlarms().pipe(
+        Effect.provideService(ExtensionContext, ctx),
+        Effect.provideService(FileSystem.FileSystem, gatedFileSystem),
+      )
+      expect(yield* rearm).toBe(1)
+      yield* TestClock.adjust("1 second")
+      yield* Deferred.await(firing)
+      // A turn's re-arm reads the file while the alarm is still firing.
+      yield* Ref.set(gateArmed, true)
+      const second = yield* rearm.pipe(Effect.forkScoped)
+      yield* Deferred.await(readDone)
+      // The fire ends. Where nothing orders it after the re-arm, its entry
+      // and its timer are gone before the re-arm goes on.
+      yield* Deferred.succeed(release, true)
+      yield* settled(alarms.pending).pipe(
+        Effect.raceFirst(
+          // gent/no-sleep: allow a fire the re-arm holds back never settles; the bound lets the re-arm go on
+          Effect.sleep("300 millis").pipe(Effect.provideService(Clock.Clock, wallClock)),
+        ),
+      )
+      yield* Deferred.succeed(proceed, true)
+      yield* Fiber.join(second)
+      yield* TestClock.adjust("1 second")
+      yield* settled(alarms.pending)
+      expect(yield* Ref.get(queued)).toHaveLength(1)
+      expect(yield* readFile(home)).not.toContain("once")
     }).pipe(
       Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),

@@ -22,6 +22,7 @@ import {
 } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
+  ApprovalService,
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
@@ -57,7 +58,7 @@ const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown)
 
 const harnessWithHome = (
   providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"],
-  options: { readonly config?: UserConfig } = {},
+  options: { readonly config?: UserConfig; readonly dialogs?: boolean } = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("delegate-")
@@ -71,6 +72,10 @@ const harnessWithHome = (
             Option.fromUndefinedOr(options.config),
             ConfigService.Test,
           ).pipe(Option.getOrUndefined),
+          // `dialogs` presents approvals to the client instead of auto-approving them.
+          approvalLayer: Option.getOrUndefined(
+            Option.liftPredicate(ApprovalService.Live, () => options.dialogs === true),
+          ),
         },
         Predicate.isNotUndefined,
       ),
@@ -456,16 +461,139 @@ describe("a child's completion", () => {
           const child = yield* childOf(harness)
           const childSnapshot = yield* harness.client.session.getSnapshot(child)
           expect(childSnapshot.runtime._tag).toBe("Idle")
-          // The child reads why, and who can answer instead.
+          // The child reads why, how to report it, and that no message grants it.
           expect(resultsOf("bash", childSnapshot.messages)[0]).toMatchObject({
             result: {
               status: "blocked",
-              stdout: expect.stringContaining('Ask your parent with session.send to "parent"'),
+              stdout: expect.stringMatching(
+                /the way this turn reports its result[\s\S]*No message can grant it/,
+              ),
             },
           })
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
+  )
+
+  it.live(
+    "a user who prompts a child directly gets a real approval; the child's task turn still declines",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const guarded = "rm -f /tmp/gent-child-direct-approval-probe"
+          const userPrompt = "USER: run the guarded command here"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const called = promptToolCallIds(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (texts.includes(userPrompt)) {
+                if (!called.includes("user-bash")) {
+                  return Effect.succeed(toolStep("bash", { command: guarded }, "user-bash"))
+                }
+                return Effect.succeed(reply("CHILD: ran it for the user"))
+              }
+              if (!called.includes("task-bash")) {
+                return Effect.succeed(toolStep("bash", { command: guarded }, "task-bash"))
+              }
+              return Effect.succeed(reply("CHILD: the command was blocked"))
+            }
+            if (!called.includes("start-1")) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, { dialogs: true })
+          yield* sendPrompt(harness, "delegate this task")
+          yield* afterCompletion(harness)
+          const child = yield* childOf(harness)
+          // The task turn, which `delegate.start` opened, declined at once.
+          const afterTask = yield* harness.client.session.getSnapshot(child)
+          expect(resultsOf("bash", afterTask.messages)[0]).toMatchObject({
+            result: { status: "blocked" },
+          })
+          // The user switches to the child and prompts it: a user watches that turn.
+          const presented = yield* harness.client.session.events(child).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* harness.client.message.send({ ...child, content: userPrompt })
+          const dialog = Array.from(yield* Fiber.join(presented))[0]?.event
+          if (dialog?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
+          expect(dialog.text).toContain(guarded)
+          yield* harness.client.interaction.respondInteraction({
+            ...child,
+            requestId: dialog.requestId,
+            approved: true,
+          })
+          const afterUser = yield* waitFor(
+            harness.client.session.getSnapshot(child),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("CHILD: ran it for the user"),
+            5_000,
+            "the child ran the approved command for the user",
+          )
+          expect(resultsOf("bash", afterUser.messages)[1]).toMatchObject({
+            result: { exitCode: 0 },
+          })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a top-level session's wake turn that runs a guarded command gets a real approval",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const guarded = "rm -f /tmp/gent-top-level-wake-approval-probe"
+          const note = "WAKE: run the guarded command"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const called = promptToolCallIds(options.prompt)
+            if (texts.some((text) => text.includes(note))) {
+              if (!called.includes("wake-bash")) {
+                return Effect.succeed(toolStep("bash", { command: guarded }, "wake-bash"))
+              }
+              return Effect.succeed(reply("ran it on the wake"))
+            }
+            if (!called.includes("set-wake")) {
+              return Effect.succeed(toolStep("wake", { afterSeconds: 0.2, note }, "set-wake"))
+            }
+            return Effect.succeed(reply("alarm set"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, { dialogs: true })
+          const top = { sessionId: harness.sessionId, branchId: harness.branchId }
+          const presented = yield* harness.client.session.events(top).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* sendPrompt(harness, "set an alarm")
+          // The wake opens a turn nobody sent; the session's user still sees it.
+          const dialog = Array.from(yield* Fiber.join(presented))[0]?.event
+          if (dialog?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
+          expect(dialog.text).toContain(guarded)
+          yield* harness.client.interaction.respondInteraction({
+            ...top,
+            requestId: dialog.requestId,
+            approved: true,
+          })
+          const after = yield* waitFor(
+            harness.client.session.getSnapshot(top),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("ran it on the wake"),
+            5_000,
+            "the wake turn ran the approved command",
+          )
+          expect(resultsOf("bash", after.messages)[0]).toMatchObject({ result: { exitCode: 0 } })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 })
 
@@ -547,12 +675,17 @@ describe("the completion headline", () => {
     ).split("\n")
     expect(source).toContain("Your final reply in this turn is your result")
     expect(source).toContain("do not also send it with session.send")
+    // A question in this turn is the reply too, so the parent is woken once.
+    expect(source).toContain("end it with your question as that reply")
+    expect(source).not.toContain("Use session.send in this turn")
     // A turn the parent's answer starts returns nothing either.
     expect(later).toContain(
-      'Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result with session.send to "parent"',
+      'Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result or question with session.send to "parent"',
     )
     expect(later).not.toContain("send each one")
-    expect(approvals).toContain("an approval is declined at once: ask the parent with session.send")
+    // A "go ahead" cannot grant an approval, so the child does not ask again.
+    expect(approvals).toContain("no message from your parent can grant it")
+    expect(approvals).toContain("the parent runs it or gives you another way")
     expect(blank).toBe("")
     expect(task).toBe("do it")
   })
@@ -792,7 +925,7 @@ describe("a start nobody waits for", () => {
             cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
-            admission: { agent: DELEGATE_AGENT_NAME, interactive: false, runSpec },
+            admission: { agent: DELEGATE_AGENT_NAME, runSpec },
           })
           // The row is written before the start is sent.
           yield* harness.writeRegistry(branchId, [
@@ -1609,56 +1742,64 @@ describe("a forked child", () => {
 })
 
 describe("session.send", () => {
-  it.live("a child's message to its parent lands on the branch that owns the child", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const report = "CHILD-REPORT: done"
-        const providerLayer = LanguageModelLayers.testStream((options) => {
-          const texts = promptTexts(options.prompt)
-          if (texts.some((text) => text.includes("report upward"))) {
-            if (!promptToolCallIds(options.prompt).includes("send-up")) {
-              return Effect.succeed(
-                toolStep("session.send", { to: "parent", message: report }, "send-up"),
-              )
+  // The child's task names its parent's id, so a model may address it by id.
+  const addresses: ReadonlyArray<readonly [string, (parent: string) => string]> = [
+    ["parent", () => "parent"],
+    ["the parent's id", (parent) => parent],
+  ]
+  for (const [addressed, address] of addresses)
+    it.live(`a child's message to ${addressed} lands on the branch that owns the child`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const report = "CHILD-REPORT: done"
+          const parentId = yield* Deferred.make<string>()
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts.some((text) => text.includes("report upward"))) {
+              if (!promptToolCallIds(options.prompt).includes("send-up")) {
+                return Deferred.await(parentId).pipe(
+                  Effect.map((to) => toolStep("session.send", { to, message: report }, "send-up")),
+                )
+              }
+              return Effect.succeed(reply("sent"))
             }
-            return Effect.succeed(reply("sent"))
-          }
-          return Effect.succeed(reply("ack"))
-        })
-        const harness = yield* harnessWithHome(providerLayer)
-        const { client, sessionId, branchId } = harness
-        const child = yield* client.session.create({
-          cwd: "/tmp",
-          parentSessionId: sessionId,
-          parentBranchId: branchId,
-        })
-        // The person moves the parent to another branch while the child works.
-        const other = yield* client.branch.create({ sessionId, name: "elsewhere" })
-        yield* client.branch.switch({
-          sessionId,
-          fromBranchId: branchId,
-          toBranchId: other.branchId,
-        })
-        yield* client.message.send({ ...child, content: "report upward" })
-        const owning = yield* waitFor(
-          client.session.getSnapshot({ sessionId, branchId }),
-          (current) =>
-            current.runtime._tag === "Idle" &&
-            sessionMessages(current.messages).some((message) =>
-              messageTexts([message]).some((text) => text.includes(report)),
-            ),
-          5_000,
-          "the report reached the branch that owns the child",
-        )
-        expect(sessionMessages(owning.messages)).toHaveLength(1)
-        const elsewhere = yield* client.session.getSnapshot({
-          sessionId,
-          branchId: other.branchId,
-        })
-        expect(sessionMessages(elsewhere.messages)).toHaveLength(0)
-      }).pipe(Effect.timeout("8 seconds")),
-    ),
-  )
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* Deferred.succeed(parentId, address(sessionId))
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          // The person moves the parent to another branch while the child works.
+          const other = yield* client.branch.create({ sessionId, name: "elsewhere" })
+          yield* client.branch.switch({
+            sessionId,
+            fromBranchId: branchId,
+            toBranchId: other.branchId,
+          })
+          yield* client.message.send({ ...child, content: "report upward" })
+          const owning = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              sessionMessages(current.messages).some((message) =>
+                messageTexts([message]).some((text) => text.includes(report)),
+              ),
+            5_000,
+            "the report reached the branch that owns the child",
+          )
+          expect(sessionMessages(owning.messages)).toHaveLength(1)
+          const elsewhere = yield* client.session.getSnapshot({
+            sessionId,
+            branchId: other.branchId,
+          })
+          expect(sessionMessages(elsewhere.messages)).toHaveLength(0)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    )
 
   it.live("a parent's message reaches a running child's next model step", () =>
     Effect.scoped(

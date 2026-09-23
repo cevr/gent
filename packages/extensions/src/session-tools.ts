@@ -320,9 +320,10 @@ const SendSessionTool = tool({
       return yield* new SendSessionError({ message: `No session ${targetId}` })
     }
     // A child reports to the branch that owns it, not to whichever branch
-    // the person has open on the parent now.
+    // the person has open on the parent now, whether it names "parent" or
+    // the parent's id.
     const branchId = Option.fromUndefinedOr(sender.parentBranchId).pipe(
-      Option.filter(() => params.to === "parent"),
+      Option.filter(() => targetId === sender.parentSessionId),
       Option.getOrElse(() => receiver.activeBranchId),
     )
     const relation = relationOf(sender, receiver)
@@ -363,7 +364,7 @@ const SESSIONS_SECTION = {
   priority: 14,
   content: `# Sessions
 
-- Sessions talk with session.send: correct a running child, answer a child's question, or ask your parent when you are blocked on a decision. A message wakes an idle session.`,
+- Sessions talk with session.send: correct a running child, answer a child's question, or ask your parent when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session.`,
 }
 
 export const SessionToolsExtension = defineExtension({

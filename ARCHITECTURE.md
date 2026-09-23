@@ -493,7 +493,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   keeps its parent's depth.
 - Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from. The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource); `^o` opens the fork as the shell's session, which is `switchSession`, because the fork already is one. The open fork per branch is process state; the fork itself is durable and listed with every other child session.
-- Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
+- Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them under the branch file's lock, the lock a fire takes to drop its entry, so a fire that ends during a re-arm is not armed and fired again; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
 - Foreground runs persist a child session/branch and can be revisited with `read_session`. Private runs leave no session behind; they return text/usage/tool-call metadata only.
 - `TurnCompleted` carries the turn's token totals, summed over its model
@@ -535,12 +535,25 @@ Tools that need human input call `ctx.Interaction.approve()`, which delegates to
 `ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
 replay also requires a trusted, unchanged saved tool binding.
 
-A session no user sees (`admission.interactive: false`, a delegate child)
-never presents an approval: `approve` declines at once, and its notes tell the
-child to ask its parent with `session.send`. The bash and monitor blocks carry
-those notes. The run's host context reads the
-flag from the session row with its cwd. A child therefore ends its turn, and
-its completion wakes the parent.
+Whether a turn can ask comes from its session and its origin, not from a
+stored flag (`turnCanAsk` in `domain/message.ts`): a turn can ask unless its
+session has a parent and no client opened it. A top-level session's user
+watches every turn there, so its wake, monitor and delegate-completion turns
+ask. In a child session, only a turn a client opened asks (a user who prompts
+or steers the child); a turn its parent's `delegate.start` or `session.send`,
+a wake or a monitor opened declines. The origin is trusted: the server stamps
+`metadata.fromClient` on every message a client sends (`message.send`, a
+session's initial prompt, a `steer.command` interjection) over whatever the
+client set, and removes a client-supplied `extensionId`; an extension's
+`Session.send` stamps its own id and removes `fromClient`. A child row stored
+before the stamp existed has no origin, so its turn declines on recovery. A
+declined turn's `approve` answers at once, and the tools that ask the user are
+withheld. The loop reads the fact from the turn's opening message and the
+stored session, so it survives a restart. The decline's notes say to report
+the command the way the turn reports its result (a child's task turn: its
+reply, which its completion carries; a later turn: `session.send`), and that
+no message can grant it: the reader runs the command, or a user prompts the
+session directly. The bash and monitor blocks carry those notes.
 
 An inner call of a dispatching tool (a cell) is the exception: its dispatcher
 cannot replay its source, so the call waits for its answer in place through the
@@ -574,8 +587,11 @@ the interaction service reads itself)
 client responds via respondInteraction RPC
   → storeResolution(branch, requestId, { approved, notes?, editedContent? })
     → first answer wins: storage keeps it with one conditional UPDATE and
-      memory keeps the same rule; the same answer again changes nothing, a
+      memory keeps the same rule; the same answer again stores nothing, a
       different one fails with InteractionDecisionConflictError
+    → the same answer again while it is stored and not yet taken wakes the
+      loop and publishes InteractionResolved again (a first attempt may have
+      failed after the store); once taken, it does nothing
     → a request the branch does not show and that keeps no answer (a wrong
       id, another branch's request, one closed without an answer) fails with
       InteractionRequestMismatchError
@@ -598,7 +614,7 @@ loop close (server stop) while an owned call waits: the turn is interrupted,
 Key properties:
 
 - **No blocked fiber for a native call.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts. Only an owned call (a cell's inner call) waits in place, because its dispatcher cannot replay its source.
-- **The first answer wins.** `storeResolution` is the one check on a reply. `InteractionStorage.decide` stores only when the row has no answer, and memory keeps the same rule. A retried reply with the same answer succeeds and publishes nothing, also after the call took the answer (the socket client retries transient errors); a different one fails with `InteractionDecisionConflictError`, so a late approval cannot flip a decline. A reply to a request that closed with no answer is refused. A reply reaches only the branch it names: `InteractionStorage.decide` writes and reads back only that session branch's row, so another branch's request, open or answered, is refused as a mismatch.
+- **The first answer wins.** `storeResolution` is the one check on a reply. `InteractionStorage.decide` stores only when the row has no answer, and memory keeps the same rule. A retried reply with the same answer succeeds. While the answer is stored and not yet taken, the retry wakes the loop and publishes `InteractionResolved` again, because the first attempt may have failed after the store and the wake is idempotent by request id. After the call took the answer, the retry does nothing (the socket client retries transient errors); a different one fails with `InteractionDecisionConflictError`, so a late approval cannot flip a decline. A reply to a request that closed with no answer is refused. A reply reaches only the branch it names: `InteractionStorage.decide` writes and reads back only that session branch's row, so another branch's request, open or answered, is refused as a mismatch.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listOpen()` in `InteractionStorage` provides the open requests for recovery: pending ones, and `taken` ones whose call still keeps the answer.
 - **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) waits for the slot while the open request's owner still runs, and is refused when that owner parked; after a crash it resumes by its request id. An answer matches its question as well as its owner; a changed question asks again, for a dispatching owner too. A call keeps the answers it took (row status `taken`) until it ends, so a call that asks twice takes both, also across a restart. Only a tool call the loop runs can ask natively; an ask with no call and no dispatching owner is refused.
 - **A request lives no longer than its turn.** A turn that ends without parking settles its open request and its kept answers, and publishes `InteractionResolved` with `dismissed: true` for a dialog nobody answered. A cancel sets the turn's interrupt latch even while the loop is parked, and an answer that arrived while a sibling call still ran resumes the turn as soon as it parks.
@@ -802,8 +818,8 @@ The catalog is instruction plus data, not a tool. When the surface narrows to
 `cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section
 with one signature line per selected host tool: its callable path, an input
 type and a result type rendered from the JSON Schema, and the first line of its
-prompt snippet or description (`- tools.delegate.cancel(input: { requestId:
-string }): Promise<object> // Cancel a running child ...`). Nested objects
+prompt snippet or description (`- tools.wake.cancel(input?: { wakeId?:
+string }): Promise<{ cancelled: string[] }> // Cancel a pending alarm ...`). Nested objects
 inline while short and otherwise render as `object`. The section is rebuilt
 each turn, so live composition changes reach the model as ordinary instruction
 changes. `cell.ts` builds the data half from the same selected map: name,
@@ -831,8 +847,9 @@ read that returns the tool as a function carrying its catalog entry (`id`,
 segment, which the prompt renders as `tools("read.then")(input)`; it records
 no operation receipt and grants no execution permission. A call with no
 argument sends `{}`; the signature marks `input?` only when the schema accepts
-`{}`. Enums past eight literals and input types past 300 characters render as
-their outer shape. The RPC lifetime test
+`{}`. Enums past eight literals, and input or result types past 300 characters,
+render as their outer shape; a test holds every shipped tool's result under
+that bound, so the cell code reads each result whole. The RPC lifetime test
 checks the namespace keys and a host schema through the compiled worker, and
 that a later cell without a catalog still describes the tool. An agent-denied
 tool and the outer `cell` are absent from the namespace.
@@ -1100,14 +1117,16 @@ Other notes:
   fails that loop, not one extension. Release runs in reverse build order when the owning
   scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
-- The agent is a session property. `Session.admission` (agent, run spec,
-  interactive; `sessions.admission_json`, migration 023) is fixed at creation,
+- The agent is a session property. `Session.admission` (agent, run spec;
+  `sessions.admission_json`, migration 023) is fixed at creation,
   and every turn of the session runs under it: the first, a wake, a queued
   follow-up, a steer that starts a turn, and a recovered turn after a restart.
   `sessionAgentDefinition` (`runtime/turn.ts`) resolves it once for the turn,
   the snapshot (`SessionSnapshot.agent`) and the auth check. No queue item,
   steering command, turn record or loop state carries an agent. A handoff
-  (`continueThread`) keeps its parent's admission unless it names one.
+  (`continueThread`) keeps its parent's admission unless it names one. A row
+  stored while admission carried `interactive` still decodes; the key is
+  ignored and dropped on the next write.
 - Model precedence: the session's `/model` setting, then the admission's run
   overrides, then config `agents[name]`, then the agent definition.
 - `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.

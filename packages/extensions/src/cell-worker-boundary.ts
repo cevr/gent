@@ -255,10 +255,21 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     error: write,
     debug: write,
   }
+  // A failed host operation already carries the host's message. Its stack
+  // lists the worker's own frames (`/$bunfs/root/gent-cell` in the compiled
+  // binary), which say nothing about the cell's code, so only the message
+  // goes back.
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
       phase,
-      message: display(cause).slice(0, maximumCellDisplayLength),
+      message: Option.liftPredicate(cause, Schema.is(CellEvaluationError))
+        .pipe(
+          Option.match({
+            onNone: () => display(cause),
+            onSome: (hostFailure) => hostFailure.message,
+          }),
+        )
+        .slice(0, maximumCellDisplayLength),
       output: rendered(),
     })
   // The catalog is data the host already validated. The namespace reads it on every access,

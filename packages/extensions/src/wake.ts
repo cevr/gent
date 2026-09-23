@@ -425,50 +425,30 @@ const unclearedRisk = (
 }
 
 /**
- * Replaces an uncleared risky monitor with a `blocked` notice, so the command
- * never runs and the model reads why on its next turn.
+ * The notice that replaces an uncleared risky monitor, so the command never
+ * runs and the model reads why on its next turn.
  */
-const blockEntry = Effect.fn("WakeTool.block")(function* (
+const blockedNotice = (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
   risk: string,
-) {
-  const ctx = yield* ExtensionContext
-  yield* Effect.logWarning("wake.monitor.blocked").pipe(
-    Effect.annotateLogs({ wakeId: entry.wakeId, command: entry.command, risk }),
-  )
-  const notice = WakeEntry.cases.notice.make({
+  firedAt: number,
+) =>
+  WakeEntry.cases.notice.make({
     wakeId: entry.wakeId,
     outcome: "blocked",
-    firedAt: yield* Clock.currentTimeMillis,
+    firedAt,
     content: `Monitor ${entry.wakeId} was not re-armed: \`${entry.command}\` is ${risk}, and it was never approved. Set the monitor again to ask for approval. ${entry.note}`,
     note: entry.note,
   })
-  yield* modifyWakeEntries((current) => [
-    ...current.filter(
-      (candidate) => candidate._tag === "notice" || candidate.wakeId !== entry.wakeId,
-    ),
-    notice,
-  ])
-  yield* ctx.State.changed()
-})
 
 /**
  * Starts the timer for one stored entry. A settled fire (or a fire that
  * failed) drops the entry from the file; an interrupt does not, so a branch
  * close or a shutdown leaves the row for the next re-arm, and a cancel cleans
  * the file itself. A repeating alarm never settles; only a cancel ends it. An
- * id already running is left alone. A monitor whose risky command was never
- * cleared becomes a `blocked` notice instead of running.
+ * id already running is left alone.
  */
-const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
-  if (entry._tag === "notice") return false
-  if (entry._tag === "monitor") {
-    const risk = unclearedRisk(entry)
-    if (Option.isSome(risk)) {
-      yield* blockEntry(entry, risk.value)
-      return false
-    }
-  }
+const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
   const ctx = yield* ExtensionContext
   // The timer outlives this call, so it keeps the services it runs against.
   const platform = yield* Effect.context<
@@ -497,14 +477,56 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
   )
 })
 
-/** Re-arms every entry the file still holds; past-due alarms fire at once. */
+/**
+ * Re-arms every entry the file still holds; past-due alarms fire at once. A
+ * monitor whose risky command was never cleared becomes a `blocked` notice
+ * instead of running.
+ *
+ * The read and the arming run under the branch file's lock. A fire drops its
+ * entry under the same lock before its timer ends, so an entry read here
+ * still has its timer, or has none and is not dropped by a fire. A fire that
+ * ended between an unlocked read and the arm was armed again and fired twice.
+ */
 export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
-  const pending = yield* readWakeEntries()
-  yield* Effect.logDebug("wake.rearm").pipe(Effect.annotateLogs({ pending: pending.length }))
-  let armed = 0
-  for (const entry of pending) {
-    if (yield* armEntry(entry)) armed += 1
-  }
+  const ctx = yield* ExtensionContext
+  const now = yield* Clock.currentTimeMillis
+  const { armed, blocked } = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
+    Effect.gen(function* () {
+      yield* Effect.logDebug("wake.rearm").pipe(Effect.annotateLogs({ pending: current.length }))
+      let armed = 0
+      const notices: Array<WakeEntry> = []
+      for (const entry of current) {
+        if (entry._tag === "notice") continue
+        if (entry._tag === "monitor") {
+          const risk = unclearedRisk(entry)
+          if (Option.isSome(risk)) {
+            yield* Effect.logWarning("wake.monitor.blocked").pipe(
+              Effect.annotateLogs({
+                wakeId: entry.wakeId,
+                command: entry.command,
+                risk: risk.value,
+              }),
+            )
+            notices.push(blockedNotice(entry, risk.value, now))
+            continue
+          }
+        }
+        if (yield* armEntry(entry)) armed += 1
+      }
+      if (notices.length === 0) return { next: current, result: { armed, blocked: 0 } }
+      const blockedIds = new Set(notices.map((notice) => notice.wakeId))
+      return {
+        next: [
+          ...current.filter(
+            (candidate) => candidate._tag === "notice" || !blockedIds.has(candidate.wakeId),
+          ),
+          ...notices,
+        ],
+        result: { armed, blocked: notices.length },
+      }
+    }),
+  )
+  if (blocked > 0) yield* ctx.State.changed()
   return armed
 })
 
@@ -710,9 +732,9 @@ export const MonitorTool = tool({
   ],
   params: MonitorParams,
   output: MonitorResult,
-  summary: (_input, output) =>
+  summary: (input, output) =>
     summaryWithNote(
-      [`${output.mode} · every ${output.everySeconds}s until ${output.deadline}`],
+      [output.mode, input.command.trim(), `every ${output.everySeconds}s until ${output.deadline}`],
       output.note,
     ),
   execute: Effect.fn("MonitorTool.execute")(function* (params: typeof MonitorParams.Type) {
@@ -745,7 +767,7 @@ export const MonitorTool = tool({
         metadata: { type: "bash-guardrail", level: risk.level },
       })
       if (!decision.approved) {
-        // A decline in a session no user sees says who can answer instead.
+        // A decline in a turn no user started says how to report it instead.
         const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
           onNone: () => "",
           onSome: (text) => `. ${text}`,

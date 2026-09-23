@@ -3503,7 +3503,7 @@ describe("turn record", () => {
             yield* submitAgentLoop(
               agentLoop,
               makeMessage(sessionId, branchId, "child task before restart"),
-              { agent: helperAgent.name, runSpec, interactive: false },
+              { agent: helperAgent.name, runSpec },
             )
             yield* Deferred.await(firstCalled)
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -5248,7 +5248,7 @@ describe("queue drain regression", () => {
               createdAt: dateFromMillis(1_767_225_600_000),
             })
             const fiber = yield* Effect.forkChild(
-              submitAgentLoop(agentLoop, turn, { interactive: true }).pipe(Effect.ignore),
+              submitAgentLoop(agentLoop, turn).pipe(Effect.ignore),
             )
             yield* controls.waitForCall(0)
             yield* steerAgentLoop({
@@ -5325,14 +5325,10 @@ describe("queue drain regression", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const agentLoop = yield* makeAgentLoopService
-            yield* submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-0", "first"), {
-              interactive: true,
-            })
+            yield* submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-0", "first"))
 
             const queuedExit = yield* Effect.exit(
-              submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-1", "second"), {
-                interactive: true,
-              }),
+              submitAgentLoop(agentLoop, makeMessage("msg-persist-failure-1", "second")),
             )
 
             expect(queuedExit._tag).toBe("Failure")

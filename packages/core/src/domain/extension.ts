@@ -331,6 +331,7 @@ export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
 export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
+  /** False when no user can answer in this turn: a child turn no client opened (`turnCanAsk`). */
   readonly interactive?: boolean
   /**
    * Tools resolved for this turn, for a hook that renders them into the
@@ -683,6 +684,11 @@ export const mapExtensionServiceError = <A, E, R>(
  *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op.
  *
  * `queue` and `steer` target the current branch when no target is named.
+ *
+ * Every mode stamps the sending extension's id on the message's `metadata`,
+ * over any the caller set, and removes the client origin only the server
+ * stamps: a turn it opens in a child session has no user to ask
+ * (`turnCanAsk`).
  */
 export const SessionSendParams = Schema.Union([
   Schema.Struct({
@@ -692,6 +698,7 @@ export const SessionSendParams = Schema.Union([
     content: Schema.String,
     commandId: Schema.optional(ActorCommandId),
     completion: Schema.optional(Schema.Literal("admission")),
+    metadata: Schema.optional(MessageMetadata),
   }),
   Schema.Struct({
     delivery: Schema.Literal("queue"),
@@ -743,7 +750,7 @@ export interface ExtensionSessionService {
     readonly parentSessionId?: SessionId
     readonly parentBranchId?: BranchId
     readonly historyBranchId?: BranchId
-    /** What every turn of the new session runs as: agent, run overrides, interactive. */
+    /** What every turn of the new session runs as: agent and run overrides. */
     readonly admission?: SessionAdmission
     /** The session's own model and reasoning; they win over the agent's, as a `/model` choice does. */
     readonly modelId?: ModelId
@@ -890,16 +897,27 @@ const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
 ): Context.Context<ExtensionContext> => {
   const extensionIdOption = Option.fromUndefinedOr(ctx.extensionId)
+  const extensionId = Option.getOrElse(extensionIdOption, () => ExtensionId.make("unknown"))
+  // Every message a leaf sends names it as the author, whatever the caller
+  // set, and never carries the client origin only the server stamps: a turn
+  // it opens in a child session knows no user started it.
+  const send: ExtensionSessionService["send"] = (params) => {
+    const { fromClient: _forged, ...metadata } = Option.getOrElse(
+      Option.fromUndefinedOr(params.metadata),
+      (): MessageMetadata => ({}),
+    )
+    return ctx.Session.send({ ...params, metadata: { ...metadata, extensionId } })
+  }
   return Context.empty().pipe(
     Context.add(ExtensionContext, {
-      extensionId: Option.getOrElse(extensionIdOption, () => ExtensionId.make("unknown")),
+      extensionId,
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
       agentName: ctx.agentName,
       toolCallId: ctx.toolCallId,
       cwd: ctx.cwd,
       home: ctx.home,
-      Session: ctx.Session,
+      Session: { ...ctx.Session, send },
       Interaction: ctx.Interaction,
       FileLock: ctx.FileLock,
       State: ctx.State(extensionIdOption),

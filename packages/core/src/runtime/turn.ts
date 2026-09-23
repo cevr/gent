@@ -33,6 +33,7 @@ import {
   type SessionAdmission,
   stringifyOutput,
   summarizeOutput,
+  openedByClient,
 } from "../domain/message.js"
 import {
   type ActorCommandId,
@@ -259,6 +260,8 @@ export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
+  /** Whether a user can answer in this turn (`turnCanAsk`). */
+  readonly turnInteractive: boolean
   readonly turnCapabilityContext?: Context.Context<never>
   /**
    * Identity of the process that built the profile. Absent for direct actor
@@ -1099,6 +1102,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   branchId: BranchId
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
+  /** False withholds the tools that ask the user: an extension opened the turn. */
+  interactive: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
@@ -1139,9 +1144,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     return undefined
   }
   const effectiveAgent = definition.value
-  const interactive = Option.flatMap(admission, (value) =>
-    Option.fromUndefinedOr(value.interactive),
-  ).pipe(Option.getOrUndefined)
+  const interactive = params.interactive
 
   // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
   // then `UserConfig.driverOverrides[agent.name]`, else default.
@@ -1671,7 +1674,9 @@ const endStep = (
 type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  readonly resolveTurnProfile: (run: {
+    readonly openedByClient: boolean
+  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
@@ -2331,6 +2336,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         sessionId: scope.sessionId,
         baseSections: turnProfile.turnBaseSections,
+        interactive: turnProfile.turnInteractive,
       })
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(
@@ -2917,7 +2923,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         .pipe(asAgentLoopError("Cannot read targeted cancellation"))
       if (cancelled) yield* scope.turnInterruption.interrupt
 
-      const turnProfile = yield* scope.resolveTurnProfile
+      // Whether a user can answer comes from what opened the turn and
+      // whether its session has a parent (`turnCanAsk`).
+      const turnProfile = yield* scope.resolveTurnProfile({
+        openedByClient: openedByClient(state.message),
+      })
 
       const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(

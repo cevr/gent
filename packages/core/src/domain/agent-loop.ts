@@ -365,6 +365,8 @@ export const SendUserMessagePayload = Schema.Struct({
   content: Schema.String,
   /** Client-generated correlation id for end-to-end observability. */
   requestId: Schema.optional(RequestId),
+  /** The envelope on the stored message; an extension's send names its author here. */
+  metadata: Schema.optional(MessageMetadata),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
@@ -604,6 +606,7 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
     role: "user",
     parts: [Prompt.textPart({ text: input.content })],
     createdAt: yield* DateTime.nowAsDate,
+    ...(Predicate.isNotUndefined(input.metadata) && { metadata: input.metadata }),
   })
   const payload = {
     workspaceId: yield* CurrentWorkspaceId,

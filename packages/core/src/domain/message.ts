@@ -223,8 +223,19 @@ const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
 export const MessageMetadata = Schema.Struct({
   /** Extension-defined type tag for custom message rendering */
   customType: Schema.optional(Schema.String),
-  /** Which extension authored this message */
+  /**
+   * The extension that authored this message. `Session.send` sets it on
+   * every message an extension admits (a child's task, a parent's message, a
+   * wake, a monitor). A client's message never carries it: the server removes
+   * it at the RPC boundary.
+   */
   extensionId: Schema.optional(Schema.String),
+  /**
+   * Set by the server on every message a client sends (`clientMetadata`),
+   * over any value the client gave; an extension's `Session.send` removes it.
+   * A turn such a message opens has a user watching it (`turnCanAsk`).
+   */
+  fromClient: Schema.optional(Schema.Boolean),
   /** If true, message is excluded from LLM context but visible in transcript */
   hidden: Schema.optional(Schema.Boolean),
   /**
@@ -238,6 +249,36 @@ export const MessageMetadata = Schema.Struct({
   details: Schema.optional(Schema.Unknown),
 })
 export type MessageMetadata = typeof MessageMetadata.Type
+
+/**
+ * The envelope of a message a client sends: the server's client origin over
+ * whatever the client set, and no extension author. Only the server calls
+ * this, at the RPC boundary, so no client can forge either field.
+ */
+export const clientMetadata = (metadata?: MessageMetadata): MessageMetadata => {
+  const { extensionId: _author, ...rest } = Option.getOrElse(
+    Option.fromUndefinedOr(metadata),
+    (): MessageMetadata => ({}),
+  )
+  return { ...rest, fromClient: true }
+}
+
+/**
+ * Whether a turn can ask its user. A top-level session always has its user
+ * watching, so its wake, monitor and child-completion turns ask too. A child
+ * session's turn asks only when a client opened it: no one watches a turn its
+ * parent, a wake or a monitor opened, so an approval there declines at once.
+ * A child row stored before the client origin existed has no stamp, so it
+ * declines. The answer comes from the turn's opening message and the stored
+ * session, so it holds for the turn's whole life, a restart included.
+ */
+export const turnCanAsk = (turn: {
+  readonly sessionHasParent: boolean
+  readonly openedByClient: boolean
+}): boolean => !turn.sessionHasParent || turn.openedByClient
+
+/** Whether a client sent the message that opens a turn (`clientMetadata`). */
+export const openedByClient = (opening: Message): boolean => opening.metadata?.fromClient === true
 
 // Steer Command — RPC payload that targets a session/branch loop.
 // Lives beside the message vocabulary: an Interject carries the envelope of
@@ -434,18 +475,20 @@ export const projectMessage = (
 // Session
 
 /**
- * What every turn of a session runs as: the agent, the run's overrides, and
- * whether anyone can answer a question. It is fixed when the session is
- * created, so a later turn -- a wake, a completed background job, a parent's
- * message -- runs as the session's agent, never as the default one. Every
- * field is optional: a plain session and a row stored before this existed run
- * as the default agent, interactively.
+ * What every turn of a session runs as: the agent and the run's overrides.
+ * It is fixed when the session is created, so a later turn -- a wake, a
+ * completed background job, a parent's message -- runs as the session's
+ * agent, never as the default one. Every field is optional: a plain session
+ * and a row stored before this existed run as the default agent.
+ *
+ * Whether a turn can ask its user is not stored here: it comes from the
+ * turn's origin (`turnCanAsk`). A row stored while this carried
+ * `interactive` still decodes: the struct ignores keys it does not declare,
+ * and the next write drops the key.
  */
 export const SessionAdmission = Schema.Struct({
   agent: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
-  /** `false` withholds the tools that ask the user. Only `false` is read. */
-  interactive: Schema.optional(Schema.Boolean),
 })
 export type SessionAdmission = typeof SessionAdmission.Type
 
@@ -1255,15 +1298,17 @@ const planOutput = (output: string | undefined): OutputPlan => {
     )
     .map(([key, field]) => ({ key, field, cost: fieldCost(key, field, encodedTwice) }))
     .toSorted((a, b) => a.cost - b.cost)
-  // Cheapest first: when every field's need fits, each one's even share of
-  // what is left covers it, so the whole output stays whole.
+  // Cheapest value first: a field's share is its own reserve plus an even
+  // part of the spare. When every field's need fits, the spare left at field
+  // i is at least the sum of the remaining values, and those are sorted, so
+  // each even part covers its own value and the whole output stays whole.
   const cuttable = Object.entries(value)
     .flatMap(([key, field]): ReadonlyArray<CuttableField> => {
       if (Predicate.isString(field)) return [textField(key, field)]
       if (!Array.isArray(field)) return []
       return Option.toArray(Option.map(scalarItems(field), (items) => itemsField(key, items)))
     })
-    .toSorted((a, b) => a.need - b.need)
+    .toSorted((a, b) => a.need - a.emptyCost - (b.need - b.emptyCost))
   const sum = (costs: ReadonlyArray<number>) => costs.reduce((total, cost) => total + cost, 0)
   return {
     room:
@@ -1282,13 +1327,12 @@ const planOutput = (output: string | undefined): OutputPlan => {
       }
       const cuts: Array<OutputCut> = []
       for (const [index, entry] of cuttable.entries()) {
-        // This field's room returns to what is left. Its share: its key, its
-        // quotes or brackets, its comma, and room for the record of its cut.
+        // The spare is what is left beyond every field's reserve. This
+        // field's share: its reserve (its key, its quotes or brackets, its
+        // comma, and room for the record of its cut) and an even part of it.
+        const share = entry.emptyCost + Math.floor(left / (cuttable.length - index))
         left += entry.emptyCost
-        const fitted = Option.getOrElse(
-          entry.fit(Math.floor(left / (cuttable.length - index))),
-          () => entry.emptied,
-        )
+        const fitted = Option.getOrElse(entry.fit(share), () => entry.emptied)
         kept[entry.key] = fitted.value
         left -= fieldCost(entry.key, fitted.value, encodedTwice)
         if (Option.isSome(fitted.cut)) {

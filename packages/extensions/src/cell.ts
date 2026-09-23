@@ -1755,11 +1755,17 @@ const operationEffectsNote = (operations: ReadonlyArray<CellToolOperation>): str
     if (n === 1) return "1 operation"
     return `${n} operations`
   }
+  const whose = (n: number) => {
+    if (n === 1) return "its"
+    return "their"
+  }
   const unrecorded = operations.filter((operation) => mayHaveActed(operation.state)).length
   const waiting = operations.filter((operation) => operation.state._tag === "Waiting").length
   const notes: Array<string> = []
   if (unrecorded > 0)
-    notes.push(`${count(unrecorded)} ran with no recorded result; its effects may have occurred.`)
+    notes.push(
+      `${count(unrecorded)} ran with no recorded result; ${whose(unrecorded)} effects may have occurred.`,
+    )
   if (waiting > 0) notes.push(`${count(waiting)} stopped at an approval that was not answered.`)
   if (notes.length === 0) return "Every host operation it made has its result in operations."
   return notes.join(" ")
@@ -2235,14 +2241,21 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           const admission = yield* storage.claim(address)
           if (admission._tag === "Completed") return admission.result
           if (admission._tag === "Incomplete") {
+            // What its operations did is on their records; a failed read says
+            // only that effects may have occurred.
+            const effects = yield* operations.listForToolCall(address).pipe(
+              Effect.map((listed) => operationEffectsNote(listed.map((entry) => entry.operation))),
+              Effect.orElseSucceed(() => "Its effects may have occurred."),
+            )
             return yield* new CellExecutionIncomplete({
               ...address,
-              message:
-                "The cell has no recorded result. Its effects may have occurred. Its source was not replayed.",
+              message: `The cell has no recorded result. ${effects} Its source was not replayed.`,
             })
           }
           const signal = yield* Deferred.make<never, CellKernelError>()
           active = Option.some(signal)
+          // Set once the cell may act. A run stopped before then never ran.
+          let started = false
           const evaluate = Effect.gen(function* () {
             if (
               cancellationEpoch !== runEpoch ||
@@ -2253,6 +2266,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                 message: "Cell did not start because execution was cancelled.",
                 output: "",
               })
+            started = true
             return yield* getKernel()
           })
           const result = yield* evaluate.pipe(
@@ -2284,12 +2298,14 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               onFailure: (error): Effect.Effect<Prompt.ToolResultPart, StorageError> => {
                 if (error._tag === "StorageError") return Effect.fail(error)
                 if (error._tag !== "CellEvaluationError") recoveryPending = true
-                // A cancelled cell says what its operations did, from their records.
+                // A cancelled cell says what its operations did, from their
+                // records. A failed read keeps the plain cancel: the cancel
+                // still records its result.
                 let described: Effect.Effect<typeof error, StorageError> = Effect.succeed(error)
                 if (error._tag === "CellKernelError" && error.reason === "cancelled")
                   described = operations.listForToolCall(address).pipe(
                     Effect.map(
-                      (listed) =>
+                      (listed): typeof error =>
                         new CellKernelError({
                           reason: error.reason,
                           message: `${error.message} ${operationEffectsNote(listed.map((entry) => entry.operation))}`,
@@ -2297,6 +2313,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                           stateLost: error.stateLost,
                         }),
                     ),
+                    Effect.orElseSucceed(() => error),
                   )
                 return described.pipe(
                   Effect.flatMap((failure) =>
@@ -2320,10 +2337,14 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               },
             }),
           )
-          // The loop closed under this run. Leave its record as a crash would,
-          // so recovery after a restart resumes a waiting operation.
-          if (stopping) return yield* Effect.interrupt
+          // The loop closed under a run that started. Leave its record as a
+          // crash would, so recovery after a restart resumes a waiting
+          // operation. A run stopped before it started did nothing: its
+          // "did not start" result is recorded, so recovery does not report
+          // a lost worker.
+          if (stopping && started) return yield* Effect.interrupt
           yield* storage.complete(address, result)
+          if (stopping) return yield* Effect.interrupt
           return result
         })
         const reset = Effect.fn("CellExecution.reset")(function* () {
@@ -2772,10 +2793,12 @@ const CELL_WORK = `# Working in the cell
 
 /** Nested objects longer than this render as `object`; `tools(id).parameters` has the rest. */
 const INLINE_OBJECT_LIMIT = 80
-/** An input type longer than this renders as its outer shape, so no schema can flood the prompt. */
-const INPUT_TYPE_LIMIT = 300
-/** A result type longer than this renders as its outer shape. */
-const RESULT_TYPE_LIMIT = 100
+/**
+ * An input or result type longer than this renders as its outer shape, so no
+ * schema can flood the prompt. One bound for both: the result is the half of
+ * the contract the cell code reads, so a shipped tool's result renders whole.
+ */
+const SIGNATURE_TYPE_LIMIT = 300
 /** An enum with more literals than this renders as the literals' types. */
 const LITERAL_LIMIT = 8
 /** The description after a signature is cut here, as opencode codemode cuts it. */
@@ -2940,10 +2963,10 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
   if (Schema.isSchema(output)) {
     result = yield* jsonSchemaOf(() => AiTool.getJsonSchemaFromSchema(output))
   }
-  const inputType = boundedType(renderSchemaType(parameters, 0), INPUT_TYPE_LIMIT)
+  const inputType = boundedType(renderSchemaType(parameters, 0), SIGNATURE_TYPE_LIMIT)
   let input = `input: ${inputType}`
   if (acceptsEmptyInput(parameters)) input = `input?: ${inputType}`
-  const resultType = boundedType(renderSchemaType(result, 0), RESULT_TYPE_LIMIT)
+  const resultType = boundedType(renderSchemaType(result, 0), SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
   if (summary.length === 0) return `- ${signature}`

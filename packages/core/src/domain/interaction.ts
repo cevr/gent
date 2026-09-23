@@ -198,11 +198,6 @@ export interface InteractionService {
     | InteractionOwnerMissingError
     | InteractionSlotBusyError
   >
-  readonly pendingRequestId: (ctx: {
-    sessionId: SessionId
-    branchId: BranchId
-    // oxlint-disable-next-line effect/noNullish -- The public interaction lookup preserves undefined for no pending request.
-  }) => Effect.Effect<InteractionRequestId | undefined>
   /**
    * Store the answer to a request the branch shows. The first answer wins,
    * in storage and in memory; true when this reply stored it. The same answer
@@ -845,15 +840,6 @@ export const makeInteractionService = (
               branchId: branchRef.branchId,
             })
           }
-          // Another branch's request is never answered from here, not even
-          // in storage.
-          const before = yield* Ref.get(state)
-          const elsewhere = Array.from(before.branches, ([other, branch]) => ({ other, branch }))
-            .filter(({ other }) => other !== key)
-            .some(({ branch }) =>
-              Option.exists(branch.open, (open) => open.requestId === requestId),
-            )
-          if (elsewhere) return yield* mismatch(before)
           const durable = yield* config.storage.decide(branchRef, requestId, decisionJson)
           // The first answer wins. Storage decides for a request with a row;
           // memory keeps the same rule for one without. A request that is not
@@ -866,7 +852,12 @@ export const makeInteractionService = (
               readonly [Option.Option<ApprovalDecision>, boolean, InteractionState],
               InteractionState,
             ] => {
-              const kept = Option.fromUndefinedOr(current.decisions.get(requestId))
+              // A kept answer counts only for the branch that asks it: one it
+              // shows, or one whose row storage just read back for it.
+              // Another branch's request is never answered from here.
+              const kept = Option.fromUndefinedOr(current.decisions.get(requestId)).pipe(
+                Option.filter(() => shownHere(current) || Option.isSome(durable)),
+              )
               if (Option.isSome(kept)) return [[kept, false, current], current]
               if (!shownHere(current) || Option.exists(durable, (row) => !row.first))
                 return [[Option.none(), false, current], current]
@@ -960,18 +951,6 @@ export const makeInteractionService = (
           if (open.value.open.admitted && !open.value.answered)
             yield* config.onDismiss(open.value.open.requestId, branchRef)
         }),
-
-      pendingRequestId: (ctx) =>
-        Ref.get(state).pipe(
-          Effect.map((current) =>
-            Option.getOrUndefined(
-              branchOf(current, contextKey(ctx)).open.pipe(
-                Option.filter((open) => open.admitted),
-                Option.map((open) => open.requestId),
-              ),
-            ),
-          ),
-        ),
 
       rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
         record: InteractionRequestRecord,

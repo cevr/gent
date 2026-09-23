@@ -158,7 +158,7 @@ const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
   })
-  return provider.forRun({ sessionId, branchId })
+  return provider.forRun({ sessionId, branchId, interactive: true })
 }).pipe(Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" })))
 
 describe("ambient extension host context", () => {
@@ -212,7 +212,6 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provideService(ApprovalService, {
         present: () => Effect.succeed({ approved: true }),
-        pendingRequestId: () => Effect.die("not used"),
         storeResolution: () => Effect.die("not used"),
         rehydrate: () => Effect.die("not used"),
         answered: () => Effect.die("not used"),
@@ -857,6 +856,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
+          openedByClient: true,
           profileCache,
           hostProvider,
           defaults: { baseSections: [] },
@@ -887,6 +887,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
+          openedByClient: true,
           hostProvider,
           defaults,
         })
@@ -922,6 +923,7 @@ describe("resolveTurnProfile", () => {
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
+            openedByClient: true,
             hostProvider,
             defaults: { baseSections: [] },
           }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
@@ -990,6 +992,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
+          openedByClient: true,
           profileCache: fakeProfileCache,
           hostProvider,
           defaults: { baseSections: [] },
@@ -2345,7 +2348,7 @@ describe("host session facet", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
       })
-      const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID })
+      const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID, interactive: true })
       const listed = yield* ctx.Session.listBranches
       expect(listed).toHaveLength(1)
       expect(listed[0]!.id).toBe(BRANCH_ID)
@@ -3942,7 +3945,6 @@ describe("addressed session verbs via RPC", () => {
           parentBranchId: ctx.branchId,
           historyBranchId: ctx.branchId,
           requestId: input.requestId,
-          admission: { interactive: false },
         })
         const detailBefore = yield* ctx.Session.getDetail(child.sessionId)
         const historyMessages =

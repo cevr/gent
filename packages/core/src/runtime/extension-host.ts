@@ -59,7 +59,6 @@ import {
 import {
   type BranchId,
   ExtensionId,
-  type InteractionRequestId,
   MessageId,
   ProcessGenerationId,
   RequestId,
@@ -129,7 +128,13 @@ import {
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
-import { type Branch, Message, type MessageMetadata, type Session } from "../domain/message.js"
+import {
+  type Branch,
+  Message,
+  type MessageMetadata,
+  type Session,
+  turnCanAsk,
+} from "../domain/message.js"
 import {
   AgentLoop as AgentLoopActor,
   entityIdOf,
@@ -2154,8 +2159,6 @@ export class ApprovalService extends Context.Service<ApprovalService, Interactio
           }))
           return Effect.succeed(decision)
         },
-        pendingRequestId: () =>
-          Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
         storeResolution: () => Effect.succeed(false),
         rehydrate: () => Effect.succeed(false),
         answered: () => Effect.succeed(false),
@@ -2212,10 +2215,10 @@ interface MakeExtensionHostContextRunInfo {
   /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
   readonly sessionCwd?: string
   /**
-   * False: no user sees this session's turns (a delegate child), so no one
-   * can answer an approval. Absent: an interactive session.
+   * False: no user watches this turn (`turnCanAsk`), so no one can answer
+   * an approval in it.
    */
-  readonly interactive?: boolean
+  readonly interactive: boolean
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2239,11 +2242,15 @@ const facet = <I, S>(tag: Context.Key<I, S>, name: string): Effect.Effect<Facet<
 
 const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
 
-/** The answer to an approval asked in a session no user sees. */
+/**
+ * The answer to an approval asked in a turn no user started. It says how the
+ * request reaches someone, and that no message can grant it, so a child
+ * told "go ahead" does not ask again.
+ */
 const unanswerableApproval: ApprovalDecision = {
   approved: false,
   notes:
-    'Declined: no user sees this session, so no one can approve it here. Ask your parent with session.send to "parent", then end your turn.',
+    "Declined: no user started this turn, so no one can approve it here, and asking again in this turn is declined again. Report the command and why you need it the way this turn reports its result, then end your turn. No message can grant it: whoever reads your report runs the command, or a user prompts this session directly and approves it there.",
 }
 
 /** A pending interaction is the caller's to handle; anything else is a service failure. */
@@ -2435,6 +2442,7 @@ export const makeExtensionHostContextProvider = (
                         content: turn.content,
                         commandId: turn.commandId,
                         completion: turn.completion,
+                        metadata: turn.metadata,
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
@@ -2559,7 +2567,7 @@ export const makeExtensionHostContextProvider = (
 
       Interaction: {
         // An approval no one is shown would park the turn for good, so a
-        // session without a user declines at once and says who can answer.
+        // turn no user started declines at once and says who can answer.
         approve: (params) => {
           if (runInfo.interactive === false) return Effect.succeed(unanswerableApproval)
           return mapInteraction(
@@ -2654,6 +2662,8 @@ export const sessionWorkingDirectory = (
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  /** Whether a client opened this run (`openedByClient` of its opening message). */
+  readonly openedByClient: boolean
   readonly profileCache?: SessionProfileCacheService
   readonly hostProvider: ExtensionHostContextProvider
   readonly defaults: TurnProfileDefaults
@@ -2667,13 +2677,17 @@ export const resolveTurnProfile = (params: {
     const hostProvider = params.hostProvider
     const session = yield* storedSession(params.sessionId)
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
+    const interactive = turnCanAsk({
+      sessionHasParent: Option.exists(session, (value) =>
+        Predicate.isNotUndefined(value.parentSessionId),
+      ),
+      openedByClient: params.openedByClient,
+    })
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
-      interactive: Option.getOrUndefined(
-        Option.flatMap(session, (value) => Option.fromUndefinedOr(value.admission?.interactive)),
-      ),
+      interactive,
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
@@ -2687,12 +2701,14 @@ export const resolveTurnProfile = (params: {
         turnExtensionRegistry: launchRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
+        turnInteractive: interactive,
       }
     }
     return {
       turnExtensionRegistry: profile.value.registryService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
+      turnInteractive: interactive,
       turnCapabilityContext: profile.value.layerContext,
       turnGenerationId: profile.value.generationId,
     }

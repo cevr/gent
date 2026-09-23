@@ -25,7 +25,7 @@ import {
   toolCallReceipts,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
-import { Option, Schema } from "effect"
+import { Option, Predicate, Schema } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 
 describe("steer command", () => {
@@ -1242,6 +1242,28 @@ describe("message part projection", () => {
       )
       expect(search?.cuts, `grep, filler ${filler}`).toBeUndefined()
       expect(encodeValue(search).length).toBeLessThanOrEqual(8_192)
+    }
+  })
+
+  test("an input that leaves only the output's room keeps every small field whole", () => {
+    const outputs = [
+      { a: "x", b: "yy" },
+      { a: "x", b: "yy", c: "zzz" },
+      { path: "/a/b.ts", diff: "d".repeat(50), note: "n" },
+    ]
+    const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
+    // Input sizes across the edge where the input takes all the room the whole
+    // output leaves; a field's share must still cover its own reserve.
+    for (const value of outputs) {
+      const output = encodeValue(value)
+      for (let filler = 7_400; filler <= 7_780; filler += 20) {
+        const operation = projectOperation("edit", { s: "x".repeat(filler) }, output)
+        expect(encodeValue(operation).length).toBeLessThanOrEqual(8_192)
+        if (Predicate.isUndefined(operation?.input)) continue
+        const label = `${Object.keys(value).join(",")}, filler ${filler}`
+        expect(decodeJson(operation.output), label).toEqual(value)
+        expect(operation.cuts, label).toBeUndefined()
+      }
     }
   })
 
