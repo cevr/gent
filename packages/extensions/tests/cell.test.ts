@@ -860,15 +860,15 @@ describe("recorded cell execution", () => {
   )
 
   it.scopedLive(
-    "counts failed lazy startup against the same worker replacement limit",
+    "a failed lazy startup counts toward the failed-launch limit",
     () =>
       Effect.gen(function* () {
         const worker = yield* buildCellWorker
         const fs = yield* FileSystem.FileSystem
         const savedWorker = `${worker.scriptPath}.saved`
         yield* fs.rename(worker.scriptPath, savedWorker)
-        const [first, next, crash] = yield* setupCalls(["41", "42", "process.exit(0)"])
-        if (!first || !next || !crash) return yield* Effect.die("Missing test cell")
+        const [first, next] = yield* setupCalls(["41", "42"])
+        if (!first || !next) return yield* Effect.die("Missing test cell")
         const execution = Context.get(
           yield* Layer.build(
             CellExecution.Live({
@@ -876,7 +876,7 @@ describe("recorded cell execution", () => {
               cwd: packageDirectory,
               sessionId,
               branchId,
-              maximumReplacements: 1,
+              maximumFailedLaunches: 1,
             }),
           ),
           CellExecution,
@@ -887,15 +887,16 @@ describe("recorded cell execution", () => {
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(failed.isFailure).toBe(true)
         expect(failed.result).toMatchObject({ _tag: "CellProcessError", phase: "launch" })
+        // The worker is back, but one failed launch already reached the limit of one.
         yield* fs.rename(savedWorker, worker.scriptPath)
-        expect(
-          (yield* execution.run(next).pipe(Effect.provideService(CellOperationHost, host))).result,
-        ).toMatchObject({ display: "42" })
-        expect(
-          (yield* execution.run(crash).pipe(Effect.provideService(CellOperationHost, host)))
-            .isFailure,
-        ).toBe(true)
-        expect((yield* execution.reset.pipe(Effect.flip)).reason).toBe("replacement-limit")
+        const refused = yield* execution
+          .run(next)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(refused.result).toMatchObject({
+          _tag: "CellProcessError",
+          phase: "launch",
+          message: expect.stringContaining("failed to launch 1 times in a row"),
+        })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
@@ -1053,7 +1054,6 @@ describe("cell worker process", () => {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
-          maximumReplacements: 0,
         })
         const host = CellOperationHost.of({
           catalog: hostCatalog("broken"),
@@ -1235,7 +1235,7 @@ describe("cell worker process", () => {
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
           evaluationTimeoutMs: 1000,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         let calls = 0
         let pid = 0
@@ -1274,7 +1274,8 @@ describe("cell worker process", () => {
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         if (crash._tag !== "CellKernelError") return yield* crash
         expect(crash.reason).toBe("process")
-        expect((yield* kernel.reset.pipe(Effect.flip)).reason).toBe("replacement-limit")
+        // Both workers launched, so neither loss counts toward the failed-launch limit.
+        yield* kernel.reset
         yield* kernel.close
         expect((yield* kernel.reset.pipe(Effect.flip)).reason).toBe("closed")
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
@@ -1289,7 +1290,7 @@ describe("cell worker process", () => {
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
           evaluationTimeoutMs: 400,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         // Host operations own their bounds: a slow one outlives the compute deadline.
         const host = CellOperationHost.of({
@@ -1321,7 +1322,7 @@ describe("cell worker process", () => {
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
           evaluationTimeoutMs: 1000,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         const catalog = {
           hash: "read-v1",
@@ -1359,6 +1360,29 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
+    "a lost worker is replaced as often as cells need; only failed launches count",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        const run = (source: string) =>
+          kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
+        // More losses than the failed-launch limit: each worker launched, so none counts.
+        for (let lost = 0; lost < 5; lost++) {
+          const crash = yield* run("process.exit(7)").pipe(Effect.flip)
+          expect(crash._tag).toBe("CellKernelError")
+          yield* kernel.reset
+        }
+        expect((yield* run("21 * 2")).display).toBe("42")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "counts failed replacement starts and does not reopen a closed kernel",
     () =>
       Effect.gen(function* () {
@@ -1367,7 +1391,7 @@ describe("cell worker process", () => {
         const kernel = yield* openCellKernel({
           worker: launch,
           cwd: packageDirectory,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const crash = yield* kernel

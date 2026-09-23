@@ -1082,16 +1082,26 @@ const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
  */
 const CELL_COMPUTE_DEADLINE_MS = 30_000
 
-/** One worker at a time. Only explicit reset can replace a failed worker. */
+/** Launches in a row that may fail before the kernel stops replacing its worker. */
+const DEFAULT_MAXIMUM_FAILED_LAUNCHES = 3
+
+/**
+ * One worker at a time. Only explicit reset can replace a failed worker.
+ *
+ * `maximumFailedLaunches` stops a crash loop at launch: once that many
+ * launches in a row never reached Ready, reset refuses. A worker lost after it
+ * launched (a cancel, a timeout, a cell that exits) does not count, and a good
+ * launch starts the count again.
+ */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly worker: CellWorker
   readonly cwd: string
   readonly readinessTimeoutMs?: number
   readonly evaluationTimeoutMs?: number
-  readonly maximumReplacements?: number
+  readonly maximumFailedLaunches?: number
 }) {
   const timeoutMs = input.evaluationTimeoutMs ?? CELL_COMPUTE_DEADLINE_MS
-  const maximumReplacements = input.maximumReplacements ?? 3
+  const maximumFailedLaunches = input.maximumFailedLaunches ?? DEFAULT_MAXIMUM_FAILED_LAUNCHES
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     return yield* new CellProcessError({
       phase: "launch",
@@ -1099,10 +1109,10 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       diagnostics: "",
     })
   }
-  if (!Number.isSafeInteger(maximumReplacements) || maximumReplacements < 0) {
+  if (!Number.isSafeInteger(maximumFailedLaunches) || maximumFailedLaunches < 1) {
     return yield* new CellProcessError({
       phase: "launch",
-      message: "Cell replacement limit must be a non-negative integer",
+      message: "Cell failed-launch limit must be a positive integer",
       diagnostics: "",
     })
   }
@@ -1139,7 +1149,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   status = "ready"
   const permit = yield* Semaphore.make(1)
   const shutdown = yield* Deferred.make<never, CellKernelError>()
-  let replacements = 0
+  let failedLaunches = 0
   let sequence = 0
   // Catalog delta: the worker keeps the last catalog, so only a changed hash travels. A
   // replacement worker starts empty and receives the full catalog on its first cell.
@@ -1348,14 +1358,24 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
     // A lost worker has nothing to talk to: replace the process instead.
     if (status === "lost") {
-      if (replacements >= maximumReplacements) {
-        return yield* failure("replacement-limit", "Cell worker replacement limit reached")
+      if (failedLaunches >= maximumFailedLaunches) {
+        return yield* failure(
+          "replacement-limit",
+          `Cell worker failed to launch ${failedLaunches} times in a row`,
+        )
       }
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          replacements++
           workerCatalogHash = Option.none()
-          child = yield* restore(openWorker()).pipe(Effect.mapError(processError))
+          child = yield* restore(openWorker()).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                failedLaunches++
+              }),
+            ),
+            Effect.mapError(processError),
+          )
+          failedLaunches = 0
           // close can run while the replacement is starting. Never restore a closed owner.
           if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
           status = "ready"
@@ -2157,7 +2177,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
             stateLost: true,
           })
         let kernel = Option.none<Kernel>()
-        let startupAttempts = 0
+        let failedStarts = 0
         // Set when the worker reported state loss; the next run replaces it and restores.
         let recoveryPending = false
         // Report for the first evaluation after a host-owned restore.
@@ -2187,22 +2207,23 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         })
         const getKernel = Effect.fn("CellExecution.getKernel")(function* () {
           if (Option.isSome(kernel)) return kernel.value
-          const remainingReplacements = (input.maximumReplacements ?? 3) - startupAttempts
-          if (remainingReplacements < 0) {
+          // The first launch counts against the same limit as the kernel's replacements.
+          if (failedStarts >= (input.maximumFailedLaunches ?? DEFAULT_MAXIMUM_FAILED_LAUNCHES)) {
             return yield* new CellProcessError({
               phase: "launch",
-              message: "Cell worker startup attempt limit reached",
+              message: `Cell worker failed to launch ${failedStarts} times in a row`,
               diagnostics: "",
             })
           }
-          startupAttempts++
           return yield* Effect.uninterruptibleMask((restore) =>
             restore(
-              openCellKernel({ ...input, maximumReplacements: remainingReplacements }).pipe(
-                Effect.provideContext(platform),
-                Scope.provide(scope),
-              ),
+              openCellKernel(input).pipe(Effect.provideContext(platform), Scope.provide(scope)),
             ).pipe(
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  failedStarts++
+                }),
+              ),
               Effect.tap((opened) =>
                 Effect.sync(() => {
                   kernel = Option.some(opened)
