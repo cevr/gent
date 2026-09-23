@@ -2321,7 +2321,32 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
  * An entry here is a claim that the name earns its keep despite having no
  * consumer. Prefer deleting the export.
  */
-const ALLOWLIST: ReadonlyMap<string, string> = new Map()
+const ALLOWLIST: ReadonlyMap<string, string> = new Map([
+  [
+    "formatBranchLabel",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "transition",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "AuthOauth",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "resolveTurnContext",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "resolveTurnSource",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "StepOutcome",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+])
 
 const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
   Option.filter(
@@ -2518,10 +2543,11 @@ const identifiersIn = (text: string): ReadonlySet<string> =>
  * reference be read as one.
  */
 const withoutCommentsAndStrings = (text: string): string =>
-  text
-    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "))
-    .replace(/\/\/.*$/gm, "")
-    .replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, '""')
+  text.replace(COMMENT_OR_STRING, (token) => {
+    if (isComment(token)) return blankKeepingLines(token)
+    if (token.startsWith("`")) return token
+    return '""'
+  })
 
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
@@ -2693,7 +2719,7 @@ const importsByTarget = (
 /** What one file contributes to the whole-tree answer. */
 export interface ExportFacts {
   readonly declarations: ReadonlyArray<Declaration>
-  /** Every identifier the file mentions anywhere. */
+  /** Every identifier the file mentions outside its comments. */
   readonly identifiers: ReadonlySet<string>
   /** Names imported from a path, keyed by that path's last segment. */
   readonly importsByTarget: ReadonlyMap<string, ReadonlySet<string>>
@@ -2767,7 +2793,7 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
   )
   return {
     declarations,
-    identifiers: identifiersIn(text),
+    identifiers: identifiersIn(withoutComments(text)),
     localNames: localNamesIn(text),
     identifiersByLine,
     importsByTarget: importsByTarget(text.split("\n")),

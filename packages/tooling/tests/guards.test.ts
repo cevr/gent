@@ -1826,6 +1826,31 @@ export const plantedDeadSdkExport = "nothing imports this"
     ).toEqual([])
   })
 
+  test("a name another file mentions only in a comment is still reported", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `export const commentedOnly = 1\n` },
+      {
+        file: SDK_CONSUMER,
+        text: `// commentedOnly used to live here\n/** see commentedOnly */\nexport const other = 1\n`,
+      },
+    ])
+    expect(findings.map((finding) => finding.message)).toContainEqual(
+      expect.stringContaining("`commentedOnly`"),
+    )
+  })
+
+  test("a name another file reads beside a URL in a string is live", () => {
+    expect(
+      findingsFor([
+        { file: SDK_FILE, text: `export const fetchedName = 1\n` },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: `const url = "https://example.test"; use(fetchedName)\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
   test("a name only its own module reads is still reported", () => {
     // Core and the SDK are held to the strict reading: drop the `export`.
     const findings = findingsFor([
