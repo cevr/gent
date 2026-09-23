@@ -606,7 +606,7 @@ describe("e2e fixture import guard", () => {
 
   test("ignores e2e helpers that are not test files", () => {
     expect(
-      findE2eFixtureImportFindings("packages/e2e/tests/test-failure-boundary.ts", noFixtureSource),
+      findE2eFixtureImportFindings("packages/e2e/src/pty-fixture.ts", noFixtureSource),
     ).toEqual([])
   })
 
