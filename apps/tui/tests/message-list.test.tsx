@@ -24,6 +24,7 @@ import {
   dateFromMillis,
   Message,
   MessageId,
+  MODEL_CHANGE_MESSAGE_TYPE,
   type MessagePart,
   SessionId,
   ToolCallId,
@@ -1372,6 +1373,33 @@ describe("FX transcript treatment", () => {
       const frame = renderFrame(setup)
       expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
       expect(frame.match(/renamed the loader/g)?.length).toBe(1)
+    }),
+  )
+
+  it.live("the runtime's model-change notice folds to one line", () =>
+    Effect.gen(function* () {
+      const notice: ListMessage = {
+        ...compactionMessage(),
+        id: "model-change:b1:m5",
+        content: "MODEL-NOTICE-BODY",
+        metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[notice]}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 10 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("⇄ model changed")
+      expect(frame).not.toContain("MODEL-NOTICE-BODY")
     }),
   )
 })

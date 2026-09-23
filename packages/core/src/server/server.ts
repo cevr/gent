@@ -20,7 +20,6 @@ import {
   copyMessageToBranch,
   Message,
   projectMessagesWithToolInteractions,
-  type RuntimeUserMessageType,
   Session,
   toolCallDurations,
 } from "../domain/message.js"
@@ -149,7 +148,11 @@ import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { PromptSection } from "../domain/capability.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
-import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
+import {
+  messagesInCurrentWindow,
+  MODEL_CHANGE_MESSAGE_TYPE,
+  settledMessages,
+} from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
 
 // ── connection-tracker ──────────────────────────────────────────────────────
@@ -415,8 +418,6 @@ const makeSessionMutationsService: Effect.Effect<
       for (const envelope of committed.envelopes) yield* eventPublisher.deliver(envelope)
       return committed.result
     })
-
-  const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
 
   /**
    * A durable user-role line the model reads on its next turn when the

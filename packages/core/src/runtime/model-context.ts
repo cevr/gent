@@ -184,6 +184,9 @@ export const toPrompt = (
 /** Custom type of the durable marker that starts a context window. */
 export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-window"
 
+/** The durable line the server writes when a session's model changes. */
+export const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
+
 /** The history a handoff marker summarizes; every message in it stays durable and readable by id. */
 const ContextHandoffSummary = Schema.Struct({
   firstMessageId: MessageId,

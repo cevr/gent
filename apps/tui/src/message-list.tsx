@@ -45,7 +45,11 @@ import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { GenericToolRenderer, type ToolCall } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
 import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
-import { CONTEXT_WINDOW_MESSAGE_TYPE, type ImagePartProjection } from "@gent/core/protocol"
+import {
+  CONTEXT_WINDOW_MESSAGE_TYPE,
+  type ImagePartProjection,
+  MODEL_CHANGE_MESSAGE_TYPE,
+} from "@gent/core/protocol"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
@@ -355,7 +359,7 @@ const runtimeRows = new Map<string, MessageRenderer>([
     CONTEXT_WINDOW_MESSAGE_TYPE,
     (props) => <CollapsedRow label={windowLabel(decodeHandoffDetails(props.details))} />,
   ],
-  ["model-change", () => <CollapsedRow label="⇄ model changed" />],
+  [MODEL_CHANGE_MESSAGE_TYPE, () => <CollapsedRow label="⇄ model changed" />],
 ])
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
