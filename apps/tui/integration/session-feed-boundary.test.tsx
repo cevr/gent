@@ -15,7 +15,8 @@ import {
   testAgent,
 } from "@gent/core/test-utils"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
+import { makeSessionState, repoRoot } from "./helpers"
+import { waitForFrame } from "../tests/helpers-boundary"
 const absentReasoningLevel = Option.getOrUndefined(Option.none())
 const absentModelId = Option.getOrUndefined(Option.none())
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>

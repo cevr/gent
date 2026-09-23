@@ -51,6 +51,7 @@ import {
   CurrentWorkspaceId,
   WorkspaceId,
   createRpcClient,
+  toolResultMessageIdForTurn,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -70,7 +71,6 @@ import {
   DEFAULT_AGENT_NAME,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   messagePartsText,
-  toolResultMessageIdForTurn,
   windowDetails,
 } from "@gent/core/protocol"
 import {

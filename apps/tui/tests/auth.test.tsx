@@ -28,7 +28,7 @@ import {
   createMockRuntime,
   renderWithProviders,
 } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 import { onMount } from "solid-js"
 
 // ── auth-state.test ─────────────────────────────────────────────────────────
@@ -313,11 +313,9 @@ describe("Auth route", () => {
           { provider: "openai", hasKey: false, required: false },
         ])
       }
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("openai") && !frame.includes("anthropic"),
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("openai") && !frame.includes("anthropic"),
       )
       const firstPending = Option.fromNullishOr(pending[0])
       if (Option.isSome(firstPending)) {
@@ -325,11 +323,9 @@ describe("Auth route", () => {
           { provider: "anthropic", hasKey: false, required: false },
         ])
       }
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("openai") && !next.includes("anthropic"),
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("openai") && !next.includes("anthropic"),
       )
       expect(frame).toContain("openai")
       expect(frame).not.toContain("anthropic")
@@ -393,41 +389,31 @@ describe("Auth route", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("anthropic")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Enter API key for anthropic")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Enter API key for anthropic"))
       yield* Effect.promise(() => setup.mockInput.typeText("old-key"))
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
-      const reloaded = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("openai")),
-      )
+      const reloaded = yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       expect(reloaded).toContain("openai")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Enter API key for openai")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Enter API key for openai"))
       yield* Deferred.succeed(oldKeySave, void 0)
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) =>
-            next.includes("Enter API key for openai") &&
-            !next.includes("API key saved for anthropic"),
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) =>
+          next.includes("Enter API key for openai") &&
+          !next.includes("API key saved for anthropic"),
       )
       expect(frame).toContain("Enter API key for openai")
       expect(frame).not.toContain("API key saved for anthropic")
@@ -519,16 +505,14 @@ describe("Auth route", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("anthropic")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
-      yield* Effect.promise(() => waitForRenderedFrame(setup, (frame) => frame.includes("openai")))
+      yield* waitForFrame(setup, (frame) => frame.includes("openai"))
       yield* Deferred.succeed(authorizeDeferred, {
         authorizationId: "auth-old",
         url: "https://example.com/oauth",
@@ -602,15 +586,11 @@ describe("Auth route", () => {
           initialAgent: AgentName.make("cowork"),
         }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("anthropic")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => callbackCalls.length === 1, "successful OAuth callback"),
-      )
+      yield* waitForFrame(setup, () => callbackCalls.length === 1, "successful OAuth callback")
       expect(authorizeCalls).toEqual([
         { provider: "anthropic", method: 0, sessionId: activeSessionId },
       ])
@@ -703,16 +683,12 @@ describe("Auth route", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("anthropic")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
       const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* Effect.yieldNow
@@ -720,11 +696,9 @@ describe("Auth route", () => {
       expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })
       if (Option.isSome(rejectOpen))
         rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("openai") && !next.includes("open failed"),
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("openai") && !next.includes("open failed"),
       )
       expect(frame).toContain("openai")
       expect(frame).not.toContain("open failed")
@@ -784,34 +758,26 @@ describe("Auth route", () => {
           initialAgent: AgentName.make("cowork"),
         }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("anthropic")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below")),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Open the URL below"))
       setup.mockInput.pressEscape()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) =>
-            frame.includes("anthropic") &&
-            !frame.includes("Open the URL below") &&
-            !frame.includes("open failed"),
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) =>
+          frame.includes("anthropic") &&
+          !frame.includes("Open the URL below") &&
+          !frame.includes("open failed"),
       )
       if (Option.isSome(rejectOpen))
         rejectOpen.value(new LinkOpenerError({ message: "open failed" }))
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("anthropic") && !next.includes("open failed"),
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("anthropic") && !next.includes("open failed"),
       )
       expect(frame).toContain("anthropic")
       expect(frame).not.toContain("open failed")

@@ -46,7 +46,6 @@ import {
   estimateTextTokens,
 } from "../../src/runtime/model-context"
 import { describe, expect, it } from "effect-bun-test"
-import { narrowR } from "../helpers/effect"
 import { AgentDefinition, AgentName, Model, ModelId, ProviderId } from "../../src/domain/agent"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ModelRegistry } from "../../src/runtime/provider"
@@ -469,29 +468,27 @@ describe("context compaction degrade path", () => {
         agents: [agent],
         extraLayers: [ModelRegistry.Test([smallWindowModel]), failingCompactor],
       })
-      const result = yield* narrowR(
-        Effect.gen(function* () {
-          yield* seedOverflowingHistory
-          const runtime = yield* SessionRuntime
-          yield* runtime.sendUserMessage({
-            sessionId: sessionIdModelContextDegrade,
-            branchId: branchIdModelContextDegrade,
-            commandId: ActorCommandId.make("turn:continue"),
-            content: "continue",
-          })
-          const events = (yield* (yield* EventStorage).listEvents({
-            sessionId: sessionIdModelContextDegrade,
-            branchId: branchIdModelContextDegrade,
-          })).map((envelope) => envelope.event)
-          const durable = yield* (yield* MessageStorage).listMessages(branchIdModelContextDegrade)
-          const metrics = (yield* getSessionSnapshot({
-            sessionId: sessionIdModelContextDegrade,
-            branchId: branchIdModelContextDegrade,
-          })).metrics
-          return { events, durable, metrics }
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
-      )
+      const result = yield* Effect.gen(function* () {
+        yield* seedOverflowingHistory
+        const runtime = yield* SessionRuntime
+        yield* runtime.sendUserMessage({
+          sessionId: sessionIdModelContextDegrade,
+          branchId: branchIdModelContextDegrade,
+          commandId: ActorCommandId.make("turn:continue"),
+          content: "continue",
+        })
+        const events = (yield* (yield* EventStorage).listEvents({
+          sessionId: sessionIdModelContextDegrade,
+          branchId: branchIdModelContextDegrade,
+        })).map((envelope) => envelope.event)
+        const durable = yield* (yield* MessageStorage).listMessages(branchIdModelContextDegrade)
+        const metrics = (yield* getSessionSnapshot({
+          sessionId: sessionIdModelContextDegrade,
+          branchId: branchIdModelContextDegrade,
+        })).metrics
+        return { events, durable, metrics }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer), Effect.timeout("8 seconds"))
       expect(yield* controls.callCount).toBe(1)
       // The notice text is the projection's; tests/runtime/agent/turn-window.test.ts reads it.
       expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toHaveLength(1)

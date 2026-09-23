@@ -1,3 +1,12 @@
+import {
+  DriverError,
+  DriverFailureId,
+  EventStoreError,
+  NotFoundError,
+  ProviderError,
+  SessionRuntimeError,
+  StorageError,
+} from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import {
@@ -29,15 +38,6 @@ import {
   workingIconFrame,
 } from "../src/utils"
 import { BunServices } from "@effect/platform-bun"
-import {
-  DriverError,
-  DriverFailureId,
-  EventStoreError,
-  NotFoundError,
-  ProviderError,
-  SessionRuntimeError,
-  StorageError,
-} from "@gent/core/protocol"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
 
