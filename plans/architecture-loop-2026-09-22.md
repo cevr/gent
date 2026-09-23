@@ -208,5 +208,5 @@ Verdict: not polish. Core 5 P1 + 9 P2; extensions 4 P1 + 16 P2; TUI 1 P1 + 2 P2;
 | Providers         | `p4-providers`     | V1 second OpenAI sign-in; V2 beta cache by model; V3 no Anthropic store write; V5 builders, not Tags                                                              |
 | Server lock       | `p4-lock`          | L1 kernel lock; L2 concurrent start; L3 doctor bound                                                                                                              |
 
-Owner decisions: D2 (child with wake/monitor/goal completes early), V4 (Anthropic env key before sign-in), L4 (new build stops an open TUI; near F11), S4 (handoff counts toward the spawn depth cap).
+Owner decisions (2026-09-23): D2 a child that arms a wake, monitor or goal sends later results to its parent with `session.send` (tools stay allowed); V4 one credential order for both drivers: stored sign-in, stored key, env key; L4 a different build fails with a message naming the pid, never SIGTERMs an open server; S4 the spawn depth cap counts child spawns only, not handoffs. Each went to its batch.
 Main fixes during the sweep: `f57cad70` adapter globals marked; `75bf5a32` stalled-worker fixture writes a raw pid (ANSI color broke the parse outside the gate).
