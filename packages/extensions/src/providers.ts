@@ -272,41 +272,6 @@ export const makeCredentialCache = <C>(
 
     type Step = readonly [Exit.Exit<C, CredentialFailure>, CredentialCacheCell<C>]
 
-    // The store lock orders refreshes inside one process only. Another gent
-    // process on the same auth files can use the refresh token first; the
-    // provider then refuses this refresh (`refresh_token_reused`) for good.
-    // Its rotation is in the store by then, so a refused refresh reads the
-    // store once more and adopts a changed, fresh credential.
-    const adoptAfterRefusal = (
-      store: CredentialStore<C>,
-      attempted: C,
-      cause: Cause.Cause<CredentialFailure>,
-      now: number,
-    ): Effect.Effect<Step, CredentialFailure> => {
-      const refused = Cause.findErrorOption(cause).pipe(
-        Option.filter((error) => error._tag === "ProviderAuthError"),
-      )
-      if (Option.isNone(refused)) return Effect.failCause(cause)
-      return store
-        .update((stored): Effect.Effect<readonly [Option.Option<C>, Option.Option<C>]> => {
-          const adoptable = Option.filter(
-            stored,
-            (creds) => !store.same(creds, attempted) && freshEnoughAt(config.expiresAt(creds), now),
-          )
-          return Effect.succeed([adoptable, Option.none<C>()])
-        })
-        .pipe(
-          Effect.orElseSucceed(() => Option.none<C>()),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.failCause(cause),
-              onSome: (creds): Effect.Effect<Step> =>
-                Effect.succeed([Exit.succeed(creds), durable(creds, now, false)]),
-            }),
-          ),
-        )
-    }
-
     // Read and refresh under the store lock. The store's credential wins
     // over the held one when they differ: another writer put it there.
     const fromStore = (
@@ -317,7 +282,6 @@ export const makeCredentialCache = <C>(
       let held = Option.none<C>()
       if (current._tag !== "Empty") held = Option.some(current.creds)
       let rotated = Option.none<{ readonly creds: C; readonly replaces: C }>()
-      let refreshedFrom = Option.none<C>()
       const result = (serve: C, write: Option.Option<C>): readonly [C, Option.Option<C>] => [
         serve,
         write,
@@ -334,7 +298,6 @@ export const makeCredentialCache = <C>(
             if (trustedBase && freshEnoughAt(config.expiresAt(base), now)) {
               return result(base, Option.none())
             }
-            refreshedFrom = Option.some(base)
             const refreshed = yield* config.refresh(Option.some(base))
             rotated = Option.some({ creds: refreshed, replaces: base })
             return result(refreshed, Option.some(refreshed))
@@ -348,12 +311,7 @@ export const makeCredentialCache = <C>(
             }
             // The refresh or the read failed: the cell keeps the held
             // refresh token so a retry can re-attempt with it.
-            if (Option.isNone(rotated)) {
-              return Option.match(refreshedFrom, {
-                onNone: () => Effect.failCause(exit.cause),
-                onSome: (attempted) => adoptAfterRefusal(store, attempted, exit.cause, now),
-              })
-            }
+            if (Option.isNone(rotated)) return Effect.failCause(exit.cause)
             // The refresh worked but the write failed: keep the rotation.
             return Effect.succeed([
               Exit.fail(persistFailure(exit.cause)),
