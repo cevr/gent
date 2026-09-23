@@ -329,6 +329,12 @@ const createSessionResult = (operation: StoredCreateSessionResult): CreateSessio
   name: operation.name,
 })
 
+/** One setting after a change: left out keeps `stored`, `Some` sets, `None` clears. */
+const mergeSetting = <A>(
+  change: Option.Option<Option.Option<A>>,
+  stored: Option.Option<A>,
+): Option.Option<A> => Option.getOrElse(change, () => stored)
+
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
@@ -911,7 +917,6 @@ const makeSessionMutationsService: Effect.Effect<
     }),
 
     updateSettings: Effect.fn("SessionMutations.updateSettings")(function* (input) {
-      const settings = { modelId: input.modelId, reasoningLevel: input.reasoningLevel }
       // The model-change notice is a branch write; the loop owns it and
       // writes it at the next step boundary (turn.ts `noticeModelChange`).
       return yield* transactWithEvents(
@@ -919,6 +924,22 @@ const makeSessionMutationsService: Effect.Effect<
           const session = yield* sessionStorage.getSession(input.sessionId)
           if (Predicate.isUndefined(session)) {
             return yield* new NotFoundError({ message: "Session not found" })
+          }
+          // Merged inside the transaction: a field the change leaves out keeps
+          // the stored value, whatever the caller last saw.
+          const settings = {
+            modelId: Option.getOrUndefined(
+              mergeSetting(
+                Option.fromUndefinedOr(input.modelId),
+                Option.fromUndefinedOr(session.modelId),
+              ),
+            ),
+            reasoningLevel: Option.getOrUndefined(
+              mergeSetting(
+                Option.fromUndefinedOr(input.reasoningLevel),
+                Option.fromUndefinedOr(session.reasoningLevel),
+              ),
+            ),
           }
           yield* sessionStorage.updateSessionSettings(
             input.sessionId,

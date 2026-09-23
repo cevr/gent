@@ -528,8 +528,6 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
             onClose={() => shell.pane.close(THREAD_PANE)}
             onSelect={(window) => {
               shell.pane.close(THREAD_PANE)
-              const active = controller.current()
-              if (Option.isSome(active) && active.value.sessionId === window.sessionId) return
               shell.switchSession({
                 sessionId: window.sessionId,
                 branchId: window.branchId,

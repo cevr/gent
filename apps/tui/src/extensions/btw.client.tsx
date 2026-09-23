@@ -99,20 +99,30 @@ export const makeForkPane = (
         )
         const send = Option.match(sending, {
           onNone: () => Effect.void,
-          onSome: (entry) =>
-            entry.send(entry.session).pipe(
-              // The pane shows a failure only under the session in view. A
-              // question asked in a session the reader has left fails out
-              // loud, with its text, instead of vanishing.
+          onSome: (entry) => {
+            const notify = (failure: { readonly message: string }) =>
+              Effect.sync(() =>
+                shell.notify(`btw: not asked "${entry.question}": ${failure.message}`),
+              )
+            // A question asked in a session the reader has left fails out
+            // loud, with its text, instead of vanishing. Its failure is this
+            // read's error only when this read is for the session it was asked
+            // in; otherwise this read goes on to read its own session's fork.
+            if (!sameSession(entry.session, session)) {
+              return entry.send(entry.session).pipe(Effect.catch(notify))
+            }
+            return entry.send(entry.session).pipe(
               Effect.tapError((failure) =>
-                Effect.sync(() => {
+                Effect.suspend(() => {
                   const here = Option.exists(transport.currentSession(), (now) =>
                     sameSession(now, entry.session),
                   )
-                  if (!here) shell.notify(`btw: not asked "${entry.question}": ${failure.message}`)
+                  if (here) return Effect.void
+                  return notify(failure)
                 }),
               ),
-            ),
+            )
+          },
         })
         return send.pipe(Effect.andThen(actions.progress(session)))
       },

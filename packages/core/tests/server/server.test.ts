@@ -89,7 +89,6 @@ import {
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   ModelId,
-  type ReasoningEffort,
 } from "../../src/domain/agent"
 import { type EventEnvelope, EventStore, SessionStarted } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
@@ -774,8 +773,8 @@ describe("session command persistence", () => {
 
       yield* mutations.updateSettings({
         sessionId,
-        modelId: ModelId.make("chosen/model"),
-        reasoningLevel: "high",
+        modelId: Option.some(ModelId.make("chosen/model")),
+        reasoningLevel: Option.some("high"),
       })
 
       const stored = yield* sessions.getSession(sessionId)
@@ -892,7 +891,11 @@ describe("session command persistence", () => {
       })
 
       const exit = yield* Effect.exit(
-        mutations.updateSettings({ sessionId, modelId: absentModel, reasoningLevel: "high" }),
+        mutations.updateSettings({
+          sessionId,
+          modelId: Option.none(),
+          reasoningLevel: Option.some("high"),
+        }),
       )
 
       expect(exit._tag).toBe("Failure")
@@ -2963,7 +2966,6 @@ describe("requestId idempotency", () => {
 // ── message send ────────────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
-const absentReasoning = Option.getOrUndefined(Option.none<ReasoningEffort>())
 
 describe("message.send", () => {
   it.live(
@@ -3205,8 +3207,8 @@ describe("message.send", () => {
 
         yield* client.session.updateSettings({
           sessionId: created.sessionId,
-          modelId: sessionModel,
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(sessionModel),
+          reasoningLevel: Option.none(),
         })
         expect((yield* client.session.getSnapshot(target)).resolvedModelId).toBe(sessionModel)
         yield* client.message.send({ ...target, content: "use the session model" })
@@ -3224,6 +3226,40 @@ describe("message.send", () => {
           "assistant reply on the session model",
         )
         yield* controls.assertDone
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("a settings change touches only the field it names", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const created = yield* client.session.create({ cwd: process.cwd() })
+        const sessionModel = ModelId.make("custom/session-model")
+        yield* client.session.updateSettings({
+          sessionId: created.sessionId,
+          modelId: Option.some(sessionModel),
+          reasoningLevel: Option.some("high"),
+        })
+        // A change of effort alone keeps the stored model.
+        const effort = yield* client.session.updateSettings({
+          sessionId: created.sessionId,
+          reasoningLevel: Option.some("low"),
+        })
+        expect(effort).toEqual({ modelId: sessionModel, reasoningLevel: "low" })
+        // `None` clears one field and leaves the other.
+        const cleared = yield* client.session.updateSettings({
+          sessionId: created.sessionId,
+          modelId: Option.none(),
+        })
+        expect(cleared).toEqual({ modelId: absentModel, reasoningLevel: "low" })
+        const snapshot = yield* client.session.getSnapshot({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        expect(snapshot.modelId).toBeUndefined()
+        expect(snapshot.reasoningLevel).toBe("low")
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -3287,8 +3323,8 @@ describe("message.send", () => {
         const sessionModel = ModelId.make("custom/session-model")
         const stored = yield* client.session.updateSettings({
           sessionId: created.sessionId,
-          modelId: sessionModel,
-          reasoningLevel: "max",
+          modelId: Option.some(sessionModel),
+          reasoningLevel: Option.some("max"),
         })
         expect(stored).toEqual({ modelId: sessionModel, reasoningLevel: "max" })
         const withSettings = yield* client.session.getSnapshot({
@@ -3309,8 +3345,8 @@ describe("message.send", () => {
 
         yield* client.session.updateSettings({
           sessionId: created.sessionId,
-          modelId: absentModel,
-          reasoningLevel: absentReasoning,
+          modelId: Option.none(),
+          reasoningLevel: Option.none(),
         })
         // Cleared settings resolve back to the config default before the next turn.
         const cleared = yield* client.session.getSnapshot({
@@ -3390,20 +3426,20 @@ describe("message.send", () => {
           // A branch with no step yet has nothing to attribute: no notice.
           yield* client.session.updateSettings({
             sessionId: created.sessionId,
-            modelId: absentModel,
-            reasoningLevel: "low",
+            modelId: Option.none(),
+            reasoningLevel: Option.some("low"),
           })
           yield* client.session.updateSettings({
             sessionId: created.sessionId,
-            modelId: Option.getOrUndefined(Option.none()),
-            reasoningLevel: "low",
+            modelId: Option.none(),
+            reasoningLevel: Option.some("low"),
           })
           yield* turn("first", "before the switch")
           expect(yield* notices()).toHaveLength(0)
           yield* client.session.updateSettings({
             sessionId: created.sessionId,
-            modelId: nextModel,
-            reasoningLevel: "low",
+            modelId: Option.some(nextModel),
+            reasoningLevel: Option.some("low"),
           })
           // The settings write records the choice; the loop writes the line.
           expect(yield* notices()).toHaveLength(0)
@@ -3412,8 +3448,8 @@ describe("message.send", () => {
           expect(notice?.role).toBe("user")
           yield* client.session.updateSettings({
             sessionId: created.sessionId,
-            modelId: nextModel,
-            reasoningLevel: "max",
+            modelId: Option.some(nextModel),
+            reasoningLevel: Option.some("max"),
           })
           yield* turn("again", "after the effort change")
           expect(yield* notices()).toHaveLength(1)

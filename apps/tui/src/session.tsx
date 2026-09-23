@@ -60,6 +60,7 @@ import {
   formatError,
   formatTokens,
   formatToolInput,
+  lostRequest,
   randomId,
   SEND_RETRY,
   useRequiredContext,
@@ -128,22 +129,24 @@ import { useExtensionUI } from "./extensions/host"
  * @module
  */
 
-/** One startup prompt, held by one send at a time. */
+/**
+ * The startup prompt as a submission. It is sent once; a send that fails is
+ * refused as a composer submission is: it comes back to the draft of the
+ * branch it was sent from, with its reason.
+ */
 interface StartupPrompt {
   readonly content: string
-  /** The id of a send that failed. The next send uses it, so the prompt cannot run twice. */
-  readonly requestId: Option.Option<string>
-  /** Report the send's end. A failed send gives the prompt back to the shell. */
-  readonly settle: (sent: boolean, requestId: string) => void
+  /** `lost` is the request id when the reply was lost, not answered. */
+  readonly refuse: (target: SessionIdentity, reason: string, lost: Option.Option<string>) => void
 }
 
 interface SessionShellValue {
   /**
    * The `-p` prompt, if this is the session the startup flags named and no
-   * send holds it. A session view that mounts again gets nothing while a send
-   * is in flight or after one landed.
+   * one took it yet. A session view that mounts again gets nothing: the
+   * prompt goes out once, and a failed send gives it to the draft.
    */
-  readonly takePrompt: (sessionId: SessionId) => Option.Option<StartupPrompt>
+  readonly takePrompt: (sessionId: SessionId) => Option.Option<string>
 }
 
 const SessionShellContext = createContext<SessionShellValue>()
@@ -155,22 +158,14 @@ interface SessionShellProviderProps {
 }
 
 export function SessionShellProvider(props: ParentProps<SessionShellProviderProps>) {
-  let failedRequestId = Option.none<string>()
-  let held = false
+  let taken = false
   const value: SessionShellValue = {
     takePrompt: (sessionId) => {
       const owns = Option.exists(props.initialSessionId, (boot) => boot === sessionId)
-      if (!owns || held) return Option.none()
+      if (!owns || taken) return Option.none()
       return Option.map(props.initialPrompt, (content) => {
-        held = true
-        return {
-          content,
-          requestId: failedRequestId,
-          settle: (sent, requestId) => {
-            held = sent
-            failedRequestId = Option.some(requestId)
-          },
-        }
+        taken = true
+        return content
       })
     },
   }
@@ -534,12 +529,20 @@ interface RefusedSubmission {
   readonly order: number
   readonly text: string
   readonly shell: boolean
+  /**
+   * The request id of a send whose reply was lost: the server may have run it.
+   * The same text sent again reuses it, so the server's dedup runs it once.
+   * A refusal the server answered has none; its text goes again as new.
+   */
+  readonly requestId: Option.Option<string>
 }
 
 /** The composer on screen for a branch: what it holds, and how to replace it. */
 interface ComposerLink {
   readonly current: () => ComposerDraft
   readonly apply: (draft: ComposerDraft) => void
+  /** How this composer writes a refused text: a large one as a paste placeholder. */
+  readonly write: (text: string) => string
 }
 
 /**
@@ -553,8 +556,11 @@ interface ComposerRefusals {
   readonly nextOrder: () => number
   readonly link: (branchId: BranchId, link: ComposerLink) => () => void
   readonly refuse: (branchId: BranchId, refused: RefusedSubmission) => void
-  /** A submit took the whole draft, refused texts included. */
-  readonly submitted: (branchId: BranchId) => void
+  /**
+   * A submit took the whole draft, refused texts included. When it sends one
+   * refused text unchanged whose reply was lost, this is that send's request id.
+   */
+  readonly submitted: (branchId: BranchId, text: string) => Option.Option<string>
 }
 
 interface ComposerMemory {
@@ -563,9 +569,14 @@ interface ComposerMemory {
   readonly history: PromptHistoryStore
 }
 
+/** A refused text and how it was written into the draft. */
+interface WrittenRefusal extends RefusedSubmission {
+  readonly written: string
+}
+
 /** The refused texts the draft starts with, as last written there. */
 interface RefusedBlock {
-  readonly entries: ReadonlyArray<RefusedSubmission>
+  readonly entries: ReadonlyArray<WrittenRefusal>
   readonly shown: string
 }
 
@@ -584,20 +595,24 @@ interface RefusedMerge {
   readonly block: RefusedBlock
 }
 
+const writeAsIs = (text: string): string => text
+
 export const mergeRefused = (
   current: ComposerDraft,
   block: RefusedBlock,
   refused: RefusedSubmission,
+  write: (text: string) => string = writeAsIs,
 ): RefusedMerge => {
+  const added: WrittenRefusal = { ...refused, written: write(refused.text) }
   // The block stands whole: the draft is it, or it and then a separator.
   const kept =
     block.shown.length > 0 &&
     (current.draft === block.shown ||
       current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
-  let entries: ReadonlyArray<RefusedSubmission> = [refused]
+  let entries: ReadonlyArray<WrittenRefusal> = [added]
   let typed = current.draft
   if (kept) {
-    entries = [...block.entries, refused].toSorted((a, b) => a.order - b.order)
+    entries = [...block.entries, added].toSorted((a, b) => a.order - b.order)
     typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
   }
   const hasTyped = typed.trim().length > 0
@@ -606,7 +621,7 @@ export const mergeRefused = (
     if (shell && !allShell) return `!${text}`
     return text
   }
-  const shown = entries.map((entry) => render(entry.text, entry.shell)).join(REFUSED_SEPARATOR)
+  const shown = entries.map((entry) => render(entry.written, entry.shell)).join(REFUSED_SEPARATOR)
   let draft = shown
   if (hasTyped) draft = `${shown}${REFUSED_SEPARATOR}${render(typed, current.mode === "shell")}`
   let mode: ComposerDraft["mode"] = "editing"
@@ -653,6 +668,8 @@ export function ComposerMemoryProvider(props: ParentProps) {
         current,
         Option.getOrElse(Option.fromUndefinedOr(blocks.get(branchId)), () => EMPTY_REFUSED_BLOCK),
         refused,
+        // A kept draft is stored as text; only a composer on screen holds placeholders.
+        Option.match(live, { onSome: (link) => link.write, onNone: () => writeAsIs }),
       )
       blocks.set(branchId, merged.block)
       Option.match(live, {
@@ -660,8 +677,15 @@ export function ComposerMemoryProvider(props: ParentProps) {
         onNone: () => drafts.set(branchId, merged.draft),
       })
     },
-    submitted: (branchId) => {
+    submitted: (branchId, text) => {
+      const block = Option.fromUndefinedOr(blocks.get(branchId))
       blocks.delete(branchId)
+      return Option.flatMap(block, (current) =>
+        Option.flatMap(
+          Option.fromUndefinedOr(current.entries.find((entry) => entry.text.trim() === text)),
+          (entry) => entry.requestId,
+        ),
+      )
     },
   }
   const value: ComposerMemory = { drafts, refusals, history: makePromptHistoryStore() }
@@ -1440,15 +1464,12 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         return
       }
       // `default`/`off` decode to `None`, which clears the session override.
-      const sessionReasoningLevel = Option.getOrUndefined(
-        Schema.decodeUnknownOption(ReasoningEffort)(reasoningLevel.value),
+      const sessionReasoningLevel = Schema.decodeUnknownOption(ReasoningEffort)(
+        reasoningLevel.value,
       )
       props.cast(
         props.client
-          .updateSessionSettings((current) => ({
-            ...current,
-            reasoningLevel: sessionReasoningLevel,
-          }))
+          .updateSessionSettings({ reasoningLevel: sessionReasoningLevel })
           .pipe(props.client.surfaceError),
       )
     },
@@ -1467,14 +1488,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         return
       }
       const apply = (modelId: Option.Option<ModelId>) =>
-        props.cast(
-          props.client
-            .updateSessionSettings((current) => ({
-              ...current,
-              modelId: Option.getOrUndefined(modelId),
-            }))
-            .pipe(props.client.surfaceError),
-        )
+        props.cast(props.client.updateSessionSettings({ modelId }).pipe(props.client.surfaceError))
       if (query === "default" || query === "off") {
         apply(Option.none())
         return
@@ -2241,24 +2255,21 @@ export function useSessionFeed(
         })
         client.runtime.cast(
           Effect.gen(function* () {
-            const requestId = yield* Option.match(prompt.requestId, {
-              onNone: () => randomId,
-              onSome: Effect.succeed,
-            })
+            const requestId = yield* randomId
             yield* client.client.message
               .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
               .pipe(
-                // A lost connection retries under the one request id; the
-                // shell takes the prompt back after the last try.
+                // A lost connection retries under the one request id; after
+                // the last try the prompt is refused like a composer send.
                 Effect.retry(SEND_RETRY),
-                Effect.andThen(Effect.sync(() => prompt.settle(true, requestId))),
                 Effect.catchEager((err) =>
-                  Effect.sync(() => {
-                    // The shell holds the prompt again; the next ready stream sends it.
-                    prompt.settle(false, requestId)
-                    if (Option.isNone(currentKey) || currentKey.value !== key) return
-                    client.setConnectionIssue(formatConnectionIssue(err))
-                  }),
+                  Effect.sync(() =>
+                    prompt.refuse(
+                      { sessionId: session, branchId: branch },
+                      formatError(err),
+                      lostRequest(err, requestId),
+                    ),
+                  ),
                 ),
               )
           }),
@@ -2537,6 +2548,7 @@ export interface SessionController {
     content: string,
     mode: "queue" | "interject",
     target: SessionIdentity,
+    requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
@@ -2570,6 +2582,7 @@ export function createSessionController(props: {
   const command = useCommand()
   const ext = useExtensionUI()
   const shell = useSessionShell()
+  const refusals = useComposerRefusals()
   const { cast } = useRuntime()
   const renderer = useRenderer()
   const env = useEnv()
@@ -2835,7 +2848,24 @@ export function createSessionController(props: {
       },
       onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
     },
-    () => shell.takePrompt(props.sessionId),
+    // The startup prompt is a submission: it takes its place in send order,
+    // and a refused one comes back to the draft of its branch with its reason.
+    () =>
+      Option.map(shell.takePrompt(props.sessionId), (content): StartupPrompt => {
+        const order = refusals.nextOrder()
+        return {
+          content,
+          refuse: (target, reason, lost) => {
+            client.setErrorIn(target, reason)
+            refusals.refuse(target.branchId, {
+              order,
+              text: content,
+              shell: false,
+              requestId: lost,
+            })
+          },
+        }
+      }),
     // Gate prompt send on auth resolution and on the branch picker — the feed
     // waits for the stream plus this signal.
     () => !authGatePending() && !branchPickerOpen(),
@@ -2986,23 +3016,12 @@ export function createSessionController(props: {
 
   const onModelSelect = (modelId: ModelId) => {
     closeOverlay()
-    cast(
-      client
-        .updateSessionSettings((current) => ({ ...current, modelId }))
-        .pipe(client.surfaceError),
-    )
+    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }).pipe(client.surfaceError))
   }
 
   const onReasoningSelect = (level: Option.Option<ReasoningEffort>) => {
     closeOverlay()
-    cast(
-      client
-        .updateSessionSettings((current) => ({
-          ...current,
-          reasoningLevel: Option.getOrUndefined(level),
-        }))
-        .pipe(client.surfaceError),
-    )
+    cast(client.updateSessionSettings({ reasoningLevel: level }).pipe(client.surfaceError))
   }
 
   const onForkSelect = (messageId: MessageId) => {
@@ -3023,6 +3042,7 @@ export function createSessionController(props: {
     content: string,
     mode: "queue" | "interject",
     target: SessionIdentity,
+    requestId: string,
   ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
@@ -3030,14 +3050,25 @@ export function createSessionController(props: {
       sameIdentity(current, target),
     )
     if (mode === "interject" && stillHere && client.isStreaming()) {
-      return client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
+      return client.steer(
+        target,
+        SteerCommandInput.cases.Interject.make({ message: content }),
+        requestId,
+      )
     }
-    return client.sendMessage(target, content)
+    return client.sendMessage(target, content, requestId)
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {
     Option.map(client.sessionIdentity(), (target) =>
-      cast(client.steer(target, SteerCommandInput.cases.Cancel.make({})).pipe(client.surfaceError)),
+      cast(
+        randomId.pipe(
+          Effect.flatMap((requestId) =>
+            client.steer(target, SteerCommandInput.cases.Cancel.make({}), requestId),
+          ),
+          client.surfaceError,
+        ),
+      ),
     )
   }
 

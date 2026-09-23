@@ -26,9 +26,10 @@ import {
   formatGenericToolText,
   parseBashOutput,
   toolArgSummary,
+  isConnectionLoss,
+  randomId,
   type ToolInput,
 } from "./utils.js"
-import { isConnectionLoss, randomId } from "./utils"
 
 // ── headless tool renderers ─────────────────────────────────────────────────
 
