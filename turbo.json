@@ -35,6 +35,7 @@
       "cache": false
     },
     "test:e2e": {
+      "dependsOn": ["build"],
       "inputs": [
         "src/**/*.ts",
         "src/**/*.tsx",

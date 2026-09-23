@@ -42,6 +42,7 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
   Effect.gen(function* () {
     const counter = yield* Ref.make(0)
     return GentPlatform.of({
+      bindModules: () => Effect.void,
       randomId: Ref.updateAndGet(counter, (n) => n + 1).pipe(
         Effect.map((n) => `bf-${String(n).padStart(8, "0")}`),
       ),
