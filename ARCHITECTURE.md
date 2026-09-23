@@ -957,8 +957,8 @@ Rules:
   transport projections instead of privileged `@gent/extensions` registries
 - dispatch compiles once, then runs from typed registries and explicit runtime slots
 - public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
-- declaration setup and validation failures exclude the affected extension;
-  resource start failures reject the live graph publication
+- declaration setup, validation, and process-resource build failures exclude
+  the affected extension; a branch-resource build failure fails its loop
 - stateful side effects cross explicit typed slots (`host.on` hooks, resources,
   or extension-owned services), not private host imports
 
@@ -978,10 +978,12 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 Other notes:
 
-- A Resource layer that fails to build rejects its extension: the profile
-  reports it failed at the `startup` phase, closes what that layer acquired,
-  and keeps its siblings live. Release runs in reverse build order when the
-  profile scope closes.
+- A process Resource layer that fails to build rejects its extension: the
+  profile reports it failed at the `startup` phase, closes what that layer
+  acquired, and keeps its siblings live. Branch resources build together when
+  a branch loop starts, so a branch resource that fails to build fails that
+  loop, not one extension. Release runs in reverse build order when the owning
+  scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
 - Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent
   for one turn and nothing else. A branch holds no agent of its own, so there

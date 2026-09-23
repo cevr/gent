@@ -372,9 +372,11 @@ export class Session extends Schema.Class<Session>("Session")({
   /**
    * The thread this session belongs to, named by the session that started it.
    *
-   * Every created session starts its own thread; a delegate child or a `/btw`
-   * fork included, so side work never joins the thread it was launched from.
-   * Storage fills it with the session id on create.
+   * A handoff joins its parent's thread (`continueThread` on create), so work
+   * that outgrew one session stays one thread. Every other session, a
+   * delegate child or a `/btw` fork included, starts its own, so side work
+   * never joins the thread it was launched from. Storage fills it with the
+   * session id when the create names none.
    */
   threadId: Schema.optional(SessionId),
   createdAt: DateFromNumber,

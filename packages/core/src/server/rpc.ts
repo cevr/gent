@@ -89,6 +89,12 @@ export const CreateSessionInput = Schema.Struct({
   cwd: Schema.optional(Schema.String),
   parentSessionId: Schema.optional(SessionId),
   parentBranchId: Schema.optional(BranchId),
+  /**
+   * Join the parent's thread instead of starting one. A handoff continues the
+   * parent's work, so it stays in the parent's thread; a spawned child leaves
+   * this unset and starts its own. Requires `parentSessionId`.
+   */
+  continueThread: Schema.optional(Schema.Boolean),
   /** Copy this branch's visible messages into the new session before its first turn. */
   historyBranchId: Schema.optional(BranchId),
   /** If provided, sends this message immediately after creation */

@@ -535,6 +535,45 @@ const makeSessionMutationsService: Effect.Effect<
     yield* sessionRuntime.sendUserMessage(message)
   })
 
+  /**
+   * Check the parent a create names and admit the child's depth. Returns the
+   * thread the new session joins: the parent's for a handoff
+   * (`continueThread`), none otherwise, so storage starts a new one.
+   */
+  const admitParent = Effect.fn("SessionMutations.admitParent")(function* (
+    input: CreateSessionInput,
+  ) {
+    if (Predicate.isUndefined(input.parentSessionId)) {
+      if (!Predicate.isUndefined(input.parentBranchId)) {
+        return yield* new NotFoundError({ message: "parentBranchId requires parentSessionId" })
+      }
+      if (input.continueThread === true) {
+        return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
+      }
+      return Option.none<SessionId>()
+    }
+    const parentSessionId = input.parentSessionId
+    const parent = yield* sessionStorage.getSession(parentSessionId)
+    if (Predicate.isUndefined(parent)) {
+      return yield* new NotFoundError({
+        message: `Parent session not found: ${parentSessionId}`,
+      })
+    }
+    yield* admitChildSessionDepth(parentSessionId).pipe(
+      Effect.provideService(RelationshipStorage, relationshipStorage),
+    )
+    if (!Predicate.isUndefined(input.parentBranchId)) {
+      const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
+      if (Predicate.isUndefined(parentBranch) || parentBranch.sessionId !== parentSessionId) {
+        return yield* new NotFoundError({
+          message: `Parent branch not found in parent session: ${input.parentBranchId}`,
+        })
+      }
+    }
+    if (input.continueThread !== true) return Option.none<SessionId>()
+    return Option.some(parent.threadId ?? parent.id)
+  })
+
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
     input: CreateSessionInput,
   ) {
@@ -544,45 +583,14 @@ const makeSessionMutationsService: Effect.Effect<
       (result) => result,
       Effect.gen(function* () {
         const sessionId = SessionId.make(yield* platform.randomId)
-        if (
-          !Predicate.isUndefined(input.parentBranchId) &&
-          Predicate.isUndefined(input.parentSessionId)
-        ) {
-          return yield* new NotFoundError({
-            message: "parentBranchId requires parentSessionId",
-          })
-        }
-        if (!Predicate.isUndefined(input.parentSessionId)) {
-          const parent = yield* sessionStorage.getSession(input.parentSessionId)
-          if (Predicate.isUndefined(parent)) {
-            return yield* new NotFoundError({
-              message: `Parent session not found: ${input.parentSessionId}`,
-            })
-          }
-          yield* admitChildSessionDepth(input.parentSessionId).pipe(
-            Effect.provideService(RelationshipStorage, relationshipStorage),
-          )
-        }
-        if (
-          !Predicate.isUndefined(input.parentBranchId) &&
-          !Predicate.isUndefined(input.parentSessionId)
-        ) {
-          const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
-          if (
-            Predicate.isUndefined(parentBranch) ||
-            parentBranch.sessionId !== input.parentSessionId
-          ) {
-            return yield* new NotFoundError({
-              message: `Parent branch not found in parent session: ${input.parentBranchId}`,
-            })
-          }
-        }
+        const threadId = yield* admitParent(input)
 
         const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
-        // Every created session starts its own thread, a child included:
-        // storage defaults the thread to the session id.
+        // A handoff joins its parent's thread. Every other create, a spawned
+        // child included, starts its own: storage defaults the thread to the
+        // session id.
         const session = new Session({
           id: sessionId,
           name,
@@ -590,6 +598,7 @@ const makeSessionMutationsService: Effect.Effect<
           activeBranchId: branchId,
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
+          threadId: Option.getOrUndefined(threadId),
           createdAt: now,
           updatedAt: now,
         })

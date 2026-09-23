@@ -1431,6 +1431,34 @@ describe("extension command RPCs", () => {
     }),
   )
 
+  it.live("a handoff joins its parent's thread; a plain child starts its own", () =>
+    narrowR(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/gent-handoff-thread",
+          })
+          const handoff = yield* client.session.create({
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            continueThread: true,
+          })
+          const plain = yield* client.session.create({
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const thread = yield* client.session.thread({ sessionId: handoff.sessionId })
+          expect(thread.map((session) => session.id)).toEqual([sessionId, handoff.sessionId])
+          const plainThread = yield* client.session.thread({ sessionId: plain.sessionId })
+          expect(plainThread.map((session) => session.id)).toEqual([plain.sessionId])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+    ),
+  )
+
   it.live("RPC request follow-up on a warm idle branch runs the queued turn", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/queue-follow-up-warm")
