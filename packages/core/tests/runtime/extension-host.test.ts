@@ -533,6 +533,64 @@ export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  it.scopedLive("an edited extension file builds its process resource again", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      // Under the package, so the module resolves `effect` and `@gent/core`.
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../.."),
+        prefix: ".tmp-profile-version-",
+      })
+      const home = path.join(directory, "home")
+      const launch = path.join(directory, "launch")
+      const entry = path.join(home, ".gent", "extensions", "marker.ts")
+      yield* fs.makeDirectory(path.dirname(entry), { recursive: true })
+      yield* fs.makeDirectory(launch, { recursive: true })
+      const writeMarker = (value: string) =>
+        writeFileAtomic(
+          entry,
+          `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Marker extends Context.Service<Marker, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
+) {}
+export default defineExtension({
+  id: "profile-version",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "profile-version/marker",
+      scope: "process",
+      layer: Layer.succeed(Marker, Marker.of({ value: "${value}" })),
+    }));
+  }),
+});
+`,
+        )
+      const marker = (profile: SessionProfile) =>
+        Context.get(profile.layerContext, SessionProfileResourceMarker).value
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        // A running turn holds the first profile, so its resource stays open
+        // and the second profile could share it.
+        const runningTurn = yield* Scope.make()
+        yield* writeMarker("first")
+        const first = yield* cache.resolve(launch).pipe(Scope.provide(runningTurn))
+        expect(marker(first)).toBe("first")
+
+        yield* writeMarker("second edit")
+        const second = yield* Effect.scoped(cache.resolve(launch))
+        expect(marker(second)).toBe("second edit")
+        yield* Scope.close(runningTurn, Exit.void)
+      }).pipe(
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("isolates profiles by workspace and reuses one per key", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

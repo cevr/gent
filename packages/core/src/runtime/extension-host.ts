@@ -2020,7 +2020,7 @@ export class SessionProfileCache extends Context.Service<
         const startProcessResources = (
           place: string,
           extensions: ReadonlyArray<LoadedExtension>,
-          files: ReadonlyArray<string>,
+          scan: ExtensionScan,
           held: Array<string>,
           restore: Restore,
         ): Effect.Effect<StartedProcessResources> =>
@@ -2029,16 +2029,21 @@ export class SessionProfileCache extends Context.Service<
             const chain = [place]
             const active: Array<LoadedExtension> = []
             const failed: Array<FailedExtension> = []
+            const versions = new Map<string, string>()
+            for (const file of [...scan.user.paths, ...scan.project.paths]) {
+              versions.set(file.path, file.version)
+            }
             for (const extension of sortExtensionsByScope(extensions)) {
               if (collectResourceEntries([extension], "process").length === 0) {
                 active.push(extension)
                 continue
               }
-              const source = Option.getOrElse(
-                Option.fromUndefinedOr(
-                  files.find((file) => file.startsWith(`${extension.sourcePath}@`)),
-                ),
-                () => extension.sourcePath,
+              const source = Option.match(
+                Option.fromUndefinedOr(versions.get(extension.sourcePath)),
+                {
+                  onNone: () => extension.sourcePath,
+                  onSome: (version) => `${extension.sourcePath}@${version}`,
+                },
               )
               const identity = `${extension.scope}:${extension.manifest.id}:${source}`
               const key = [...chain, identity].join("\u0000")
@@ -2096,7 +2101,7 @@ export class SessionProfileCache extends Context.Service<
           cwd: string,
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
-          files: ReadonlyArray<string>,
+          scan: ExtensionScan,
           restore: Restore,
         ) =>
           Effect.gen(function* () {
@@ -2106,7 +2111,7 @@ export class SessionProfileCache extends Context.Service<
               const started = yield* startProcessResources(
                 place,
                 declarations.extensionDeclarations.active,
-                files,
+                scan,
                 held,
                 restore,
               )
@@ -2179,7 +2184,7 @@ export class SessionProfileCache extends Context.Service<
               aliases.set(list, key)
               return found.value
             }
-            const built = yield* buildProfile(place, cwd, fresh, declarations, files, restore).pipe(
+            const built = yield* buildProfile(place, cwd, fresh, declarations, scan, restore).pipe(
               Effect.orDie,
             )
             const entry: ProfileEntry = { key, place, ...built }
