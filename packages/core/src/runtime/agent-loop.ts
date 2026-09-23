@@ -533,12 +533,22 @@ const turnFailureEpoch = (state: AgentLoopState): number =>
 
 // ── The module ──
 
+/**
+ * The queue writes that failed so far, as a monotonic counter with the latest
+ * error. A waiter records the epoch before it starts and fails only on a mark
+ * past it, so a write that failed once never fails a later caller.
+ */
+interface PersistenceFailureMark {
+  readonly epoch: number
+  readonly error: Option.Option<AgentLoopError>
+}
+
 type LoopInboxContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
   readonly queuePersistenceSemaphore: Semaphore.Semaphore
-  readonly persistenceFailure: Deferred.Deferred<void, AgentLoopError>
+  readonly persistenceFailures: TxSubscriptionRef.TxSubscriptionRef<PersistenceFailureMark>
   readonly startedRef: Ref.Ref<boolean>
 }
 
@@ -638,7 +648,10 @@ export const makeLoopInbox = (
       })
 
     const recordPersistenceFailure = (error: AgentLoopError) =>
-      Deferred.fail(scope.persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
+      TxSubscriptionRef.update(scope.persistenceFailures, (mark) => ({
+        epoch: mark.epoch + 1,
+        error: Option.some(error),
+      }))
 
     const commitQueueTransaction = <A>(
       operation: string,
@@ -1170,7 +1183,10 @@ const provideAgentLoopRuntimeContext =
     Effect.provideContext(effect, ctx)
 
 type AgentLoopBehavior = {
-  persistenceFailure: Effect.Effect<void, AgentLoopError>
+  /** The persistence-failure epoch now; a waiter records it before it starts. */
+  persistenceFailureEpoch: Effect.Effect<number>
+  /** Fails with the first queue-write failure recorded after `epoch`. */
+  persistenceFailureAfter: (epoch: number) => Effect.Effect<void, AgentLoopError>
   /**
    * Everything this branch has accepted and not yet answered. The behavior
    * does not restate the inbox's verbs: a caller that wants to admit, steer,
@@ -1394,7 +1410,10 @@ const makeAgentLoopBehavior = (
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
     )
     const queuePersistenceSemaphore = yield* Semaphore.make(1)
-    const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
+    const persistenceFailures = yield* TxSubscriptionRef.make<PersistenceFailureMark>({
+      epoch: 0,
+      error: Option.none(),
+    })
     const closed = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
@@ -1403,7 +1422,7 @@ const makeAgentLoopBehavior = (
       branchId,
       loopRef,
       queuePersistenceSemaphore,
-      persistenceFailure,
+      persistenceFailures,
       startedRef,
     })
 
@@ -1522,7 +1541,26 @@ const makeAgentLoopBehavior = (
     })
 
     return {
-      persistenceFailure: Deferred.await(persistenceFailure),
+      persistenceFailureEpoch: Effect.map(
+        TxSubscriptionRef.get(persistenceFailures),
+        (mark) => mark.epoch,
+      ),
+      persistenceFailureAfter: (epoch) =>
+        Effect.gen(function* () {
+          const after = (mark: PersistenceFailureMark) => mark.epoch > epoch
+          const current = yield* TxSubscriptionRef.get(persistenceFailures)
+          let mark = Option.liftPredicate(current, after)
+          if (Option.isNone(mark)) {
+            mark = yield* TxSubscriptionRef.changesStream(persistenceFailures).pipe(
+              Stream.filter(after),
+              Stream.runHead,
+            )
+          }
+          return yield* Option.getOrElse(
+            Option.flatMap(mark, (value) => value.error),
+            () => new AgentLoopError({ message: "Queue persistence failure stream ended" }),
+          )
+        }),
       inbox,
       incompleteUserTurn,
       hasPriorHistory,
@@ -1592,7 +1630,7 @@ const isActiveLoopState = Predicate.or(
  * not running it, not waiting on it, and not keeping it queued. That is read
  * off the loop's own state, so no event subscription can miss it. Failure is
  * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
- * before starting the turn (`turnFailureBaseline`). A later mark that names
+ * before starting the turn (`waitBaseline`). A later mark that names
  * the caller's message is this turn's failure; a mark for another message is
  * not.
  */
@@ -1691,9 +1729,18 @@ const failIfTurnFailedAfterEpoch = (
     }
   })
 
-/** Record the failure mark to wait from. Take this *before* starting the turn. */
-const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number> =>
-  Effect.map(behavior.inbox.read, turnFailureEpoch)
+/** Where a waiter starts: the turn- and persistence-failure marks before its turn. */
+interface WaitBaseline {
+  readonly turn: number
+  readonly persistence: number
+}
+
+/** Record the failure marks to wait from. Take this *before* starting the turn. */
+const waitBaseline = (behavior: AgentLoopBehavior): Effect.Effect<WaitBaseline> =>
+  Effect.all({
+    turn: Effect.map(behavior.inbox.read, turnFailureEpoch),
+    persistence: behavior.persistenceFailureEpoch,
+  })
 
 /**
  * Wait until the loop has released `messageId`, started after `baseline`.
@@ -1707,7 +1754,7 @@ const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number>
  */
 const awaitTurnCompletion = (
   behavior: AgentLoopBehavior,
-  baseline: number,
+  baseline: WaitBaseline,
   messageId: MessageId,
   onPersistenceFailure: (
     failure: Effect.Effect<void, AgentLoopError>,
@@ -1716,13 +1763,13 @@ const awaitTurnCompletion = (
   Effect.raceFirst(
     Effect.raceFirst(
       waitForMessageReleased(behavior, messageId),
-      waitForTurnFailureAfterEpoch(behavior, baseline, messageId),
+      waitForTurnFailureAfterEpoch(behavior, baseline.turn, messageId),
     ),
-    onPersistenceFailure(behavior.persistenceFailure),
+    onPersistenceFailure(behavior.persistenceFailureAfter(baseline.persistence)),
   ).pipe(
     // Release wins the race even when the turn failed on its way there,
     // so the failure is checked once more after the race settles.
-    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline, messageId)),
+    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline.turn, messageId)),
   )
 /**
  * `Actor.toLayer` handler layer for `AgentLoop`.
@@ -2220,7 +2267,7 @@ const buildAgentLoopActorHandlers = (config: {
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      const baseline = yield* turnFailureBaseline(handle)
+      const baseline = yield* waitBaseline(handle)
       yield* admitTurn(handle, operation)
       // This turn is done when the loop lets *its* message go, which can
       // happen while the loop stays busy with a follow-up.
@@ -2336,7 +2383,7 @@ const buildAgentLoopActorHandlers = (config: {
             if (phase._tag !== "Idle") return
             const message = yield* handle.incompleteUserTurn
             if (Option.isNone(message)) return
-            const baseline = yield* turnFailureBaseline(handle)
+            const baseline = yield* waitBaseline(handle)
             yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
             yield* awaitTurnCompletion(handle, baseline, message.value.id, orCleanup(handle))
           }).pipe(provideActorWorkspace),

@@ -1947,7 +1947,10 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       branchId,
       loopRef,
       queuePersistenceSemaphore: yield* Semaphore.make(1),
-      persistenceFailure: yield* Deferred.make<void, AgentLoopError>(),
+      persistenceFailures: yield* TxSubscriptionRef.make({
+        epoch: 0,
+        error: Option.none<AgentLoopError>(),
+      }),
       startedRef: yield* Ref.make(true),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
@@ -3454,7 +3457,10 @@ describe("wake admission", () => {
         branchId: wakeBranchId,
         loopRef,
         queuePersistenceSemaphore: yield* Semaphore.make(1),
-        persistenceFailure: yield* Deferred.make<void, AgentLoopError>(),
+        persistenceFailures: yield* TxSubscriptionRef.make({
+          epoch: 0,
+          error: Option.none<AgentLoopError>(),
+        }),
         startedRef: yield* Ref.make(true),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
@@ -5915,6 +5921,80 @@ describe("streaming", () => {
         Effect.timeout("4 seconds"),
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayerWithEventPublisher(providerLayer, failFirstAssistant)),
+      )
+    }),
+  )
+  it.live("a queue write that failed earlier does not fail a later waiting caller", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("stale-persistence-session")
+      const branchId = BranchId.make("stale-persistence-branch")
+      const failWrites = yield* Ref.make(false)
+      const rows = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
+      const queueStorageLayer = Layer.succeed(
+        AgentLoopQueueStorage,
+        AgentLoopQueueStorage.of({
+          getQueueState: () => Ref.get(rows),
+          putQueueState: (_s, _b, queue) =>
+            Effect.gen(function* () {
+              if (yield* Ref.get(failWrites)) {
+                return yield* new StorageError({ message: "queue write failed once" })
+              }
+              yield* Ref.set(rows, queue)
+            }),
+        }),
+      )
+      const providerLayer = scriptedProvider([
+        [textDeltaPart("answered"), finishPart({ finishReason: "stop" })],
+      ])
+      const deps = Layer.mergeAll(
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+        queueStorageLayer,
+        providerLayer,
+        ModelResolver.fromLanguageModel(providerLayer),
+        makeExtRegistry(),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ConfigService.Test(),
+        EventStore.Memory,
+        ToolRunner.Test(),
+        ApprovalService.Test(),
+        BunServices.layer,
+        ModelRegistry.Test(),
+        GentPlatform.Test(),
+      )
+      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            Layer.provide(EventPublisherLive, deps),
+            AgentLoopSessionGovernance.Live,
+          ),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        expect((yield* agentLoop.getState({ sessionId, branchId }))._tag).toBe("Idle")
+        // One steering write fails while storage is down; the caller hears it.
+        yield* Ref.set(failWrites, true)
+        const steered = yield* Effect.exit(
+          steerAgentLoop({
+            _tag: "Interject",
+            sessionId,
+            branchId,
+            requestId: "req-stale-persistence",
+            message: "parked while storage is down",
+          }),
+        )
+        expect(steered._tag).toBe("Failure")
+        // Storage recovers. A turn submitted now owes nothing to that failure.
+        yield* Ref.set(failWrites, false)
+        const submitted = yield* Effect.exit(
+          runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "after recovery")),
+        )
+        expect(submitted._tag).toBe("Success")
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(layer),
       )
     }),
   )
