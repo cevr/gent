@@ -391,6 +391,11 @@ const continueGoal = (input: TurnAfterInput) =>
       )
       return
     }
+    // A turn whose total is unknown (a step cut short, or a restart) charges its time only.
+    const turnTokens = Option.match(Option.fromUndefinedOr(input.usage), {
+      onNone: () => 0,
+      onSome: (usage) => usage.inputTokens + usage.outputTokens,
+    })
     const decision = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current)) return { next: current, result: Option.none<GoalState>() }
@@ -399,7 +404,7 @@ const continueGoal = (input: TurnAfterInput) =>
         if (goal.status === "complete" && goal.finalized !== true) {
           const finalized: GoalState = {
             ...goal,
-            tokensUsed: goal.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
+            tokensUsed: goal.tokensUsed + turnTokens,
             timeUsedMs: goal.timeUsedMs + input.durationMs,
             finalized: true,
             updatedAt: yield* now,
@@ -409,7 +414,7 @@ const continueGoal = (input: TurnAfterInput) =>
         if (goal.status !== "active") return { next: current, result: Option.none<GoalState>() }
         const charged: GoalState = {
           ...goal,
-          tokensUsed: goal.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
+          tokensUsed: goal.tokensUsed + turnTokens,
           timeUsedMs: goal.timeUsedMs + input.durationMs,
           updatedAt: yield* now,
         }

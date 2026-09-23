@@ -1248,6 +1248,76 @@ describe("tool projection reconciliation", () => {
     execute: (params) => Effect.succeed({ text: params.text }),
   })
 
+  it.live("a turn resumed after a restart reports no usage total", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("restart-usage-session")
+      const branchId = BranchId.make("restart-usage-branch")
+      const toolCallId = ToolCallId.make("restart-usage-call")
+      const providerLayer = scriptedProvider([
+        [
+          textDeltaPart("after restart"),
+          finishPart({ finishReason: "stop", usage: { inputTokens: 7, outputTokens: 11 } }),
+        ],
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const messageStorage = yield* MessageStorage
+          yield* ensureStorageParents({ sessionId, branchId })
+          const turn = makeMessage(sessionId, branchId, "resume after restart")
+          // A previous host settled step 1 and died: its usage never reached this process.
+          yield* messageStorage.createMessage(
+            Message.cases.regular.make({
+              id: assistantMessageIdForTurn(turn.id, 1),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [
+                Prompt.toolCallPart({
+                  id: toolCallId,
+                  name: "echo",
+                  params: { text: "done" },
+                  providerExecuted: false,
+                }),
+              ],
+              createdAt: dateFromMillis(1_767_225_600_010),
+            }),
+          )
+          yield* messageStorage.createMessage(
+            Message.cases.regular.make({
+              id: toolResultMessageIdForTurn(turn.id, 1),
+              sessionId,
+              branchId,
+              role: "tool",
+              parts: [
+                Prompt.toolResultPart({
+                  id: toolCallId,
+                  name: "echo",
+                  isFailure: false,
+                  providerExecuted: false,
+                  result: "done",
+                }),
+              ],
+              createdAt: dateFromMillis(1_767_225_600_020),
+            }),
+          )
+
+          const agentLoop = yield* makeAgentLoopService
+          yield* runAgentLoop(agentLoop, turn)
+
+          const completed = (yield* Ref.get(eventsRef)).find(
+            (event) => event._tag === "TurnCompleted" && event.messageId === turn.id,
+          )
+          expect(completed?._tag).toBe("TurnCompleted")
+          expect(completed?._tag === "TurnCompleted" && completed.usage).toBeUndefined()
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
+          Effect.timeout("4 seconds"),
+        ),
+      )
+    }),
+  )
   it.live("fails a stale running tool projection before any new model work", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("orphan-session")
@@ -4445,6 +4515,66 @@ describe("interaction", () => {
       )
     }),
   )
+  it.live("a turn resumed after an interaction reports the usage of every step", () =>
+    Effect.gen(function* () {
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
+      const tool = makeInteractionTool(callCount, resolution)
+      let streamCall = 0
+      const provider = LanguageModelLayers.testStream(() => {
+        const call = streamCall++
+        if (call === 0) {
+          return Effect.succeed(
+            Stream.fromIterable([
+              toolCallPart(
+                "interaction-tool",
+                { value: "test" },
+                { toolCallId: ToolCallId.make("tc-usage") },
+              ),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 3, outputTokens: 5 },
+              }),
+            ] satisfies LanguageModelStreamPart[]),
+          )
+        }
+        return Effect.succeed(
+          Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop", usage: { inputTokens: 7, outputTokens: 11 } }),
+          ] satisfies LanguageModelStreamPart[]),
+        )
+      })
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const layer = makeLiveToolLayer(provider, [tool], [], makeCountingEventStore(eventsRef))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const message = makeIntMessage("usage across a park")
+          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: intSessionId, branchId: intBranchId },
+            "WaitingForInteraction",
+          )
+          yield* respondAgentLoopInteraction({
+            sessionId: intSessionId,
+            branchId: intBranchId,
+            requestId: InteractionRequestId.make("req-test-1"),
+          })
+          yield* Fiber.join(fiber)
+          const completed = (yield* Ref.get(eventsRef)).find(
+            (event) => event._tag === "TurnCompleted" && event.messageId === message.id,
+          )
+          expect(completed?._tag === "TurnCompleted" && completed.usage).toEqual({
+            inputTokens: 10,
+            outputTokens: 16,
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+      )
+    }),
+  )
   it.live("an interrupt during a parked interaction gives the parked call a result", () =>
     Effect.gen(function* () {
       const callCount = yield* Ref.make(0)
@@ -5916,7 +6046,10 @@ describe("streaming", () => {
             )
           }
           return Effect.succeed(
-            Stream.fromIterable([textDeltaPart("rest"), finishPart({ finishReason: "stop" })]),
+            Stream.fromIterable([
+              textDeltaPart("rest"),
+              finishPart({ finishReason: "stop", usage: { inputTokens: 7, outputTokens: 11 } }),
+            ]),
           )
         })
         yield* Effect.scoped(
@@ -5945,6 +6078,9 @@ describe("streaming", () => {
             const completed = events.filter((event) => event._tag === "TurnCompleted")
             expect(completed).toHaveLength(1)
             expect(completed[0]).not.toMatchObject({ streamFailed: true })
+            // The broken step spent tokens nobody reported: the receipt names no
+            // total rather than the second step's alone.
+            expect(completed[0]?._tag === "TurnCompleted" && completed[0].usage).toBeUndefined()
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
         )

@@ -334,6 +334,8 @@ const wasInterrupted = (handle: ActiveStreamHandle): Effect.Effect<boolean> =>
 
 /** Mutable accumulator for per-turn wide event fields. */
 type TurnMetrics = {
+  /** The turn these totals belong to; a resume of the same turn keeps them. */
+  messageId: Option.Option<MessageId>
   agent: AgentNameType
   model: string
   inputTokens: number
@@ -346,6 +348,7 @@ type TurnMetrics = {
 }
 
 const emptyTurnMetrics = (): TurnMetrics => ({
+  messageId: Option.none(),
   agent: DEFAULT_AGENT_NAME,
   model: "",
   inputTokens: 0,
@@ -683,7 +686,11 @@ export const collectExternalTurnResponse = <R>(params: {
  *
  * A turn's token totals, tool-call count and step count accumulate across its
  * model steps and are read once, at the end, to fill `TurnCompleted`. The
- * accumulator therefore outlives no turn: the next one starts from zero.
+ * accumulator therefore outlives no turn: the next one starts from zero. A
+ * turn parked on an interaction and resumed is the same turn, so its steps
+ * before the park still count. Steps this process never saw (a turn resumed
+ * after a restart) and steps cut short without usage make the total
+ * unreportable rather than partial.
  *
  * `beginTurn` is the reset, and a writer says what its step observed rather
  * than how to merge it; the fold (which totals to add, which counts make the
@@ -700,8 +707,10 @@ export const collectExternalTurnResponse = <R>(params: {
 const reportable = (count: number) => Number.isSafeInteger(count) && count >= 0
 
 interface TurnLedger {
-  /** A fresh turn begins, so it has spent nothing. */
-  readonly beginTurn: Effect.Effect<void>
+  /** A turn begins or resumes. A different turn starts from zero; the same one keeps its totals. */
+  readonly beginTurn: (messageId: MessageId) => Effect.Effect<void>
+  /** The turn committed steps before this ledger saw it: its total cannot be complete. */
+  readonly noteUnseenSteps: Effect.Effect<void>
   /** Which agent and model this turn runs as. Known before its first step. */
   readonly noteModel: (params: {
     readonly agent: AgentNameType
@@ -724,7 +733,15 @@ interface TurnLedger {
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
   return {
-    beginTurn: Ref.set(metrics, emptyTurnMetrics()),
+    beginTurn: (messageId) =>
+      Ref.update(metrics, (m) => {
+        if (Option.contains(m.messageId, messageId)) return m
+        return { ...emptyTurnMetrics(), messageId: Option.some(messageId) }
+      }),
+    noteUnseenSteps: Ref.update(metrics, (m) => {
+      if (m.steps > 0) return m
+      return { ...m, usageKnown: false }
+    }),
     noteModel: (params) =>
       Ref.update(metrics, (m) => ({ ...m, agent: params.agent, model: params.model })),
     noteStep: (params) =>
@@ -733,6 +750,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
         const inputTokens = m.inputTokens + step.inputTokens
         const outputTokens = m.outputTokens + step.outputTokens
         return {
+          messageId: m.messageId,
           agent: params.agent,
           model: params.model,
           inputTokens,
@@ -2399,6 +2417,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             parts: [...toolParts, ...unrun],
           })
           yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
+          // A cut step spent tokens nobody reported, so the turn's total is unknown.
+          yield* scope.turnLedger.noteStep({
+            agent: params.resolved.currentTurnAgent,
+            model: params.resolved.modelId,
+            usage: Option.none(),
+            toolCallCount: 0,
+          })
         })
 
       yield* Match.type<StepOutcome>().pipe(
@@ -2464,16 +2489,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
       const metrics = yield* scope.turnLedger.total
+      // Token totals are a receipt only when every step reported usable
+      // counts; a partial sum would read as the turn's true total.
+      const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
+        inputTokens: metrics.inputTokens,
+        outputTokens: metrics.outputTokens,
+      }))
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
           // Token totals are a receipt only when every step reported usable
           // counts; a partial sum would read as the turn's true total.
-          const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
-            inputTokens: metrics.inputTokens,
-            outputTokens: metrics.outputTokens,
-          }))
           return yield* eventPublisher.append(
             TurnCompleted.make({
               sessionId: scope.sessionId,
@@ -2502,7 +2529,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
         unanswered: params.unanswered,
-        usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+        ...omitUndefined({ usage: Option.getOrUndefined(usage) }),
       })
       yield* Effect.logDebug("finalize.turn-after.done")
 
@@ -3053,7 +3080,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
-      yield* scope.turnLedger.beginTurn
+      yield* scope.turnLedger.beginTurn(state.message.id)
       const cancelled = yield* operations
         .isTurnCancelled({
           sessionId: scope.sessionId,
@@ -3111,6 +3138,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           preserveReplayBindings = true
           return resumed.interaction.value
         }
+        if (resumed.step > 0) yield* scope.turnLedger.noteUnseenSteps
 
         const ended = yield* runSteps(resumed.step)
         if (ended._tag === "Interaction") {

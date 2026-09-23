@@ -533,7 +533,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   readonly interrupted: boolean
   readonly streamFailed: boolean
   readonly unanswered: boolean
-  readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
+  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
 }) {
   const ctx = yield* ExtensionContext
   const session = yield* ctx.Session.getSession(input.sessionId)

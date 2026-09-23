@@ -365,6 +365,7 @@ export const makeLiveToolLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
+  eventStoreLayer: Layer.Layer<EventStore> = EventStore.Memory,
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
@@ -374,7 +375,7 @@ export const makeLiveToolLayer = (
     extRegistry,
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ConfigService.Test(),
-    EventStore.Memory,
+    eventStoreLayer,
     ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
