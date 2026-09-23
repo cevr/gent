@@ -99,7 +99,20 @@ export const makeForkPane = (
         )
         const send = Option.match(sending, {
           onNone: () => Effect.void,
-          onSome: (entry) => entry.send(entry.session),
+          onSome: (entry) =>
+            entry.send(entry.session).pipe(
+              // The pane shows a failure only under the session in view. A
+              // question asked in a session the reader has left fails out
+              // loud, with its text, instead of vanishing.
+              Effect.tapError((failure) =>
+                Effect.sync(() => {
+                  const here = Option.exists(transport.currentSession(), (now) =>
+                    sameSession(now, entry.session),
+                  )
+                  if (!here) shell.notify(`btw: not asked "${entry.question}": ${failure.message}`)
+                }),
+              ),
+            ),
         })
         return send.pipe(Effect.andThen(actions.progress(session)))
       },
