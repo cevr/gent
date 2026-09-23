@@ -525,12 +525,16 @@ Tools that need human input call `ctx.Interaction.approve()`, which delegates to
 `ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
 replay also requires a trusted, unchanged saved tool binding.
 
-A session no user sees (`admission.interactive: false`, a delegate child)
-never presents an approval: `approve` declines at once, and its notes tell the
-child to ask its parent with `session.send`. The bash and monitor blocks carry
-those notes. The run's host context reads the
-flag from the session row with its cwd. A child therefore ends its turn, and
-its completion wakes the parent.
+Whether a turn can ask comes from its origin, not from a stored flag
+(`turnCanAsk` in `domain/message.ts`). `Session.send` stamps the sending
+extension's id on every message it admits (`metadata.extensionId`), so a turn
+such a message opens (a child's task from `delegate.start`, a parent's
+`session.send`, a wake, a monitor, a delegate completion, a `/btw` question)
+has no user watching. Its `approve` declines at once, and the tools that ask
+the user are withheld. A turn a client's prompt opens asks as usual, in any
+session, a delegate child included. The loop reads the fact from the turn's
+opening message, so it survives a restart. The decline's notes say who can
+answer instead; the bash and monitor blocks carry them.
 
 An inner call of a dispatching tool (a cell) is the exception: its dispatcher
 cannot replay its source, so the call waits for its answer in place through the
@@ -1093,14 +1097,16 @@ Other notes:
   fails that loop, not one extension. Release runs in reverse build order when the owning
   scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
-- The agent is a session property. `Session.admission` (agent, run spec,
-  interactive; `sessions.admission_json`, migration 023) is fixed at creation,
+- The agent is a session property. `Session.admission` (agent, run spec;
+  `sessions.admission_json`, migration 023) is fixed at creation,
   and every turn of the session runs under it: the first, a wake, a queued
   follow-up, a steer that starts a turn, and a recovered turn after a restart.
   `sessionAgentDefinition` (`runtime/turn.ts`) resolves it once for the turn,
   the snapshot (`SessionSnapshot.agent`) and the auth check. No queue item,
   steering command, turn record or loop state carries an agent. A handoff
-  (`continueThread`) keeps its parent's admission unless it names one.
+  (`continueThread`) keeps its parent's admission unless it names one. A row
+  stored while admission carried `interactive` still decodes; the key is
+  ignored and dropped on the next write.
 - Model precedence: the session's `/model` setting, then the admission's run
   overrides, then config `agents[name]`, then the agent definition.
 - `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.

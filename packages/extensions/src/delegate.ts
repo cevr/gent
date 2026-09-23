@@ -684,7 +684,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           parentBranchId: ctx.branchId,
           admission: {
             agent: DELEGATE_AGENT_NAME,
-            interactive: false,
             runSpec: childRunSpec(makeRunSpec(params.runSpec)),
           },
           ...Record.filter(

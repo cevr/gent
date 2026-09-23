@@ -2099,10 +2099,10 @@ interface MakeExtensionHostContextRunInfo {
   /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
   readonly sessionCwd?: string
   /**
-   * False: no user sees this session's turns (a delegate child), so no one
-   * can answer an approval. Absent: an interactive session.
+   * False: an extension opened this turn (`turnCanAsk`), so no user can
+   * answer an approval in it.
    */
-  readonly interactive?: boolean
+  readonly interactive: boolean
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2126,7 +2126,7 @@ const facet = <I, S>(tag: Context.Key<I, S>, name: string): Effect.Effect<Facet<
 
 const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
 
-/** The answer to an approval asked in a session no user sees. */
+/** The answer to an approval asked in a turn no user started. */
 const unanswerableApproval: ApprovalDecision = {
   approved: false,
   notes:
@@ -2322,6 +2322,7 @@ export const makeExtensionHostContextProvider = (
                         content: turn.content,
                         commandId: turn.commandId,
                         completion: turn.completion,
+                        metadata: turn.metadata,
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
@@ -2446,7 +2447,7 @@ export const makeExtensionHostContextProvider = (
 
       Interaction: {
         // An approval no one is shown would park the turn for good, so a
-        // session without a user declines at once and says who can answer.
+        // turn no user started declines at once and says who can answer.
         approve: (params) => {
           if (runInfo.interactive === false) return Effect.succeed(unanswerableApproval)
           return mapInteraction(
@@ -2540,6 +2541,8 @@ export const sessionWorkingDirectory = (
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  /** Whether a user can answer in this run (`turnCanAsk` of its opening message). */
+  readonly interactive: boolean
   readonly profileCache?: SessionProfileCacheService
   readonly hostProvider: ExtensionHostContextProvider
   readonly defaults: TurnProfileDefaults
@@ -2553,9 +2556,7 @@ export const resolveTurnProfile = (params: {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
-      interactive: Option.getOrUndefined(
-        Option.flatMap(session, (value) => Option.fromUndefinedOr(value.admission?.interactive)),
-      ),
+      interactive: params.interactive,
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),

@@ -138,7 +138,6 @@ describe("session admission", () => {
       const sessionId = SessionId.make("admitted-session")
       const admission = {
         agent: AgentName.make("helper"),
-        interactive: false,
         runSpec: { overrides: { deniedTools: ["delegate.start"] } },
       }
       yield* sessions.createSession(
@@ -239,14 +238,14 @@ describe("session admission", () => {
 
         yield* Effect.gen(function* () {
           const sessions = yield* SessionStorage
+          // The copied `interactive` key stays in the row and decodes away:
+          // whether a turn can ask comes from its origin now.
           expect((yield* sessions.getSession(recorded))?.admission).toEqual({
             agent: AgentName.make("helper"),
-            interactive: false,
             runSpec: { overrides: { deniedTools: ["delegate.start"] } },
           })
           expect((yield* sessions.getSession(queued))?.admission).toEqual({
             agent: AgentName.make("helper"),
-            interactive: false,
           })
           expect((yield* sessions.getSession(plain))?.admission).toBeUndefined()
           // The turn that runs next keeps its agent over an older record.

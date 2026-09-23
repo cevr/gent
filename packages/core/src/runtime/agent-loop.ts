@@ -1220,7 +1220,10 @@ type AgentLoopBehavior = {
    * the withdrawal has to reach the admission gate as well.
    */
   withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
+  /** The profile for one run; `interactive` says whether a user can answer in it. */
+  resolveTurnProfile: (run: {
+    readonly interactive: boolean
+  }) => Effect.Effect<AgentLoopTurnProfile>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
@@ -1390,15 +1393,17 @@ const makeAgentLoopBehavior = (
       },
     })
 
-    const resolveTurnProfile = provideAgentLoopRuntimeContext(runtimeContext)(
-      resolveSessionTurnProfile({
-        sessionId,
-        branchId,
-        profileCache,
-        hostProvider,
-        defaults: { baseSections },
-      }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
-    )
+    const resolveTurnProfile = (run: { readonly interactive: boolean }) =>
+      provideAgentLoopRuntimeContext(runtimeContext)(
+        resolveSessionTurnProfile({
+          sessionId,
+          branchId,
+          interactive: run.interactive,
+          profileCache,
+          hostProvider,
+          defaults: { baseSections },
+        }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
+      )
 
     const loopScope = yield* Effect.scope
     const turnInterruption = yield* makeTurnInterruption
@@ -1423,7 +1428,8 @@ const makeAgentLoopBehavior = (
     const branchContext = Effect.gen(function* () {
       const built = yield* Ref.get(branchResources)
       if (Option.isSome(built)) return built.value
-      const profile = yield* resolveTurnProfile
+      // Resources are built once for the branch; no turn's origin reaches them.
+      const profile = yield* resolveTurnProfile({ interactive: true })
       return yield* Effect.uninterruptible(
         Layer.build(
           buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
@@ -2455,7 +2461,8 @@ const buildAgentLoopActorHandlers = (config: {
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             const handle = yield* ensureStarted
-            const environment = yield* handle.resolveTurnProfile
+            // A request comes from a client, which can answer.
+            const environment = yield* handle.resolveTurnProfile({ interactive: true })
             const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())

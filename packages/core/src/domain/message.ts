@@ -221,7 +221,11 @@ const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
 export const MessageMetadata = Schema.Struct({
   /** Extension-defined type tag for custom message rendering */
   customType: Schema.optional(Schema.String),
-  /** Which extension authored this message */
+  /**
+   * The extension that authored this message. `Session.send` sets it on
+   * every message an extension admits, so a turn such a message opens (a
+   * child's task, a parent's message, a wake, a monitor) has no user to ask.
+   */
   extensionId: Schema.optional(Schema.String),
   /** If true, message is excluded from LLM context but visible in transcript */
   hidden: Schema.optional(Schema.Boolean),
@@ -236,6 +240,15 @@ export const MessageMetadata = Schema.Struct({
   details: Schema.optional(Schema.Unknown),
 })
 export type MessageMetadata = typeof MessageMetadata.Type
+
+/**
+ * Whether a turn can ask its user: only a turn a client's prompt opened has
+ * one watching it. A turn an extension admitted declines every approval at
+ * once. The answer comes from the turn's opening message, so it holds for
+ * the turn's whole life, a restart included.
+ */
+export const turnCanAsk = (opening: Message): boolean =>
+  Predicate.isUndefined(opening.metadata?.extensionId)
 
 // Steer Command — RPC payload that targets a session/branch loop.
 // Lives beside the message vocabulary: an Interject carries the envelope of
@@ -432,18 +445,20 @@ export const projectMessage = (
 // Session
 
 /**
- * What every turn of a session runs as: the agent, the run's overrides, and
- * whether anyone can answer a question. It is fixed when the session is
- * created, so a later turn -- a wake, a completed background job, a parent's
- * message -- runs as the session's agent, never as the default one. Every
- * field is optional: a plain session and a row stored before this existed run
- * as the default agent, interactively.
+ * What every turn of a session runs as: the agent and the run's overrides.
+ * It is fixed when the session is created, so a later turn -- a wake, a
+ * completed background job, a parent's message -- runs as the session's
+ * agent, never as the default one. Every field is optional: a plain session
+ * and a row stored before this existed run as the default agent.
+ *
+ * Whether a turn can ask its user is not stored here: it comes from the
+ * turn's origin (`turnCanAsk`). A row stored while this carried
+ * `interactive` still decodes: the struct ignores keys it does not declare,
+ * and the next write drops the key.
  */
 export const SessionAdmission = Schema.Struct({
   agent: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
-  /** `false` withholds the tools that ask the user. Only `false` is read. */
-  interactive: Schema.optional(Schema.Boolean),
 })
 export type SessionAdmission = typeof SessionAdmission.Type
 

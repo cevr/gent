@@ -22,6 +22,7 @@ import {
 } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
+  ApprovalService,
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
@@ -57,7 +58,7 @@ const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown)
 
 const harnessWithHome = (
   providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"],
-  options: { readonly config?: UserConfig } = {},
+  options: { readonly config?: UserConfig; readonly dialogs?: boolean } = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("delegate-")
@@ -71,6 +72,10 @@ const harnessWithHome = (
             Option.fromUndefinedOr(options.config),
             ConfigService.Test,
           ).pipe(Option.getOrUndefined),
+          // `dialogs` presents approvals to the client instead of auto-approving them.
+          approvalLayer: Option.getOrUndefined(
+            Option.liftPredicate(ApprovalService.Live, () => options.dialogs === true),
+          ),
         },
         Predicate.isNotUndefined,
       ),
@@ -467,6 +472,74 @@ describe("a child's completion", () => {
       ),
     10_000,
   )
+
+  it.live(
+    "a user who prompts a child directly gets a real approval; the child's task turn still declines",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const guarded = "rm -f /tmp/gent-child-direct-approval-probe"
+          const userPrompt = "USER: run the guarded command here"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const called = promptToolCallIds(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (texts.includes(userPrompt)) {
+                if (!called.includes("user-bash")) {
+                  return Effect.succeed(toolStep("bash", { command: guarded }, "user-bash"))
+                }
+                return Effect.succeed(reply("CHILD: ran it for the user"))
+              }
+              if (!called.includes("task-bash")) {
+                return Effect.succeed(toolStep("bash", { command: guarded }, "task-bash"))
+              }
+              return Effect.succeed(reply("CHILD: the command was blocked"))
+            }
+            if (!called.includes("start-1")) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, { dialogs: true })
+          yield* sendPrompt(harness, "delegate this task")
+          yield* afterCompletion(harness)
+          const child = yield* childOf(harness)
+          // The task turn, which `delegate.start` opened, declined at once.
+          const afterTask = yield* harness.client.session.getSnapshot(child)
+          expect(resultsOf("bash", afterTask.messages)[0]).toMatchObject({
+            result: { status: "blocked" },
+          })
+          // The user switches to the child and prompts it: a user watches that turn.
+          const presented = yield* harness.client.session.events(child).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* harness.client.message.send({ ...child, content: userPrompt })
+          const dialog = Array.from(yield* Fiber.join(presented))[0]?.event
+          if (dialog?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
+          expect(dialog.text).toContain(guarded)
+          yield* harness.client.interaction.respondInteraction({
+            ...child,
+            requestId: dialog.requestId,
+            approved: true,
+          })
+          const afterUser = yield* waitFor(
+            harness.client.session.getSnapshot(child),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("CHILD: ran it for the user"),
+            5_000,
+            "the child ran the approved command for the user",
+          )
+          expect(resultsOf("bash", afterUser.messages)[1]).toMatchObject({
+            result: { exitCode: 0 },
+          })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
 // ── delegate/completion-message ─────────────────────────────────────────────
@@ -792,7 +865,7 @@ describe("a start nobody waits for", () => {
             cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
-            admission: { agent: DELEGATE_AGENT_NAME, interactive: false, runSpec },
+            admission: { agent: DELEGATE_AGENT_NAME, runSpec },
           })
           // The row is written before the start is sent.
           yield* harness.writeRegistry(branchId, [

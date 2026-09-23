@@ -1306,6 +1306,109 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
+    "a turn an extension opens declines an approval at once; a client's prompt on the same session asks",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const probeExtensionId = ExtensionId.make("@test/interaction-origin")
+          // A wake, a monitor, a child's task and a parent's message all reach
+          // the branch through `Session.send`, as this request does.
+          const OriginExtension: LoadedExtension = {
+            ...InteractionProbeExtension,
+            manifest: { id: probeExtensionId },
+            artifactIdentity: LoadedArtifactIdentity.make("@test/interaction-origin@artifact-1"),
+            contributions: {
+              ...InteractionProbeExtension.contributions,
+              requests: [
+                request({
+                  id: "nudge",
+                  input: Schema.Struct({}),
+                  output: Schema.Void,
+                  execute: Effect.fn("nudge")(function* () {
+                    const ctx = yield* ExtensionContext
+                    yield* ctx.Session.send({
+                      delivery: "queue",
+                      sourceId: "nudge",
+                      content: "extension nudge",
+                      wake: true,
+                    })
+                  }),
+                }),
+              ],
+            },
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "approve from the nudge?" }),
+            textStep("nudge turn done"),
+            toolCallStep("approval_probe", { text: "approve from the user?" }),
+            textStep("user turn done"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [OriginExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: probeExtensionId,
+            capabilityId: "nudge",
+            input: {},
+          })
+          const nudged = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some((message) =>
+                message.parts.some(
+                  (part) => part.type === "text" && part.text === "nudge turn done",
+                ),
+              ),
+            5_000,
+            "the nudge turn ended without a dialog",
+          )
+          // The opening message names its author; its turn declined at once.
+          const opening = nudged.messages.find((message) =>
+            message.parts.some((part) => part.type === "text" && part.text === "extension nudge"),
+          )
+          expect(opening?.metadata?.extensionId).toBe(probeExtensionId)
+          const [declined] = toolResultTexts(nudged.messages)
+          expect(declined).toContain('"approved":false')
+          expect(declined).toContain("no user sees this session")
+          // A client's prompt on the same session is a turn a user watches: it asks.
+          yield* client.message.send({ sessionId, branchId, content: "run the probe" })
+          const dialog = Array.from(yield* Fiber.join(presented))[0]
+          if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
+          expect(dialog.text).toBe("approve from the user?")
+          yield* client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: dialog.requestId,
+            approved: true,
+          })
+          yield* waitForReply({ client, sessionId, branchId, reply: "user turn done" }).pipe(
+            Effect.timeout("5 seconds"),
+          )
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
     "a retried reply after the call took its answer succeeds; a changed one conflicts",
     () =>
       Effect.scoped(

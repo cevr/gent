@@ -555,12 +555,19 @@ export function ensureStorageParents(input: {
 // durable rows a crash leaves behind. These operations build that state the
 // way the loop does, so such a test never reads core's own Tags.
 
-/** Where a turn or leaf runs: its session, its branch, and optionally its cwd. */
+/**
+ * Where a turn or leaf runs: its session, its branch, and optionally its cwd.
+ * `interactive: false` runs it as a turn an extension opened; absent, a user
+ * can answer.
+ */
 interface HarnessRun {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly sessionCwd?: string
+  readonly interactive?: boolean
 }
+
+const hostRun = (run: HarnessRun) => ({ ...run, interactive: run.interactive ?? true })
 
 /**
  * One turn's profile and every model tool binding it captures, as the loop
@@ -573,7 +580,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
     turnGenerationId: profile.generationId,
     turnExtensionRegistry: profile.registryService,
     turnBaseSections: profile.baseSections,
-    turnHostCtx: hostProvider.forRun(run),
+    turnHostCtx: hostProvider.forRun(hostRun(run)),
   }
   const toolBindings = yield* Effect.gen(function* () {
     const bindings = new Map<string, ResolvedToolCapability>()
@@ -601,7 +608,7 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
       steer: (command) => runtime.steer(command),
     },
   })
-  return provider.forRun(run)
+  return provider.forRun(hostRun(run))
 })
 
 /**
