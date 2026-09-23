@@ -25,15 +25,17 @@ import {
   Message,
   MessageId,
   MODEL_CHANGE_MESSAGE_TYPE,
-  type MessagePart,
   SessionId,
   ToolCallId,
-  projectMessagesWithToolInteractions,
   AgentEvent,
   EventEnvelope,
-  EventId,
 } from "@gent/core/protocol"
-import { toolCallReceipts } from "@gent/core/test-utils"
+import {
+  toolCallReceipts,
+  type MessagePart,
+  projectMessagesWithToolInteractions,
+  EventId,
+} from "@gent/core/test-utils"
 import {
   CHILD_COMPLETION_TYPE,
   type SessionMessageDetails,

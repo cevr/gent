@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 import {
   ErrorOccurred,
   EventId,
@@ -8,6 +6,11 @@ import {
   StreamEnded,
   StreamStarted,
   TurnCompleted,
+  type SessionRuntimeState,
+} from "@gent/core/test-utils"
+import { describe, expect, it, test } from "effect-bun-test"
+import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import {
   type ActiveInteraction,
   AgentEvent,
   AgentName,
@@ -23,7 +26,6 @@ import {
   type SessionSnapshot,
   ToolCallId,
   ToolInteraction,
-  type SessionRuntimeState,
 } from "@gent/core/protocol"
 import { ExtensionId } from "@gent/core/extensions/api"
 import {

@@ -1,4 +1,3 @@
-import type { FileSystem } from "effect"
 import {
   Cause,
   Context,
@@ -6,6 +5,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  type FileSystem,
   type Logger,
   Option,
   type PlatformError,

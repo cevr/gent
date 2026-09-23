@@ -1,3 +1,4 @@
+import { ExtensionHealth } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
@@ -37,7 +38,7 @@ import {
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "@gent/core/host"
-import { ExtensionHealth, ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
+import { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 
 // ── client-logs.test ────────────────────────────────────────────────────────
 
