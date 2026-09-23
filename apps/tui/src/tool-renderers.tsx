@@ -18,6 +18,7 @@ import {
   getString,
   isAbsPath,
   plural,
+  splitLines,
   type ToolInput,
   truncatePath,
 } from "./utils"
@@ -283,38 +284,48 @@ const charsMarker = (chars: number): string => `… [${plural(chars, "char")} tr
  * output, before or after a reload. A cut inside one line draws that line
  * once, its two ends joined by a marker of the characters left out.
  */
-const outputRows = (text: string, cut: Option.Option<TextCut>): OutputRows => {
-  const parts = text.split("\n")
-  const line = (lineText: string, lineNum: number): WindowedLine => ({
-    _tag: "line",
-    text: lineText,
-    lineNum,
-  })
-  const whole = Option.match(cut, {
-    onNone: () => ({
-      rows: parts.map((part, index) => line(part, index + 1)),
-      total: parts.length,
-    }),
-    onSome: ({ lines, tailLine, chars }) => {
-      const tailCount = lines - tailLine + 1
-      const head = parts.slice(0, Math.max(0, parts.length - tailCount - 1))
-      const tail = parts.slice(parts.length - tailCount)
-      const headRows = head.map((part, index) => line(part, index + 1))
-      const tailRows = tail.map((part, index) => line(part, tailLine + index))
-      if (tailLine === head.length) {
-        const joined = line(`${head.at(-1) ?? ""} ${charsMarker(chars)} ${tail[0] ?? ""}`, tailLine)
-        return {
-          rows: [...headRows.slice(0, -1), joined, ...tailRows.slice(1)],
-          total: lines,
-        }
-      }
-      // Whole lines left out, else only the characters of a line cut in two.
-      const skipped = tailLine - head.length - 1
-      let gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
-      if (skipped > 0) gap = { _tag: "elision", count: skipped, unit: "lines" }
-      return { rows: [...headRows, gap, ...tailRows], total: lines }
+const numberedLine = (text: string, lineNum: number): WindowedLine => ({
+  _tag: "line",
+  text,
+  lineNum,
+})
+
+const outputRows = (text: string, cut: Option.Option<TextCut>): OutputRows =>
+  Option.match(cut, {
+    onNone: () => {
+      const rows = splitLines(text).map((part, index) => numberedLine(part, index + 1))
+      return { rows, total: rows.length }
     },
+    onSome: (textCut) => cutRows(text, textCut),
   })
+
+/**
+ * A cut string's rows. The cut record counts the parts of `split("\n")`, so a
+ * final newline's empty part is dropped once the excerpt is placed, as
+ * `splitLines` drops it from a whole string.
+ */
+const cutRows = (text: string, { lines, tailLine, chars }: TextCut): OutputRows => {
+  const parts = text.split("\n")
+  const tailCount = lines - tailLine + 1
+  const head = parts.slice(0, Math.max(0, parts.length - tailCount - 1))
+  const tail = parts.slice(parts.length - tailCount)
+  const headRows = head.map((part, index) => numberedLine(part, index + 1))
+  const tailRows = tail.map((part, index) => numberedLine(part, tailLine + index))
+  const placed = (): OutputRows => {
+    if (tailLine === head.length) {
+      const joined = numberedLine(
+        `${head.at(-1) ?? ""} ${charsMarker(chars)} ${tail[0] ?? ""}`,
+        tailLine,
+      )
+      return { rows: [...headRows.slice(0, -1), joined, ...tailRows.slice(1)], total: lines }
+    }
+    // Whole lines left out, else only the characters of a line cut in two.
+    const skipped = tailLine - head.length - 1
+    let gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
+    if (skipped > 0) gap = { _tag: "elision", count: skipped, unit: "lines" }
+    return { rows: [...headRows, gap, ...tailRows], total: lines }
+  }
+  const whole = placed()
   const last = whole.rows.at(-1)
   if (last?._tag === "line" && last.text.length === 0) {
     return { rows: whole.rows.slice(0, -1), total: whole.total - 1 }

@@ -216,6 +216,7 @@ const CellFailure = Schema.Struct({
 const BashOutput = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Literals(["blocked", "background"])),
 })
 
 /** The part of a window marker's details the transcript shows: how much history a handoff replaced. */
@@ -281,14 +282,29 @@ const rowOutputText = (call: ToolCall): string => {
   if (call.toolName === "bash") {
     return Option.match(decodeToolOutputOption(BashOutput, call.output), {
       onNone: () => formatGenericToolText(call.output) ?? "",
-      onSome: (value) => [value.stdout, value.stderr ?? ""].filter((t) => t.length > 0).join("\n"),
+      // Each stream's final newline ends its last line, so the joined text
+      // holds as many lines as the two streams do.
+      onSome: (value) =>
+        [value.stdout, value.stderr ?? ""]
+          .filter((text) => text.length > 0)
+          .map((text) => text.replace(/\n$/, ""))
+          .join("\n"),
     })
   }
   return formatGenericToolText(call.output) ?? ""
 }
 
+/** A declined command never ran and a background one has not ended: neither has lines to count. */
+const hasNoOutputYet = (call: ToolCall): boolean =>
+  call.toolName === "bash" &&
+  Option.isSome(
+    Option.flatMap(decodeToolOutputOption(BashOutput, call.output), (value) =>
+      Option.fromUndefinedOr(value.status),
+    ),
+  )
+
 const rowCounts = (call: ToolCall): string => {
-  if (call.status === "running") return ""
+  if (call.status === "running" || hasNoOutputYet(call)) return ""
   return formatRowCounts(call.toolName, {
     input: getString(call.input, "code"),
     output: rowOutputText(call),

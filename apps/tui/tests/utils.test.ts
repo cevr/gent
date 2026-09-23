@@ -24,6 +24,7 @@ import {
   formatGroupDuration,
   formatPreviewFooter,
   formatRowCounts,
+  lineCount,
   formatTokens,
   formatToolInput,
   formatUsageStats,
@@ -928,6 +929,16 @@ describe("progressive disclosure helpers", () => {
     expect(formatRowCounts("cell", { input: "a\nb\nc", output: "x\ny" })).toBe("↑ 3 ↓ 2 lines")
     expect(formatRowCounts("bash", { input: "ls", output: "x" })).toBe("↓ 1 line")
     expect(formatRowCounts("read", { input: "", output: "x" })).toBe("")
+  })
+
+  test("a final newline ends the last line and does not start one", () => {
+    expect(lineCount("")).toBe(0)
+    expect(lineCount("\n")).toBe(1)
+    expect(lineCount("hello\n")).toBe(1)
+    expect(lineCount("a\nb\n")).toBe(2)
+    expect(lineCount("a\n\n")).toBe(2)
+    expect(formatRowCounts("bash", { input: "ls\n", output: "hello\n" })).toBe("↓ 1 line")
+    expect(formatRowCounts("cell", { input: "a\nb\n", output: "x\n" })).toBe("↑ 2 ↓ 1 lines")
   })
 
   test("one count of one line reads singular; two counts share the plural", () => {

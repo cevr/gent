@@ -697,10 +697,14 @@ export function formatCellRowLabel(
 // ── Progressive disclosure ──
 // Row labels stay the same at every level; levels only add output beneath them.
 
-const lineCount = (text: string) => {
-  if (text.length === 0) return 0
-  return text.split("\n").length
+/** The lines of a text. A final newline ends the last line; it does not start one. `""` has none. */
+export const splitLines = (text: string): Array<string> => {
+  if (text.length === 0) return []
+  return text.replace(/\n$/, "").split("\n")
 }
+
+/** How many lines a text holds, by the `splitLines` rule: the rule every row and body count uses. */
+export const lineCount = (text: string): number => splitLines(text).length
 
 /** Line counts for a row: cells show code in and display out, bash shows output only; a zero count is left out. The unit keeps them apart from token counts. */
 export function formatRowCounts(

@@ -572,6 +572,20 @@ const bashMessage = (id: string, lines: number): ListMessage =>
     }),
   })
 
+/** A bash row whose output fields are given as the tool wrote them. */
+const bashOutputMessage = (
+  id: string,
+  output: { readonly stdout: string; readonly stderr: string; readonly status?: string },
+): ListMessage =>
+  assistantToolMessage(`assistant-${id}`, {
+    id,
+    toolName: "bash",
+    status: "completed",
+    input: { command: "echo hello" },
+    summary: absent,
+    output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({ ...output, exitCode: 0 }),
+  })
+
 const compactionMessage = (): ListMessage => ({
   _tag: "regular-message",
   id: "context-handoff:b1:m3",
@@ -1838,6 +1852,48 @@ describe("FX transcript treatment", () => {
         const text = `CELL-OUTPUT-${String(line).padStart(3, "0")}`
         expect(transcript.split("\n").filter((value) => value.trim() === text)).toHaveLength(1)
       }
+    }),
+  )
+
+  it.live("a bash row counts lines as its body does: a final newline ends a line", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        bashOutputMessage("call-one-line", { stdout: "hello\n", stderr: "" }),
+        bashOutputMessage("call-two-streams", { stdout: "a\n", stderr: "b\n" }),
+        bashOutputMessage("call-declined", {
+          stdout: "Command blocked: destructive\n",
+          stderr: "",
+          status: "blocked",
+        }),
+        bashOutputMessage("call-background", {
+          stdout: "started pid 42\nlog at /tmp/x\n",
+          stderr: "",
+          status: "background",
+        }),
+      ]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="preview"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      const rows = renderFrame(setup)
+        .split("\n")
+        .filter((line) => line.includes("└ bash"))
+        .map((line) => line.trim().split(/\s{2,}/)[0])
+      expect(rows).toEqual([
+        "└ bash echo hello · ↓ 1 line",
+        "└ bash echo hello · ↓ 2 lines",
+        "└ bash echo hello",
+        "└ bash echo hello",
+      ])
     }),
   )
 
