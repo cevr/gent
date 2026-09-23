@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect"
+import { Clock, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect"
 import { writeFileAtomic } from "@gent/core/host"
 import type { AutocompleteItem } from "./extensions/client-facets.js"
 
@@ -282,32 +282,31 @@ export const writeFrecencyStore = (
 const writeGate = Semaphore.makeUnsafe(1)
 
 /**
- * The store as this process last saw it, for callers that must rank without
- * awaiting.
+ * The reader's decayed pick weights, read from the file now.
  *
- * Ranking runs inside the popup's resource callback and cannot await a file
- * read while the reader types, so it reads this snapshot synchronously. Every
- * recorded pick refreshes it, which is what lets a pick made in this session
- * steer the very next keystroke.
+ * Every prefix ranks through this, on every keystroke: there is no in-memory
+ * copy to go stale when another surface or another `gent` records a pick, and
+ * a pick this process just recorded is on disk before the next key.
  */
-let frecencyStoreSnapshot: FrecencyStoreValue = emptyFrecencyStore()
-
-/** The store as last read or written by this process. Never awaits. */
-export const frecencySnapshot = (): FrecencyStoreValue => frecencyStoreSnapshot
-
-/** Replaces the snapshot — the load path's way of seeding it. */
-export const setFrecencySnapshot = (value: FrecencyStoreValue): void => {
-  frecencyStoreSnapshot = value
-}
+export const readFrecencyLookup = (
+  home: string,
+): Effect.Effect<FrecencyLookup, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const store = yield* readFrecencyStore(home)
+    const now = yield* Clock.currentTimeMillis
+    return frecencyLookup(
+      Option.getOrElse(store, () => emptyFrecencyStore()),
+      now,
+    )
+  })
 
 /**
- * Forgets every pick, on disk and in memory.
+ * Forgets every pick.
  *
  * Ranking has no other escape hatch: a store that learned the wrong row keeps
- * offering it, and the weights only halve every two weeks. Deleting the file
- * by hand works but leaves this process ranking from the snapshot it already
- * holds, so the clear has to happen on both sides of the gate — inside it, so
- * a concurrent pick cannot interleave and re-create what was just removed.
+ * offering it, and the weights only halve every two weeks. The clear runs
+ * inside the gate, so a concurrent pick cannot interleave and re-create what
+ * was just removed.
  *
  * Removing the file rather than writing an empty store keeps "never picked
  * anything" and "picked then cleared" the same state, which is what the read
@@ -320,15 +319,13 @@ export const clearFrecencyStore = (
     const fs = yield* FileSystem.FileSystem
     const paths = yield* frecencyPaths(home)
     yield* fs.remove(paths.file, { force: true })
-    frecencyStoreSnapshot = emptyFrecencyStore()
   }).pipe(Effect.ignoreCause, writeGate.withPermits(1))
 
 /**
  * Records a pick against the file, folding it into whatever is on disk.
  *
- * This is the only write. A caller hands over the prefix and the id and gets
- * back the store that was written, so an in-memory reader can refresh from the
- * same value the file now holds rather than from a guess.
+ * This is the only write, and the file is the only copy: every reader ranks
+ * through `readFrecencyLookup`.
  *
  * Reading inside the gate is the point. The alternative — folding into a
  * cached value — is what lost picks: the cache goes stale the moment another
@@ -339,7 +336,7 @@ export const recordFrecencyPick = (
   prefix: string,
   id: string,
   now: number,
-): Effect.Effect<FrecencyStoreValue, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const current = yield* readFrecencyStore(home)
     const next = recordPick(
@@ -349,8 +346,6 @@ export const recordFrecencyPick = (
       now,
     )
     yield* writeFrecencyStore(home, next)
-    frecencyStoreSnapshot = next
-    return next
   }).pipe(writeGate.withPermits(1))
 
 // ── autocomplete ranking ────────────────────────────────────────────────────

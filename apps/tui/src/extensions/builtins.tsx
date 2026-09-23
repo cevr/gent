@@ -53,13 +53,7 @@ import builtinBtw from "./btw.client"
 import builtinDelegate from "./delegate.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
-import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  rankAutocompleteItems,
-  readFrecencyStore,
-  recordFrecencyPick,
-} from "../autocomplete"
+import { rankAutocompleteItems, readFrecencyLookup, recordFrecencyPick } from "../autocomplete"
 
 // ── file tags ───────────────────────────────────────────────────────────────
 
@@ -722,11 +716,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
         Effect.gen(function* () {
           const { transport } = yield* ClientContext
           const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
-          const store = yield* readFrecencyStore(workspace.home)
-          const lookup = frecencyLookup(
-            Option.getOrElse(store, () => emptyFrecencyStore()),
-            yield* Clock.currentTimeMillis,
-          )
+          const lookup = yield* readFrecencyLookup(workspace.home)
           return rankAutocompleteItems(
             skills.map((s) => ({
               id: s.name,

@@ -8,18 +8,17 @@ import {
   frecencyBonus,
   frecencyLookup,
   frecencyPaths,
-  frecencySnapshot,
   type FrecencyStoreValue,
   ghostCompletion,
   HALF_LIFE_MS,
   MAX_ENTRIES,
   noFrecency,
   rankAutocompleteItems,
+  readFrecencyLookup,
   readFrecencyStore,
   recordFrecencyPick,
   recordPick,
   scoreSubsequence,
-  setFrecencySnapshot,
   writeFrecencyStore,
 } from "../src/autocomplete"
 import type { AutocompleteItem } from "../src/extensions/client-facets"
@@ -409,26 +408,6 @@ describe("a pick from one surface survives a pick from another", () => {
     }),
   )
 
-  crossWriterTest("folds a pick into a file another writer changed underneath", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-
-      // A stale in-memory snapshot is the precise trigger: seed it as the old
-      // `/` cell did, let another surface write, then record. A writer that
-      // folds into the snapshot loses `$triage`; one that reads the file keeps
-      // it.
-      yield* recordFrecencyPick(home, "/", "tree", NOW)
-      const stale = frecencySnapshot()
-      yield* recordFrecencyPick(home, "$", "triage", NOW)
-      setFrecencySnapshot(stale)
-
-      yield* recordFrecencyPick(home, "/", "thread", NOW)
-
-      expect(yield* storedKeys(home)).toEqual(["$triage", "/thread", "/tree"])
-    }),
-  )
-
   crossWriterTest("accumulates concurrent picks instead of overwriting them", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -467,17 +446,20 @@ describe("a pick from one surface survives a pick from another", () => {
     }),
   )
 
-  crossWriterTest("refreshes the snapshot ranking reads without awaiting", () =>
+  crossWriterTest("ranking reads a pick the moment it is recorded, from any writer", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
 
-      setFrecencySnapshot(emptyFrecencyStore())
       yield* recordFrecencyPick(home, "/", "thread", NOW)
+      // Another process writes behind this one's back; there is no cache to miss it.
+      yield* writeFrecencyStore(home, {
+        entries: { "/thread": { count: 1, lastAt: NOW }, $theirs: { count: 1, lastAt: NOW } },
+      })
 
-      // Ranking cannot await, so a recorded pick has to be visible in the
-      // synchronous snapshot immediately after the write lands.
-      expect(frecencyLookup(frecencySnapshot(), NOW)("/", "thread")).toBeCloseTo(1, 10)
+      const lookup = yield* readFrecencyLookup(home)
+      expect(lookup("/", "thread")).toBeGreaterThan(0)
+      expect(lookup("$", "theirs")).toBeGreaterThan(0)
     }),
   )
 })
@@ -511,8 +493,6 @@ describe("the store survives a writer outside this process", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
-      setFrecencySnapshot(emptyFrecencyStore())
-
       yield* recordFrecencyPick(home, "/", "tree", NOW)
       const paths = yield* frecencyPaths(home)
       const present = yield* fs.readDirectory(paths.directory)
@@ -524,8 +504,6 @@ describe("the store survives a writer outside this process", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
-      setFrecencySnapshot(emptyFrecencyStore())
-
       // Stand in for the other process: write straight to the file, behind
       // this process's back, after its snapshot is already seeded.
       yield* recordFrecencyPick(home, "/", "mine", NOW)
@@ -546,18 +524,15 @@ describe("the store survives a writer outside this process", () => {
 })
 
 describe("forgetting every pick", () => {
-  durabilityTest("removes the file and empties the snapshot", () =>
+  durabilityTest("removes the file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
-      setFrecencySnapshot(emptyFrecencyStore())
-
       yield* recordFrecencyPick(home, "/", "tree", NOW)
-      expect(Object.keys(frecencySnapshot().entries).length).toBe(1)
+      expect(Option.isSome(yield* readFrecencyStore(home))).toBe(true)
 
       yield* clearFrecencyStore(home)
 
-      expect(Object.keys(frecencySnapshot().entries).length).toBe(0)
       expect(Option.isNone(yield* readFrecencyStore(home))).toBe(true)
       const paths = yield* frecencyPaths(home)
       expect(yield* fs.exists(paths.file)).toBe(false)
@@ -568,8 +543,6 @@ describe("forgetting every pick", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
-      setFrecencySnapshot(emptyFrecencyStore())
-
       const items: ReadonlyArray<AutocompleteItem> = [
         { id: "think", label: "/think", description: "reasoning" },
         { id: "thread", label: "/thread", description: "sessions" },
@@ -577,14 +550,14 @@ describe("forgetting every pick", () => {
       yield* recordFrecencyPick(home, "/", "thread", NOW)
       const withHistory = rankAutocompleteItems(items, "thr", {
         prefix: "/",
-        frecency: frecencyLookup(frecencySnapshot(), NOW),
+        frecency: frecencyLookup(orEmpty(yield* readFrecencyStore(home)), NOW),
       })
       expect(withHistory[0]?.id).toBe("thread")
 
       yield* clearFrecencyStore(home)
       const afterReset = rankAutocompleteItems(items, "thi", {
         prefix: "/",
-        frecency: frecencyLookup(frecencySnapshot(), NOW),
+        frecency: frecencyLookup(orEmpty(yield* readFrecencyStore(home)), NOW),
       })
       expect(afterReset[0]?.id).toBe("think")
     }),

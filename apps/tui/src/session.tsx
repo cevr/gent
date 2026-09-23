@@ -84,14 +84,11 @@ import {
 import { useEnv, useWorkspace } from "./workspace"
 import {
   clearFrecencyStore,
-  frecencyLookup,
   type FrecencyLookup,
-  frecencySnapshot,
   noFrecency,
   rankAutocompleteItems,
-  readFrecencyStore,
+  readFrecencyLookup,
   recordFrecencyPick,
-  setFrecencySnapshot,
 } from "./autocomplete"
 import { type Command, executeSlashCommand, useCommand } from "./commands"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
@@ -1117,35 +1114,19 @@ export function usePromptHistory(): PromptHistory {
  */
 
 interface AutocompleteFrecency {
-  /** The reader's decayed pick weights, fixed at the moment of the call. */
-  readonly lookup: () => FrecencyLookup
+  /** The reader's decayed pick weights, read from the store when ranking runs. */
+  readonly lookup: Effect.Effect<FrecencyLookup, never, FileSystem.FileSystem | Path.Path>
   /** Records that the reader chose `id` from the `prefix` popup. */
   readonly record: (prefix: string, id: string) => void
-  /** Forgets every pick, so ranking falls back to match quality alone. */
+  /** Forgets every recorded pick, so ranking falls back to match quality alone. */
   readonly reset: () => void
 }
-
-/** Whether the store has been read from disk yet, once per process. */
-let frecencyLoaded = false
 
 function useAutocompleteFrecency(): AutocompleteFrecency {
   const workspace = useWorkspace()
   const { cast } = useRuntime()
-
-  if (!frecencyLoaded) {
-    frecencyLoaded = true
-    cast(
-      Effect.tap(readFrecencyStore(workspace.home), (snapshot) =>
-        Effect.sync(() => {
-          if (Option.isNone(snapshot)) return
-          setFrecencySnapshot(snapshot.value)
-        }),
-      ),
-    )
-  }
-
   return {
-    lookup: () => frecencyLookup(frecencySnapshot(), currentMillis()),
+    lookup: readFrecencyLookup(workspace.home),
     record: (prefix: string, id: string) => {
       cast(recordFrecencyPick(workspace.home, prefix, id, currentMillis()))
     },
@@ -1194,7 +1175,7 @@ interface SessionCommandRegistryProps {
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
   /** The reader's pick history, so a command they choose often ranks first. */
-  readonly frecency: () => FrecencyLookup
+  readonly frecency: Effect.Effect<FrecencyLookup, never, FileSystem.FileSystem | Path.Path>
   /** Records that the reader chose a command from the `/` popup. */
   readonly recordPick: (id: string) => void
   /** Forgets every recorded pick, so ranking starts over. */
@@ -1375,7 +1356,10 @@ const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void 
       {
         prefix: "/",
         title: "Commands",
-        items: (filter) => slashAutocompleteItems(allCommands, filter, props.frecency()),
+        items: (filter) =>
+          Effect.map(props.frecency, (lookup) =>
+            slashAutocompleteItems(allCommands, filter, lookup),
+          ),
         // Without this a slash pick is never recorded, and `/t` answers
         // `think` forever however often the reader opens `/thread`.
         onSelect: (id: string) => props.recordPick(id),
@@ -2793,7 +2777,7 @@ export function createSessionController(props: {
     client,
     ext,
     cast,
-    frecency: () => frecency.lookup(),
+    frecency: frecency.lookup,
     recordPick: (id: string) => frecency.record("/", id),
     resetFrecency: () => frecency.reset(),
     openForkPicker,
