@@ -160,6 +160,21 @@ describe("injectGitTrailers", () => {
     expect(inject('echo "$(git commit -m a)"')).toBe(`echo "$(git commit ${trailer} -m a)"`)
   })
 
+  test("a commit in an escaped script word gets no trailer that would split the word", () => {
+    for (const command of ["bash -c git\\ commit\\ -m\\ x", 'bash -c "git "commit\\ -m\\ x']) {
+      expect(inject(command), command).toBe(command)
+    }
+    expect(inject("bash -c \"sh -c 'git commit -m x'\"")).toBe(
+      `bash -c "sh -c 'git commit ${trailer} -m x'"`,
+    )
+  })
+
+  test("a commit in a git alias runs with the trailer", () => {
+    expect(inject("git -c alias.c='!git commit -m x' c")).toBe(
+      `git -c alias.c='!git commit ${trailer} -m x' c`,
+    )
+  })
+
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
     expect(inject(cmd)).toBe(cmd)
@@ -481,6 +496,57 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
+  })
+
+  test("a command after a wrapper is classified", () => {
+    for (const command of [
+      "xargs git reset --hard",
+      "env -i git reset --hard",
+      "nohup git reset --hard",
+      "time git reset --hard",
+      "sudo -u me git reset --hard",
+      "command git reset --hard",
+      "exec git reset --hard",
+      "nice -n 5 git reset --hard",
+      "timeout 5 git reset --hard",
+      "find . -exec git reset --hard \\;",
+      "find . -execdir sh -c 'git reset --hard' \\;",
+      "parallel git reset --hard ::: a",
+      "sudo eval 'git reset --hard'",
+      "env bash -c 'git reset --hard'",
+      "echo bash | xargs sh -c 'git reset --hard'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git alias that runs a script or a destructive subcommand is classified", () => {
+    for (const command of [
+      "git -c alias.wipe='! git reset --hard' wipe",
+      "git -c alias.wipe='!git push --force' wipe",
+      "git -c alias.wipe='reset --hard' wipe",
+      "git config alias.wipe '!git reset --hard'",
+      "git config --global alias.wipe 'reset --hard'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("git -c alias.st=status st").level).toBe("safe")
+    expect(classifyBashCommand("git config alias.st status").level).toBe("safe")
+  })
+
+  test("a shell script the guard cannot read takes its input as the script, or asks", () => {
+    for (const command of [
+      "echo 'git reset --hard' | xargs -I{} sh -c '{}'",
+      "echo 'git reset --hard' | parallel {}",
+      "parallel ::: 'git reset --hard'",
+      "printf 'git reset --hard' | xargs -0 bash -c",
+      'sh -c "$CMD"',
+      'bash -c "$(cat script.sh)"',
+      "xargs -a cmds.txt -I{} sh -c '{}'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo 'git status' | xargs -I{} sh -c '{}'").level).toBe("safe")
   })
 
   test("quoted text and heredoc notes that describe git work are data", () => {

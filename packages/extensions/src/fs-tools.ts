@@ -778,12 +778,14 @@ interface NormalizedText {
  * `offsets[i]` is the source offset of the normalized character at `i`, so a
  * match in the normalized text maps back to the source.
  */
-const normalizeWithOffsets = (s: string): NormalizedText => {
+const normalizeWithOffsets = (s: string, keepLastLineEnd = false): NormalizedText => {
   let text = ""
   const offsets: Array<number> = []
   let lineStart = 0
-  for (const line of s.split("\n")) {
-    const kept = line.replace(/[ \t]+$/, "")
+  const lines = s.split("\n")
+  for (const [lineIndex, line] of lines.entries()) {
+    let kept = line.replace(/[ \t]+$/, "")
+    if (keepLastLineEnd && lineIndex === lines.length - 1) kept = line
     for (let index = 0; index < kept.length; index++) {
       const char = kept.charAt(index)
       text += NORMALIZED_CHARACTERS.get(char) ?? char
@@ -834,6 +836,11 @@ const findNormalizedMatch = (content: string, search: string): Option.Option<Mat
   // A whitespace-only search normalizes to blank lines, which every blank line matches.
   if (normalizedSearch.trim() === "") return Option.none()
   if (normalizedSearch === search && normalized.text === content) return Option.none()
+  // Spaces that end the search are text to replace when the line goes on
+  // (`"hi"  x`); a match at a line end drops them, as the file has none there.
+  const withSearchedSpaces = normalizeWithOffsets(search, true).text
+  let found = literalRanges(normalized.text, withSearchedSpaces)
+  if (found.length === 0) found = literalRanges(normalized.text, normalizedSearch)
 
   const sourceStart = (index: number) => normalized.offsets[index] ?? content.length
   // A match that ends a line also takes the trailing whitespace the
@@ -845,7 +852,7 @@ const findNormalizedMatch = (content: string, search: string): Option.Option<Mat
     if (lineEnd === -1) return content.length
     return lineEnd
   }
-  const ranges = literalRanges(normalized.text, normalizedSearch).map((range) => ({
+  const ranges = found.map((range) => ({
     start: sourceStart(range.start),
     end: sourceEnd(range.end),
   }))

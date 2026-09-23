@@ -385,6 +385,12 @@ describe("findMatch", () => {
     const match = Option.getOrThrow(findMatch("a \u201Cq\u201D   \nb", '"q"'))
     expect(match.ranges).toEqual([{ start: 2, end: 8 }])
   })
+  test("a normalized match keeps the searched spaces when the line goes on", () => {
+    const match = Option.getOrThrow(findMatch("\u201Chi\u201D  x", '"hi"  '))
+    expect(match.ranges).toEqual([{ start: 0, end: 6 }])
+    const atLineEnd = Option.getOrThrow(findMatch("\u201Chi\u201D\nx", '"hi"  '))
+    expect(atLineEnd.ranges).toEqual([{ start: 0, end: 4 }])
+  })
   test("a whitespace run that exists in the file still matches exactly", () => {
     expect(Option.getOrThrow(findMatch("a\tb", "\t")).strategy).toBe("exact")
   })
