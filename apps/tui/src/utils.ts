@@ -629,6 +629,13 @@ export function describeCellCode(code: string): ReadonlyArray<string> {
   return collapseRepeats(found.map((entry) => entry.label))
 }
 
+/**
+ * A session id as rows show it: its last 8 characters. A session id is a
+ * UUIDv7, whose head is its start time, so children started together share
+ * the head; the tail is random.
+ */
+export const shortSessionId = (sessionId: string): string => sessionId.slice(-8)
+
 /** The noun a count takes, without the count: `line` for one, `lines` otherwise. */
 export const countNoun = (count: number, singular: string, pluralForm = `${singular}s`): string => {
   if (count === 1) return singular

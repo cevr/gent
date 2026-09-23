@@ -1080,7 +1080,7 @@ describe("FX transcript treatment", () => {
       }
       const frame = yield* renderLoaded([sent])
       // A blank line in the name or the body leaves the header strip whole.
-      expect(frame).toContain('» from your parent "auth refactor" · 0199aabb')
+      expect(frame).toContain('» from your parent "auth refactor" · aabbccdd')
       expect(frame).toContain("Use the v2 token route.")
       expect(frame).toContain("Then rerun the suite.")
       expect(frame).not.toContain("Message from your parent")
@@ -1111,7 +1111,7 @@ describe("FX transcript treatment", () => {
         },
       }
       const frame = yield* renderLoaded([sent])
-      expect(frame).toContain('» from your child "delegate: Use session.send with…" · 01a0ca0c')
+      expect(frame).toContain('» from your child "delegate: Use session.send with…" · ca0cb3e7')
       expect(frame).toContain("hello from the child")
       // The status line is for the model; the row already says who is writing.
       expect(frame).not.toContain("not its completion")
@@ -1143,7 +1143,7 @@ describe("FX transcript treatment", () => {
       expect(frame).toContain("old question")
       expect(frame).not.toContain("Message from your child")
       // Wide characters count two columns: 15 of them fit before the ellipsis, and the id stays on the line.
-      expect(frame).toContain(`"${Array.from(from.name).slice(0, 15).join("")}…" · 01a0ca0c`)
+      expect(frame).toContain(`"${Array.from(from.name).slice(0, 15).join("")}…" · ca0cb3e7`)
     }),
   )
 

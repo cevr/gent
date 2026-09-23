@@ -85,9 +85,10 @@ const envelope = (preview: string, status = "completed") =>
 const completion = (
   details: Schema.JsonObject,
   content = envelope("CHILD-ANSWER: the loader is fine"),
+  id = "child-completion",
 ): SessionItem => ({
   _tag: "regular-message",
-  id: "child-completion",
+  id,
   role: "user",
   content,
   reasoning: "",
@@ -213,13 +214,35 @@ describe("child-completion row", () => {
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(fullDetails)])
       expect(frame).toContain("delegate completed")
-      expect(frame).toContain("childses")
+      expect(frame).toContain("ess-1234")
       expect(frame).toContain("↑1.2k ↓300")
       expect(frame).toContain("✓ read CHILD-NOTE.md 12 lines")
       expect(frame).toContain("✕ bash exit 1")
       // The row lists the last calls; the details count the rest.
       expect(frame).toContain("5 earlier calls")
       expect(frame).not.toContain("Completion is a turn receipt")
+    }),
+  )
+
+  it.live("siblings started together show ids that tell them apart", () =>
+    Effect.gen(function* () {
+      // UUIDv7 ids of children started in the same millisecond share their head.
+      const first = "01a0ce0a-b3e7-7000-8000-00000000aaaa"
+      const second = "01a0ce0a-b3e7-7000-8000-00000000bbbb"
+      const frame = yield* loadedFrame([
+        completion(
+          { ...fullDetails, sessionId: first },
+          envelope("CHILD-ANSWER: a"),
+          "completion-a",
+        ),
+        completion(
+          { ...fullDetails, sessionId: second },
+          envelope("CHILD-ANSWER: b"),
+          "completion-b",
+        ),
+      ])
+      expect(frame).toContain("delegate completed · 0000aaaa")
+      expect(frame).toContain("delegate completed · 0000bbbb")
     }),
   )
 
@@ -256,7 +279,7 @@ describe("child-completion row", () => {
   it.live("a row saved before the details grew reads its status from the envelope", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(oldDetails)])
-      expect(frame).toContain("✓ delegate completed · childses")
+      expect(frame).toContain("✓ delegate completed · ess-1234")
       expect(frame).toContain("CHILD-ANSWER")
       expect(frame).not.toContain("Completion is a turn receipt")
     }),
@@ -284,7 +307,7 @@ describe("child-completion row", () => {
   it.live("an older row whose envelope does not parse draws a neutral mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(oldDetails, "CHILD-ANSWER: bare text")])
-      expect(frame).toContain("· child finished · childses")
+      expect(frame).toContain("· child finished · ess-1234")
       expect(frame).not.toContain("✓ child")
     }),
   )
@@ -302,7 +325,7 @@ describe("delegate.start row", () => {
     Effect.gen(function* () {
       const frame = yield* loadedFrame([])
       expect(frame).toContain("review the loader")
-      expect(frame).toContain("child childses")
+      expect(frame).toContain("child ess-1234")
     }),
   )
 

@@ -11,7 +11,7 @@ import {
 } from "@gent/extensions/client"
 import { useTheme } from "../theme"
 import { ToolFrame, UserRow } from "../ui"
-import { formatUsageStats, type ToolInput } from "../utils"
+import { formatUsageStats, shortSessionId, type ToolInput } from "../utils"
 import type { ToolRendererProps } from "../tool-renderers"
 import {
   clientContributions,
@@ -35,9 +35,6 @@ import {
  */
 
 /** The server delegate's id; the client module shares it by convention. */
-
-/** A child session id as the rows show it. */
-const shortSession = (sessionId: string) => sessionId.slice(0, 8)
 
 // ── start row ───────────────────────────────────────────────────────────────
 
@@ -72,7 +69,7 @@ const startLine = (props: ToolRendererProps): string => {
   return Option.flatMap(output, decodeHandle).pipe(
     Option.match({
       onNone: () => "result arrives as a message",
-      onSome: (handle) => `child ${shortSession(handle.sessionId)} · result arrives as a message`,
+      onSome: (handle) => `child ${shortSessionId(handle.sessionId)} · result arrives as a message`,
     }),
   )
 }
@@ -160,7 +157,7 @@ const completionHeader = (state: CompletionState, details: CompletionDetails): s
     Option.map((text) => ` · ${text}`),
     Option.getOrElse(() => ""),
   )
-  return `${state.who} ${state.status} · ${shortSession(details.sessionId)}${usage}`
+  return `${state.who} ${state.status} · ${shortSessionId(details.sessionId)}${usage}`
 }
 
 function ChildToolTree(props: { details: CompletionDetails }) {

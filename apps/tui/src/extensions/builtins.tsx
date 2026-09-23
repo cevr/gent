@@ -26,7 +26,7 @@ import {
   sessionQuery,
   statusLabelContribution,
 } from "./client-facets.js"
-import { truncate, truncatePath } from "../utils"
+import { shortSessionId, truncate, truncatePath } from "../utils"
 import { CollapsedRow, UserRow } from "../ui"
 import { textWidth } from "../text-width-adapter"
 import { BunSocket } from "@effect/platform-bun"
@@ -620,7 +620,7 @@ const senderLine = ({ from }: SessionMessageDetails): string => {
     Option.map((value) => ` "${shortName(value)}"`),
     Option.getOrElse(() => ""),
   )
-  return `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`
+  return `» from ${who}${name} · ${shortSessionId(from.sessionId)}`
 }
 
 /**
