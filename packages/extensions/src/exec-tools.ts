@@ -2988,7 +2988,7 @@ const sqlQuotedEnd = (sql: string, at: number, dialect: SqlDialect): Option.Opti
   if (char === "[" && dialect.brackets) {
     return Option.some(foundOr(sql.indexOf("]", at), sql.length - 1) + 1)
   }
-  if (!dialect.dollar || wordBefore) return Option.none()
+  if (char !== "$" || !dialect.dollar || wordBefore) return Option.none()
   return Option.map(Option.fromNullishOr(/^\$(?:[A-Za-z_]\w*)?\$/.exec(sql.slice(at))), ([tag]) => {
     const close = sql.indexOf(tag, at + tag.length)
     return foundOr(close, sql.length - tag.length) + tag.length
