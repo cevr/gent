@@ -180,6 +180,17 @@ describe("headTail", () => {
     expect(result.truncatedCount).toBe(0)
   })
 
+  test("an odd limit keeps exactly that many items, the extra one at the head", () => {
+    const one = headTail([1, 2, 3], 1)
+    expect(one.head).toEqual([1])
+    expect(one.tail).toEqual([])
+    expect(one.truncatedCount).toBe(2)
+    const five = headTail([1, 2, 3, 4, 5, 6, 7], 5)
+    expect(five.head).toEqual([1, 2, 3])
+    expect(five.tail).toEqual([6, 7])
+    expect(five.truncatedCount).toBe(2)
+  })
+
   test("handles empty array", () => {
     const result = headTail([], 10)
     expect(result.head).toEqual([])
