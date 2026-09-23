@@ -1248,6 +1248,85 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("readable xargs input is read through a runner, and supplies a git subcommand", () => {
+    for (const command of [
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs env",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs nohup",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs timeout 5",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
+      "echo 'reset --hard' | xargs git",
+      "printf 'push --force' | xargs git",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git diff --name-only | xargs git add",
+      "echo a b | xargs -n1 echo",
+      "echo src | xargs grep -n foo",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("printf with only %s directives prints its arguments into the input", () => {
+    expect(
+      classifyBashCommand("printf '%s\\n' -rf /nonexistent/gent-probe-x | xargs rm").level,
+    ).toBe("destructive")
+    expect(classifyBashCommand("printf '%s ' reset --hard | xargs git").level).toBe("destructive")
+    for (const command of [
+      "printf '%s\\n' a b | xargs wc -l",
+      "printf '%s\\n' src/a.ts | xargs -n 50 bunx oxfmt",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a root shell with no command runs its piped input", () => {
+    for (const command of [
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo -s",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo -i",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | su",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | doas -s",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["sudo -s", "sudo -i", "su - someone", "echo hi | sudo -s ls"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("fish's script options are read", () => {
+    for (const command of [
+      "fish -C 'rm -rf /nonexistent/gent-probe-x'",
+      "fish --init-command 'rm -rf /nonexistent/gent-probe-x'",
+      "fish --init-command='rm -rf /nonexistent/gent-probe-x'",
+      "fish --command='rm -rf /nonexistent/gent-probe-x'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("fish -C 'set x 1'").level).toBe("safe")
+  })
+
+  test("gh's repo option before the group does not hide a delete", () => {
+    for (const command of ["gh --repo o/r release delete v1", "gh -R o/r repo delete o/r"]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("gh --repo o/r issue list").level).toBe("safe")
+  })
+
+  test("TRUNCATE without TABLE, and DROP VIEW or INDEX, are destructive", () => {
+    for (const command of [
+      "psql -c 'TRUNCATE t'",
+      "psql -c 'DROP VIEW v'",
+      "psql -c 'DROP INDEX i'",
+      "echo 'drop materialized view m' | psql",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("psql -c 'SELECT TRUNCATE(1.5, 1)'").level).toBe("safe")
+  })
+
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
     for (const command of [
       "npm x -- rm -rf x",
@@ -1606,6 +1685,35 @@ describe("BashTool execution", () => {
         expect(prompts.length).toBe(1)
         expect(prompts[0]).toContain("This command is classified as destructive: git push --force")
         expect(prompts[0]).toContain("Allow execution?")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
+  // Declined, so it never runs; the directory does not exist.
+  it.live(
+    "the question names the directory a leading cd moves the command to",
+    () =>
+      Effect.gen(function* () {
+        const asked = yield* Ref.make<ReadonlyArray<string>>([])
+        const ctx: TestToolContext = {
+          ...stubCtx,
+          Interaction: {
+            ...stubCtx.Interaction,
+            approve: ({ text }) =>
+              Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
+          },
+        }
+        yield* provideBun(
+          runToolWithCtx(
+            BashTool,
+            { command: "cd /nonexistent/gent-probe-x && git push --force" },
+            ctx,
+          ),
+        )
+        const prompts = yield* Ref.get(asked)
+        expect(prompts[0]).toContain(
+          "This command (in `/nonexistent/gent-probe-x`) is classified as destructive",
+        )
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )

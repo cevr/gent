@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  Clock,
   Context,
   Deferred,
   Effect,
@@ -614,6 +615,56 @@ describe("recorded cell execution", () => {
         expect(typeErrorMessage.startsWith("TypeError: ")).toBe(true)
         expect(typeErrorMessage).not.toContain("\n")
         expect(yield* message(withCause)).toBe("Error: outer\ncaused by RangeError: inner")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "an error keeps the detail it holds outside its message, and a caught one shows no stack",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [aggregate, syntax, shell, caught] = yield* setupCalls([
+          "await Promise.any([Promise.reject(new Error('first')), Promise.reject(new RangeError('second'))])",
+          "const a = 1\nlet x = ;",
+          "await Bun.$`sh -c 'echo shell-detail >&2; exit 3'`",
+          "try { await tools.nope({}) } catch (e) { console.log(e) }",
+        ])
+        if (!aggregate || !syntax || !shell || !caught)
+          return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("start"),
+          call: () => Effect.succeed({}),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        // A failure carries its text as `message`; a finished cell as `display`.
+        const ReplyText = Schema.Union([
+          Schema.Struct({ message: Schema.String }),
+          Schema.Struct({ display: Schema.String }),
+        ])
+        const reply = (call: typeof aggregate) =>
+          cells.run(call).pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.map((result) => {
+              const text = Schema.decodeUnknownSync(ReplyText)(result.result)
+              if ("message" in text) return text.message
+              return text.display
+            }),
+          )
+        const aggregateText = yield* reply(aggregate)
+        expect(aggregateText).toContain("AggregateError")
+        expect(aggregateText).toContain("Error: first")
+        expect(aggregateText).toContain("RangeError: second")
+        expect(yield* reply(syntax)).toMatch(/line \d+, column \d+: let x = ;/)
+        expect(yield* reply(shell)).toContain("shell-detail")
+        const caughtText = yield* reply(caught)
+        expect(caughtText).toContain("tools.nope is not a host tool")
+        expect(caughtText).not.toMatch(/\bat [^ ]+ \(/)
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
@@ -5008,6 +5059,58 @@ describe("model context directives from a cell", () => {
     20000,
   )
 
+  it.scopedLive(
+    "a handoff summary names the cell bindings the kept turn still uses",
+    () =>
+      Effect.gen(function* () {
+        // A failed summary call degrades to no handoff, so an assertion thrown
+        // inside the model would be swallowed; the request is kept and read after.
+        const summaryPrompts: Array<string> = []
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "const rows = [1, 2, 3]; 'bound'" }),
+          textStep("rows bound"),
+          toolCallStep("cell", { code: "await context.compact(); rows.length" }),
+          {
+            ...textStep("summary of older history"),
+            assertOptions: (options) => {
+              summaryPrompts.push(
+                Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(options.prompt),
+              )
+            },
+          },
+          textStep("after compaction"),
+        ])
+        const fixture = defineExtension({
+          id: "retained-bindings-fixture",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("tool", CellTool)
+          }),
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          agents: [],
+          extensionInputs: [
+            CompactionExtension,
+            {
+              ...fixture,
+              artifactIdentity: LoadedArtifactIdentity.make("retained-bindings-source"),
+            },
+          ],
+          branchTools: CellBranchTools,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "bind the rows" })
+        yield* waitFor(client.message.list({ branchId }), hasReply("rows bound"))
+        yield* client.message.send({ sessionId, branchId, content: "compact, then count rows" })
+        yield* waitFor(client.message.list({ branchId }), hasReply("after compaction"))
+        yield* controls.assertDone
+        expect(summaryPrompts).toHaveLength(1)
+        expect(summaryPrompts[0]).toContain("Names retained on this branch: rows")
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    20000,
+  )
+
   for (const directive of ["newWindow", "compact"]) {
     it.scopedLive(
       `an interrupted cell does not apply context.${directive}() to the next turn`,
@@ -5169,7 +5272,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     ReadTool,
-    "- tools.read(input: { path: string; offset?: number; limit?: number }): Promise<{ content: string; path: string; lineCount: number; truncated: boolean; nextOffset?: number }> // Read file contents with line numbers",
+    "- tools.read(input: { path: string; offset?: number; limit?: number }): Promise<{ content: string; path: string; lineCount: number; truncated: boolean; nextOffset?: number; lossy?: true }> // Read file contents with line numbers",
   ],
   [
     WriteTool,
@@ -5181,7 +5284,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     GrepTool,
-    "- tools.grep(input: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; context?: number; limit?: number }): Promise<{ matches: { file: string; line: number; content: string; context?: object }[]; truncated: boolean; unreadable?: number; oversized?: number }> // Search file contents with regex",
+    "- tools.grep(input: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; context?: number; limit?: number }): Promise<{ matches: { file: string; line: number; content: string; context?: object }[]; truncated: boolean; unreadable?: number; oversized?: number; undecided?: number }> // Search file contents with regex",
   ],
   [
     GoalTool,
@@ -5380,6 +5483,55 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
     "- tools.record(input?: {} | unknown[]): Promise<Record<string, boolean>> // Returns a map.",
   ],
 ]
+
+// Each level names a union of the one below and a list of it, so a renderer
+// that expands a shared definition at every reach doubles per level.
+const sharedUnion = Array.from({ length: 22 }).reduce<Schema.Codec<unknown>>(
+  (below, _, index) =>
+    Schema.Union([below, Schema.Array(below)]).annotate({ identifier: `Level${index + 1}` }),
+  Schema.Union([Schema.Boolean, Schema.Null]).annotate({ identifier: "Level0" }),
+)
+// Anonymous unions nested with no definition to share.
+const nestedUnion = Array.from({ length: 14 }).reduce<Schema.Codec<unknown>>(
+  (below) => Schema.Union([Schema.Boolean, Schema.Null, Schema.Array(below)]),
+  Schema.Union([Schema.Boolean, Schema.Null]),
+)
+const deepUnionTools = [
+  tool({
+    id: "shared-union",
+    description: "Returns a shared union.",
+    params: Schema.Struct({ value: sharedUnion }),
+    output: sharedUnion,
+    execute: () => Effect.succeed(true),
+  }),
+  tool({
+    id: "nested-union",
+    description: "Returns a nested union.",
+    params: Schema.Struct({ value: nestedUnion }),
+    output: nestedUnion,
+    execute: () => Effect.succeed(true),
+  }),
+]
+
+describe("tool signature bound", () => {
+  for (const capability of deepUnionTools) {
+    it.live(
+      `${String(capability.id)} renders within the type limit, in one pass over its definitions`,
+      () =>
+        Effect.gen(function* () {
+          const started = yield* Clock.currentTimeMillis
+          const line = yield* renderToolSignature(capability)
+          const elapsed = (yield* Clock.currentTimeMillis) - started
+          const [, input = "", result = ""] =
+            /^- tools\["[^"]+"\]\(input: (.*)\): Promise<(.*)> \/\/ /.exec(line) ?? []
+          expect(input).toBe("object")
+          expect(result).toBe("boolean | null | unknown[]")
+          // Expanding a shared definition at every reach doubles the work per level.
+          expect(elapsed).toBeLessThan(1000)
+        }),
+    )
+  }
+})
 
 describe("tool signature edges", () => {
   for (const [capability, expected] of edgeSignatures) {

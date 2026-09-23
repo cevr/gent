@@ -1006,7 +1006,7 @@ const CHILDREN_SECTION = {
 
 - Delegate independent, self-contained work to children: start each with delegate.start, from one cell when you work in one, then end your turn. Each child's result arrives as a message that wakes you.
 - A fresh child has no conversation history, so give it a complete task; a forked child starts from your context. Do a single lookup, edit, or command inline.
-- A child's approvals are declined, and no message grants one: when a child reports a command it could not run, run it yourself or give it another way. Telling it to go ahead does not unblock it.`,
+- A turn you, a wake or a monitor start in a child cannot ask for an approval, and no message grants one: when a child reports a command it could not run, run it yourself or give it another way. Telling it to go ahead does not unblock it. Only a turn a user opens in the child can ask.`,
 }
 
 const childrenSection = (agent: AgentDefinition) => {

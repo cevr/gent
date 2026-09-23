@@ -7,6 +7,10 @@ import {
   ExtensionHost,
 } from "@gent/core/extensions/api"
 
+// Test seam: only tests read these exports. main is the agent the test roots
+// register; basePromptSections, readProjectInstructions and
+// projectInstructionsSection are read by the prompt-assembly tests.
+
 // What a Gent agent is and how it works. The loop states how a turn ends and
 // nothing else; the tools a deployment ships say how work gets done in their
 // own prompt sections.
@@ -92,8 +96,8 @@ const readFirstNonEmpty = Effect.fn("Agents.readFirstNonEmpty")(function* (
 
 /**
  * The joined `AGENTS.md`/`CLAUDE.md` text, or an empty string when no file has
- * content. Files are read on every turn, so an edit reaches the next turn of a
- * running session; a file that cannot be read counts as absent.
+ * content. Files are read on every model step, so an edit reaches the next
+ * step of a running session; a file that cannot be read counts as absent.
  */
 export const readProjectInstructions = Effect.fn("Agents.readProjectInstructions")(function* () {
   const { home } = yield* ExtensionContext

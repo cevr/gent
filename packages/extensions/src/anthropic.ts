@@ -148,15 +148,14 @@ export const getModelOverride = (modelId: string): Option.Option<ModelOverride> 
 }
 
 /**
- * Heuristic — does this model id look like opus/sonnet 4.6+ (the
- * versions where 1M-context is default)? Lifted from the opencode
- * reference; broader than a pure version bump because date-suffix
- * model ids (`-20250514`) get treated as `x.0`.
+ * Heuristic — does this model id look like opus/sonnet 4.6 or later in
+ * the 4 family, the versions that take the `context-1m` beta? Date-suffix
+ * model ids (`-20250514`) are treated as `x.0`.
  *
- * It needs `family-major-minor`. Ids without a minor version
- * (`claude-sonnet-5`, `claude-opus-5`) and families other than opus and
- * sonnet (`claude-fable-5`) get no `context-1m` beta. That is intended:
- * those models have a 1M context window by default and need no beta.
+ * It needs `family-4-minor`. The 5 family (`claude-sonnet-5`,
+ * `claude-opus-5-5`) and families other than opus and sonnet
+ * (`claude-fable-5`) get no `context-1m` beta: those models have a 1M
+ * context window by default and need no beta.
  */
 export const supports1mContext = (modelId: string): boolean => {
   const lower = modelId.toLowerCase()
@@ -175,7 +174,7 @@ export const supports1mContext = (modelId: string): boolean => {
   // Date suffixes like 20250514 are not minor versions — treat as x.0
   let effectiveMinor = minor
   if (minor > 99) effectiveMinor = 0
-  return major > 4 || (major === 4 && effectiveMinor >= 6)
+  return major === 4 && effectiveMinor >= 6
 }
 
 const applyModelOverride = (betas: Array<string>, override: Option.Option<ModelOverride>): void => {

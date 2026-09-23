@@ -215,6 +215,53 @@ const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 // oxlint-disable-next-line no-eval -- Evaluating model source in the worker realm is this adapter's purpose.
 const evaluateInRealm: (compiled: string) => unknown = globalThis.eval
 
+/** Inner errors an `AggregateError` lists before it counts the rest. */
+const AGGREGATE_DETAIL_LIMIT = 3
+/** The stderr a `ShellError` shows, from its end. */
+const SHELL_STDERR_LIMIT = 2000
+
+const errorLine = (error: Error) => `${error.name}: ${error.message}`
+
+/** Where a Bun `BuildMessage` (a cell syntax error) points. */
+const BuildPosition = Schema.Struct({
+  line: Schema.Finite,
+  column: Schema.Finite,
+  lineText: Schema.optional(Schema.String),
+})
+
+/**
+ * The detail an error keeps outside its message, one line each and with no
+ * stack: an `AggregateError`'s inner errors, a `BuildMessage`'s position, and
+ * a `ShellError`'s stderr.
+ */
+const errorDetail = (error: Error): ReadonlyArray<string> => {
+  if (error instanceof AggregateError) {
+    const inner: ReadonlyArray<unknown> = error.errors
+    const listed = inner.slice(0, AGGREGATE_DETAIL_LIMIT).map((each) => {
+      if (Predicate.isError(each)) return `  ${errorLine(each)}`
+      return `  ${String(each)}`
+    })
+    const rest = inner.length - listed.length
+    if (rest > 0) return [...listed, `  … ${rest} more`]
+    return listed
+  }
+  if (Predicate.hasProperty(error, "position")) {
+    const position = Schema.decodeUnknownOption(BuildPosition)(error.position)
+    if (Option.isSome(position)) {
+      const { line, column, lineText } = position.value
+      let at = `  at line ${line}, column ${column}`
+      if (Predicate.isNotUndefined(lineText)) at = `${at}: ${lineText.trim()}`
+      return [at]
+    }
+  }
+  if (Predicate.hasProperty(error, "stderr") && error.stderr instanceof Uint8Array) {
+    const stderr = new TextDecoder().decode(error.stderr).trim()
+    if (stderr.length === 0) return []
+    return [`stderr: ${stderr.slice(-SHELL_STDERR_LIMIT)}`]
+  }
+  return []
+}
+
 export const makeBunCellEvaluator = Effect.gen(function* () {
   const host = yield* CellHost
   const environment = yield* CellWorkerEnvironment
@@ -234,6 +281,8 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // oxlint-disable-next-line effect/noUnknownParameters -- VM values can have any JavaScript shape; inspect produces bounded display text.
   const display = (value: unknown): string => {
     if (Predicate.isString(value)) return value
+    // A caught error the cell logs or returns reads as it does uncaught: no worker stack.
+    if (Predicate.isError(value)) return errorText(value)
     return inspect(value, {
       depth: 4,
       maxArrayLength: 100,
@@ -262,7 +311,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // host's message.
   const errorText = (cause: unknown): string => {
     if (!Predicate.isError(cause)) return display(cause)
-    const head = `${cause.name}: ${cause.message}`
+    const head = [`${cause.name}: ${cause.message}`, ...errorDetail(cause)].join("\n")
     if (Predicate.isUndefined(cause.cause)) return head
     let inner = display(cause.cause)
     if (Predicate.isError(cause.cause)) inner = `${cause.cause.name}: ${cause.cause.message}`

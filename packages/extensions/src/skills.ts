@@ -24,7 +24,8 @@ import {
 
 // Test seam: only tests read these exports. SkillEntry, parseSkillFile and
 // formatSkillsForPrompt are pure with unit tests; bundledSkillFiles and
-// installBundledSkills let a test install the bundled skills into a scratch home.
+// installBundledSkills let a test install the bundled skills into a scratch home;
+// Skills.Test gives a test a fixed skill list.
 
 // ── bundled sources ─────────────────────────────────────────────────────────
 

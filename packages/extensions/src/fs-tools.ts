@@ -7,6 +7,7 @@ import {
   Path,
   Result,
   Schema,
+  type Scope,
   Stream,
 } from "effect"
 import picomatch from "picomatch"
@@ -57,6 +58,19 @@ type PathMatcher = (path: string) => boolean
 
 /** The walk stops with an error past this many files; the caller narrows `path`. */
 const FALLBACK_MAX_FILES = 100_000
+
+const tooManyFiles = (cwd: string) =>
+  new FileListingError({
+    message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+    cwd,
+  })
+
+/**
+ * A relative path that climbs out of its base. `..cache` is a name inside the
+ * base; only `..` itself or a `../` step leaves it.
+ */
+const leavesBase = (path: Path.Path, relative: string): boolean =>
+  relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
 
 /** One `.gitignore` line. */
 interface IgnoreRule {
@@ -266,7 +280,7 @@ const walkFiles = (params: {
       const { cwd } = params
       let root = params.root
       let fromRoot = path.relative(root, cwd)
-      if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) {
+      if (leavesBase(path, fromRoot)) {
         root = cwd
         fromRoot = ""
       }
@@ -321,10 +335,7 @@ const walkFiles = (params: {
             }
 
             if (files.length >= FALLBACK_MAX_FILES) {
-              return yield* new FileListingError({
-                message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-                cwd,
-              })
+              return yield* tooManyFiles(cwd)
             }
             files.push({ path: absPath, relativePath })
           }
@@ -339,13 +350,6 @@ const walkFiles = (params: {
 
 // ── Inside a git work tree: git decides the listing ──
 
-/**
- * Git lists the files itself, so every exclude source applies as git applies
- * it: the `.gitignore` files above the search root, `.git/info/exclude` and
- * `core.excludesFile`. Tracked files are listed even when a pattern matches
- * them, as git treats them. A nested repository or a submodule is listed by
- * its own git, with its own rules. `None` outside a work tree or without git.
- */
 /**
  * A hook or `rebase -x` exports `GIT_DIR` and its kin for its own repository;
  * the listing asks the repository that holds `cwd`.
@@ -408,10 +412,7 @@ const gitLsFiles = (
       }),
     )
     if (onDisk > FALLBACK_MAX_FILES) {
-      return yield* new FileListingError({
-        message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-        cwd,
-      })
+      return yield* tooManyFiles(cwd)
     }
     if ((yield* handle.exitCode) !== 0) return Option.none<GitNames>()
     const decoder = new TextDecoder("utf-8", { fatal: true })
@@ -450,6 +451,13 @@ const gitLsFiles = (
     ),
   )
 
+/**
+ * Git lists the files itself, so every exclude source applies as git applies
+ * it: the `.gitignore` files above the search root, `.git/info/exclude` and
+ * `core.excludesFile`. Tracked files are listed even when a pattern matches
+ * them, as git treats them. A nested repository or a submodule is listed by
+ * its own git, with its own rules. `None` outside a work tree or without git.
+ */
 const listGitFiles: (
   cwd: string,
 ) => Effect.Effect<
@@ -505,10 +513,7 @@ const listGitFiles: (
   )
   const files = nested.flat()
   if (files.length > FALLBACK_MAX_FILES) {
-    return yield* new FileListingError({
-      message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-      cwd,
-    })
+    return yield* tooManyFiles(cwd)
   }
   return Option.some({ files, unreadable })
 })
@@ -558,6 +563,96 @@ const listFiles: (params: {
   return yield* walkFiles(params)
 })
 
+// ── file text ───────────────────────────────────────────────────────────────
+
+/** How a text file spells its text: UTF-8, or the byte order mark it starts with. */
+type TextEncoding = "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be"
+
+/** A text file's text and the encoding it was read in, so an edit writes it back the same way. */
+interface FileText {
+  readonly text: string
+  readonly encoding: TextEncoding
+  /**
+   * The bytes are not valid in `encoding`: an invalid UTF-8 sequence, an odd
+   * trailing byte or an unpaired surrogate in UTF-16. The decoder put U+FFFD in
+   * their place, so writing `text` back would not give the same bytes.
+   */
+  readonly lossy: boolean
+}
+
+/** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary. */
+const BINARY_PROBE_BYTES = 8192
+
+const UTF8_BOM = [0xef, 0xbb, 0xbf]
+const UTF16LE_BOM = [0xff, 0xfe]
+const UTF16BE_BOM = [0xfe, 0xff]
+
+const startsWith = (bytes: Uint8Array, mark: ReadonlyArray<number>) =>
+  mark.every((byte, index) => bytes[index] === byte)
+
+/** Decode the bytes after a byte order mark; the mark is not part of the text. */
+const decodeAfter = (label: string, bytes: Uint8Array, mark: ReadonlyArray<number>) =>
+  new TextDecoder(label, { ignoreBOM: true }).decode(bytes.subarray(mark.length))
+
+/**
+ * The text of a file, or `None` for a binary one. read, edit and grep all read
+ * through this one decoder. A UTF-16 file starts with a byte order mark and
+ * holds NUL bytes, so it is decoded before the NUL probe, as ripgrep
+ * transcodes it. The decoder replaces a bad sequence silently; encoding the
+ * text again is the one check that the bytes and the text hold the same file.
+ */
+const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> =>
+  Option.map(decodeText(bytes), (decoded) => ({
+    ...decoded,
+    lossy: !sameBytes(encodeFileText({ ...decoded, lossy: false }), bytes),
+  }))
+
+const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> => {
+  if (startsWith(bytes, UTF16LE_BOM)) {
+    return Option.some({ encoding: "utf-16le", text: decodeAfter("utf-16le", bytes, UTF16LE_BOM) })
+  }
+  if (startsWith(bytes, UTF16BE_BOM)) {
+    return Option.some({ encoding: "utf-16be", text: decodeAfter("utf-16be", bytes, UTF16BE_BOM) })
+  }
+  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
+  if (startsWith(bytes, UTF8_BOM)) {
+    return Option.some({ encoding: "utf-8-bom", text: decodeAfter("utf-8", bytes, UTF8_BOM) })
+  }
+  return Option.some({ encoding: "utf-8", text: decodeAfter("utf-8", bytes, []) })
+}
+
+const sameBytes = (left: Uint8Array, right: Uint8Array) =>
+  left.length === right.length && left.every((byte, index) => byte === right[index])
+
+/** Why a file that does not decode exactly is not rewritten. */
+const lossyWriteMessage = (verb: string, file: FileText) =>
+  `Cannot ${verb} this file: it holds bytes that are not valid ${file.encoding}, and writing the text back would replace them with U+FFFD. Convert the file to valid ${file.encoding} first.`
+
+/** UTF-16 code units in the given byte order, after the byte order mark. */
+const encodeUtf16 = (text: string, littleEndian: boolean): Uint8Array => {
+  const bytes = new Uint8Array(2 + text.length * 2)
+  const view = new DataView(bytes.buffer)
+  view.setUint16(0, 0xfeff, littleEndian)
+  for (let index = 0; index < text.length; index++) {
+    view.setUint16(2 + index * 2, text.charCodeAt(index), littleEndian)
+  }
+  return bytes
+}
+
+/** The bytes of `file.text` in the encoding the file was read in, with its byte order mark. */
+const encodeFileText = (file: FileText): Uint8Array => {
+  switch (file.encoding) {
+    case "utf-8":
+      return new TextEncoder().encode(file.text)
+    case "utf-8-bom":
+      return new Uint8Array([...UTF8_BOM, ...new TextEncoder().encode(file.text)])
+    case "utf-16le":
+      return encodeUtf16(file.text, true)
+    case "utf-16be":
+      return encodeUtf16(file.text, false)
+  }
+}
+
 // ── read ────────────────────────────────────────────────────────────────────
 
 // Read Tool Error
@@ -598,6 +693,8 @@ const ReadResult = Schema.Struct({
   truncated: Schema.Boolean,
   /** The 1-indexed line to pass as `offset` to continue. Absent when the read reached the end. */
   nextOffset: Schema.optional(Schema.Finite),
+  /** Present when the file holds invalid bytes, shown as U+FFFD; edit and write refuse such a file. */
+  lossy: Schema.optional(Schema.Literal(true)),
 })
 
 /** `1 line`, `3 lines`: the counted noun of a one-line tool summary. */
@@ -613,7 +710,7 @@ export const ReadTool = tool({
   id: "read",
   readonly: true,
   description:
-    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line.",
+    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line. A file with bytes that are not valid text shows them as U+FFFD and reports lossy; edit and write refuse that file.",
   promptSnippet: "Read file contents with line numbers",
   params: ReadParams,
   output: ReadResult,
@@ -648,7 +745,7 @@ export const ReadTool = tool({
       })
     }
 
-    const content = yield* fs.readFileString(filePath).pipe(
+    const bytes = yield* fs.readFile(filePath).pipe(
       Effect.mapError(
         (e) =>
           new ReadError({
@@ -658,8 +755,12 @@ export const ReadTool = tool({
           }),
       ),
     )
+    const decoded = decodeFileText(bytes)
+    if (Option.isNone(decoded)) {
+      return yield* new ReadError({ message: "Cannot read a binary file.", path: filePath })
+    }
 
-    const lines = splitLines(content)
+    const lines = splitLines(decoded.value.text)
     const totalLines = lines.length
     const offset = params.offset ?? 1
     const limit = params.limit ?? 2000
@@ -687,6 +788,7 @@ export const ReadTool = tool({
       // A truncated read names the next unread line so the caller continues
       // without a gap; a complete read leaves the key out entirely.
       ...(truncated && { nextOffset: endIndex + 1 }),
+      ...(decoded.value.lossy && { lossy: true }),
     }
   }),
 })
@@ -751,6 +853,17 @@ export const WriteTool = tool({
       filePath,
       Effect.gen(function* () {
         const dir = path.dirname(filePath)
+
+        // A file that does not decode exactly was shown with U+FFFD in place
+        // of its bad bytes; content built from that read would destroy them.
+        const existing = yield* fs.readFile(filePath).pipe(Effect.option)
+        const existingText = Option.flatMap(existing, decodeFileText)
+        if (Option.isSome(existingText) && existingText.value.lossy) {
+          return yield* new WriteError({
+            message: lossyWriteMessage("overwrite", existingText.value),
+            path: filePath,
+          })
+        }
 
         // Ensure directory exists
         yield* fs.makeDirectory(dir, { recursive: true }).pipe(
@@ -1024,7 +1137,7 @@ export const EditTool = tool({
     return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
-        const content = yield* fs.readFileString(filePath).pipe(
+        const bytes = yield* fs.readFile(filePath).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -1034,6 +1147,17 @@ export const EditTool = tool({
               }),
           ),
         )
+        const decoded = decodeFileText(bytes)
+        if (Option.isNone(decoded)) {
+          return yield* new EditError({ message: "Cannot edit a binary file.", path: filePath })
+        }
+        if (decoded.value.lossy) {
+          return yield* new EditError({
+            message: lossyWriteMessage("edit", decoded.value),
+            path: filePath,
+          })
+        }
+        const content = decoded.value.text
 
         const replaceAll = params.replaceAll === true
 
@@ -1062,7 +1186,9 @@ export const EditTool = tool({
         const newContent = spliceRanges(content, replaced, params.newString)
         const replacements = replaced.length
 
-        yield* fs.writeFileString(filePath, newContent).pipe(
+        // The file keeps the encoding and byte order mark it was read in.
+        const written = encodeFileText({ ...decoded.value, text: newContent })
+        yield* fs.writeFile(filePath, written).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -1149,10 +1275,12 @@ const GrepResult = Schema.Struct({
   unreadable: Schema.optional(Schema.Finite),
   /** Files grep skipped because they are larger than the size cap. */
   oversized: Schema.optional(Schema.Finite),
+  /**
+   * Lines the regex engine gave up on: the pattern backtracks too much to
+   * decide them, so one of them may match. Simplify the pattern.
+   */
+  undecided: Schema.optional(Schema.Finite),
 })
-
-/** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary, and grep skips it. */
-const BINARY_PROBE_BYTES = 8192
 
 /** A file larger than this is skipped and counted: it is a log or a bundle, not source. */
 const MAX_SEARCH_FILE_BYTES = 10 * 1024 * 1024
@@ -1164,22 +1292,6 @@ const SEARCH_CONCURRENCY = 16
 const SEARCH_ROUND = 64
 
 type GrepMatch = typeof GrepMatch.Type
-
-/**
- * The text of a file, or `None` for a binary one. A UTF-16 file starts with a
- * byte order mark and holds NUL bytes, so it is decoded before the NUL probe,
- * as ripgrep transcodes it.
- */
-const fileText = (bytes: Uint8Array): Option.Option<string> => {
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
-    return Option.some(new TextDecoder("utf-16le").decode(bytes))
-  }
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    return Option.some(new TextDecoder("utf-16be").decode(bytes))
-  }
-  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
-  return Option.some(new TextDecoder().decode(bytes))
-}
 
 /** A match or context line longer than this is cut to this many characters. */
 const MAX_LINE_LENGTH = 500
@@ -1209,11 +1321,128 @@ const clipLine = (line: string, at: number): string => {
   return clipped
 }
 
+// ── Line matcher: the regex runs on its own thread ──
+
+/**
+ * A line whose search runs longer than this and finds nothing is undecided.
+ * JavaScriptCore stops a search that backtracks too far and reports no match,
+ * with no other signal, so a slow miss may hide a match. The limit counts
+ * backtracking steps, so a give-up takes a steady time: 320 ms for the
+ * fastest pattern measured, 450 ms to 1 s for most. Load only makes it
+ * slower. A slow real miss counted here costs one number in the result, so
+ * the bound sits far below the fastest give-up.
+ */
+const UNDECIDED_LINE_MS = 50
+
+/** A grep that runs longer than this fails: its pattern backtracks too much. */
+const GREP_TIME_LIMIT = Duration.seconds(30)
+
+/** One file's answer from the matcher thread. */
+const MatcherReply = Schema.Struct({
+  id: Schema.Int,
+  /** Each matching line's index and the offset of its match, at most `limit + 1`. */
+  hits: Schema.Array(Schema.Tuple([Schema.Int, Schema.Int])),
+  undecided: Schema.Int,
+})
+type MatcherReply = typeof MatcherReply.Type
+
+/**
+ * The matcher thread's source. It is plain JavaScript with no imports, so it
+ * runs from a Blob URL in the compiled binary as well as from source. Each
+ * request carries the pattern; the thread builds its regex once.
+ */
+const MATCHER_SOURCE = [
+  "let regex",
+  "onmessage = (event) => {",
+  "  const { id, source, flags, text, limit } = event.data",
+  "  regex ??= new RegExp(source, flags)",
+  "  const lines = text.split('\\n')",
+  "  const hits = []",
+  "  let undecided = 0",
+  "  for (let index = 0; index < lines.length && hits.length <= limit; index++) {",
+  "    const started = performance.now()",
+  "    const hit = regex.exec(lines[index])",
+  "    if (hit !== null) hits.push([index, hit.index])",
+  `    else if (performance.now() - started > ${UNDECIDED_LINE_MS}) undecided++`,
+  "  }",
+  "  postMessage({ id, hits, undecided })",
+  "}",
+].join("\n")
+
+/** Searches one file's text on the matcher thread. */
+interface LineMatcher {
+  readonly search: (text: string, limit: number) => Effect.Effect<MatcherReply, GrepError>
+}
+
+/**
+ * A matcher thread for one grep. The regex runs off the server thread, so a
+ * pattern that backtracks for minutes stalls nothing else, and closing the
+ * scope ends the thread: a timeout or an interrupt stops the search at once.
+ */
+const makeLineMatcher = (regex: RegExp): Effect.Effect<LineMatcher, GrepError, Scope.Scope> =>
+  Effect.gen(function* () {
+    const pending = new Map<number, (reply: Effect.Effect<MatcherReply, GrepError>) => void>()
+    const failAll = (message: string) => {
+      for (const resume of pending.values()) {
+        resume(Effect.fail(new GrepError({ message, pattern: regex.source })))
+      }
+      pending.clear()
+    }
+    // The URL is released on its own, so it is revoked even when the Worker
+    // constructor throws.
+    const url = yield* Effect.acquireRelease(
+      Effect.sync(() => URL.createObjectURL(new Blob([MATCHER_SOURCE]))),
+      (created) => Effect.sync(() => URL.revokeObjectURL(created)),
+    )
+    const thread = yield* Effect.acquireRelease(
+      Effect.try({
+        // oxlint-disable-next-line effect/noGlobals -- the regex must run on an OS thread the server can end, and an Effect Worker needs a bundled entry module; this one is a Blob of plain JavaScript.
+        try: () => new Worker(url),
+        catch: (cause) =>
+          new GrepError({
+            message: `grep could not start its matcher: ${String(cause)}`,
+            pattern: regex.source,
+          }),
+      }),
+      (started) =>
+        Effect.sync(() => {
+          started.terminate()
+          failAll("grep ended")
+        }),
+    )
+    thread.onmessage = (event: MessageEvent) => {
+      const reply = Schema.decodeUnknownOption(MatcherReply)(event.data)
+      if (Option.isNone(reply)) return failAll("grep's matcher sent a reply it cannot read")
+      const resume = pending.get(reply.value.id)
+      pending.delete(reply.value.id)
+      resume?.(Effect.succeed(reply.value))
+    }
+    thread.onerror = (event: ErrorEvent) => failAll(`grep's matcher failed: ${event.message}`)
+    let nextId = 0
+    return {
+      search: (text, limit) =>
+        Effect.callback<MatcherReply, GrepError>((resume) => {
+          const id = nextId++
+          pending.set(id, resume)
+          thread.postMessage({ id, source: regex.source, flags: regex.flags, text, limit })
+          return Effect.sync(() => {
+            pending.delete(id)
+          })
+        }),
+    }
+  })
+
 /** What one grep looks for. */
 interface Search {
-  readonly regex: RegExp
+  readonly matcher: LineMatcher
   readonly limit: number
   readonly contextLines: number
+}
+
+interface FileSearch {
+  readonly matches: ReadonlyArray<GrepMatch>
+  readonly oversized: boolean
+  readonly undecided: number
 }
 
 /**
@@ -1223,46 +1452,38 @@ interface Search {
 const searchFile = (
   filePath: string,
   search: Search,
-): Effect.Effect<
-  { readonly matches: ReadonlyArray<GrepMatch>; readonly oversized: boolean },
-  never,
-  FileSystem.FileSystem
-> =>
+): Effect.Effect<FileSearch, GrepError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const none = { matches: [], oversized: false }
+    const none: FileSearch = { matches: [], oversized: false, undecided: 0 }
     const info = yield* fs.stat(filePath).pipe(Effect.option)
     if (Option.isNone(info)) return none
-    if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { matches: [], oversized: true }
+    if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { ...none, oversized: true }
     const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
-    const text = Option.flatMap(bytes, fileText)
-    if (Option.isNone(text)) return none
+    const decoded = Option.flatMap(bytes, decodeFileText)
+    if (Option.isNone(decoded)) return none
 
-    const lines = text.value.split("\n")
+    const text = decoded.value.text
+    const reply = yield* search.matcher.search(text, search.limit)
+    const lines = text.split("\n")
     const contextOf = (from: number, to: number) =>
       lines.slice(from, to).map((line) => clipLine(line, 0))
-    const found: Array<GrepMatch> = []
-    for (const [i, line] of lines.entries()) {
-      if (found.length > search.limit) break
-      const hit = Option.fromNullishOr(search.regex.exec(line))
-      if (Option.isNone(hit)) continue
-      let match: GrepMatch = {
+    const matches = reply.hits.map(([index, at]): GrepMatch => {
+      const match: GrepMatch = {
         file: filePath,
-        line: i + 1,
-        content: clipLine(line, hit.value.index),
+        line: index + 1,
+        content: clipLine(lines[index] ?? "", at),
       }
-      if (search.contextLines > 0) {
-        match = {
-          ...match,
-          context: {
-            before: contextOf(Math.max(0, i - search.contextLines), i),
-            after: contextOf(i + 1, i + 1 + search.contextLines),
-          },
-        }
+      if (search.contextLines === 0) return match
+      return {
+        ...match,
+        context: {
+          before: contextOf(Math.max(0, index - search.contextLines), index),
+          after: contextOf(index + 1, index + 1 + search.contextLines),
+        },
       }
-      found.push(match)
-    }
-    return { matches: found, oversized: false }
+    })
+    return { matches, oversized: false, undecided: reply.undecided }
   })
 
 /**
@@ -1277,13 +1498,15 @@ const searchFiles = (
     readonly matches: ReadonlyArray<GrepMatch>
     readonly truncated: boolean
     readonly oversized: number
+    readonly undecided: number
   },
-  never,
+  GrepError,
   FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
     const matches: Array<GrepMatch> = []
     let oversized = 0
+    let undecided = 0
     for (let from = 0; from < files.length; from += SEARCH_ROUND) {
       const results = yield* Effect.forEach(
         files.slice(from, from + SEARCH_ROUND),
@@ -1292,13 +1515,19 @@ const searchFiles = (
       )
       for (const result of results) {
         if (result.oversized) oversized++
+        undecided += result.undecided
         matches.push(...result.matches)
         if (matches.length > search.limit) {
-          return { matches: matches.slice(0, search.limit), truncated: true, oversized }
+          return {
+            matches: matches.slice(0, search.limit),
+            truncated: true,
+            oversized,
+            undecided,
+          }
         }
       }
     }
-    return { matches, truncated: false, oversized }
+    return { matches, truncated: false, oversized, undecided }
   })
 
 // Grep Tool
@@ -1307,7 +1536,7 @@ export const GrepTool = tool({
   id: "grep",
   readonly: true,
   description:
-    "Search file contents with regex. Returns matching lines in path order. Skips binary files and files over 10 MB; a line over 500 characters is cut around the match.",
+    "Search file contents with regex. Returns matching lines in path order. Skips binary files and files over 10 MB; a line over 500 characters is cut around the match. A pattern that backtracks too much leaves lines undecided (counted in undecided) and fails past 30 seconds.",
   promptSnippet: "Search file contents with regex",
   params: GrepParams,
   output: GrepResult,
@@ -1355,7 +1584,7 @@ export const GrepTool = tool({
       // A target inside the session cwd reads the session's ignore rules from its root.
       const fromCwd = path.relative(ctx.cwd, basePath)
       let root = basePath
-      if (!fromCwd.startsWith("..") && !path.isAbsolute(fromCwd)) root = ctx.cwd
+      if (!leavesBase(path, fromCwd)) root = ctx.cwd
       const listing = yield* listFiles({ root, cwd: basePath }).pipe(
         Effect.mapError(
           (cause) =>
@@ -1386,14 +1615,27 @@ export const GrepTool = tool({
         .toSorted()
     }
 
-    const { matches, truncated, oversized } = yield* searchFiles(files, {
-      regex,
-      limit,
-      contextLines,
-    })
+    const { matches, truncated, oversized, undecided } = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const matcher = yield* makeLineMatcher(regex)
+        return yield* searchFiles(files, { matcher, limit, contextLines })
+      }),
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: GREP_TIME_LIMIT,
+        orElse: () =>
+          Effect.fail(
+            new GrepError({
+              message: `grep ran past ${Duration.format(GREP_TIME_LIMIT)}: the pattern backtracks too much. Simplify it or search a narrower path.`,
+              pattern: params.pattern,
+            }),
+          ),
+      }),
+    )
     let result: typeof GrepResult.Type = { matches, truncated }
     if (unreadable > 0) result = { ...result, unreadable }
     if (oversized > 0) result = { ...result, oversized }
+    if (undecided > 0) result = { ...result, undecided }
     return result
   }),
 })
