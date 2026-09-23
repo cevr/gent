@@ -2538,7 +2538,8 @@ export const approveBashCommand = Effect.fn("approveBashCommand")(function* (
   const ctx = yield* ExtensionContext
   const decision = yield* ctx.Interaction.approve({
     text: `${subject} is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\n${question}`,
-    metadata: { type: "bash-guardrail", level: risk.level },
+    // A key a client extension can pick a renderer by; the shipped TUI has none.
+    metadata: { type: "bash-guardrail" },
   })
   if (decision.approved) return Option.none<string>()
   const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
@@ -2969,7 +2970,10 @@ export const BashTool = tool({
     }
     const cwd = Option.some(directory)
 
-    const blocked = yield* approveBashCommand(command, "This command", "Allow execution?")
+    // The command is quoted without its `cd`, so the question names where it runs.
+    let subject = "This command"
+    if (directory !== ctx.cwd) subject = `This command (in \`${directory}\`)`
+    const blocked = yield* approveBashCommand(command, subject, "Allow execution?")
     if (Option.isSome(blocked)) {
       return { stdout: blocked.value, stderr: "", exitCode: 1, status: "blocked" }
     }

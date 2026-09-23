@@ -1689,6 +1689,35 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
+  // Declined, so it never runs; the directory does not exist.
+  it.live(
+    "the question names the directory a leading cd moves the command to",
+    () =>
+      Effect.gen(function* () {
+        const asked = yield* Ref.make<ReadonlyArray<string>>([])
+        const ctx: TestToolContext = {
+          ...stubCtx,
+          Interaction: {
+            ...stubCtx.Interaction,
+            approve: ({ text }) =>
+              Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
+          },
+        }
+        yield* provideBun(
+          runToolWithCtx(
+            BashTool,
+            { command: "cd /nonexistent/gent-probe-x && git push --force" },
+            ctx,
+          ),
+        )
+        const prompts = yield* Ref.get(asked)
+        expect(prompts[0]).toContain(
+          "This command (in `/nonexistent/gent-probe-x`) is classified as destructive",
+        )
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "keeps a huge command result whole",
     () =>
