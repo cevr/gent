@@ -2273,6 +2273,8 @@ export const makeExtensionHostContextProvider = (
               parentBranchId: params.parentBranchId,
               historyBranchId: params.historyBranchId,
               admission: params.admission,
+              modelId: params.modelId,
+              reasoningLevel: params.reasoningLevel,
               requestId: params.requestId,
             }),
           ).pipe(

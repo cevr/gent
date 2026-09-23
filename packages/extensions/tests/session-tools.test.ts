@@ -16,8 +16,10 @@ import {
   renderSessionTree,
   sessionMessageBody,
   sessionMessageText,
+  SendSessionTool,
   SessionToolsExtension,
 } from "../src/session-tools.js"
+import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import {
   Branch,
   dateFromMillis,
@@ -80,6 +82,18 @@ describe("SessionToolsExtension", () => {
 })
 
 // ── session-tools/read-session.test ─────────────────────────────────────────
+
+describe("session.send summary", () => {
+  test("a sent message reads as who got it and what it said, not JSON", () => {
+    expect(
+      toolResultSummary(
+        Option.some(SendSessionTool),
+        { to: "parent", message: "  CI is green  " },
+        { isFailure: false, result: { sessionId: "parent-1", relation: "parent" } },
+      ),
+    ).toBe("to parent · CI is green")
+  })
+})
 
 describe("messagePartsDisplayText", () => {
   test("read-session subpath exports renderMessageParts", () => {

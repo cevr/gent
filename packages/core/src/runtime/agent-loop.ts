@@ -1023,15 +1023,22 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       // A withdrawn admission (see `withdrawAdmittedTurn`) leaves its entry in
       // the worker queue; the gate decides whether this entry still runs.
       if (!(yield* claimAdmission(startState.message.id))) return
-      yield* scope.runTurn(startState).pipe(
-        Effect.annotateLogs({ sessionId: scope.sessionId, branchId: scope.branchId }),
-        Effect.withSpan("AgentLoop.turn"),
-        withWideEvent({
-          service: "agent-loop",
-          method: "turn",
-          actor: yield* scope.sessionAgent,
-          envelope: { sessionId: scope.sessionId, branchId: scope.branchId },
-        }),
+      // The agent read is part of the turn: a failed read (a busy database, an
+      // admission that does not decode) fails this turn and releases its
+      // admission like any other failure, and the worker takes the next item.
+      yield* scope.sessionAgent.pipe(
+        Effect.flatMap((actor) =>
+          scope.runTurn(startState).pipe(
+            Effect.annotateLogs({ sessionId: scope.sessionId, branchId: scope.branchId }),
+            Effect.withSpan("AgentLoop.turn"),
+            withWideEvent({
+              service: "agent-loop",
+              method: "turn",
+              actor,
+              envelope: { sessionId: scope.sessionId, branchId: scope.branchId },
+            }),
+          ),
+        ),
         Effect.matchCauseEffect({
           onFailure: (cause) =>
             failTurnWorker(startState, cause).pipe(scope.interruptSemaphore.withPermits(1)),
