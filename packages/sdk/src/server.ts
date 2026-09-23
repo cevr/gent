@@ -33,12 +33,13 @@ import {
   BranchStorage,
   MessageStorage,
   SessionStorage,
-  type RpcHandlersLive,
+  RpcHandlersLive,
   provideWorkspaceIdHeader,
   type WorkspaceHeaders,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
-  buildServerRoot,
+  buildServerRoutes,
+  createDependencies,
   BunPlatformLive,
   ScriptedLanguageModel,
   StateLocation,
@@ -1013,9 +1014,9 @@ const buildOwnedServer = (
     )
     // A user extension imports the same effect modules the shipped ones do.
     yield* platform.bindModules(BuiltinExtensionModules)
-    const serverRoot = yield* buildServerRoot({
-      observability: GentObservability(options.cwd, logLevel, yield* resolveLogDir),
-      dependencies: {
+    const observability = GentObservability(options.cwd, logLevel, yield* resolveLogDir)
+    const coreServices = yield* Layer.buildWithScope(
+      createDependencies({
         cwd: options.cwd,
         // One broken user extension is reported, not fatal: the rest of the profile runs.
         failOnExtensionFailure: false,
@@ -1031,7 +1032,19 @@ const buildOwnedServer = (
         extensions: options.extensions ?? BuiltinExtensions,
         branchTools: options.branchTools ?? CellBranchTools,
         languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
-      },
+      }).pipe(Layer.provide(observability)),
+      scope,
+    ).pipe(
+      Effect.mapError(
+        (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
+      ),
+    )
+    const coreServicesLive = Layer.succeedContext(coreServices)
+    const rpcHandlersContext = yield* Layer.buildWithScope(
+      Layer.provide(RpcHandlersLive, coreServicesLive),
+      scope,
+    )
+    const httpRoutes = buildServerRoutes(coreServicesLive, {
       identity: {
         serverId,
         pid,
@@ -1039,15 +1052,11 @@ const buildOwnedServer = (
         dbPath: Option.getOrElse(dbPath, () => ":memory:"),
         buildFingerprint,
       },
-    }).pipe(
-      Effect.mapError(
-        (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
-      ),
-    )
+    })
 
-    const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
+    const HttpServerLive = HttpRouter.serve(httpRoutes).pipe(
       Layer.provide(Layer.succeedContext(httpServerCtx)),
-      Layer.provide(serverRoot.coreServicesLive),
+      Layer.provide(coreServicesLive),
     )
 
     yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
@@ -1056,7 +1065,7 @@ const buildOwnedServer = (
     if (options.debug === true) {
       yield* seedDebugSession(options.cwd).pipe(
         provideWorkspaceIdHeader(Headers.fromInput(workspaceHeaders)),
-        Effect.provideContext(serverRoot.coreServices),
+        Effect.provideContext(coreServices),
         Effect.catchEager((error) =>
           Effect.logWarning("Debug session seeding failed").pipe(
             Effect.annotateLogs({ error: String(error) }),
@@ -1070,7 +1079,7 @@ const buildOwnedServer = (
       workspaceId: workspaceIdForCwd(options.cwd),
     })
     ownedInternals.set(server, {
-      handlerContext: serverRoot.rpcHandlersContext,
+      handlerContext: rpcHandlersContext,
       port,
       serverId,
       headers: workspaceHeaders,

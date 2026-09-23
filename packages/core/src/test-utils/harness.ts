@@ -83,7 +83,12 @@ import {
 } from "../domain/agent-loop.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
 import { LanguageModelLayers } from "./language-model.js"
-import { makeInProcessClient, RpcHandlersLive, StateLocation } from "../server/server.js"
+import {
+  createDependencies,
+  makeInProcessClient,
+  RpcHandlersLive,
+  StateLocation,
+} from "../server/server.js"
 import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
 import { Branch, type Message, Session, SessionAdmission } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
@@ -105,7 +110,6 @@ import {
 } from "../domain/event.js"
 import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { buildServerRoot } from "../server/server-root.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -187,14 +191,6 @@ export const testExtensionHostContext = (
  */
 
 const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
-
-const testIdentity = (dbPath: string = ":memory:") => ({
-  serverId: "test-server",
-  pid: 0,
-  hostname: "test-host",
-  dbPath,
-  buildFingerprint: "test-fingerprint",
-})
 
 const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
   defineExtension({
@@ -835,40 +831,33 @@ const approvalOverrideForConfig = (config: E2ELayerConfig) => {
  *
  * The harness is a production-root preset: extension setup, resource startup,
  * event publishing, interaction recovery, and session runtime wiring flow
- * through `createDependencies`/`buildServerRoot`.
+ * through `createDependencies`, the root the SDK builds.
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   let toolRunnerLayer = Option.none<Layer.Layer<ToolRunner>>()
   if (config.toolRunner === "test") toolRunnerLayer = Option.some(ToolRunner.Test())
 
-  const root = buildServerRoot({
-    observability: Layer.empty,
-    dependencies: {
-      ...testEnvironment,
-      state: Option.match(Option.fromUndefinedOr(config.storagePath), {
-        onNone: () => StateLocation.cases.Memory.make({}),
-        onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
-      }),
-      languageModelLayerOverride: config.providerLayer,
-      extensions: extensionInputsForConfig(config),
-      // A broken extension fails the test with its reason, not a later timeout.
-      failOnExtensionFailure: config.allowFailedExtensions !== true,
-      branchTools: config.branchTools ?? noBranchTools,
-      overrides: {
-        modelRegistryLayer: ModelRegistry.Test(),
-        authLayer: config.authLayer ?? Auth.Test(),
-        approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
-        configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
-        sessionProfileCacheLayer: config.sessionProfileCacheLayer,
-        toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
-        extraLayers: config.extraLayers,
-      },
+  return createDependencies({
+    ...testEnvironment,
+    state: Option.match(Option.fromUndefinedOr(config.storagePath), {
+      onNone: () => StateLocation.cases.Memory.make({}),
+      onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
+    }),
+    languageModelLayerOverride: config.providerLayer,
+    extensions: extensionInputsForConfig(config),
+    // A broken extension fails the test with its reason, not a later timeout.
+    failOnExtensionFailure: config.allowFailedExtensions !== true,
+    branchTools: config.branchTools ?? noBranchTools,
+    overrides: {
+      modelRegistryLayer: ModelRegistry.Test(),
+      authLayer: config.authLayer ?? Auth.Test(),
+      approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
+      configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
+      sessionProfileCacheLayer: config.sessionProfileCacheLayer,
+      toolRunnerLayer: Option.getOrUndefined(toolRunnerLayer),
+      extraLayers: config.extraLayers,
     },
-    identity: testIdentity(config.storagePath),
-  })
-  return Layer.unwrap(root.pipe(Effect.map((built) => built.coreServicesLive))).pipe(
-    Layer.provide(BunPlatformLive),
-  )
+  }).pipe(Layer.provide(BunPlatformLive))
 }
 
 // ── in-process-layer ────────────────────────────────────────────────────────

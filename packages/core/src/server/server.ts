@@ -170,7 +170,7 @@ const clientSteer = (command: TransportSteerCommand): TransportSteerCommand => {
  * What `/_gent/identity` serves, verbatim. Registry validation compares it
  * field for field, so it holds nothing that varies across a restart.
  */
-export interface ServerIdentityApi {
+interface ServerIdentityApi {
   readonly serverId: string
   readonly pid: number
   readonly hostname: string
@@ -1594,7 +1594,7 @@ export const StateLocation = Schema.TaggedUnion({
 })
 export type StateLocation = typeof StateLocation.Type
 
-export interface DependenciesConfig {
+interface DependenciesConfig {
   cwd: string
   home: string
   platform: string

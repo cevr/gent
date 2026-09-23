@@ -1945,7 +1945,6 @@ export class SessionProfileCache extends Context.Service<
     | ChildProcessSpawner
     | Crypto.Crypto
     | ConfigService
-    | ScopeType.Scope
     | GentPlatform
   > =>
     Layer.effect(

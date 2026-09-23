@@ -1196,7 +1196,7 @@ describe("platform duplication guards", () => {
 
     expect(
       findPlatformDuplicationViolations(
-        "packages/core/src/server/server-root.ts",
+        "packages/core/src/runtime/gent-platform-bun.ts",
         "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
       ),
     ).toEqual([])

@@ -1297,12 +1297,11 @@ const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
   "packages/core/src/runtime/gent-platform-bun.ts",
-  "packages/core/src/server/server-root.ts",
   // The host entry is the door hosts take to the platform roots.
   "packages/core/src/host.ts",
   // The test entry hands test roots the full Bun platform.
   "packages/core/src/test-utils/index.ts",
-  // The in-process test server root provides the platform around `buildServerRoot`.
+  // The in-process test server root provides the platform around `createDependencies`.
   "packages/core/src/test-utils/harness.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",

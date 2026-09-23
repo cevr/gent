@@ -226,7 +226,7 @@ The app surface is split by concern:
 
 `SessionEvents` and `SessionSubscriptions` are inlined into `server/server.ts` — they are not separate services.
 
-The app services are assembled inline in `buildServerRoot` in `packages/core/src/server/server-root.ts`, from `createDependencies`; no separate app-services layer exists.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -1291,7 +1291,7 @@ One test file per source file. No god tests. Names match source owners.
 
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder` and the
   recording layers; `baseLocalLayer`, a production-root preset over
-  `buildServerRoot` with in-memory SQLite, storage-backed events, debug
+  `createDependencies` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps
   real `ToolRunner.Live`, extension setup/resource startup, event publishing,
   and interaction recovery while expressing test
