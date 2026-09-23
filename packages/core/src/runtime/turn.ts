@@ -2488,23 +2488,36 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }
         nativeToolCalls.push(toolCall)
       }
+      // A call whose result is already known needs no binding: it will not
+      // run again. Only the calls still owed a result are captured, so one
+      // missing binding cannot turn a stored success into a failure.
+      const known = yield* readKnownStepResults({
+        messageId: params.messageId,
+        step: pendingStep,
+        toolCalls: pendingToolCalls,
+        recoveredResults,
+      })
+      if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
+      const knownResults = known.value.knownResults
+      const unsettledCalls = nativeToolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
       const toolBindings = yield* captureReplayToolBindings({
         assistantMessageId: pendingAssistant.value.id,
-        toolCalls: nativeToolCalls,
+        toolCalls: unsettledCalls,
         turnProfile: params.turnProfile,
       }).pipe(
         Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
           Effect.gen(function* () {
-            const failureParts = nativeToolCalls.map((toolCall) =>
-              Prompt.toolResultPart({
-                id: toolCall.id,
-                name: toolCall.name,
-                isFailure: true,
-                providerExecuted: false,
-                result: { error: error.message, reason: error.reason },
-              }),
+            const parts = pendingToolCalls.map(
+              (toolCall) =>
+                knownResults.get(toolCall.id) ??
+                Prompt.toolResultPart({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  isFailure: true,
+                  providerExecuted: false,
+                  result: { error: error.message, reason: error.reason },
+                }),
             )
-            const parts = [...recoveredResults, ...failureParts]
             yield* recordToolOutcome({
               sessionId: scope.sessionId,
               branchId: scope.branchId,

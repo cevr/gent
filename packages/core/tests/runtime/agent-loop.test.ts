@@ -1421,6 +1421,105 @@ describe("tool projection reconciliation", () => {
       )
     }),
   )
+  for (const scenario of [
+    { name: "beside a call left with nothing", lost: true },
+    { name: "and the turn goes on", lost: false },
+  ]) {
+    it.live(`a cold resume keeps a stored tool result without its binding, ${scenario.name}`, () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make(`cold-binding-session-${scenario.lost}`)
+        const branchId = BranchId.make(`cold-binding-branch-${scenario.lost}`)
+        const doneCall = ToolCallId.make("cold-binding-done")
+        const lostCall = ToolCallId.make("cold-binding-lost")
+        const providerLayer = scriptedProvider([
+          [textDeltaPart("after resume"), finishPart({ finishReason: "stop" })],
+        ])
+        const eventsRef = yield* Ref.make<AgentEvent[]>([])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const messageStorage = yield* MessageStorage
+            const eventStorage = yield* EventStorage
+            yield* ensureStorageParents({ sessionId, branchId })
+            const turn = makeMessage(sessionId, branchId, "resume without bindings")
+            // A previous host issued the step's calls and died before its tool
+            // message. The finished call's terminal event is stored; a lost
+            // call left nothing. No call has a stored binding.
+            const calls = [
+              Prompt.toolCallPart({
+                id: doneCall,
+                name: "echo",
+                params: { text: "done" },
+                providerExecuted: false,
+              }),
+            ]
+            if (scenario.lost) {
+              calls.push(
+                Prompt.toolCallPart({
+                  id: lostCall,
+                  name: "echo",
+                  params: { text: "lost" },
+                  providerExecuted: false,
+                }),
+              )
+            }
+            const assistant = Message.cases.regular.make({
+              id: assistantMessageIdForTurn(turn.id, 1),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: calls,
+              createdAt: dateFromMillis(1_767_225_600_010),
+            })
+            yield* messageStorage.createMessage(assistant)
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: assistant }))
+            yield* eventStorage.appendEvent(
+              ToolCallSucceeded.make({
+                sessionId,
+                branchId,
+                toolCallId: doneCall,
+                toolName: "echo",
+                output: "done",
+                resultJson: encodeToolOutput({ text: "done" }),
+                assistantMessageId: assistant.id,
+              }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const exit = yield* Effect.exit(runAgentLoop(agentLoop, turn))
+
+            const toolMessage = yield* messageStorage.getMessage(
+              toolResultMessageIdForTurn(turn.id, 1),
+            )
+            const results = (toolMessage?.parts ?? []).filter(
+              (part): part is Prompt.ToolResultPart => part.type === "tool-result",
+            )
+            // The finished call keeps its stored success.
+            expect(results.find((part) => part.id === doneCall)).toEqual(
+              Prompt.toolResultPart({
+                id: doneCall,
+                name: "echo",
+                isFailure: false,
+                providerExecuted: false,
+                result: { text: "done" },
+              }),
+            )
+            if (scenario.lost) {
+              // Only the call with no result and no binding is failed.
+              expect(results.find((part) => part.id === lostCall)?.isFailure).toBe(true)
+              return
+            }
+            // Every call has a result, so no binding is needed and the turn
+            // answers instead of failing on the missing one.
+            expect(exit._tag).toBe("Success")
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
+            Effect.timeout("4 seconds"),
+          ),
+        )
+      }),
+    )
+  }
   it.live("fails a stale running tool projection before any new model work", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("orphan-session")
