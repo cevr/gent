@@ -793,6 +793,26 @@ export const DelegateRpc = defineRequests(DELEGATE_EXTENSION_ID, {
 
 // ── extension ───────────────────────────────────────────────────────────────
 
+/**
+ * How to work with children. A section, not tool guidelines: in a cell turn
+ * the model sees only the cell tool, so tool guidelines stay behind
+ * `tools(id)`. A child cannot delegate, so its turns do not get it.
+ */
+const CHILDREN_SECTION = {
+  id: "children",
+  priority: 12,
+  content: `# Children
+
+- Delegate independent, self-contained work to children: start each with delegate.start, from one cell when you work in one, then end your turn. Each child's result arrives as a message that wakes you.
+- A fresh child has no conversation history, so give it a complete task; a forked child starts from your context. Do a single lookup, edit, or command inline.`,
+}
+
+const childrenSection = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  if (ctx.turn?.agent.deniedTools?.includes("delegate.start") === true) return []
+  return [CHILDREN_SECTION]
+})
+
 /** Child admission and control: start, send, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
@@ -822,7 +842,8 @@ export const DelegateExtension = defineExtension({
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
           ),
         ),
-        Effect.as({}),
+        Effect.andThen(childrenSection),
+        Effect.map((promptSections) => ({ promptSections })),
       ),
     )
   }),

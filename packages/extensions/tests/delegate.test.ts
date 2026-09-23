@@ -732,6 +732,57 @@ const sessionMessages = <
     ),
   )
 
+/** The system text of one model call. */
+const systemText = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .flatMap((message) => {
+      if (message.role !== "system") return []
+      return [message.content]
+    })
+    .join("\n")
+
+describe("delegation guidance", () => {
+  it.live(
+    "the parent's prompt says how to use children; a child, which cannot delegate, does not get it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const parentSystems: Array<string> = []
+          const childSystems: Array<string> = []
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
+              childSystems.push(systemText(options.prompt))
+              return Effect.succeed(reply("pong"))
+            }
+            parentSystems.push(systemText(options.prompt))
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate the ping")
+          yield* afterCompletion(harness)
+          expect(parentSystems.length).toBeGreaterThan(0)
+          expect(childSystems.length).toBeGreaterThan(0)
+          for (const text of parentSystems) {
+            expect(text).toContain("# Children")
+            expect(text).toContain("# Sessions")
+          }
+          for (const text of childSystems) {
+            expect(text).not.toContain("# Children")
+            // A child still asks its parent with session.send.
+            expect(text).toContain("# Sessions")
+          }
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
 describe("a forked child", () => {
   it.live(
     "starts from the parent's context window, minus the start call still in flight",

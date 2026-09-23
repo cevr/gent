@@ -1060,6 +1060,13 @@ export class CellKernelError extends Schema.TaggedError<CellKernelError>()("Cell
 
 const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
 
+/**
+ * How long one stretch of worker compute may run before the worker is killed.
+ * Awaited host calls stop the clock, so long commands belong in `tools.bash`;
+ * the cell guidance names this number.
+ */
+const CELL_COMPUTE_DEADLINE_MS = 30_000
+
 /** One worker at a time. Only explicit reset can replace a failed worker. */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly worker: CellWorker
@@ -1068,7 +1075,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly evaluationTimeoutMs?: number
   readonly maximumReplacements?: number
 }) {
-  const timeoutMs = input.evaluationTimeoutMs ?? 30000
+  const timeoutMs = input.evaluationTimeoutMs ?? CELL_COMPUTE_DEADLINE_MS
   const maximumReplacements = input.maximumReplacements ?? 3
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     return yield* new CellProcessError({
@@ -2309,8 +2316,9 @@ export const CellTool = tool({
     "Top-level variables stay bound in later cells on this branch. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values).",
     "Call a host tool through its id path: await tools.read({ path }), await tools.delegate.start({ todo }). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
     "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available. Use it directly to read, search, parse, and transform data.",
-    "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in ~/.gent/data.db (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",
-    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }): it carries the approval guardrails and the session trailer. Bun.$ and Bun.spawn are for reading: builds, tests, queries, parsers. Use host tools for work that needs permissions, durable records, and child agents.",
+    "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in data.db under process.env.GENT_DATA_DIR, else ~/.gent (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",
+    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }): it carries the approval guardrails and the session trailer. Bun.$ and Bun.spawn are for short reads: queries, parsers, quick checks. Use host tools for work that needs permissions, durable records, and child agents.",
+    `A cell gets ${CELL_COMPUTE_DEADLINE_MS / 1000} seconds of its own compute; past that the worker is killed and bindings not yet saved are lost. An awaited host call stops that clock, so run builds, test suites, and other long commands through tools.bash({ command, timeout }) (timeout up to 600000 ms) and parse its stdout and stderr in the cell.`,
     "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result, before the value of the last expression. Output a spawned process writes after the cell ends is lost, so await the processes you start.",
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
@@ -2662,8 +2670,7 @@ const CELL_WORK = `# Working in the cell
 
 - The cell is your persistent control environment. Keep intermediate values in named variables, inspect and transform outputs, and write small helpers. Use it for loops, parsing, and state; call host tools for effects.
 - You solve tasks by writing and running TypeScript in the cell, observing results, and iterating. Batch independent work inside one cell; iterate between cells.
-- Independent work goes to children: start each with tools.delegate.start({ todo }) from one cell, then end your turn. Each child's result arrives as a message that wakes you. Single reads, searches, and edits stay inline.
-- Example: \`const run = await Bun.$\`bun test\`.quiet().nothrow(); const lines = (run.stdout.toString() + run.stderr.toString()).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
+- Example: \`const run = await tools.bash({ command: "bun test", timeout: 600000 }); const lines = (run.stdout + run.stderr).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
 - To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore and caches the listing.`
 
 // ── tool signatures ─────────────────────────────────────────────────────────
