@@ -5,6 +5,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Runtime,
   Schema,
   Semaphore,
   Stream,
@@ -37,7 +38,6 @@ import {
   type SnapshotBinding,
   snapshotReviverSource,
 } from "./cell-protocol.js"
-import { BunRuntime } from "@effect/platform-bun"
 
 // ── tool namespace ──────────────────────────────────────────────────────────
 
@@ -607,11 +607,36 @@ const DescriptorTransport = Layer.effect(
   }),
 )
 
+/**
+ * macOS has no parent-death signal, and a cell in a synchronous loop never
+ * yields to the event loop, so neither a transport read nor a signal handler
+ * can notice that the host died. A separate thread can: it sees the kernel
+ * reparent this process and kills it. The thread never keeps the worker alive.
+ */
+const watchParent = () => {
+  const source = `const host = ${process.ppid}
+setInterval(() => {
+  if (process.ppid !== host) process.kill(process.pid, "SIGKILL")
+}, 250)`
+  return new Worker(URL.createObjectURL(new Blob([source])), { ref: false })
+}
+
+/**
+ * Runs the worker loop with no signal handler: a JavaScript handler cannot run
+ * while a cell holds the thread, so SIGTERM keeps its default action and ends
+ * the process. The process exits when the loop ends, so a timer or socket a cell
+ * left open never outlives the transport.
+ */
+const runWorkerMain = Runtime.makeRunMain(({ fiber, teardown }) => {
+  fiber.addObserver((exit) => teardown(exit, (code) => process.exit(code)))
+})
+
 // The parent launches this entry with the request and response descriptors attached.
 // A test that imports the evaluator or the worker loop is not that parent, so the
 // entry only runs when this file is the process's own entry point.
 if (import.meta.main) {
-  BunRuntime.runMain(
+  watchParent()
+  runWorkerMain(
     Effect.scoped(
       Effect.gen(function* () {
         const services = yield* Layer.build(
