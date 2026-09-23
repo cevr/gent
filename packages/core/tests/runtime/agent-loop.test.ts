@@ -3433,8 +3433,8 @@ describe("model-change notice", () => {
         // `/model` lands while the tool call has no result yet.
         yield* client.session.updateSettings({
           sessionId,
-          modelId: nextModel,
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(nextModel),
+          reasoningLevel: Option.none(),
         })
         yield* Deferred.succeed(gate.release, void 0)
         const messages = yield* waitFor(
@@ -3493,8 +3493,8 @@ describe("model-change notice", () => {
         // The settings event lands before this step's `StreamEnded`.
         yield* client.session.updateSettings({
           sessionId,
-          modelId: nextModel,
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(nextModel),
+          reasoningLevel: Option.none(),
         })
         yield* controls.emitAll(0)
         yield* waitFor(
@@ -3549,8 +3549,8 @@ describe("model-change notice", () => {
             yield* Deferred.await(entered)
             yield* client.session.updateSettings({
               sessionId,
-              modelId: secondModel,
-              reasoningLevel: Option.getOrUndefined(Option.none()),
+              modelId: Option.some(secondModel),
+              reasoningLevel: Option.none(),
             })
             yield* Deferred.succeed(release, void 0)
             yield* firstProvider.controls.waitForCall(1)
@@ -3581,8 +3581,8 @@ describe("model-change notice", () => {
             )
             yield* client.session.updateSettings({
               sessionId: started.sessionId,
-              modelId: finalModel,
-              reasoningLevel: Option.getOrUndefined(Option.none()),
+              modelId: Option.some(finalModel),
+              reasoningLevel: Option.none(),
             })
             yield* client.session.getSnapshot({
               sessionId: started.sessionId,
@@ -3655,8 +3655,8 @@ describe("model-change notice", () => {
         yield* answered("reply 1")
         yield* client.session.updateSettings({
           sessionId,
-          modelId: ModelId.make("custom/next-model"),
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(ModelId.make("custom/next-model")),
+          reasoningLevel: Option.none(),
         })
         yield* client.message.send({ sessionId, branchId, content: "second" })
         const messages = yield* answered("reply 3")
@@ -3699,8 +3699,8 @@ describe("model-change notice", () => {
         )
         yield* client.session.updateSettings({
           sessionId,
-          modelId: ModelId.make("custom/next-model"),
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(ModelId.make("custom/next-model")),
+          reasoningLevel: Option.none(),
         })
         const newPrompt = "SECOND-USER-PROMPT"
         yield* client.message.send({ sessionId, branchId, content: newPrompt })
@@ -4958,10 +4958,11 @@ describe("turn admission", () => {
     expect(canStartTurnNow(buildInitialAgentLoopState({ state: running }))).toBe(false)
   })
 
-  // The reserving caller has taken the item out of the queue and has not yet
-  // reached `startTurn`, so `state` is still Idle. A second caller that reads
-  // only `state` would take a turn past the reservation, and the reserved item
-  // would then be in neither the queue nor the transcript.
+  // The reserving caller has taken the item out of the queue, and the start the
+  // loop forked (`startInLoop`) has not run yet, so `state` is still Idle. A
+  // second caller that reads only `state` would take a turn past the
+  // reservation, and the reserved item would then be in neither the queue nor
+  // the transcript.
   test("an idle branch holding a reservation may not start a turn", () => {
     const reserved = buildRunningState(item("reserved"), { startedAtMs: 0 })
     const state = {

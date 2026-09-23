@@ -1134,6 +1134,16 @@ const lineEndingAt = (content: string, index: number): string => {
 }
 
 /**
+ * Where a search matched, and whether it matched only once unescaped (`\\n`
+ * read as a line break). Such a match says nothing about how `newString` was
+ * written, so the edit refuses it instead of guessing.
+ */
+interface EditMatch {
+  readonly ranges: MatchRanges
+  readonly unescaped: boolean
+}
+
+/**
  * A search that names a CR is matched on the file as written first, so it
  * touches only the lines that have that ending. Every other search, and one
  * the file misses, is matched on the LF view, where line endings never decide
@@ -1141,34 +1151,37 @@ const lineEndingAt = (content: string, index: number): string => {
  * a bare CR) goes through the looser tiers on the file. No match starts or
  * ends between a CR and its LF.
  */
-const findEditMatch = (content: string, oldString: string): MatchRanges => {
+const findEditMatch = (content: string, oldString: string): EditMatch => {
   if (oldString.includes("\r")) {
     const exact = literalRanges(content, oldString)
-    if (exact.length > 0) return exact
+    if (exact.length > 0) return { ranges: exact, unescaped: false }
   }
   const view = lineFeedView(content)
-  const viewed = findMatch(view.text, oldString.replaceAll("\r\n", "\n")).map((range) => ({
+  const viewed = findMatch(view.text, oldString.replaceAll("\r\n", "\n"))
+  const ranges = viewed.ranges.map((range) => ({
     start: view.toSource(range.start),
     end: view.toSource(range.end),
   }))
-  if (viewed.length > 0 || view.text === content) return viewed
+  if (ranges.length > 0 || view.text === content) return { ...viewed, ranges }
   return findMatch(content, oldString)
 }
 
-function findMatch(content: string, oldString: string): MatchRanges {
+function findMatch(content: string, oldString: string): EditMatch {
   // Tier 1: exact
   const exact = literalRanges(content, oldString)
-  if (exact.length > 0) return exact
+  if (exact.length > 0) return { ranges: exact, unescaped: false }
 
-  // Tier 2: unescape literal \n, \t, \\ in oldString
+  // Tier 2: normalize whitespace + unicode in both
+  const normalized = findNormalizedMatch(content, oldString)
+  if (normalized.length > 0) return { ranges: normalized, unescaped: false }
+
+  // Tier 3: the search read with \n, \t, \r, \\ unescaped. It never edits: a
+  // match here only tells the edit to refuse with a reason clearer than "not found".
   const unescaped = unescapeStr(oldString)
-  if (unescaped !== oldString) {
-    const unescapedMatch = literalRanges(content, unescaped)
-    if (unescapedMatch.length > 0) return unescapedMatch
-  }
-
-  // Tier 3: normalize whitespace + unicode in both
-  return findNormalizedMatch(content, unescaped)
+  if (unescaped === oldString) return { ranges: [], unescaped: false }
+  const unescapedExact = literalRanges(content, unescaped)
+  if (unescapedExact.length > 0) return { ranges: unescapedExact, unescaped: true }
+  return { ranges: findNormalizedMatch(content, unescaped), unescaped: true }
 }
 
 /**
@@ -1244,11 +1257,19 @@ export const EditTool = tool({
 
         const replaceAll = params.replaceAll === true
 
-        const ranges = findEditMatch(content, params.oldString)
+        const { ranges, unescaped } = findEditMatch(content, params.oldString)
 
         if (ranges.length === 0) {
           return yield* new EditError({
             message: "oldString not found in file",
+            path: filePath,
+          })
+        }
+
+        if (unescaped) {
+          return yield* new EditError({
+            message:
+              "oldString matched only after unescaping (\\n, \\t, \\r, \\\\). Resend oldString and newString as the literal file text, without escapes.",
             path: filePath,
           })
         }

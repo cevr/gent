@@ -44,7 +44,7 @@ import {
   type GentNamespacedClient,
   type Message,
   type QueueSnapshot,
-  type SessionSettings,
+  type UpdateSessionSettingsInput,
   type SessionSnapshot,
   type SteerCommand,
 } from "@gent/core/protocol"
@@ -216,10 +216,8 @@ export interface Session {
   readonly cwd: string | undefined
 }
 
-export const sessionSettings = (session: Session): SessionSettings => ({
-  modelId: session.modelId,
-  reasoningLevel: session.reasoningLevel,
-})
+/** A change to the session's settings: a field left out stays as the server stores it. */
+type SessionSettingsChange = Omit<UpdateSessionSettingsInput, "sessionId">
 
 const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
@@ -242,7 +240,6 @@ export const SessionStateEvent = Schema.TaggedUnion({
   Activated: { session: SessionSchema },
   Clear: {},
   UpdateName: { name: Schema.String },
-  UpdateBranch: { branchId: BranchId },
   /** The session's cwd, read after a switch; ignored once the shell left that session. */
   UpdateCwd: { sessionId: SessionId, cwd: Schema.String },
   UpdateSettings: {
@@ -278,8 +275,6 @@ export function transitionSessionState(
       return SessionState.none()
     case "UpdateName":
       return mapActive(state, (session) => ({ ...session, name: event.name }))
-    case "UpdateBranch":
-      return mapActive(state, (session) => ({ ...session, branchId: event.branchId }))
     case "UpdateCwd":
       return mapActive(state, (session) => {
         if (session.sessionId !== event.sessionId) return session
@@ -511,10 +506,11 @@ interface ClientSessionValue {
   openHandoffSession: (summary: string) => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
   clearSession: () => void
-  /** Replace the session's settings from its current ones; the server reply is folded back. */
-  updateSessionSettings: (
-    update: (current: SessionSettings) => SessionSettings,
-  ) => Effect.Effect<void, GentClientRpcError>
+  /**
+   * Change the session's settings. Only the fields the change names are sent;
+   * the server merges them into what it stores, and its reply is folded back.
+   */
+  updateSessionSettings: (change: SessionSettingsChange) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
@@ -592,12 +588,19 @@ interface ClientActionValue {
   /**
    * Send to the session the content was drafted in, not whichever is active
    * when it lands. A rejected send fails, so the caller can give the text back.
+   * The caller names the request id: a text sent again after a lost reply
+   * reuses it, so the server's dedup runs it once.
    */
-  sendMessage: (target: SessionIdentity, content: string) => Effect.Effect<void, GentClientRpcError>
+  sendMessage: (
+    target: SessionIdentity,
+    content: string,
+    requestId: string,
+  ) => Effect.Effect<void, GentClientRpcError>
   /** Steer the target's loop; a rejected command fails for the caller to report. */
   steer: (
     target: SessionIdentity,
     command: SteerCommandInput,
+    requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
 }
 
@@ -823,14 +826,18 @@ export function ClientProvider(props: ClientProviderProps) {
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
-  // Errors a session earned before its snapshot was in, shown when the
-  // snapshot lands: the snapshot writes the status and would overwrite them.
-  // That covers a session the reader left and the one just switched to.
+  // The error each session last showed, until a later status replaces it. A
+  // snapshot writes the status, so every snapshot shows the held error again:
+  // the one the reader returns to, the one just switched to, and a feed that
+  // hydrates again after a reconnect.
   const heldErrors = new Map<string, string>()
   const identityKey = (identity: SessionIdentity) =>
     `${identity.sessionId}\u0000${identity.branchId}`
-  // The identity whose snapshot has landed since the last session change.
-  let snapshotIn = Option.none<string>()
+  /** Write the status of the session in view; it replaces that session's held error. */
+  const showStatus = (status: AgentStatus): void => {
+    Option.map(sessionOption(), (current) => heldErrors.delete(identityKey(current)))
+    setAgentStore({ status })
+  }
 
   /**
    * Drop everything the previous session left behind.
@@ -839,9 +846,8 @@ export function ClientProvider(props: ClientProviderProps) {
    * {@link SessionMetrics} is one value for the same reason: its two halves
    * cannot be cleared apart.
    *
-   * `switchSession` is the one caller that can land back on the session it is
-   * already on, and extension health belongs to the session rather than the
-   * branch, so it says whether to clear it.
+   * Extension health belongs to the session rather than the branch, so a
+   * branch switch within one session says not to clear it.
    */
   const resetForSession = (input: {
     readonly agent: Option.Option<AgentName>
@@ -855,7 +861,6 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.none(),
     })
     setSessionMetrics(EMPTY_SESSION_METRICS)
-    snapshotIn = Option.none()
     setNoticeState(Option.none())
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -943,11 +948,9 @@ export function ClientProvider(props: ClientProviderProps) {
     if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
       return
     if (input.runtime._tag === "Idle") {
-      if (agentStore.status._tag === "Streaming") {
-        setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
-      }
+      if (agentStore.status._tag === "Streaming") showStatus(AgentStatus.cases.Idle.make({}))
     } else {
-      setAgentStore({ status: AgentStatus.cases.Streaming.make({}) })
+      showStatus(AgentStatus.cases.Streaming.make({}))
     }
   }
 
@@ -999,11 +1002,8 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
     setSessionMetrics(metricsOf(snapshot))
-    const key = identityKey(snapshot)
-    snapshotIn = Option.some(key)
-    const held = Option.fromUndefinedOr(heldErrors.get(key))
+    const held = Option.fromUndefinedOr(heldErrors.get(identityKey(snapshot)))
     if (Option.isSome(held)) {
-      heldErrors.delete(key)
       setAgentStore({ status: AgentStatus.cases.Error.make({ error: held.value }) })
     }
   }
@@ -1040,7 +1040,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
     const lifecycle = reduceAgentLifecycle(event)
     const status = Option.fromNullishOr(lifecycle.status)
-    if (Option.isSome(status)) setAgentStore({ status: status.value })
+    if (Option.isSome(status)) showStatus(status.value)
     // A user message starts the next turn; the notice from before it is spent.
     if (event._tag === "MessageReceived" && event.message.role === "user") {
       setNoticeState(Option.none())
@@ -1053,14 +1053,6 @@ export function ClientProvider(props: ClientProviderProps) {
         const s = sessionOption()
         if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
           dispatchSession(SessionStateEvent.cases.UpdateName.make({ name: event.name }))
-        }
-        break
-      }
-
-      case "BranchSwitched": {
-        const s = sessionOption()
-        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
-          dispatchSession(SessionStateEvent.cases.UpdateBranch.make({ branchId: event.toBranchId }))
         }
         break
       }
@@ -1165,9 +1157,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
             dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
-            setAgentStore({
-              status: AgentStatus.cases.Error.make({ error: formatError(err) }),
-            })
+            showStatus(AgentStatus.cases.Error.make({ error: formatError(err) }))
           }),
         ),
       ),
@@ -1200,6 +1190,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name) => {
       const current = sessionOption()
+      // Choosing the session already in view changes nothing. A reset here
+      // would clear its status, metrics and settings, and no snapshot comes to
+      // restore them: the identity did not change, so the feed does not re-run.
+      if (Option.exists(current, (value) => sameIdentity(value, { sessionId, branchId }))) return
       const currentSessionId = Option.map(current, (value) => value.sessionId)
       // A branch switch stays in the session's directory; another session's
       // directory is read when something asks for it.
@@ -1247,21 +1241,19 @@ export function ClientProvider(props: ClientProviderProps) {
       return yield* client.branch.list({ sessionId: currentSession.value.sessionId })
     }),
 
-    updateSessionSettings: (update) => {
+    updateSessionSettings: (change) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return Effect.void
       const s = currentSession.value
-      return client.session
-        .updateSettings({ sessionId: s.sessionId, ...update(sessionSettings(s)) })
-        .pipe(
-          Effect.tap((result) =>
-            Effect.sync(() => {
-              dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
-              refreshSessionMetrics()
-            }),
-          ),
-          Effect.asVoid,
-        )
+      return client.session.updateSettings({ ...change, sessionId: s.sessionId }).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
+            refreshSessionMetrics()
+          }),
+        ),
+        Effect.asVoid,
+      )
     },
 
     createBranch: (name) => {
@@ -1344,11 +1336,9 @@ export function ClientProvider(props: ClientProviderProps) {
           })
         }).pipe(
           Effect.tapError((err) =>
-            Effect.sync(() => {
-              setAgentStore({
-                status: AgentStatus.cases.Error.make({ error: formatError(err) }),
-              })
-            }),
+            Effect.sync(() =>
+              showStatus(AgentStatus.cases.Error.make({ error: formatError(err) })),
+            ),
           ),
         ),
       )
@@ -1395,21 +1385,20 @@ export function ClientProvider(props: ClientProviderProps) {
         modelStore.driverIds.includes(model.provider),
       ),
     setErrorIn: (target, error) => {
-      const key = identityKey(target)
-      const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
-      // The session in view shows it now; until its snapshot is in, the
-      // error is also held, so the snapshot shows it again over its status.
-      if (inView) agentValue.setError(error)
-      if (inView && Option.contains(snapshotIn, key)) return
-      heldErrors.set(key, error)
+      // The session in view shows it now. Either way it is held, so the
+      // session's next snapshot shows it again over the status it writes.
+      if (Option.exists(sessionOption(), (current) => sameIdentity(current, target))) {
+        agentValue.setError(error)
+      }
+      heldErrors.set(identityKey(target), error)
     },
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {
-        setAgentStore({ status: AgentStatus.cases.Error.make({ error: nextError.value }) })
+        showStatus(AgentStatus.cases.Error.make({ error: nextError.value }))
         return
       }
-      setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
+      showStatus(AgentStatus.cases.Idle.make({}))
     },
     notice,
     setNotice: (message) => setNoticeState(Option.some(message)),
@@ -1421,8 +1410,7 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const actionValue: ClientActionValue = {
-    sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content) {
-      const requestId = yield* randomId
+    sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content, requestId) {
       log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
       yield* client.message
         .send({
@@ -1433,8 +1421,7 @@ export function ClientProvider(props: ClientProviderProps) {
         })
         .pipe(Effect.retry(SEND_RETRY))
     }),
-    steer: Effect.fn("TUI.steer")(function* (s, command) {
-      const requestId = yield* randomId
+    steer: Effect.fn("TUI.steer")(function* (s, command, requestId) {
       const fullCommand: SteerCommand = {
         ...command,
         sessionId: s.sessionId,

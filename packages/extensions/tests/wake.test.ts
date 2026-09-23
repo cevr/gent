@@ -26,12 +26,14 @@ import {
   toolCallPart,
   toolCallStep,
   waitFor,
+  collectTestContributions,
   createRpcHarness,
   runToolWithCtx,
   testLeafContext,
   testToolContext,
   RuntimeEnvironment,
 } from "@gent/core/test-utils"
+import { builtinAgent } from "./helpers/builtin-agents"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   CancelTool,
@@ -48,11 +50,12 @@ import {
   wakeMessage,
   WakePending,
   WakeRpc,
+  WakeExtension,
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
-import { BranchId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
+import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {
   RequestId,
   ExtensionContext,
@@ -714,6 +717,86 @@ describe("notices", () => {
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+
+  it.scopedLive(
+    "a failed re-arm still shows the notices, so the answered turn clears only what it read",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* makeTempDirectoryScoped("wake-rearm-failed-")
+        const file = `${home}/.gent/wakes/${branchId}.json`
+        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+        yield* fs.writeFileString(
+          file,
+          encodeAlarms([
+            {
+              _tag: "notice",
+              wakeId: "earlier",
+              outcome: "fired",
+              firedAt: 1_000,
+              content: "Alarm earlier fired. stand up",
+              note: "stand up",
+            },
+            { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
+          ]),
+        )
+        const contributions = yield* collectTestContributions(WakeExtension.setup)
+        const hooks = contributions.hooks ?? []
+        const projection = Option.getOrThrow(
+          Option.fromUndefinedOr(
+            hooks.find(
+              (slot): slot is Extract<typeof slot, { readonly kind: "turnProjection" }> =>
+                slot.kind === "turnProjection",
+            ),
+          ),
+        )
+        const after = Option.getOrThrow(
+          Option.fromUndefinedOr(
+            hooks.find(
+              (slot): slot is Extract<typeof slot, { readonly kind: "turnAfter" }> =>
+                slot.kind === "turnAfter",
+            ),
+          ),
+        )
+        // The branch resource failed, so the re-arm cannot schedule the stored alarm.
+        const failedAlarms = Layer.succeed(
+          WakeAlarms,
+          WakeAlarms.of({
+            schedule: () => Effect.die("the branch resource failed"),
+            cancel: () => Effect.succeed(false),
+            pending: Effect.succeed([]),
+          }),
+        )
+        const ctx = testLeafContext({
+          ...contextWith(home, yield* Ref.make<ReadonlyArray<string>>([])),
+          cwd: home,
+        })
+        const projected = yield* projection.hook
+          .handler({ agent: builtinAgent })
+          .pipe(Effect.provideService(ExtensionContext, ctx), Effect.provide(failedAlarms))
+        const shown = (projected.promptSections ?? []).map((section) => section.content)
+        expect(shown.join("\n")).toContain("stand up")
+        yield* after.hook
+          .handler({
+            sessionId: SessionId.make("wake-session"),
+            branchId,
+            messageId: MessageId.make("wake-message"),
+            durationMs: 10,
+            agentName: builtinAgent.name,
+            interrupted: false,
+            streamFailed: false,
+            unanswered: false,
+            usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
+          })
+          .pipe(Effect.provideService(ExtensionContext, ctx), Effect.provide(failedAlarms))
+        const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
+          yield* fs.readFileString(file),
+        )
+        // The turn read the notice and answered, so it is gone; the alarm row stays.
+        expect(stored.map((entry) => entry.wakeId)).toEqual(["later"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    10_000,
   )
 
   it.live(

@@ -1,6 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { Cause, Deferred, Effect, Exit, Option, Schema } from "effect"
+import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import { SocketCloseError } from "effect/unstable/socket/Socket"
 import {
   AgentName,
   BranchId,
@@ -1613,7 +1615,7 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
-  it.live("a startup prompt whose send failed is sent again under the same request id", () =>
+  it.live("a startup prompt the server refuses comes back to the draft with its reason", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
       const attempts: Array<{ readonly content: string; readonly requestId?: string }> = []
@@ -1624,7 +1626,7 @@ describe("App auth gate", () => {
             Effect.suspend(() => {
               attempts.push(input)
               if (attempts.length === 1) {
-                return Effect.fail(new ProviderAuthError({ message: "connection lost" }))
+                return Effect.fail(new ProviderAuthError({ message: "send refused" }))
               }
               return Effect.void
             }),
@@ -1655,24 +1657,73 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
+      // The refusal is an answer: the prompt comes back as a draft, with why.
       yield* waitForFrame(
         setup,
-        () => attempts.some((message) => message.content === initialPrompt),
-        "sent message",
+        (frame) =>
+          frame.includes(`┃ ${initialPrompt}`) &&
+          Option.exists(Option.fromNullishOr(clientContext.error()), (error) =>
+            error.includes("send refused"),
+          ),
+        "prompt back in the draft",
       )
-      // Nothing else changes: the send itself goes again.
-      yield* waitForFrame(setup, () => attempts.length >= 2, "second send")
-      // The send landed; one more mount must not send again.
-      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "A")
-      yield* Effect.promise(() => setup.renderOnce())
-      // gent/no-sleep: allow real-clock gap so a third send, if one starts, lands before the assertion
-      yield* Effect.sleep("50 millis")
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(attempts).toHaveLength(2)
-      expect(attempts[0]?.requestId).toBeDefined()
-      expect(attempts[1]?.requestId).toBe(attempts[0]?.requestId)
+      expect(attempts).toHaveLength(1)
+      // The reader sends it; nothing sends it on its own.
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => attempts.length === 2, "sent by the reader")
+      expect(attempts[1]?.content).toBe(initialPrompt)
       setup.renderer.destroy()
     }),
+  )
+  it.live(
+    "a startup prompt whose replies were lost goes again under its request id",
+    () =>
+      Effect.gen(function* () {
+        const ids: Array<string> = []
+        const initialPrompt = "lost on the way back"
+        const client = createMockClient({
+          message: {
+            send: (input: { readonly content: string; readonly requestId?: string }) =>
+              Effect.suspend(() => {
+                ids.push(input.requestId ?? "<missing>")
+                // The first send and its four retries: admitted, reply lost.
+                if (ids.length <= 5) {
+                  return Effect.fail(
+                    new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+                  )
+                }
+                return Effect.void
+              }),
+          },
+        })
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(() => <App missingAuthProviders={[]} />, {
+            client,
+            runtime: createMockRuntime(),
+            initialAgent: AgentName.make("cowork"),
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+            initialPrompt: Option.some(initialPrompt),
+          }),
+        )
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes(`┃ ${initialPrompt}`),
+          "prompt back in the draft",
+          8_000,
+        )
+        expect(ids).toHaveLength(5)
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, () => ids.length === 6, "sent by the reader")
+        expect(new Set(ids).size).toBe(1)
+        setup.renderer.destroy()
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
   )
   it.live("a renamed session does not refetch the extension slash commands", () =>
     Effect.gen(function* () {
