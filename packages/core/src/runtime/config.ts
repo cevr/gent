@@ -357,12 +357,48 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           Effect.flatMap((content) => Schema.decodeEffect(UserConfigJson)(content)),
         )
 
-      const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
+      const decodeConfigFile = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
         readConfigFile(filePath).pipe(
           Effect.mapError(
             (cause) => new ConfigLoadError({ path: filePath, message: String(cause) }),
           ),
         )
+
+      // The decoded read of each file, kept while its stat (mtime, size and
+      // inode) is the same, so a turn does not read and decode unchanged files. A
+      // changed or new file is read at once; a missing one reads as empty.
+      const decodedFiles = new Map<
+        string,
+        { readonly stamp: string; readonly read: Result.Result<UserConfig, ConfigLoadError> }
+      >()
+      const fileStamp = (filePath: string) =>
+        fs.stat(filePath).pipe(
+          Effect.map((info) => {
+            const mtime = Option.match(info.mtime, {
+              onNone: () => "",
+              onSome: (date) => String(date.getTime()),
+            })
+            // The inode tells an atomic replace (a rename) of the same size
+            // and millisecond apart from the file it replaced.
+            const inode = Option.match(info.ino, { onNone: () => "", onSome: String })
+            return `${mtime}:${String(info.size)}:${inode}`
+          }),
+          Effect.orElseSucceed(() => "missing"),
+        )
+      const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
+        Effect.gen(function* () {
+          const stamp = yield* fileStamp(filePath)
+          const cached = Option.fromUndefinedOr(decodedFiles.get(filePath))
+          if (Option.isSome(cached) && cached.value.stamp === stamp) {
+            return yield* Result.match(cached.value.read, {
+              onSuccess: Effect.succeed,
+              onFailure: Effect.fail,
+            })
+          }
+          const read = yield* Effect.result(decodeConfigFile(filePath))
+          decodedFiles.set(filePath, { stamp, read })
+          return yield* Result.match(read, { onSuccess: Effect.succeed, onFailure: Effect.fail })
+        })
 
       // Seed the last-decoded user config. A user file that will not decode
       // reads as empty, so a broken file cannot stop a turn. Writes never

@@ -1104,6 +1104,29 @@ describe("FileIndex inside a git work tree", () => {
   )
 })
 
+describe("an ignored directory with tracked files", () => {
+  for (const { name, layer } of [
+    { name: "fallback", layer: FallbackLayer },
+    { name: "native-first", layer: LiveLayer },
+  ]) {
+    it.scopedLive(`${name}: an explicit search lists its untracked files too`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(repo, ["dist/pinned.js", "src/a.ts"], {})
+        yield* runProcess("git", ["-C", repo, "add", "."])
+        yield* fs.writeFileString(`${repo}/.gitignore`, "dist/\n")
+        yield* fs.writeFileString(`${repo}/dist/new.js`, "x")
+
+        const fileIndex = yield* FileIndex
+        const files = yield* fileIndex.listFiles({ root: repo, cwd: `${repo}/dist` })
+        expect(files.map((file) => file.relativePath).toSorted()).toEqual(["new.js", "pinned.js"])
+      }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
+    )
+  }
+})
+
 describe("FileIndex native-first layer", () => {
   it.scopedLive("constructs without error (always succeeds)", () =>
     Effect.gen(function* () {

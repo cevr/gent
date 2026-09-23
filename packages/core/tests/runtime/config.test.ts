@@ -615,6 +615,48 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive("an unchanged config file is not read again", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.writeFileString(projectConfigPath, encodeJson({ disabledExtensions: ["x"] }))
+        const reads = yield* Ref.make<ReadonlyArray<string>>([])
+        const countingReads = Layer.effect(
+          FileSystem.FileSystem,
+          Effect.gen(function* () {
+            const realFs = yield* FileSystem.FileSystem
+            return FileSystem.makeNoop({
+              ...realFs,
+              readFileString: (target, encoding) =>
+                Ref.update(reads, (all) => [...all, target]).pipe(
+                  Effect.andThen(realFs.readFileString(target, encoding)),
+                ),
+            })
+          }),
+        ).pipe(Layer.provide(BunServices.layer))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          const before = (yield* Ref.get(reads)).length
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          expect((yield* cfg.get(cwd)).disabledExtensions).toEqual(["x"])
+          expect((yield* Ref.get(reads)).length).toBe(before)
+          // A changed file is read at once.
+          yield* fs.writeFileString(
+            projectConfigPath,
+            encodeJson({ disabledExtensions: ["y", "z"] }),
+          )
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["y", "z"])
+          expect((yield* Ref.get(reads)).slice(before)).toEqual([projectConfigPath])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home, countingReads)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("a launch project config that breaks drops its cached settings", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

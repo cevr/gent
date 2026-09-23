@@ -162,11 +162,12 @@ interface RunProcessOptions {
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
 
+/** One streaming decoder across the chunks: a character split between two chunks decodes whole. */
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()
   let out = ""
-  for (const chunk of chunks) out += decoder.decode(chunk)
-  return out
+  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  return out + decoder.decode()
 }
 
 /**

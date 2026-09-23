@@ -169,6 +169,19 @@ describe("runProcess", () => {
     processTestTimeout,
   )
   it.live(
+    "a character split across output chunks decodes whole",
+    () =>
+      Effect.gen(function* () {
+        // "é" is 0xC3 0xA9; the pause makes the two bytes arrive as two chunks.
+        const script =
+          "printf '\\303'; sleep 0.2; printf '\\251'; printf '\\303' 1>&2; sleep 0.2; printf '\\251' 1>&2"
+        const result = yield* provideBun(runProcess("/bin/sh", ["-c", script]))
+        expect(result.stdout).toBe("\u00E9")
+        expect(result.stderr).toBe("\u00E9")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+  it.live(
     "respects cwd option",
     () =>
       Effect.gen(function* () {

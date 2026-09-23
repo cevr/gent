@@ -21,7 +21,7 @@ import {
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcessSpawner } from "effect/unstable/process"
 
 // ── file index ──────────────────────────────────────────────────────────────
 
@@ -350,22 +350,57 @@ const makeWalkService = (
   })
 
 /**
- * A shared root does not index its gitignored subtrees (`dist/`,
- * `node_modules/x`), so an explicit target that lists nothing is walked from
- * its own root. The walk has a bound and holds no watcher, so listing many
- * ignored targets never evicts the root's cached finder. An unignored
- * directory keeps its children's ignore rules (`logs/` with `*.log`), as
- * ripgrep does.
+ * Git's answer for whether `cwd` itself is ignored, from its own exclude
+ * sources and without the index: a directory that holds tracked files is
+ * still ignored for its untracked ones. `None` outside a work tree.
  */
-const listIgnoredTargets = (index: FileIndexService, walk: FileIndexService): FileIndexService => ({
-  listFiles: (params) =>
-    index.listFiles(params).pipe(
-      Effect.filterOrElse(
-        (files) => files.length > 0 || params.root === params.cwd,
-        () => walk.listFiles({ root: params.cwd, cwd: params.cwd }),
-      ),
-    ),
-})
+const gitIgnoresDirectory = (
+  cwd: string,
+): Effect.Effect<Option.Option<boolean>, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  runProcess("git", ["-C", cwd, "check-ignore", "-q", "--no-index", "--", "."]).pipe(
+    Effect.map((result) => {
+      if (result.exitCode === 0) return Option.some(true)
+      if (result.exitCode === 1) return Option.some(false)
+      return Option.none()
+    }),
+    Effect.orElseSucceed(() => Option.none<boolean>()),
+  )
+
+/**
+ * A shared root does not index its gitignored subtrees (`dist/`,
+ * `node_modules/x`), so an explicit ignored target is walked from its own
+ * root: when git says the target is ignored, or when the index lists nothing
+ * for it. Git's answer matters because git lists a tracked file inside an
+ * ignored directory, and that one file would hide the untracked rest. The
+ * walk has a bound and holds no watcher, so listing many ignored targets
+ * never evicts the root's cached finder. An unignored directory keeps its
+ * children's ignore rules (`logs/` with `*.log`), as ripgrep does.
+ */
+const listIgnoredTargets = (
+  index: FileIndexService,
+  walk: FileIndexService,
+): Effect.Effect<FileIndexService, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const walkTarget = (cwd: string) => walk.listFiles({ root: cwd, cwd })
+    return {
+      listFiles: (params) => {
+        if (params.root === params.cwd) return index.listFiles(params)
+        return gitIgnoresDirectory(params.cwd).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.flatMap((ignored) => {
+            if (Option.getOrElse(ignored, () => false)) return walkTarget(params.cwd)
+            return index.listFiles(params).pipe(
+              Effect.filterOrElse(
+                (files) => files.length > 0,
+                () => walkTarget(params.cwd),
+              ),
+            )
+          }),
+        )
+      },
+    }
+  })
 
 export const FallbackFileIndexLive: Layer.Layer<
   FileIndex,
@@ -375,7 +410,7 @@ export const FallbackFileIndexLive: Layer.Layer<
   FileIndex,
   Effect.gen(function* () {
     const matcherWalk = yield* makeMatcherWalk
-    return listIgnoredTargets(yield* makeWalkService(matcherWalk), matcherWalk)
+    return yield* listIgnoredTargets(yield* makeWalkService(matcherWalk), matcherWalk)
   }),
 )
 
@@ -557,14 +592,14 @@ export const FileIndexLive = (options: {
     Effect.gen(function* () {
       const matcherWalk = yield* makeMatcherWalk
       const walk = yield* makeWalkService(matcherWalk)
-      if (!NativeFileFinder.isAvailable()) return listIgnoredTargets(walk, matcherWalk)
+      if (!NativeFileFinder.isAvailable()) return yield* listIgnoredTargets(walk, matcherWalk)
 
       const path = yield* Path.Path
       const fs = yield* FileSystem.FileSystem
       const dbDir = path.join(options.home, ".gent", "fff")
       yield* fs.makeDirectory(dbDir, { recursive: true }).pipe(Effect.ignore)
       const native = yield* makeNativeService(dbDir)
-      return listIgnoredTargets(withFallback(native, walk), matcherWalk)
+      return yield* listIgnoredTargets(withFallback(native, walk), matcherWalk)
     }),
   )
 
