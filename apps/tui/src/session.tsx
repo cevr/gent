@@ -490,7 +490,7 @@ interface TransitionResult {
   readonly effect?: ComposerEffect
 }
 
-export function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
+function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
   if (event._tag === "EnterInteraction") {
     return { state: { _tag: "interaction", interaction: event.interaction } }
   }
