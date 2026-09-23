@@ -281,6 +281,21 @@ export class ConfigWriteError extends Schema.TaggedError<ConfigWriteError>()("Co
   message: Schema.String,
 }) {}
 
+/**
+ * A file's version as its stat tells it: mtime (ms), size and inode. The
+ * inode tells an atomic replace (a rename) of the same size and millisecond
+ * apart from the file it replaced. A same-size rewrite in place within one
+ * millisecond keeps the version; `File.Info` has no ctime to tell it apart.
+ */
+export const fileVersion = (info: FileSystem.File.Info): string => {
+  const mtime = Option.match(info.mtime, {
+    onNone: () => "",
+    onSome: (date) => String(date.getTime()),
+  })
+  const inode = Option.match(info.ino, { onNone: () => "", onSome: String })
+  return `${mtime}:${String(info.size)}:${inode}`
+}
+
 export class ConfigService extends Context.Service<ConfigService, ConfigServiceService>()(
   "@gent/core/src/runtime/config/ConfigService",
 ) {
@@ -374,16 +389,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       >()
       const fileStamp = (filePath: string) =>
         fs.stat(filePath).pipe(
-          Effect.map((info) => {
-            const mtime = Option.match(info.mtime, {
-              onNone: () => "",
-              onSome: (date) => String(date.getTime()),
-            })
-            // The inode tells an atomic replace (a rename) of the same size
-            // and millisecond apart from the file it replaced.
-            const inode = Option.match(info.ino, { onNone: () => "", onSome: String })
-            return `${mtime}:${String(info.size)}:${inode}`
-          }),
+          Effect.map(fileVersion),
           Effect.orElseSucceed(() => "missing"),
         )
       const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>

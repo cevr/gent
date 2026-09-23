@@ -247,10 +247,16 @@ Resource layers. Trusted setup can still perform its own effects; this is not a
 sandbox boundary.
 
 `SessionProfileCache` builds one profile per (workspace, cwd, set of
-extensions the config leaves active or failed). Each resolve reads the config as
-it is now, so an edit to `disabledExtensions` reaches the next turn and the next
-session without a restart; a list that leaves the same extensions, such as one
-that names an unknown id, finds the profile already built. `resolve` takes a
+extensions the config leaves active or failed, versions of the extension files
+on disk). Each resolve reads the config and lists the user and project
+extension directories as they are now, under the place's lock, so an edit to
+`disabledExtensions` and an added, fixed or edited extension file reach the
+next turn and the next session without a restart; a file is imported under its
+version (mtime, size, inode), so Bun's module cache does not serve the old one.
+A directory extension's version is its index file's. A list that leaves the
+same extensions, such as one that names an unknown id, finds the profile
+already built. Finding or building the profile, its lease and making it
+current are one step no interrupt can split. `resolve` takes a
 lease in the caller's scope: a turn and an extension request hold it until they
 end, a branch loop holds it while its branch Resources live, and a query holds
 it for its read. The newest profile of a (workspace, cwd) stays cached; a

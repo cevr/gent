@@ -95,6 +95,7 @@ import { GentPlatform } from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
+  fileVersion,
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
@@ -984,27 +985,23 @@ const isExtensionFile = (entry: string): boolean =>
     return entry.endsWith(ext)
   })
 
+/** An extension file found on disk, and its version (`fileVersion`). */
+interface DiscoveredFile {
+  readonly path: string
+  readonly version: string
+}
+
 /**
- * Discover extension files from a directory, sorted by name. An entry that
- * cannot be read (a dangling symlink, a permission error) is a `load` failure
- * for that path alone; its siblings are still discovered.
+ * The extension files in a directory, sorted by path, and the entries that
+ * could not be read (a dangling symlink, a permission error). It reports
+ * nothing; `discoverDir` turns the unreadable entries into failures.
  */
-const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
-  dir: string,
-  scope: ExtensionScope,
-) {
+const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const paths: string[] = []
-  const failed: FailedExtension[] = []
-  const fail = (sourcePath: string, error: PlatformError.PlatformError) =>
-    Effect.gen(function* () {
-      const message = `Failed to read ${sourcePath}: ${error.message}`
-      failed.push(importFailure(path, sourcePath, scope, message))
-      yield* Effect.logWarning("extension.discover.failed").pipe(
-        Effect.annotateLogs({ path: sourcePath, scope, error: message }),
-      )
-    })
+  const paths: DiscoveredFile[] = []
+  const unreadable: Array<{ readonly path: string; readonly error: PlatformError.PlatformError }> =
+    []
 
   const listed = yield* Effect.result(
     Effect.gen(function* () {
@@ -1013,8 +1010,8 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
     }),
   )
   if (Result.isFailure(listed)) {
-    yield* fail(dir, listed.failure)
-    return { paths, failed }
+    unreadable.push({ path: dir, error: listed.failure })
+    return { paths, unreadable }
   }
 
   for (const entry of listed.success) {
@@ -1026,24 +1023,79 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
     const found = yield* Effect.result(
       Effect.gen(function* () {
         const stat = yield* fs.stat(filePath)
-        if (stat.type === "File" && isExtensionFile(entry)) return Option.some(filePath)
-        if (stat.type !== "Directory") return Option.none<string>()
-        // A directory extension is its index.ts/index.js/index.mjs.
+        if (stat.type === "File" && isExtensionFile(entry))
+          return Option.some({ path: filePath, version: fileVersion(stat) })
+        if (stat.type !== "Directory") return Option.none<DiscoveredFile>()
+        // A directory extension is its index.ts/index.js/index.mjs. Its
+        // version is the index's: an edit to a module it imports is not seen.
         for (const indexName of ["index.ts", "index.js", "index.mjs"]) {
           const indexPath = path.join(filePath, indexName)
-          if (yield* fs.exists(indexPath)) return Option.some(indexPath)
+          if (yield* fs.exists(indexPath)) {
+            const indexStat = yield* fs.stat(indexPath)
+            return Option.some({ path: indexPath, version: fileVersion(indexStat) })
+          }
         }
-        return Option.none<string>()
+        return Option.none<DiscoveredFile>()
       }),
     )
     if (Result.isFailure(found)) {
-      yield* fail(filePath, found.failure)
+      unreadable.push({ path: filePath, error: found.failure })
       continue
     }
     if (Option.isSome(found.success)) paths.push(found.success.value)
   }
 
-  return { paths: paths.sort(), failed }
+  return { paths: paths.toSorted((a, b) => a.path.localeCompare(b.path)), unreadable }
+})
+
+/**
+ * Discover extension files from a directory, sorted by name. An entry that
+ * cannot be read is a `load` failure for that path alone; its siblings are
+ * still discovered.
+ */
+const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
+  dir: string,
+  scope: ExtensionScope,
+) {
+  const path = yield* Path.Path
+  const scanned = yield* scanDir(dir)
+  const failed: FailedExtension[] = []
+  for (const entry of scanned.unreadable) {
+    const message = `Failed to read ${entry.path}: ${entry.error.message}`
+    failed.push(importFailure(path, entry.path, scope, message))
+    yield* Effect.logWarning("extension.discover.failed").pipe(
+      Effect.annotateLogs({ path: entry.path, scope, error: message }),
+    )
+  }
+  return { paths: scanned.paths, failed }
+})
+
+/**
+ * The extension files a profile would load, each with its version, and the
+ * paths that failed to read. A profile is keyed on it, so an added, removed,
+ * fixed or edited extension file reaches the next resolve.
+ */
+const discoveredFilesStamp = (inputs: {
+  readonly cwd: string
+  readonly home: string
+}): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const dirs = extensionDirectories(path, inputs)
+    const found = [yield* scanDir(dirs.userDir), yield* scanDir(dirs.projectDir)]
+    return found.flatMap(({ paths, unreadable }) => [
+      ...paths.map((file) => `${file.path}@${file.version}`),
+      ...unreadable.map((entry) => `!${entry.path}`),
+    ])
+  })
+
+/** The user and project extension directories a profile discovers. */
+const extensionDirectories = (
+  path: Path.Path,
+  inputs: { readonly cwd: string; readonly home: string },
+) => ({
+  userDir: path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions"),
+  projectDir: path.join(path.resolve(inputs.cwd), GENT_CONFIG_DIRECTORY, "extensions"),
 })
 
 // Loading — import extension files via Bun native import()
@@ -1051,12 +1103,17 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
 // gent/no-dynamic-imports: allow extension modules are discovered from user/project files at runtime
 const importExtensionModule = (filePath: string) => import(filePath)
 
-/** Load a single extension from a file path. */
+/**
+ * Load a single extension from a file path. The import names the file's
+ * version, so an edited file is imported again instead of from Bun's module
+ * cache.
+ */
 const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(function* (
-  filePath: string,
+  file: DiscoveredFile,
 ) {
+  const filePath = file.path
   const mod = yield* Effect.tryPromise({
-    try: () => importExtensionModule(filePath),
+    try: () => importExtensionModule(`${filePath}?v=${encodeURIComponent(file.version)}`),
     catch: (err) =>
       new ExtensionLoadError({
         extensionId: ExtensionId.make("unknown"),
@@ -1214,11 +1271,12 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
 
   /** Load one scope's files; a broken file is skipped, its siblings still load. */
   const loadScope = Effect.fn("ExtensionLoader.loadScope")(function* (
-    paths: ReadonlyArray<string>,
+    files: ReadonlyArray<DiscoveredFile>,
     scope: ExtensionScope,
   ) {
-    for (const filePath of paths) {
-      const result = yield* loadExtensionFile(filePath).pipe(Effect.result)
+    for (const file of files) {
+      const filePath = file.path
+      const result = yield* loadExtensionFile(file).pipe(Effect.result)
       if (Result.isSuccess(result)) {
         loaded.push({ extension: result.success, scope, sourcePath: filePath })
         continue
@@ -1240,7 +1298,7 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
   } else {
     const error =
       "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
-    for (const filePath of projectPaths) {
+    for (const { path: filePath } of projectPaths) {
       failed.push(importFailure(path, filePath, "project", error))
       yield* Effect.logWarning("extension.load.untrusted").pipe(
         Effect.annotateLogs({ path: filePath, error }),
@@ -1600,12 +1658,7 @@ export const loadRuntimeProfileDeclarations = (
     const disabledSet = new Set(inputs.disabledExtensions ?? [])
 
     // 2. Discover external extensions (user + project dirs)
-    const userExtensionsDir = path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions")
-    const projectExtensionsDir = path.join(canonicalCwd, GENT_CONFIG_DIRECTORY, "extensions")
-    const discovery = yield* discoverExtensions({
-      userDir: userExtensionsDir,
-      projectDir: projectExtensionsDir,
-    }).pipe(
+    const discovery = yield* discoverExtensions(extensionDirectories(path, inputs)).pipe(
       Effect.catchEager((error) =>
         Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
           Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
@@ -1744,22 +1797,33 @@ const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
   [workspaceId, cwd].join("\u0000")
 
 /**
- * The raw disabled list as the config names it. It only finds a profile the
- * same list resolved before; the profile itself is keyed by `profileKey`.
+ * The raw disabled list as the config names it, and the extension files on
+ * disk (`discoveredFilesStamp`). It only finds a profile the same inputs
+ * resolved before; the profile itself is keyed by `profileKey`.
  */
-const listKey = (place: string, disabledExtensions: ReadonlyArray<string>): string =>
-  [place, ...[...new Set(disabledExtensions)].toSorted()].join("\u0000")
+const listKey = (
+  place: string,
+  disabledExtensions: ReadonlyArray<string>,
+  files: ReadonlyArray<string>,
+): string => [place, ...[...new Set(disabledExtensions)].toSorted(), "", ...files].join("\u0000")
 
 /**
- * A profile is derived from its place and the extensions its config leaves
- * set up, so the key holds the active and the failed extension ids, not the
- * disabled list: an id no extension has builds no second profile.
+ * A profile is derived from its place, the extensions its config leaves set
+ * up, and the files they load from, so the key holds the active and the
+ * failed extension ids and the file versions, not the disabled list: an id
+ * no extension has builds no second profile, and an edited file builds one.
  */
-const profileKey = (place: string, declarations: ExtensionActivationResult): string =>
+const profileKey = (
+  place: string,
+  declarations: ExtensionActivationResult,
+  files: ReadonlyArray<string>,
+): string =>
   [
     place,
     ...declarations.active.map((extension) => `+${extension.manifest.id}`).toSorted(),
     ...declarations.failed.map((extension) => `!${extension.manifest.id}`).toSorted(),
+    "",
+    ...files,
   ].join("\u0000")
 
 /** The profile inputs with the merged user and project config's disabled list. */
@@ -1957,6 +2021,7 @@ export class SessionProfileCache extends Context.Service<
         const entryFor = (
           place: string,
           list: string,
+          files: ReadonlyArray<string>,
           cwd: string,
           fresh: FreshConfig,
           restore: Restore,
@@ -1971,7 +2036,7 @@ export class SessionProfileCache extends Context.Service<
                 Effect.provideContext(platformServicesContext),
               ),
             )
-            const key = profileKey(place, declarations.extensionDeclarations)
+            const key = profileKey(place, declarations.extensionDeclarations, files)
             const found = Option.fromNullishOr(entries.get(key))
             if (Option.isSome(found)) {
               aliases.set(list, key)
@@ -2039,11 +2104,17 @@ export class SessionProfileCache extends Context.Service<
                 // `current` in the order they read it: a read from before an
                 // edit cannot put the older profile back.
                 const fresh = yield* restore(configService.getFresh(canonicalCwd))
+                const files = yield* restore(
+                  discoveredFilesStamp(inputsFor(canonicalCwd)).pipe(
+                    Effect.provideContext(platformServicesContext),
+                  ),
+                )
                 const list = listKey(
                   place,
                   effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+                  files,
                 )
-                const entry = yield* entryFor(place, list, canonicalCwd, fresh, restore)
+                const entry = yield* entryFor(place, list, files, canonicalCwd, fresh, restore)
                 leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
                 yield* Scope.addFinalizer(callerScope, release(entry, lock))
                 const previous = Option.fromNullishOr(current.get(place))

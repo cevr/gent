@@ -875,6 +875,68 @@ describe("session profile resolution", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // A profile is keyed on the extension files on disk as well as the config:
+  // a file added, broken, fixed or edited reaches the next resolve without a
+  // restart or a config edit.
+  it.scopedLive("an added, broken, fixed or edited extension file reaches the next resolve", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      // Under the repository, so the extension file resolves `effect`.
+      const home = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-profile-files-",
+      })
+      const extensionDir = path.join(home, ".gent", "extensions")
+      yield* fs.makeDirectory(extensionDir, { recursive: true })
+      const extensionFile = path.join(extensionDir, "probe.ts")
+      const writeExtension = (id: string) =>
+        fs.writeFileString(
+          extensionFile,
+          `import { Effect } from "effect"\nexport default { manifest: { id: "${id}" }, setup: Effect.void }\n`,
+        )
+      const kept = defineExtension({
+        id: "@gent/test-session-profile/files-kept",
+        setup: Effect.void,
+      })
+      const ids = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+      const failedPaths = (profile: SessionProfile) =>
+        profile.resolved.failedExtensions.map((extension) => extension.sourcePath)
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(launch))
+        expect(ids(yield* resolve)).toEqual(["@gent/test-session-profile/files-kept"])
+
+        yield* writeExtension("@gent/test-file-added")
+        expect(ids(yield* resolve)).toContain("@gent/test-file-added")
+
+        yield* fs.writeFileString(extensionFile, "export const = ;\n")
+        const broken = yield* resolve
+        expect(ids(broken)).toEqual(["@gent/test-session-profile/files-kept"])
+        expect(failedPaths(broken)).toEqual([extensionFile])
+
+        // The same path again, with new content: imported afresh, not from
+        // the module cache.
+        yield* writeExtension("@gent/test-file-fixed-and-renamed")
+        const fixed = yield* resolve
+        expect(ids(fixed)).toContain("@gent/test-file-fixed-and-renamed")
+        expect(failedPaths(fixed)).toEqual([])
+        // Nothing changed since: the same profile.
+        expect(yield* resolve).toBe(fixed)
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          makeCacheLayer({ cwd: launch, home, extensions: [kept], allowFailedExtensions: true }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -2663,8 +2725,8 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       expect(first.loaded).toHaveLength(1)
       expect(first.loaded[0]?.extension.artifactIdentity).toBeUndefined()
 
-      // The module path remains cached even though the source file changes.
-      // The loader must not attach a new identity to the old export.
+      // An edited file is imported again under its new version. The loader
+      // still attaches no identity to what it imported.
       yield* fs.writeFileString(
         extensionPath,
         'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.void }\n',
