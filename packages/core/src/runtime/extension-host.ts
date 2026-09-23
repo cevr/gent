@@ -291,6 +291,7 @@ interface CompiledExtensionHooks {
   readonly emitTurnAfter: (
     input: TurnAfterInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
+  readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
 }
 
 interface ExtensionTurnProjection {
@@ -396,6 +397,7 @@ const collectHookSlot = (
     systemPrompt: RegisteredSystemPromptRewrite[]
     turnProjection: HookTurnProjectionSlot[]
     turnAfter: RegisteredHook<TurnAfterInput>[]
+    loopOpen: RegisteredHook<void>[]
   },
 ) => {
   switch (slot.kind) {
@@ -414,6 +416,12 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
+    case "loopOpen":
+      slots.loopOpen.push({
+        extensionId: ext.manifest.id,
+        handler: slot.hook.handler,
+      })
+      return
   }
 }
 
@@ -424,10 +432,12 @@ export const compileExtensionHooks = (
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
   const turnProjectionSlots: HookTurnProjectionSlot[] = []
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
+  const loopOpenSlots: RegisteredHook<void>[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
     turnProjection: turnProjectionSlots,
     turnAfter: turnAfterSlots,
+    loopOpen: loopOpenSlots,
   }
 
   for (const ext of sorted) {
@@ -490,6 +500,10 @@ export const compileExtensionHooks = (
       Effect.gen(function* () {
         for (const slot of turnAfterSlots) yield* runHook(input, slot)
       }),
+
+    emitLoopOpen: Effect.gen(function* () {
+      for (const slot of loopOpenSlots) yield* runHook(void 0, slot)
+    }),
   }
 }
 

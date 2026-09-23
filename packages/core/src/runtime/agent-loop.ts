@@ -1396,6 +1396,8 @@ type AgentLoopBehavior = {
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   /** Mark the per-entity behavior ready to accept state mutations. */
   start: Effect.Effect<void, AgentLoopError>
+  /** Fork the extensions' `loopOpen` hooks as the loop's own fiber; the opening loop calls it once. */
+  runOpenHooks: Effect.Effect<void>
   /** Resolves once the loop scope is closed. */
   awaitExit: Effect.Effect<void>
   close: Effect.Effect<void>
@@ -1752,6 +1754,36 @@ const makeAgentLoopBehavior = (
       }),
     )
 
+    // The `loopOpen` hooks, as the loop's own fiber. They run under the
+    // side-mutation permit, like an extension request: a follow-up they queue
+    // on this branch wakes it once the permit is free. No client opened the
+    // run, so a hook cannot ask. The profile and the branch Resources are
+    // resolved here, off the caller's path: the op that opened the loop never
+    // waits on them, and a profile that fails to resolve only logs.
+    const runOpenHooks = Effect.forkIn(
+      Effect.gen(function* () {
+        const profile = yield* resolveTurnProfile(
+          RunOpener.cases.Turn.make({ openedByClient: false }),
+        )
+        const context = yield* branchContext
+        yield* profile.turnExtensionRegistry
+          .getResolved()
+          .extensionHooks.emitLoopOpen.pipe(
+            runAgentLoopTurnProfile(profile),
+            Effect.provideContext(context),
+          )
+      }).pipe(
+        Effect.scoped,
+        worker.withSideMutation,
+        Effect.catchCause((cause) =>
+          Effect.logWarning("agent-loop.loop-open-hooks.failed").pipe(
+            Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+      loopScope,
+    ).pipe(Effect.asVoid)
+
     const close = Effect.suspend(
       Effect.fn("AgentLoop.close")(function* () {
         yield* worker.interruptActiveStream
@@ -1859,6 +1891,7 @@ const makeAgentLoopBehavior = (
       respondInteraction: worker.respondInteraction,
       withSideMutation: worker.withSideMutation,
       start,
+      runOpenHooks,
       awaitExit: Deferred.await(closed),
       close,
     } satisfies AgentLoopBehavior
@@ -2499,7 +2532,11 @@ const buildAgentLoopActorHandlers = (config: {
             error: causeToAgentLoopError(exit.cause),
           }),
         )
+        return
       }
+      // Once per build, after startup and the recovery above: the extensions
+      // repair what a previous process or a closed loop left on this branch.
+      yield* handle.runOpenHooks
     })
 
     yield* openLoop.pipe(provideActorWorkspace)

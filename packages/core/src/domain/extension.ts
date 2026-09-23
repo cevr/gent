@@ -395,7 +395,8 @@ export interface TurnUsage {
 // ── Lifecycle hooks ──
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
-// turn seams. Registered with `host.on(kind, handler)` inside `setup`.
+// turn seams, and once when a branch's loop opens in this process
+// (`loopOpen`). Registered with `host.on(kind, handler)` inside `setup`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
 // still fire.
 
@@ -408,6 +409,15 @@ interface ExtensionHookSignatures {
   readonly systemPrompt: { readonly input: SystemPromptInput; readonly output: string }
   readonly turnProjection: { readonly input: TurnProjectionInput; readonly output: TurnProjection }
   readonly turnAfter: { readonly input: TurnAfterInput; readonly output: void }
+  /**
+   * The branch's loop was built in this process: at the first operation after
+   * a restart, or after the loop closed. It runs once per build, after the
+   * loop resumed a turn a restart cut short, before or beside any turn. The
+   * branch comes from `ExtensionContext`. A handler repairs what the previous
+   * process left: it re-arms timers, resumes children, reports lost work.
+   * No user watches it, so it cannot ask.
+   */
+  readonly loopOpen: { readonly input: void; readonly output: void }
 }
 
 type ExtensionHookKind = keyof ExtensionHookSignatures
@@ -626,6 +636,8 @@ const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.
     case "turnProjection":
       return host.on(slot.kind, slot.hook.handler)
     case "turnAfter":
+      return host.on(slot.kind, slot.hook.handler)
+    case "loopOpen":
       return host.on(slot.kind, slot.hook.handler)
   }
 }
