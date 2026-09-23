@@ -631,15 +631,16 @@ const makeSessionMutationsService: Effect.Effect<
     )
     if (Option.isNone(effective)) return
     const agent = effective.value
-    const registry = yield* Option.match(profileCache, {
-      onNone: () => resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)),
-      onSome: (cache) =>
-        Effect.provideService(
-          resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)),
-          SessionProfileCache,
-          cache,
-        ),
-    }).pipe(Effect.provideService(ExtensionRegistry, launchRegistry))
+    const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)).pipe(
+      Effect.provideService(ExtensionRegistry, launchRegistry),
+      // The profile cache joins the context only when the server wired one.
+      Effect.updateContext((context: Context.Context<never>) =>
+        Option.match(profileCache, {
+          onNone: () => context,
+          onSome: (cache) => Context.add(context, SessionProfileCache, cache),
+        }),
+      ),
+    )
     if (registry.getResolved().agents.has(agent)) return
     return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
   })
