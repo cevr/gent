@@ -67,133 +67,210 @@ type PathMatcher = (path: string) => boolean
 /** The walk stops with an error past this many files; the caller narrows `path`. */
 const FALLBACK_MAX_FILES = 100_000
 
-const parseGitignorePatterns = (content: string): PathMatcher[] => {
-  const patterns: PathMatcher[] = []
-  for (const raw of content.split("\n")) {
-    const line = raw.trim()
-    if (line.length === 0 || line.startsWith("#")) continue
-    if (line.startsWith("!")) continue
-
-    let pattern = line
-    const isDir = pattern.endsWith("/")
-    if (isDir) pattern = pattern.slice(0, -1)
-
-    const hasSlash = pattern.includes("/")
-    if (pattern.startsWith("/")) pattern = pattern.slice(1)
-
-    if (hasSlash) {
-      patterns.push(picomatch(pattern, { dot: true }))
-      patterns.push(picomatch(`${pattern}/**`, { dot: true }))
-    } else {
-      patterns.push(picomatch(pattern, { dot: true }))
-      patterns.push(picomatch(`**/${pattern}`, { dot: true }))
-      patterns.push(picomatch(`${pattern}/**`, { dot: true }))
-      patterns.push(picomatch(`**/${pattern}/**`, { dot: true }))
-    }
-  }
-  return patterns
+/** One `.gitignore` line. */
+interface IgnoreRule {
+  /** Directory of the `.gitignore`, relative to the search root ("" for the root). */
+  readonly base: string
+  readonly matches: PathMatcher
+  /** `!pattern` re-includes what an earlier rule ignored. */
+  readonly negated: boolean
+  /** `pattern/` matches directories only. */
+  readonly directoryOnly: boolean
+  /** A pattern with a slash matches the path from `base`; one without matches the name at any depth. */
+  readonly anchored: boolean
 }
 
-const isGitignored = (path: string, patterns: ReadonlyArray<PathMatcher>): boolean =>
-  patterns.some((matches) => matches(path))
-
-const makeFallbackService: Effect.Effect<
-  FileIndexService,
-  never,
-  FileSystem.FileSystem | Path.Path
-> = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  // Read on every listing: one small file, and an edit applies at once.
-  const loadGitignore = (cwd: string): Effect.Effect<ReadonlyArray<PathMatcher>> =>
-    fs.readFileString(path.join(cwd, ".gitignore")).pipe(
-      Effect.map(parseGitignorePatterns),
-      Effect.orElseSucceed((): ReadonlyArray<PathMatcher> => []),
-    )
-
-  const scanAllFiles = (cwd: string): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
-    Effect.gen(function* () {
-      const ignorePatterns = yield* loadGitignore(cwd)
-
-      const files: IndexedFile[] = []
-      // Real paths of the directories already walked: a directory link back
-      // into the tree is skipped instead of walked forever.
-      const visited = new Set<string>()
-      const scanDir: (
-        absoluteDir: string,
-        relativeDir: string,
-      ) => Effect.Effect<void, FileIndexError> = (absoluteDir, relativeDir) =>
-        Effect.gen(function* () {
-          const realDir = yield* fs.realPath(absoluteDir).pipe(Effect.option)
-          if (Option.isNone(realDir) || visited.has(realDir.value)) return
-          visited.add(realDir.value)
-
-          const entries = yield* fs
-            .readDirectory(absoluteDir)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new FileIndexError({ message: `directory scan failed: ${cause.message}`, cwd }),
-              ),
-            )
-
-          for (const entry of entries) {
-            if (entry === ".git") continue
-            let relativePath = relativeDir
-            if (relativeDir.length === 0) {
-              relativePath = entry
-            } else {
-              relativePath = `${relativeDir}/${entry}`
-            }
-            if (isGitignored(relativePath, ignorePatterns)) continue
-
-            const absPath = path.join(absoluteDir, entry)
-            const info = yield* fs.stat(absPath).pipe(Effect.option)
-            if (info._tag === "None") continue
-
-            if (info.value.type === "Directory") {
-              yield* scanDir(absPath, relativePath)
-              continue
-            }
-
-            if (info.value.type !== "File") continue
-
-            if (files.length >= FALLBACK_MAX_FILES) {
-              return yield* new FileIndexError({
-                message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-                cwd,
-              })
-            }
-            files.push({ path: absPath, relativePath })
-          }
-        })
-
-      yield* scanDir(cwd, "")
-
-      return files
+const parseGitignore = (content: string, base: string): Array<IgnoreRule> => {
+  const rules: Array<IgnoreRule> = []
+  for (const raw of content.split("\n")) {
+    let pattern = raw.trim()
+    if (pattern.length === 0 || pattern.startsWith("#")) continue
+    const negated = pattern.startsWith("!")
+    if (negated) pattern = pattern.slice(1)
+    // `\#` and `\!` are literal.
+    if (pattern.startsWith("\\")) pattern = pattern.slice(1)
+    const directoryOnly = pattern.endsWith("/")
+    if (directoryOnly) pattern = pattern.slice(0, -1)
+    const anchored = pattern.includes("/")
+    if (pattern.startsWith("/")) pattern = pattern.slice(1)
+    if (pattern.length === 0) continue
+    rules.push({
+      base,
+      matches: picomatch(pattern, { dot: true }),
+      negated,
+      directoryOnly,
+      anchored,
     })
+  }
+  return rules
+}
 
-  return {
-    listFiles: (params) =>
-      scanAllFiles(params.cwd).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new FileIndexError({
-              message: `fallback scan failed: ${e.message}`,
-              cwd: params.cwd,
-              cause: e,
-            }),
+/** Git's rule: the last matching line decides, so a later `!pattern` re-includes. */
+const isGitignored = (
+  pathFromRoot: string,
+  isDirectory: boolean,
+  rules: ReadonlyArray<IgnoreRule>,
+): boolean => {
+  let ignored = false
+  for (const rule of rules) {
+    if (rule.directoryOnly && !isDirectory) continue
+    let relative = pathFromRoot
+    if (rule.base.length > 0) {
+      if (!pathFromRoot.startsWith(`${rule.base}/`)) continue
+      relative = pathFromRoot.slice(rule.base.length + 1)
+    }
+    let subject = relative
+    if (!rule.anchored) subject = relative.slice(relative.lastIndexOf("/") + 1)
+    if (rule.matches(subject)) ignored = !rule.negated
+  }
+  return ignored
+}
+
+const joinRelative = (directory: string, entry: string) => {
+  if (directory.length === 0) return entry
+  return `${directory}/${entry}`
+}
+
+/**
+ * The walk reads every `.gitignore` from `root` down, as git does: the ones
+ * on the way from `root` to `cwd` and the ones inside the walked tree. A
+ * `cwd` inside an ignored directory lists nothing, as the native index does;
+ * `listIgnoredTargets` then lists it from its own root.
+ */
+const makeWalkService: Effect.Effect<FileIndexService, never, FileSystem.FileSystem | Path.Path> =
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    // Read on every listing: small files, and an edit applies at once.
+    const loadRules = (directory: string, base: string): Effect.Effect<Array<IgnoreRule>> =>
+      fs.readFileString(path.join(directory, ".gitignore")).pipe(
+        Effect.map((content) => parseGitignore(content, base)),
+        Effect.orElseSucceed((): Array<IgnoreRule> => []),
+      )
+
+    const scanAllFiles = (params: {
+      readonly root: string
+      readonly cwd: string
+    }): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
+      Effect.gen(function* () {
+        const { cwd } = params
+        let root = params.root
+        let fromRoot = path.relative(root, cwd)
+        if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) {
+          root = cwd
+          fromRoot = ""
+        }
+        let rules = yield* loadRules(root, "")
+        let base = ""
+        for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
+          base = joinRelative(base, part)
+          if (isGitignored(base, true, rules)) return []
+          rules = [...rules, ...(yield* loadRules(path.join(root, base), base))]
+        }
+
+        const files: IndexedFile[] = []
+        // Real paths of the directories already walked: a directory link back
+        // into the tree is skipped instead of walked forever.
+        const visited = new Set<string>()
+        const scanDir: (
+          absoluteDir: string,
+          relativeDir: string,
+          inherited: ReadonlyArray<IgnoreRule>,
+        ) => Effect.Effect<void, FileIndexError> = (absoluteDir, relativeDir, inherited) =>
+          Effect.gen(function* () {
+            const realDir = yield* fs.realPath(absoluteDir).pipe(Effect.option)
+            if (Option.isNone(realDir) || visited.has(realDir.value)) return
+            visited.add(realDir.value)
+
+            let dirRules = inherited
+            if (relativeDir.length > 0) {
+              const dirBase = joinRelative(fromRoot, relativeDir)
+              dirRules = [...inherited, ...(yield* loadRules(absoluteDir, dirBase))]
+            }
+
+            const entries = yield* fs
+              .readDirectory(absoluteDir)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new FileIndexError({ message: `directory scan failed: ${cause.message}`, cwd }),
+                ),
+              )
+
+            for (const entry of entries) {
+              if (entry === ".git") continue
+              const relativePath = joinRelative(relativeDir, entry)
+              const absPath = path.join(absoluteDir, entry)
+              const info = yield* fs.stat(absPath).pipe(Effect.option)
+              if (Option.isNone(info)) continue
+              const isDirectory = info.value.type === "Directory"
+              if (isGitignored(joinRelative(fromRoot, relativePath), isDirectory, dirRules))
+                continue
+
+              if (isDirectory) {
+                yield* scanDir(absPath, relativePath, dirRules)
+                continue
+              }
+
+              if (info.value.type !== "File") continue
+
+              if (files.length >= FALLBACK_MAX_FILES) {
+                return yield* new FileIndexError({
+                  message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+                  cwd,
+                })
+              }
+              files.push({ path: absPath, relativePath })
+            }
+          })
+
+        yield* scanDir(cwd, "", rules)
+
+        return files
+      })
+
+    return {
+      listFiles: (params) =>
+        scanAllFiles(params).pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(
+              new FileIndexError({
+                message: `fallback scan failed: ${e.message}`,
+                cwd: params.cwd,
+                cause: e,
+              }),
+            ),
           ),
         ),
+    }
+  })
+
+/**
+ * A shared root does not index its gitignored subtrees (`dist/`,
+ * `node_modules/x`), so an explicit target that lists nothing is walked from
+ * its own root. The walk has a bound and holds no watcher, so listing many
+ * ignored targets never evicts the root's cached finder. An unignored
+ * directory keeps its children's ignore rules (`logs/` with `*.log`), as
+ * ripgrep does.
+ */
+const listIgnoredTargets = (index: FileIndexService, walk: FileIndexService): FileIndexService => ({
+  listFiles: (params) =>
+    index.listFiles(params).pipe(
+      Effect.filterOrElse(
+        (files) => files.length > 0 || params.root === params.cwd,
+        () => walk.listFiles({ root: params.cwd, cwd: params.cwd }),
       ),
-  }
+    ),
 })
 
 export const FallbackFileIndexLive: Layer.Layer<
   FileIndex,
   never,
   FileSystem.FileSystem | Path.Path
-> = Layer.effect(FileIndex, makeFallbackService)
+> = Layer.effect(
+  FileIndex,
+  Effect.map(makeWalkService, (walk) => listIgnoredTargets(walk, walk)),
+)
 
 // ── Native: fff-bun finders, one per search root ──
 
@@ -349,16 +426,7 @@ const makeNativeService = (
         return allFiles
       }).pipe(Effect.scoped)
 
-    return {
-      listFiles: (params) =>
-        Effect.gen(function* () {
-          const files = yield* listUnder(params)
-          if (files.length > 0 || params.root === params.cwd) return files
-          // A shared root does not index its gitignored subtrees (`dist/`,
-          // `node_modules/x`). An explicit target is listed from its own root.
-          return yield* listUnder({ root: params.cwd, cwd: params.cwd })
-        }),
-    }
+    return { listFiles: listUnder }
   })
 
 /** Wrap a primary service with per-method fallback on FileIndexError. */
@@ -376,15 +444,15 @@ export const FileIndexLive = (options: {
   Layer.effect(
     FileIndex,
     Effect.gen(function* () {
-      const fallback = yield* makeFallbackService
-      if (!NativeFileFinder.isAvailable()) return fallback
+      const walk = yield* makeWalkService
+      if (!NativeFileFinder.isAvailable()) return listIgnoredTargets(walk, walk)
 
       const path = yield* Path.Path
       const fs = yield* FileSystem.FileSystem
       const dbDir = path.join(options.home, ".gent", "fff")
       yield* fs.makeDirectory(dbDir, { recursive: true }).pipe(Effect.ignore)
       const native = yield* makeNativeService(dbDir)
-      return withFallback(native, fallback)
+      return listIgnoredTargets(withFallback(native, walk), walk)
     }),
   )
 

@@ -789,6 +789,68 @@ describe("FileIndex fallback walk", () => {
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
+  it.scopedLive("a subdirectory listing applies the .gitignore files from the root down", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(`${tmpDir}/pkg/node_modules/dep`, { recursive: true })
+      yield* fs.makeDirectory(`${tmpDir}/pkg/build`, { recursive: true })
+      yield* fs.makeDirectory(`${tmpDir}/pkg/gen`, { recursive: true })
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "node_modules\n/build\n*.log\n!keep.log\n")
+      yield* fs.writeFileString(`${tmpDir}/pkg/.gitignore`, "gen/\nlocal.ts\n")
+      yield* fs.writeFileString(`${tmpDir}/pkg/gen/.gitignore`, "")
+      for (const file of [
+        "pkg/a.ts",
+        "pkg/node_modules/dep/index.js",
+        "pkg/build/out.js",
+        "pkg/debug.log",
+        "pkg/keep.log",
+        "pkg/local.ts",
+        "pkg/gen/x.ts",
+      ]) {
+        yield* fs.writeFileString(`${tmpDir}/${file}`, "x")
+      }
+
+      const fileIndex = yield* FileIndex
+      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/pkg` })
+      expect(files.map((f) => f.relativePath).toSorted()).toEqual([
+        ".gitignore",
+        "a.ts",
+        "build/out.js",
+        "keep.log",
+      ])
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
+  it.scopedLive("a directory-only pattern leaves a file of that name", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(`${tmpDir}/src/logs`, { recursive: true })
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "logs/\n")
+      yield* fs.writeFileString(`${tmpDir}/src/logs/a.txt`, "x")
+      yield* fs.writeFileString(`${tmpDir}/logs`, "a file")
+
+      const fileIndex = yield* FileIndex
+      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
+      expect(files.map((f) => f.relativePath).toSorted()).toEqual([".gitignore", "logs"])
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
+  it.scopedLive("an explicitly named ignored directory is listed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(`${tmpDir}/dist`)
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "dist/\n")
+      yield* fs.writeFileString(`${tmpDir}/dist/b.js`, "x")
+
+      const fileIndex = yield* FileIndex
+      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/dist` })
+      expect(files.map((f) => f.relativePath)).toEqual(["b.js"])
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
   it.scopedLive("listFiles returns full file list (no early break)", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -868,6 +930,37 @@ describe("FileIndex native-first layer", () => {
       expect(docs.map((f) => f.relativePath)).toEqual(["b.txt"])
       expect(create).toHaveBeenCalledTimes(1)
     }).pipe(Effect.provide(LiveLayer)),
+  )
+
+  it.scopedLive("listing ignored directories does not create finders or evict the root", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", tmpDir])
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "vendor/\n")
+      yield* fs.writeFileString(`${tmpDir}/src.ts`, "x")
+      for (let index = 0; index < 6; index++) {
+        yield* fs.makeDirectory(`${tmpDir}/vendor/p${index}`, { recursive: true })
+        yield* fs.writeFileString(`${tmpDir}/vendor/p${index}/i.js`, "x")
+      }
+      const create = spyOn(NativeFileFinder, "create")
+      yield* Effect.addFinalizer(() => Effect.sync(() => create.mockRestore()))
+
+      const fileIndex = yield* FileIndex
+      const root = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
+      for (let index = 0; index < 6; index++) {
+        const vendored = yield* fileIndex.listFiles({
+          root: tmpDir,
+          cwd: `${tmpDir}/vendor/p${index}`,
+        })
+        expect(vendored.map((f) => f.relativePath)).toEqual(["i.js"])
+      }
+      const again = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
+      expect(again.map((f) => f.relativePath).toSorted()).toEqual(
+        root.map((f) => f.relativePath).toSorted(),
+      )
+      expect(create).toHaveBeenCalledTimes(1)
+    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("an evicted finder stays alive until its in-flight listing finishes", () =>
