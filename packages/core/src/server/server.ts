@@ -1394,22 +1394,13 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "driver.list": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
-          const config = yield* configService.get()
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           const resolved = registry.getResolved()
           const agents = [...resolved.agents.values()]
           const drivers = [...resolved.modelDrivers.values()].map((driver) =>
             DriverInfo.make({ id: driver.id }),
           )
-          const overrides = Option.getOrElse(
-            Option.fromUndefinedOr(config.driverOverrides),
-            () => ({}),
-          )
-          return new DriverListResult({
-            drivers,
-            overrides,
-            agents,
-          })
+          return new DriverListResult({ drivers, agents })
         }).pipe(Effect.scoped),
 
       "driver.set": ({ agentName, driver, sessionId }: SetDriverOverrideInput) =>

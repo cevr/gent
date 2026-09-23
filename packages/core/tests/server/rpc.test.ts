@@ -173,31 +173,42 @@ describe("RPC contract schemas", () => {
  */
 
 describe("ExtensionRpcs", () => {
-  it.live("driver.list returns registered drivers and current overrides", () =>
+  /** A client over a config the test can read: `driver.set` and `driver.clear` write it. */
+  const clientWithConfig = Effect.gen(function* () {
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+    const configContext = yield* Layer.build(ConfigService.Test())
+    const { client } = yield* createRpcClient(
+      createE2ELayer({
+        ...e2ePreset,
+        providerLayer,
+        configServiceLayer: Layer.succeedContext(configContext),
+      }),
+    )
+    const driverOverrides = Context.get(configContext, ConfigService)
+      .get()
+      .pipe(Effect.map((config) => config.driverOverrides ?? {}))
+    return { client, driverOverrides }
+  })
+
+  it.live("driver.list returns the registered drivers and agents", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* clientWithConfig
         const before = yield* client.driver.list({})
         expect(before).toBeInstanceOf(DriverListResult)
-        expect(before.drivers[0]?._tag).toBeDefined()
         // Built-in agents extension contributes the "anthropic" model driver
-        // (and friends); the registered list should be non-empty even when no
-        // overrides are set.
+        // (and friends); the registered list is non-empty.
         expect(before.drivers.length).toBeGreaterThan(0)
         expect(before.agents.map((agent) => agent.name)).toContain(DEFAULT_AGENT_NAME)
-        expect(before.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 
-  it.live("driver.set persists an override; driver.list reflects it", () =>
+  it.live("driver.set persists an override in the config", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const drivers = (yield* client.driver.list({})).drivers
-        const someModel = drivers.find((d) => d._tag === "Model")
+        const { client, driverOverrides } = yield* clientWithConfig
+        const someModel = (yield* client.driver.list({})).drivers[0]
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
@@ -205,8 +216,7 @@ describe("ExtensionRpcs", () => {
           agentName: DEFAULT_AGENT_NAME,
           driver: DriverRef.make({ id: someModel.id }),
         })
-        const after = yield* client.driver.list({})
-        expect(after.overrides[DEFAULT_AGENT_NAME]?._tag).toBe("Model")
+        expect((yield* driverOverrides)[DEFAULT_AGENT_NAME]?.id).toBe(someModel.id)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -214,8 +224,7 @@ describe("ExtensionRpcs", () => {
   it.live("driver.set rejects unknown driver id with NotFoundError", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* clientWithConfig
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
@@ -230,10 +239,8 @@ describe("ExtensionRpcs", () => {
   it.live("driver.clear removes an existing override", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const drivers = (yield* client.driver.list({})).drivers
-        const someModel = drivers.find((d) => d._tag === "Model")
+        const { client, driverOverrides } = yield* clientWithConfig
+        const someModel = (yield* client.driver.list({})).drivers[0]
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
@@ -242,8 +249,7 @@ describe("ExtensionRpcs", () => {
           driver: DriverRef.make({ id: someModel.id }),
         })
         yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
-        const after = yield* client.driver.list({})
-        expect(after.overrides).toEqual({})
+        expect(yield* driverOverrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -251,11 +257,9 @@ describe("ExtensionRpcs", () => {
   it.live("driver.clear is a no-op for an unknown agent", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client, driverOverrides } = yield* clientWithConfig
         yield* client.driver.clear({ agentName: AgentName.make("does-not-exist") })
-        const after = yield* client.driver.list({})
-        expect(after.overrides).toEqual({})
+        expect(yield* driverOverrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
