@@ -34,7 +34,11 @@ import {
   EventId,
 } from "@gent/core/protocol"
 import { toolCallReceipts } from "@gent/core/test-utils"
-import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client"
+import {
+  CHILD_COMPLETION_TYPE,
+  type SessionMessageDetails,
+  sessionMessageText,
+} from "@gent/extensions/client"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
@@ -1691,6 +1695,128 @@ describe("native transcript markdown", () => {
       expect(history).not.toContain("## ")
       expect(history).not.toContain("`")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+// ── native-transcript-footer-room.test ──────────────────────────────────────
+
+/** A long resumed session: a model switch, four child completions, a cell with two ops. */
+const longHistory = (): SessionItem[] => {
+  const childCompletion = (index: number): ListMessage => ({
+    ...assistant(`child-${index}`, `child ${index} finished\nCHILD-${index} answer`),
+    role: "user",
+    segments: absent,
+    metadata: {
+      customType: CHILD_COMPLETION_TYPE,
+      details: { sessionId: `child-session-${index}`, agentName: "delegate", outcome: {} },
+    },
+  })
+  const cellWithOps = assistantToolMessage("assistant-cell-ops", {
+    id: "call-cell-ops",
+    toolName: "cell",
+    status: "completed",
+    input: { code: "await tools.read({path: 'a.md'}); await tools.bash({command: 'ls'})" },
+    summary: absent,
+    output: encodeJson({ display: "done" }),
+    operations: [
+      {
+        id: "op-read",
+        toolName: "read",
+        status: "completed",
+        input: { path: "a.md" },
+        summary: "3 lines",
+        output: absent,
+      },
+      {
+        id: "op-bash",
+        toolName: "bash",
+        status: "completed",
+        input: { command: "ls" },
+        summary: "exit 0",
+        output: absent,
+      },
+    ],
+  })
+  return [
+    assistant("a1", longBody("EARLY")),
+    {
+      ...compactionMessage(),
+      id: "model-change:b1:m2",
+      metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+    },
+    ...[1, 2, 3, 4].map(childCompletion),
+    cellWithOps,
+    assistant("a2", "one\ntwo\nthree"),
+    assistant("a3", "four\nfive"),
+    assistant("a4", "LAST-ANSWER"),
+  ]
+}
+
+describe("native transcript footer room", () => {
+  it.live(
+    "a long session leaves the status line and the tray on screen",
+    () =>
+      Effect.gen(function* () {
+        const firstCommit = yield* Deferred.make<void>()
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              const capture = () => Deferred.doneUnsafe(firstCommit, Effect.void)
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              const [footer, setFooter] = createSignal(4)
+              return (
+                <box flexDirection="column" flexGrow={1}>
+                  <NativeTranscript
+                    items={longHistory()}
+                    streaming={false}
+                    footerHeight={footer()}
+                    expanded={false}
+                    disclosure="collapsed"
+                    displayRevision={0}
+                    overlayOpen={false}
+                    renderItems={(visible) => (
+                      <MessageList
+                        items={visible}
+                        disclosure="collapsed"
+                        syntaxStyle={syntaxStyle}
+                        streaming={false}
+                      />
+                    )}
+                  >
+                    <box />
+                  </NativeTranscript>
+                  <box
+                    flexDirection="column"
+                    flexShrink={0}
+                    onSizeChange={function () {
+                      setFooter(this.height)
+                    }}
+                  >
+                    <text>COMPOSER</text>
+                    <text>STATUS-LINE</text>
+                    <text>TRAY-ROW</text>
+                  </box>
+                </box>
+              )
+            },
+            { width: 107, height: 26 },
+          ),
+        )
+        yield* Deferred.await(firstCommit)
+        // The footer region is the terminal less the rows kept for scrollback:
+        // the live tail and the footer share it, so the last footer row stays on screen.
+        const frame = yield* Effect.promise(() =>
+          waitForRenderedFrame(
+            setup,
+            (next) => next.includes("LAST-ANSWER") && next.includes("TRAY-ROW"),
+            "footer on screen",
+          ),
+        )
+        expect(frame).toContain("STATUS-LINE")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })
 

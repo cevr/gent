@@ -986,6 +986,15 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const [replayPending, setReplayPending] = createSignal(false)
   let measuredDimensions = dimensions()
   let measuredDisclosure = props.disclosure
+  /**
+   * Rows the live tail may take below native history: what the split footer
+   * leaves after the composer's footer. The footer region is at most
+   * `splitFooterHeight` rows, not the full terminal, so a tail sized against
+   * the terminal pushes the last footer rows (the status line, a docked tray)
+   * below the last terminal row.
+   */
+  const liveRows = () =>
+    Math.max(0, splitFooterHeight(dimensions().height, dimensions().height) - props.footerHeight)
   const finishNativeReturn = () => {
     settlingNative = false
     if (props.expanded || props.overlayOpen) return
@@ -1249,7 +1258,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     const next = items.map((item) => transcriptFingerprint(item))
     measurementVersion()
     retryVersion()
-    const available = Math.max(0, dimensions().height - props.footerHeight)
+    const available = liveRows()
     untrack(() => {
       const prefixMatches = committed.every((value, index) => next[index] === value)
       if (!prefixMatches) {
@@ -1285,9 +1294,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     return displayedItems().slice(committedCount())
   })
   const viewportHeight = () => {
-    const available = Math.max(0, dimensions().height - props.footerHeight)
-    if (props.expanded) return available
-    return Math.min(Math.max(1, liveHeight()), available)
+    if (props.expanded) return Math.max(0, dimensions().height - props.footerHeight)
+    return Math.min(Math.max(1, liveHeight()), liveRows())
   }
 
   return (
