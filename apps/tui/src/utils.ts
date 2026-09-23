@@ -647,9 +647,13 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   const operations = calls.flatMap((call) => call.operations)
   const children = operations.filter(isChildOperation).length
-  const failed =
-    operations.filter((operation) => operation.outcome === "failed").length +
-    calls.filter((call) => call.status === "error").length
+  // A cell that failed with a failed op is one failure, the op's: a reload
+  // settles an interrupted op as failed, and the count must not grow with it.
+  const failed = calls.reduce((sum, call) => {
+    const failedOps = call.operations.filter((operation) => operation.outcome === "failed").length
+    if (failedOps === 0 && call.status === "error") return sum + 1
+    return sum + failedOps
+  }, 0)
   const parts = [plural(calls.length, "cell")]
   if (operations.length > 0) parts.push(plural(operations.length, "op"))
   else {
@@ -710,7 +714,10 @@ export function formatRowCounts(
   // A zero count says nothing: a cell with no output shows only its code.
   const shown = all.filter((entry) => entry.count > 0)
   if (shown.length === 0) return ""
-  return `${shown.map((entry) => `${entry.arrow} ${entry.count}`).join(" ")} lines`
+  // One count of one line is one line; two counts are at least two lines.
+  let noun = "lines"
+  if (shown.length === 1 && shown[0]?.count === 1) noun = "line"
+  return `${shown.map((entry) => `${entry.arrow} ${entry.count}`).join(" ")} ${noun}`
 }
 
 // ── Working icon ──

@@ -1,9 +1,11 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
-import { BranchId, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
+import { Effect, Fiber, Option, Predicate, Queue, Ref, Schema, Stream } from "effect"
+import { BranchId, ExtensionContext, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
 import { AgentEvent } from "@gent/core/protocol"
 import {
   activityText,
+  AgentActivity,
+  AgentActivityLive,
   type AgentRow,
   AgentsViewExtension,
   AgentsViewRpc,
@@ -19,7 +21,14 @@ import {
   rowKey,
   sectionOf,
 } from "../src/agents-view.js"
-import { LanguageModelLayers, textStep, createRpcHarness, waitFor } from "@gent/core/test-utils"
+import {
+  LanguageModelLayers,
+  textStep,
+  createRpcHarness,
+  testLeafContext,
+  testToolContext,
+  waitFor,
+} from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── agents-view/projection.test ─────────────────────────────────────────────
@@ -56,6 +65,7 @@ const durable = (overrides: {
       branchId: bid(parentBranch),
     })),
   ),
+  createdAt: 0,
   updatedAt: overrides.updatedAt ?? 0,
   sideThread: overrides.sideThread ?? false,
 })
@@ -348,7 +358,7 @@ describe("agents view projection", () => {
   })
 
   describe("full projection", () => {
-    test("reconciles, propagates, orders, and filters in one pass", () => {
+    test("reconciles, propagates, and orders in one pass", () => {
       const rows = projectAgentRows({
         live: [
           live({ session: "parent", branch: "b", status: "Idle" }),
@@ -498,6 +508,101 @@ const listAgents = (input: { readonly query?: string }) =>
     return { raw, reply, harness, sessionId: harness.sessionId, branchId: harness.branchId }
   })
 
+/**
+ * One loop behind a scripted `Session`: `events` reads a queue the test feeds,
+ * and `listActiveLoops` reports the loop with `status`, or not at all once it
+ * is `None`. `checks` counts the liveness reads, one per follower start and
+ * one per turn end, so a test sees whether a follower still runs.
+ */
+const scriptedLoop = Effect.gen(function* () {
+  const loop = { sessionId: sid("child-session"), branchId: bid("child-branch") }
+  const events = yield* Queue.unbounded<AgentEvent>()
+  const status = yield* Ref.make<Option.Option<string>>(Option.some("Running"))
+  const checks = yield* Ref.make(0)
+  const base = testToolContext()
+  const ctx = testLeafContext(
+    testToolContext({
+      Session: {
+        ...base.Session,
+        events: () => Stream.fromQueue(events),
+        listActiveLoops: Ref.update(checks, (count) => count + 1).pipe(
+          Effect.andThen(Ref.get(status)),
+          Effect.map((current) =>
+            Option.toArray(
+              Option.map(current, (value) => ({ ...loop, status: Option.some(value) })),
+            ),
+          ),
+        ),
+      },
+    }),
+  )
+  const activity = yield* AgentActivity
+  const follow = activity.follow([loop]).pipe(Effect.provideService(ExtensionContext, ctx))
+  const chunk = (text: string) =>
+    Queue.offer(events, AgentEvent.cases.StreamChunk.make({ ...loop, chunk: text }))
+  const turnCompleted = Queue.offer(
+    events,
+    AgentEvent.cases.TurnCompleted.make({ ...loop, durationMs: 1 }),
+  )
+  return { loop, status, checks, activity, follow, chunk, turnCompleted }
+})
+
+describe("AgentActivity followers", () => {
+  it.live(
+    "a follower for a loop that is not working ends at once",
+    () =>
+      Effect.gen(function* () {
+        const script = yield* scriptedLoop
+        yield* Ref.set(script.status, Option.some("Idle"))
+        // Each follow starts a follower only when none runs, so the liveness
+        // reads climb only while every follower has already ended.
+        yield* waitFor(
+          script.follow.pipe(Effect.andThen(Ref.get(script.checks))),
+          (checks) => checks >= 3,
+          2_000,
+          "a new follower on each follow",
+        )
+        yield* script.chunk("never read")
+        expect(Option.isNone(yield* script.activity.read(script.loop))).toBe(true)
+      }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
+    6_000,
+  )
+
+  it.live(
+    "a follower ends at the turn end that finds its loop gone, and forgets its line",
+    () =>
+      Effect.gen(function* () {
+        const script = yield* scriptedLoop
+        yield* script.follow
+        yield* script.chunk("Reading the loader.")
+        yield* waitFor(script.activity.read(script.loop), Option.isSome, 2_000, "the streamed line")
+        // Live at a turn's end: the follower stays for the next turn.
+        yield* script.turnCompleted
+        yield* waitFor(Ref.get(script.checks), (checks) => checks >= 2, 2_000, "turn end check")
+        yield* script.chunk("Checking the tests.")
+        const next = yield* waitFor(
+          script.activity.read(script.loop),
+          Option.isSome,
+          2_000,
+          "the next turn's line",
+        )
+        expect(Option.getOrUndefined(next)).toBe("Checking the tests.")
+        // Gone at a turn's end: the follower ends, so the next follow starts
+        // a new one, which finds the loop gone and ends at once.
+        yield* Ref.set(script.status, Option.none())
+        yield* script.turnCompleted
+        yield* waitFor(
+          script.follow.pipe(Effect.andThen(Ref.get(script.checks))),
+          (checks) => checks >= 4,
+          2_000,
+          "a new follower after the old one ended",
+        )
+        expect(Option.isNone(yield* script.activity.read(script.loop))).toBe(true)
+      }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
+    6_000,
+  )
+})
+
 describe("AgentsViewExtension via RPC", () => {
   it.live(
     "the harness session appears as a row with its stored cwd",
@@ -591,6 +696,153 @@ describe("AgentsViewExtension via RPC", () => {
             "child idle",
           )
           expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a filtered listing keeps the activity of the children it hides",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(
+            "Reading the loader. Checking the tests.",
+          )
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/agents-view-rpc-filter",
+          })
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-filter",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          yield* harness.client.message.send({
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            content: "look at the loader",
+          })
+          yield* controls.waitForStreamStart
+          const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          // Only listings that hide the child, as a pane query that matches the
+          // root alone sends. The busy child forces its root into `running`.
+          const rootOnly = { query: String(harness.sessionId) }
+          const rootRunning = yield* waitFor(
+            requestRows(harness, rootOnly),
+            ({ reply }) => rowOf(reply, harness.sessionId)?.section === "running",
+            5_000,
+            "root running under its child",
+          )
+          expect(rowOf(rootRunning.reply, child.sessionId)).toBeUndefined()
+          const chunkPublished = yield* harness.client.session
+            .events({ sessionId: child.sessionId, branchId: child.branchId })
+            .pipe(
+              Stream.filter((envelope) => envelope.event._tag === "StreamChunk"),
+              Stream.runHead,
+              Effect.forkScoped,
+            )
+          yield* controls.emitNext
+          // The line is on the branch before the tray first reads without a
+          // query: a follower started only now would never see it.
+          yield* Fiber.join(chunkPublished)
+          // The hidden child was followed all along, so the tray's first
+          // unfiltered read sees the line it streamed.
+          const shown = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => Predicate.isNotUndefined(rowOf(reply, child.sessionId)?.activity),
+            3_000,
+            "activity of the hidden child",
+          ).pipe(Effect.option)
+          expect(
+            Option.getOrUndefined(
+              Option.map(shown, ({ reply }) => rowOf(reply, child.sessionId)?.activity),
+            ),
+          ).toBe("Reading the loader.")
+          // A query that hides every row leaves the follower in place.
+          const filtered = yield* requestRows(harness, { query: "no-such-agent-anywhere" })
+          expect(filtered.reply.rows).toHaveLength(0)
+          const after = yield* requestRows(harness, {})
+          expect(rowOf(after.reply, child.sessionId)?.activity).toBe("Reading the loader.")
+          yield* controls.emitAll
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a child's next turn reports from its first event, with no listing between turns",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(
+            "Reading the loader. Checking the tests.",
+          )
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/agents-view-rpc-turns",
+          })
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-turns",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          // The first chunk of the second turn: every event after turn one ends.
+          const secondTurnChunk = yield* harness.client.session
+            .events({ sessionId: child.sessionId, branchId: child.branchId })
+            .pipe(
+              Stream.dropWhile((envelope) => envelope.event._tag !== "TurnCompleted"),
+              Stream.filter((envelope) => envelope.event._tag === "StreamChunk"),
+              Stream.runHead,
+              Effect.forkScoped,
+            )
+          yield* harness.client.message.send({
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            content: "look at the loader",
+          })
+          yield* controls.waitForStreamStart
+          // Turn one: the tray lists the running child, which opens its follower.
+          yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply, child.sessionId)?.section === "running",
+            5_000,
+            "child running",
+          )
+          yield* controls.emitAll
+          const idle = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply, child.sessionId)?.section === "idle",
+            5_000,
+            "child idle",
+          )
+          // The turn's end clears the line.
+          expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
+          // Turn two streams its first line before any listing sees it running.
+          yield* harness.client.message.send({
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            content: "now the tests",
+          })
+          yield* controls.emitNext
+          yield* Fiber.join(secondTurnChunk)
+          const shown = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => Predicate.isNotUndefined(rowOf(reply, child.sessionId)?.activity),
+            3_000,
+            "second turn activity",
+          ).pipe(Effect.option)
+          expect(
+            Option.getOrUndefined(
+              Option.map(shown, ({ reply }) => rowOf(reply, child.sessionId)?.activity),
+            ),
+          ).toBe("Reading the loader.")
+          yield* controls.emitAll
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
