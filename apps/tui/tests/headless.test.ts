@@ -1,7 +1,26 @@
-import { EventId, ToolCallStarted, ToolCallSucceeded, TurnCompleted } from "@gent/core/test-utils"
+import {
+  ErrorOccurred,
+  EventId,
+  MessageReceived,
+  StreamEnded,
+  ToolCallStarted,
+  ToolCallSucceeded,
+  TurnCompleted,
+} from "@gent/core/test-utils"
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Option, Schema, Sink, Stdio, Stream } from "effect"
-import { BranchId, EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
+import { Cause, Deferred, Effect, Exit, Option, Schema, Sink, Stdio, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import {
+  AgentEvent,
+  BranchId,
+  dateFromMillis,
+  EventEnvelope,
+  Message,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/protocol"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { GentConnectionError } from "@gent/sdk"
 import { renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
@@ -20,75 +39,390 @@ const encodeBashOutput = Schema.encodeSync(BashOutputJson)
 const encodeCellOutput = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 const capturedWrites: string[] = []
+const capturedErrors: string[] = []
 const stdout = Sink.forEach((chunk: string | Uint8Array): Effect.Effect<void> =>
   Effect.sync(() => {
     capturedWrites.push(String(chunk))
   }),
 )
-const headlessTest = it.live.layer(Stdio.layerTest({ stdout: () => stdout }))
+const stderr = Sink.forEach((chunk: string | Uint8Array): Effect.Effect<void> =>
+  Effect.sync(() => {
+    capturedErrors.push(String(chunk))
+  }),
+)
+const headlessTest = it.live.layer(Stdio.layerTest({ stdout: () => stdout, stderr: () => stderr }))
+const noUser = { approveAll: false }
+
+const sessionId = SessionId.make("session-headless")
+const branchId = BranchId.make("branch-headless")
+const PROMPT = "Say hi"
+const OWN_TURN = MessageId.make("own-turn")
+const OLDER_TURN = MessageId.make("older-turn")
+
+/** The client-sent message that opens a turn, as its `MessageReceived` carries it. */
+const opening = (id: MessageId, text: string) =>
+  MessageReceived.make({
+    message: Message.cases.regular.make({
+      id,
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(0),
+      metadata: { fromClient: true },
+    }),
+  })
+const chunk = (text: string) =>
+  AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
+const completed = (
+  fields: { readonly unanswered?: boolean; readonly messageId?: MessageId } = {},
+) => TurnCompleted.make({ sessionId, branchId, durationMs: 1, messageId: OWN_TURN, ...fields })
+const errorOccurred = (error: string) => ErrorOccurred.make({ sessionId, branchId, error })
+
+/**
+ * A branch as one run sees it: the stored history, the synchronization
+ * marker, the live events that come before the run's prompt is sent (an
+ * older turn still running), and, once the run sends, its own turn: the
+ * opening message, then `ownTurn`. The stream stays open. `send` fails with
+ * `sendFailure` when one is given, as a failed turn phase fails it.
+ */
+const branchClient = (input: {
+  readonly history?: ReadonlyArray<AgentEvent>
+  readonly beforeSend?: ReadonlyArray<AgentEvent>
+  readonly ownTurn: ReadonlyArray<AgentEvent>
+  readonly sendFailure?: HeadlessRunnerTestError
+  readonly respondInteraction?: (answer: {
+    readonly approved: boolean
+    readonly notes?: string
+  }) => Effect.Effect<void>
+}) => {
+  const sent = Deferred.makeUnsafe<void>()
+  const history = input.history ?? []
+  // The envelope keeps each event as given: `make` rebuilds an event and
+  // drops a field its schema does not name, such as a notice's `notice`.
+  const envelopes = (events: ReadonlyArray<AgentEvent>, from: number) =>
+    events.map((event, index) =>
+      Object.assign(EventEnvelope.make({ id: EventId.make(from + index), event, createdAt: 0 }), {
+        event,
+      }),
+    )
+  const marker = AgentEvent.cases.StreamSynchronized.make({
+    sessionId,
+    branchId,
+    lastEventId: EventId.make(history.length),
+  })
+  const before = [...history, marker, ...(input.beforeSend ?? [])]
+  const after = [opening(OWN_TURN, PROMPT), ...input.ownTurn]
+  return createMockClient({
+    session: {
+      events: () =>
+        Stream.fromIterable(envelopes(before, 1)).pipe(
+          Stream.concat(
+            Stream.fromEffect(Deferred.await(sent)).pipe(
+              Stream.flatMap(() => Stream.fromIterable(envelopes(after, before.length + 1))),
+            ),
+          ),
+          Stream.concat(Stream.never),
+        ),
+    },
+    message: {
+      send: () =>
+        Deferred.done(sent, Exit.void).pipe(
+          Effect.andThen(
+            Option.match(Option.fromUndefinedOr(input.sendFailure), {
+              onNone: () => Effect.void,
+              onSome: (failure) => Effect.fail(failure),
+            }),
+          ),
+        ),
+    },
+    interaction: {
+      respondInteraction: (answer: { readonly approved: boolean; readonly notes?: string }) =>
+        Option.match(Option.fromUndefinedOr(input.respondInteraction), {
+          onNone: () => Effect.void,
+          onSome: (respond) => respond(answer),
+        }),
+    },
+  })
+}
 
 const captureStdout = <A, E>(
   effect: Effect.Effect<A, E, Stdio.Stdio>,
 ): Effect.Effect<{ readonly result: A; readonly stdout: string }, E, Stdio.Stdio> =>
   Effect.gen(function* () {
     capturedWrites.length = 0
+    capturedErrors.length = 0
     const result = yield* effect
     return { result, stdout: capturedWrites.join("") }
   })
 
+const run = (
+  client: ReturnType<typeof createMockClient>,
+  options: { readonly approveAll: boolean } = noUser,
+) => runHeadless(client, sessionId, branchId, PROMPT, options).pipe(Effect.timeout("2 seconds"))
+
 describe("runHeadless", () => {
-  headlessTest("stops after TurnCompleted even if the event stream stays open", () =>
+  headlessTest("an error notice does not end the turn; the answer after it prints", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.make("session-test")
-      const branchId = BranchId.make("branch-test")
-      let sent = false
-      const completed = EventEnvelope.make({
-        id: EventId.make(1),
-        event: TurnCompleted.make({
-          sessionId,
-          branchId,
-          durationMs: 42,
-        }),
-        createdAt: 0,
+      const client = branchClient({
+        ownTurn: [
+          errorOccurred("Context compaction failed; continuing"),
+          chunk("the answer"),
+          completed(),
+        ],
       })
-      const client = createMockClient({
-        session: {
-          events: () => Stream.concat(Stream.make(completed), Stream.never),
-        },
-        message: {
-          send: () => {
-            sent = true
-            return Effect.void
-          },
-        },
-      })
-      const exit = yield* Effect.exit(
-        runHeadless(client, sessionId, branchId, "Say hi").pipe(Effect.timeout("250 millis")),
-      )
-      expect(exit._tag).toBe("Success")
-      expect(sent).toBe(true)
+      const captured = yield* captureStdout(run(client))
+      expect(captured.stdout).toContain("the answer")
+      // The run's end owns stderr: an answered turn reports its notice once.
+      expect(capturedErrors.join("")).toBe("Warning: Context compaction failed; continuing\n")
     }),
   )
+
+  headlessTest("an error notice alone leaves the run waiting for its turn", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [errorOccurred("Context compaction failed; continuing")],
+      })
+      // Absence of an end: the run is still open when the bound expires.
+      const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
+        Effect.timeoutOption("150 millis"),
+      )
+      expect(Option.isNone(outcome)).toBe(true)
+    }),
+  )
+
+  headlessTest("a notice does not fail a turn that ends without answer text", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [
+          Object.assign(errorOccurred("compaction fell back to truncation"), { notice: true }),
+          completed(),
+        ],
+      })
+      capturedErrors.length = 0
+      const exit = yield* Effect.exit(run(client))
+      expect(exit._tag).toBe("Success")
+      expect(capturedErrors.join("")).toBe("Warning: compaction fell back to truncation\n")
+    }),
+  )
+
+  headlessTest("a notice alone leaves the run waiting for its turn", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [Object.assign(errorOccurred("compaction fell back"), { notice: true })],
+      })
+      const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
+        Effect.timeoutOption("150 millis"),
+      )
+      expect(Option.isNone(outcome)).toBe(true)
+    }),
+  )
+
+  headlessTest("a failed stream with no answer fails the run with one stderr line", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [
+          StreamEnded.make({ sessionId, branchId, outcome: "Failed" }),
+          errorOccurred("provider unavailable:\n  rate limited"),
+          completed(),
+        ],
+      })
+      capturedErrors.length = 0
+      const exit = yield* Effect.exit(run(client))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      const failure = Cause.squash(exit.cause)
+      expect(String(failure)).toContain("HeadlessUnansweredError")
+      // The failure is the one report: the run wrote nothing to stderr itself,
+      // and the message it hands the CLI is one line.
+      expect(capturedErrors).toEqual([])
+      expect(failure instanceof Error && failure.message).toBe(
+        "the turn ended without an answer: provider unavailable: rate limited",
+      )
+    }),
+  )
+
+  headlessTest("a failed stream after an answer still exits cleanly", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [chunk("partial answer"), errorOccurred("provider unavailable"), completed()],
+      })
+      const exit = yield* Effect.exit(run(client))
+      expect(exit._tag).toBe("Success")
+    }),
+  )
+
+  headlessTest("a failed turn phase fails the run through the send that opened it", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [errorOccurred("storage is busy")],
+        sendFailure: new HeadlessRunnerTestError({ message: "turn failed: storage is busy" }),
+      })
+      const exit = yield* Effect.exit(run(client))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(String(Cause.squash(exit.cause))).toContain("turn failed: storage is busy")
+    }),
+  )
+
+  headlessTest("an older turn's output and errors before the run's turn are not the run's", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        // The branch was running an older turn when the run subscribed.
+        beforeSend: [chunk("older output"), errorOccurred("older failure")],
+        ownTurn: [chunk("the answer"), completed()],
+      })
+      const captured = yield* captureStdout(run(client))
+      expect(captured.stdout).toContain("the answer")
+      expect(captured.stdout).not.toContain("older output")
+      expect(capturedErrors).toEqual([])
+    }),
+  )
+
+  headlessTest("an older turn's TurnCompleted after the send settles nothing", () =>
+    Effect.gen(function* () {
+      const sent = Deferred.makeUnsafe<void>()
+      const events = [
+        AgentEvent.cases.StreamSynchronized.make({
+          sessionId,
+          branchId,
+          lastEventId: EventId.make(0),
+        }),
+      ]
+      // After the send: the older turn still streams and completes unanswered,
+      // then the run's own turn opens and answers.
+      const live = [
+        chunk("older output"),
+        completed({ messageId: OLDER_TURN, unanswered: true }),
+        opening(OWN_TURN, PROMPT),
+        chunk("the answer"),
+        completed(),
+      ]
+      const client = createMockClient({
+        session: {
+          events: () =>
+            Stream.fromIterable(
+              events.map((event, index) =>
+                EventEnvelope.make({ id: EventId.make(index + 1), event, createdAt: 0 }),
+              ),
+            ).pipe(
+              Stream.concat(
+                Stream.fromEffect(Deferred.await(sent)).pipe(
+                  Stream.flatMap(() =>
+                    Stream.fromIterable(
+                      live.map((event, index) =>
+                        EventEnvelope.make({ id: EventId.make(index + 2), event, createdAt: 0 }),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Stream.concat(Stream.never),
+            ),
+        },
+        message: { send: () => Deferred.done(sent, Exit.void).pipe(Effect.asVoid) },
+      })
+      const captured = yield* captureStdout(run(client))
+      expect(captured.stdout).toContain("the answer")
+      expect(captured.stdout).not.toContain("older output")
+    }),
+  )
+
+  headlessTest("a resumed session's history neither prints nor settles the run", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        history: [
+          opening(OLDER_TURN, PROMPT),
+          chunk("old answer"),
+          completed({ messageId: OLDER_TURN, unanswered: true }),
+        ],
+        ownTurn: [chunk("new answer"), completed()],
+      })
+      const captured = yield* captureStdout(run(client))
+      expect(captured.stdout).toContain("new answer")
+      expect(captured.stdout).not.toContain("old answer")
+    }),
+  )
+
+  const presented = AgentEvent.cases.InteractionPresented.make({
+    sessionId,
+    branchId,
+    requestId: InteractionRequestId.make("req-headless"),
+    text: "Run a destructive command?",
+  })
+  const answerInteraction = (options: { readonly approveAll: boolean }) =>
+    Effect.gen(function* () {
+      const answers: Array<{ readonly approved: boolean; readonly notes?: string }> = []
+      const client = branchClient({
+        ownTurn: [presented, chunk("done"), completed()],
+        respondInteraction: (answer) =>
+          Effect.sync(() => {
+            answers.push(answer)
+          }),
+      })
+      const captured = yield* captureStdout(run(client, options))
+      return { answers, stdout: captured.stdout }
+    })
+
+  headlessTest("an interaction is declined when no flag approves it", () =>
+    Effect.gen(function* () {
+      const { answers, stdout: printed } = yield* answerInteraction({ approveAll: false })
+      expect(answers).toHaveLength(1)
+      expect(answers[0]?.approved).toBe(false)
+      expect(answers[0]?.notes).toContain("--approve-all")
+      expect(printed).toContain("[interaction: declined, no user to answer]")
+    }),
+  )
+
+  headlessTest("--approve-all approves an interaction", () =>
+    Effect.gen(function* () {
+      const { answers, stdout: printed } = yield* answerInteraction({ approveAll: true })
+      expect(answers).toHaveLength(1)
+      expect(answers[0]?.approved).toBe(true)
+      expect(answers[0]?.notes).toBeUndefined()
+      expect(printed).toContain("[interaction: approved by --approve-all]")
+    }),
+  )
+
+  headlessTest("stops after TurnCompleted even if the event stream stays open", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(run(branchClient({ ownTurn: [completed()] })))
+      expect(exit._tag).toBe("Success")
+    }),
+  )
+
   headlessTest(
     "retries reuse the same sendRequestId so the server-side dedup collapses them onto one mutation",
     () =>
       Effect.gen(function* () {
-        const sessionId = SessionId.make("session-test")
-        const branchId = BranchId.make("branch-test")
         const observedRequestIds: Array<string> = []
         let sendAttempts = 0
-        const completed = EventEnvelope.make({
-          id: EventId.make(1),
-          event: TurnCompleted.make({
-            sessionId,
-            branchId,
-            durationMs: 1,
-          }),
-          createdAt: 0,
+        const sent = Deferred.makeUnsafe<void>()
+        const marker = AgentEvent.cases.StreamSynchronized.make({
+          sessionId,
+          branchId,
+          lastEventId: EventId.make(0),
         })
+        const live = [opening(OWN_TURN, PROMPT), completed()]
         const client = createMockClient({
           session: {
-            events: () => Stream.concat(Stream.make(completed), Stream.never),
+            events: () =>
+              Stream.make(
+                EventEnvelope.make({ id: EventId.make(1), event: marker, createdAt: 0 }),
+              ).pipe(
+                Stream.concat(
+                  Stream.fromEffect(Deferred.await(sent)).pipe(
+                    Stream.flatMap(() =>
+                      Stream.fromIterable(
+                        live.map((event, index) =>
+                          EventEnvelope.make({ id: EventId.make(index + 2), event, createdAt: 0 }),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Stream.concat(Stream.never),
+              ),
           },
           message: {
             send: (input: { requestId?: string }) => {
@@ -103,12 +437,14 @@ describe("runHeadless", () => {
                   }),
                 )
               }
-              return Effect.void
+              return Deferred.done(sent, Exit.void).pipe(Effect.asVoid)
             },
           },
         })
         const exit = yield* Effect.exit(
-          runHeadless(client, sessionId, branchId, "Say hi").pipe(Effect.timeout("5 seconds")),
+          runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
+            Effect.timeout("5 seconds"),
+          ),
         )
         expect(exit._tag).toBe("Success")
         expect(sendAttempts).toBe(3)
@@ -121,10 +457,9 @@ describe("runHeadless", () => {
         expect(observedRequestIds[0]).not.toBe("<missing>")
       }),
   )
+
   headlessTest("fails when the event stream ends before turn completion", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.make("session-test")
-      const branchId = BranchId.make("branch-test")
       const client = createMockClient({
         session: {
           events: () => Stream.empty,
@@ -133,7 +468,7 @@ describe("runHeadless", () => {
           send: () => Effect.void,
         },
       })
-      const exit = yield* Effect.exit(runHeadless(client, sessionId, branchId, "Say hi"))
+      const exit = yield* Effect.exit(runHeadless(client, sessionId, branchId, PROMPT, noUser))
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return
       expect(Cause.squash(exit.cause)).toBeInstanceOf(GentConnectionError)
@@ -142,55 +477,32 @@ describe("runHeadless", () => {
       )
     }),
   )
+
   headlessTest("renders named bash tool input and truncated output", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.make("session-test")
-      const branchId = BranchId.make("branch-test")
       const toolCallId = ToolCallId.make("tool-call-test")
-      const started = EventEnvelope.make({
-        id: EventId.make(1),
-        event: ToolCallStarted.make({
-          sessionId,
-          branchId,
-          toolCallId,
-          toolName: "bash",
-          input: { command: "printf many-lines" },
-        }),
-        createdAt: 0,
-      })
       const outputLines = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n")
-      const succeeded = EventEnvelope.make({
-        id: EventId.make(2),
-        event: ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId,
-          toolName: "bash",
-          output: encodeBashOutput({ stdout: outputLines, stderr: "", exitCode: 0 }),
-        }),
-        createdAt: 0,
-      })
-      const completed = EventEnvelope.make({
-        id: EventId.make(3),
-        event: TurnCompleted.make({
-          sessionId,
-          branchId,
-          durationMs: 1,
-        }),
-        createdAt: 0,
-      })
-      const client = createMockClient({
-        session: {
-          events: () => Stream.concat(Stream.make(started, succeeded, completed), Stream.never),
-        },
-        message: {
-          send: () => Effect.void,
-        },
+      const client = branchClient({
+        ownTurn: [
+          ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName: "bash",
+            input: { command: "printf many-lines" },
+          }),
+          ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName: "bash",
+            output: encodeBashOutput({ stdout: outputLines, stderr: "", exitCode: 0 }),
+          }),
+          completed(),
+        ],
       })
 
-      const captured = yield* captureStdout(
-        runHeadless(client, sessionId, branchId, "Say hi").pipe(Effect.timeout("5 seconds")),
-      )
+      const captured = yield* captureStdout(run(client))
       expect(captured.stdout).toContain("[tool: bash] printf many-lines")
       expect(captured.stdout).toContain("[tool done: bash exit 0]")
       expect(captured.stdout).toContain("line 0")
@@ -236,55 +548,47 @@ describe("runHeadless", () => {
 
   headlessTest("prints each operation a cell admitted once, when it ends", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.make("session-cell-ops")
-      const branchId = BranchId.make("branch-cell-ops")
       const cell = ToolCallId.make("cell-call")
       const read = ToolCallId.make("read-call")
-      const events = [
-        ToolCallStarted.make({
-          sessionId,
-          branchId,
-          toolCallId: cell,
-          toolName: "cell",
-          input: { code: "x" },
-        }),
-        ToolCallStarted.make({
-          sessionId,
-          branchId,
-          toolCallId: read,
-          toolName: "read",
-          input: { path: "a.txt" },
-          parentToolCallId: cell,
-        }),
-        ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId: read,
-          toolName: "read",
-          output: "READ-BODY",
-          parentToolCallId: cell,
-        }),
-        ToolCallSucceeded.make({
-          sessionId,
-          branchId,
-          toolCallId: cell,
-          toolName: "cell",
-          output: encodeCellOutput({
-            display: "ok",
-            operations: [{ tool: "read", outcome: "succeeded", summary: "1 line" }],
+      const client = branchClient({
+        ownTurn: [
+          ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cell,
+            toolName: "cell",
+            input: { code: "x" },
           }),
-        }),
-        TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
-      ].map((event, index) =>
-        EventEnvelope.make({ id: EventId.make(index + 1), event, createdAt: 0 }),
-      )
-      const client = createMockClient({
-        session: { events: () => Stream.concat(Stream.fromIterable(events), Stream.never) },
-        message: { send: () => Effect.void },
+          ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: read,
+            toolName: "read",
+            input: { path: "a.txt" },
+            parentToolCallId: cell,
+          }),
+          ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: read,
+            toolName: "read",
+            output: "READ-BODY",
+            parentToolCallId: cell,
+          }),
+          ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: cell,
+            toolName: "cell",
+            output: encodeCellOutput({
+              display: "ok",
+              operations: [{ tool: "read", outcome: "succeeded", summary: "1 line" }],
+            }),
+          }),
+          completed(),
+        ],
       })
-      const { stdout: printed } = yield* captureStdout(
-        runHeadless(client, sessionId, branchId, "run a cell").pipe(Effect.timeout("2 seconds")),
-      )
+      const { stdout: printed } = yield* captureStdout(run(client))
       // The op prints its terminal block once; no running line, and no receipt repeats it.
       expect(printed.match(/read/g)).toHaveLength(1)
       expect(printed).toContain("  [tool done: read]")

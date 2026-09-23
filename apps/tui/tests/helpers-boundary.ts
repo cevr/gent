@@ -73,6 +73,18 @@ export const waitForFrame = (
   ).pipe(Effect.map(() => lastFrame))
 }
 
+/**
+ * Wait until `check` holds, running `advance` before each look: for work
+ * that runs on a test clock, which `advance` moves one step.
+ */
+export const waitUntilAdvancing = (
+  advance: Effect.Effect<void>,
+  check: () => boolean,
+  label = "condition",
+  timeoutMs = 2_000,
+): Effect.Effect<void, RenderWaitTimeoutError> =>
+  pollUntil(Effect.map(advance, check), () => `timed out waiting for: ${label}`, timeoutMs)
+
 /** Wait, without rendering, until `check` holds: for reactive state outside a render tree. */
 export const waitUntil = (
   check: () => boolean,

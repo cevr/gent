@@ -48,6 +48,7 @@ import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import {
   BUILTIN_TOOL_RENDERERS,
+  ToolRenderersProvider,
   EditToolRenderer,
   ReadToolRenderer,
   useToolRenderers,
@@ -2283,6 +2284,77 @@ describe("transcript block spacing", () => {
     )
   }
 
+  const twoOpCell: ToolCall = {
+    id: "cell-two-ops",
+    toolName: "cell",
+    status: "completed",
+    input: {
+      code: "await tools.bash({ command: 'seq 1 3' }); await tools.bash({ command: 'seq 4 6' })",
+    },
+    summary: absent,
+    output: encodeJson({ display: "shown text", bindings: [], truncated: false }),
+    operations: [
+      {
+        id: "two-op-1",
+        toolName: "bash",
+        status: "completed",
+        input: { command: "seq 1 3" },
+        summary: absent,
+        output: encodeJson({ stdout: "1\n2\n3\n", stderr: "", exitCode: 0 }),
+      },
+      {
+        id: "two-op-2",
+        toolName: "bash",
+        status: "completed",
+        input: { command: "seq 4 6" },
+        summary: absent,
+        output: encodeJson({ stdout: "4\n5\n6\n", stderr: "", exitCode: 0 }),
+      },
+    ],
+  }
+  const builtinRenderers = () =>
+    new Map(
+      BUILTIN_TOOL_RENDERERS.flatMap((entry) =>
+        entry.toolNames.map((name): [string, typeof entry.component] => [name, entry.component]),
+      ),
+    )
+  for (const expanded of [false, true]) {
+    it.live(
+      `ops inside one cell and its shown text are one blank line apart, expanded ${expanded}`,
+      () =>
+        Effect.gen(function* () {
+          const CellToolRenderer = builtinRenderer("cell")
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <ToolRenderersProvider value={builtinRenderers}>
+                  <CellToolRenderer expanded={expanded} toolCall={twoOpCell} />
+                </ToolRenderersProvider>
+              ),
+              { width: 100, height: 40 },
+            ),
+          )
+          const lines = renderFrame(setup)
+            .split("\n")
+            .map((line) => line.trimEnd())
+          // Row 0 is the cell's header, which names both ops; the second op's
+          // own header is the next row that does.
+          const second = lines.findIndex(
+            (line, index) => index > 0 && line.includes("bash seq 4 6"),
+          )
+          const shown = lines.findIndex((line) => line.trim() === "shown text")
+          expect(second).toBeGreaterThan(1)
+          expect(shown).toBeGreaterThan(second)
+          // The row above each later block is blank, and the row above that is
+          // the earlier block's last row: one blank line, not zero or two.
+          expect(lines[second - 1]?.trim()).toBe("")
+          expect(lines[second - 2]?.trim().length).toBeGreaterThan(0)
+          expect(lines[shown - 1]?.trim()).toBe("")
+          expect(lines[shown - 2]?.trim().length).toBeGreaterThan(0)
+        }),
+    )
+  }
+
   it.live("native history keeps one blank line between committed blocks in full disclosure", () =>
     Effect.gen(function* () {
       const savedText: string[] = []
@@ -2349,7 +2421,10 @@ describe("transcript block spacing", () => {
         .map((run) => Math.max(0, run.length - 1))
         .filter((run) => run > 0)
       expect(body.some((line) => line.includes("git log --oneline -1"))).toBe(true)
-      expect(blankRuns).toEqual(Array.from({ length: history.length - 1 }, () => 1))
+      // One blank line between blocks, and inside each open cell one between
+      // its code, its op and its shown text.
+      const cells = items.length - 1
+      expect(blankRuns).toEqual(Array.from({ length: history.length - 1 + 2 * cells }, () => 1))
     }),
   )
 })

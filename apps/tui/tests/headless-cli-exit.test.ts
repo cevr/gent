@@ -125,6 +125,41 @@ describe("headless CLI", () => {
   )
 
   it.scopedLive(
+    "an unanswered turn exits 1 with one line on stderr",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr } = yield* runHeadless(["--mock-empty", "Say hi in 3 words"])
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe("HeadlessUnansweredError: the turn ended without an answer\n")
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  it.scopedLive(
+    "--approve-all without -H is refused",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr } = yield* runGent(["--approve-all"])
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe(
+          "CliStartupError: --approve-all applies to headless mode; add -H with a prompt\n",
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  it.scopedLive(
+    "--help names --approve-all",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stdout } = yield* runGent(["--help"])
+        expect(exitCode).toBe(0)
+        expect(stdout).toContain("--approve-all")
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  it.scopedLive(
     "missing API keys are one line on stderr",
     () =>
       Effect.gen(function* () {

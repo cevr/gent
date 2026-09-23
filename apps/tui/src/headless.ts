@@ -11,7 +11,13 @@ import {
   Stdio,
   Stream,
 } from "effect"
-import { formatHeadTail, type BranchId, type SessionId } from "@gent/core/protocol"
+import {
+  formatHeadTail,
+  type AgentEvent,
+  type BranchId,
+  type Message,
+  type SessionId,
+} from "@gent/core/protocol"
 import {
   CellOperationReceipts,
   formatGenericToolText,
@@ -19,7 +25,7 @@ import {
   type ToolInput,
 } from "./utils.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
-import { randomId } from "./utils"
+import { isErrorNotice, randomId } from "./utils"
 
 // ── headless tool renderers ─────────────────────────────────────────────────
 
@@ -167,30 +173,93 @@ export const renderHeadlessToolCall = (toolCall: HeadlessToolCall): string => {
 // ── headless run loop ───────────────────────────────────────────────────────
 
 /**
- * The turn finished without the model ever answering. Distinct from a
- * connection fault: the run reached the server, spent its continuations and
- * came back empty. Failing here is what gives a scripted caller a non-zero
+ * The turn finished without an answer: the model spent its continuations and
+ * came back empty, or the turn failed before it answered. Distinct from a
+ * connection fault. Failing here is what gives a scripted caller a non-zero
  * exit — a silent exit 0 with no output is indistinguishable from success.
  */
 class HeadlessUnansweredError extends Schema.TaggedError<HeadlessUnansweredError>()(
-  "@gent/tui/HeadlessUnansweredError",
+  "HeadlessUnansweredError",
   { message: Schema.String },
 ) {}
+
+export interface HeadlessOptions {
+  /**
+   * Approve every interaction the turn presents. Off by default: a headless
+   * run has no user, so it declines each ask, as a session with no user does.
+   */
+  readonly approveAll: boolean
+}
+
+/** What the model reads when the run declines its ask. */
+const DECLINE_NOTES =
+  "Declined: this is a headless run and no user is present to answer. Report what you would do; a user can rerun the prompt with --approve-all to approve every ask."
+
+const messageText = (message: Message): string =>
+  message.parts
+    .flatMap((part) => {
+      if (part.type === "text") return [part.text]
+      return []
+    })
+    .join("")
+
+/** How the run draws a tool call that ended. */
+const TOOL_END_STATUS = {
+  ToolCallSucceeded: "completed",
+  ToolCallFailed: "error",
+} satisfies Record<"ToolCallSucceeded" | "ToolCallFailed", HeadlessToolCall["status"]>
+
+/** A user message a client sent with this text: the opening message of a run's turn. */
+const isClientPrompt = (message: Message, text: string): boolean =>
+  message._tag === "regular" &&
+  message.role === "user" &&
+  Option.fromNullishOr(message.metadata).pipe(
+    Option.exists((metadata) => metadata.fromClient === true),
+  ) &&
+  messageText(message) === text
+
+/** An error the run reports on one stderr line. */
+const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, " ").trim()
 
 export const runHeadless = (
   client: GentNamespacedClient,
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
+  options: HeadlessOptions,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const stdio = yield* Stdio.Stdio
       const writeStdout = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stdout()))
       const writeStderr = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stderr()))
-      // Carries whether the turn actually answered, so the race below can fail
-      // the run instead of exiting 0 on an empty transcript.
+      // A subscription replays the stored events first (a resumed session's
+      // history), then marks the start of the live events. The run sends after
+      // the mark, so the turn it opens arrives live.
+      const synchronized = yield* Deferred.make<void>()
+      // Settles with whether the run's own turn answered.
       const done = yield* Deferred.make<boolean>()
+      let live = false
+      let sent = false
+      /**
+       * The opening message of the run's own turn. The branch may be running
+       * an older turn when the prompt arrives; that turn's output, errors,
+       * asks and `TurnCompleted` are not this run's. A turn starts with the
+       * `MessageReceived` of its opening message, and the branch runs one turn
+       * at a time, so the events from the run's opening message to the
+       * `TurnCompleted` that names it are the run's turn. The opening message
+       * is the first client-sent user message with the prompt's text after the
+       * run sent it.
+       */
+      let ownTurn = Option.none<Message["id"]>()
+      let ownTurnEnded = false
+      const inOwnTurn = () => Option.isSome(ownTurn) && !ownTurnEnded
+      // Errors of the run's turn, notices included. The run's end owns
+      // stderr: one line.
+      const errors: Array<string> = []
+      // An error that is not a notice: without answer text, the turn failed.
+      let failed = false
+      let wroteText = false
       const activeTools = new Map<string, HeadlessToolCall>()
       // Cells whose admitted calls printed their own lines.
       const cellsWithPrintedOperations = new Set<string>()
@@ -204,85 +273,110 @@ export const runHeadless = (
           .join("\n")
         return writeStdout(`${nested}\n`)
       }
+      const toolStarted = (event: Extract<AgentEvent, { readonly _tag: "ToolCallStarted" }>) => {
+        const toolCall: HeadlessToolCall = {
+          toolName: event.toolName,
+          input: Option.some(event.input),
+          status: "running",
+          summary: Option.none(),
+          output: Option.none(),
+        }
+        activeTools.set(String(event.toolCallId), toolCall)
+        // A cell-admitted call prints once, when it ends.
+        if (Predicate.isNotUndefined(event.parentToolCallId)) return Effect.void
+        return writeStdout("\n").pipe(Effect.andThen(renderTool(toolCall)))
+      }
+      // The run settles on the `TurnCompleted` that names its opening message.
+      const turnCompleted = (event: Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>) => {
+        if (!Option.contains(ownTurn, event.messageId)) return Effect.void
+        ownTurnEnded = true
+        // A failed stream ends its turn without `unanswered`; the error and
+        // the empty transcript say it did not answer.
+        return Deferred.succeed(done, event.unanswered !== true && (wroteText || !failed))
+      }
+      const toolEnded = (
+        event: Extract<AgentEvent, { readonly _tag: "ToolCallSucceeded" | "ToolCallFailed" }>,
+      ) => {
+        const priorInput = Option.fromNullishOr(activeTools.get(String(event.toolCallId))).pipe(
+          Option.flatMap((toolCall) => toolCall.input),
+        )
+        const status = TOOL_END_STATUS[event._tag]
+        const toolCall: HeadlessToolCall = {
+          toolName: event.toolName,
+          input: priorInput,
+          status,
+          summary: Option.fromNullishOr(event.summary),
+          output: Option.fromNullishOr(event.output),
+          operationsPrinted: cellsWithPrintedOperations.delete(String(event.toolCallId)),
+        }
+        activeTools.delete(String(event.toolCallId))
+        if (Predicate.isNotUndefined(event.parentToolCallId))
+          cellsWithPrintedOperations.add(String(event.parentToolCallId))
+        return renderTool(toolCall, event.parentToolCallId)
+      }
+      const answerInteraction = (
+        event: Extract<AgentEvent, { readonly _tag: "InteractionPresented" }>,
+      ) =>
+        Effect.gen(function* () {
+          const respond = (answer: { readonly approved: boolean; readonly notes?: string }) =>
+            client.interaction
+              .respondInteraction({
+                requestId: event.requestId,
+                sessionId,
+                branchId,
+                ...answer,
+              })
+              .pipe(Effect.catchEager(() => Effect.void))
+          if (options.approveAll) {
+            yield* writeStdout(`\n[interaction: approved by --approve-all]\n`)
+            yield* respond({ approved: true })
+            return
+          }
+          yield* writeStdout(`\n[interaction: declined, no user to answer]\n`)
+          yield* respond({ approved: false, notes: DECLINE_NOTES })
+        })
       const streamFiber = yield* client.session.events({ sessionId, branchId }).pipe(
         Stream.tap((envelope) =>
           Effect.gen(function* () {
             const event = envelope.event
+            if (event._tag === "StreamSynchronized") {
+              live = true
+              yield* Deferred.done(synchronized, Exit.void)
+              return
+            }
+            if (!live) return
+            if (event._tag === "MessageReceived") {
+              if (sent && Option.isNone(ownTurn) && isClientPrompt(event.message, promptText))
+                ownTurn = Option.some(event.message.id)
+              return
+            }
+            if (!inOwnTurn()) return
             switch (event._tag) {
               case "StreamChunk":
+                if (event.chunk.trim().length > 0) wroteText = true
                 yield* writeStdout(event.chunk)
                 break
-              case "ToolCallStarted": {
-                const toolCall: HeadlessToolCall = {
-                  toolName: event.toolName,
-                  input: Option.some(event.input),
-                  status: "running",
-                  summary: Option.none(),
-                  output: Option.none(),
-                }
-                activeTools.set(String(event.toolCallId), toolCall)
-                // A cell-admitted call prints once, when it ends.
-                if (Predicate.isNotUndefined(event.parentToolCallId)) break
-                yield* writeStdout("\n")
-                yield* renderTool(toolCall)
+              case "ToolCallStarted":
+                yield* toolStarted(event)
                 break
-              }
-              case "ToolCallSucceeded": {
-                const priorInput = Option.fromNullishOr(
-                  activeTools.get(String(event.toolCallId)),
-                ).pipe(Option.flatMap((toolCall) => toolCall.input))
-                const toolCall: HeadlessToolCall = {
-                  toolName: event.toolName,
-                  input: priorInput,
-                  status: "completed",
-                  summary: Option.fromNullishOr(event.summary),
-                  output: Option.fromNullishOr(event.output),
-                  operationsPrinted: cellsWithPrintedOperations.delete(String(event.toolCallId)),
-                }
-                activeTools.delete(String(event.toolCallId))
-                if (Predicate.isNotUndefined(event.parentToolCallId))
-                  cellsWithPrintedOperations.add(String(event.parentToolCallId))
-                yield* renderTool(toolCall, event.parentToolCallId)
+              case "ToolCallSucceeded":
+              case "ToolCallFailed":
+                yield* toolEnded(event)
                 break
-              }
-              case "ToolCallFailed": {
-                const priorInput = Option.fromNullishOr(
-                  activeTools.get(String(event.toolCallId)),
-                ).pipe(Option.flatMap((toolCall) => toolCall.input))
-                const toolCall: HeadlessToolCall = {
-                  toolName: event.toolName,
-                  input: priorInput,
-                  status: "error",
-                  summary: Option.fromNullishOr(event.summary),
-                  output: Option.fromNullishOr(event.output),
-                  operationsPrinted: cellsWithPrintedOperations.delete(String(event.toolCallId)),
-                }
-                activeTools.delete(String(event.toolCallId))
-                if (Predicate.isNotUndefined(event.parentToolCallId))
-                  cellsWithPrintedOperations.add(String(event.parentToolCallId))
-                yield* renderTool(toolCall, event.parentToolCallId)
-                break
-              }
               case "StreamEnded":
                 yield* writeStdout("\n")
                 break
               case "ErrorOccurred":
-                yield* writeStderr(`\nError: ${event.error}\n`)
-                yield* Deferred.succeed(done, true)
+                // An error does not end the turn; its `TurnCompleted` or the
+                // send does. A notice (a compaction fallback) does not fail it.
+                errors.push(oneLine(event.error))
+                if (!isErrorNotice(event)) failed = true
                 break
               case "TurnCompleted":
-                yield* Deferred.succeed(done, event.unanswered !== true)
+                yield* turnCompleted(event)
                 break
               case "InteractionPresented":
-                yield* writeStdout(`\n[interaction: auto-approving]\n`)
-                yield* client.interaction
-                  .respondInteraction({
-                    requestId: event.requestId,
-                    sessionId,
-                    branchId,
-                    approved: true,
-                  })
-                  .pipe(Effect.catchEager(() => Effect.void))
+                yield* answerInteraction(event)
                 break
               case "InteractionResolved":
                 break
@@ -293,8 +387,35 @@ export const runHeadless = (
         Effect.forkScoped,
       )
 
+      const streamEnded = Fiber.await(streamFiber).pipe(
+        Effect.flatMap((exit) =>
+          Exit.match(exit, {
+            onFailure: (cause) =>
+              Effect.fail(
+                new GentConnectionError({
+                  message: Cause.pretty(cause),
+                }),
+              ),
+            onSuccess: () =>
+              Effect.fail(
+                new GentConnectionError({
+                  message: "headless event stream ended before turn completion",
+                }),
+              ),
+          }),
+        ),
+      )
+
+      yield* Effect.raceFirst(Deferred.await(synchronized), streamEnded)
+
+      // The send returns when the loop lets the run's message go, and fails
+      // when the turn's phase failed. A failed phase publishes no
+      // `TurnCompleted`, so the send's failure is the run's end then; a
+      // success leaves the end to the run's `TurnCompleted`, which the loop
+      // stores before it lets the message go.
       const sendRequestId = yield* randomId
-      yield* Effect.suspend(() =>
+      sent = true
+      const sendFiber = yield* Effect.suspend(() =>
         client.message.send({
           sessionId,
           branchId,
@@ -311,35 +432,21 @@ export const runHeadless = (
           },
         }),
         Effect.withSpan("Headless.sendMessage"),
+        Effect.forkScoped,
       )
+      const sendFailed = Fiber.join(sendFiber).pipe(Effect.andThen(Effect.never))
 
       const answered = yield* Effect.raceFirst(
         Deferred.await(done),
-        Fiber.await(streamFiber).pipe(
-          Effect.flatMap((exit) =>
-            Exit.match(exit, {
-              onFailure: (cause) =>
-                Effect.fail(
-                  new GentConnectionError({
-                    message: Cause.pretty(cause),
-                  }),
-                ),
-              onSuccess: () =>
-                Effect.fail(
-                  new GentConnectionError({
-                    message: "headless event stream ended before turn completion",
-                  }),
-                ),
-            }),
-          ),
-        ),
+        Effect.raceFirst(streamEnded, sendFailed),
       )
       yield* Fiber.interrupt(streamFiber).pipe(Effect.asVoid)
       if (!answered) {
-        yield* writeStderr("\nError: the turn ended without an answer.\n")
-        return yield* new HeadlessUnansweredError({
-          message: "turn completed without producing an answer",
-        })
+        let message = "the turn ended without an answer"
+        if (errors.length > 0) message = `${message}: ${errors.join("; ")}`
+        return yield* new HeadlessUnansweredError({ message })
       }
+      // An answered turn's notices, one line each.
+      for (const error of errors) yield* writeStderr(`Warning: ${error}\n`)
     }),
   )
