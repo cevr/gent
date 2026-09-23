@@ -28,7 +28,7 @@ import {
   toolArgSummary,
   type ToolInput,
 } from "./utils.js"
-import { randomId } from "./utils"
+import { isConnectionLoss, randomId } from "./utils"
 
 // ── headless tool renderers ─────────────────────────────────────────────────
 
@@ -448,10 +448,7 @@ export const runHeadless = (
         Effect.retry({
           schedule: Schedule.spaced("250 millis"),
           times: 20,
-          while: (error) => {
-            const text = String(error)
-            return text.includes("RpcClientError") || text.includes("SocketOpenError")
-          },
+          while: isConnectionLoss,
         }),
         Effect.withSpan("Headless.sendMessage"),
         Effect.forkScoped,

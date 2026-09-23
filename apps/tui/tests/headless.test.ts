@@ -462,14 +462,10 @@ describe("runHeadless", () => {
             send: (input: { requestId?: string }) => {
               observedRequestIds.push(input.requestId ?? "<missing>")
               sendAttempts += 1
-              // Fail the first two attempts with a transport-shape error so the
+              // Fail the first two attempts with a lost connection so the
               // retry policy fires; succeed on the third.
               if (sendAttempts < 3) {
-                return Effect.fail(
-                  new HeadlessRunnerTestError({
-                    message: "RpcClientError: transient socket close",
-                  }),
-                )
+                return Effect.fail(new GentConnectionError({ message: "transient socket close" }))
               }
               return Deferred.done(sent, Exit.void).pipe(Effect.asVoid)
             },

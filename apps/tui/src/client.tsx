@@ -58,7 +58,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { omitUndefined } from "@gent/core/extensions/api"
-import { formatError, randomId, type UiError, useRequiredContext } from "./utils"
+import { formatError, randomId, SEND_RETRY, type UiError, useRequiredContext } from "./utils"
 import { useWorkspace } from "./workspace"
 
 // ── client logging ──────────────────────────────────────────────────────────
@@ -1425,12 +1425,14 @@ export function ClientProvider(props: ClientProviderProps) {
     sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content) {
       const requestId = yield* randomId
       log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
-      yield* client.message.send({
-        sessionId: s.sessionId,
-        branchId: s.branchId,
-        content,
-        requestId,
-      })
+      yield* client.message
+        .send({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+          content,
+          requestId,
+        })
+        .pipe(Effect.retry(SEND_RETRY))
     }),
     steer: Effect.fn("TUI.steer")(function* (s, command) {
       const requestId = yield* randomId
@@ -1440,7 +1442,7 @@ export function ClientProvider(props: ClientProviderProps) {
         branchId: s.branchId,
         requestId,
       }
-      yield* client.steer.command({ command: fullCommand })
+      yield* client.steer.command({ command: fullCommand }).pipe(Effect.retry(SEND_RETRY))
     }),
   }
 

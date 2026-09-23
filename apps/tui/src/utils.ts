@@ -1,4 +1,14 @@
-import { Effect, FileSystem, Match, Option, Path, Predicate, Random, Schema } from "effect"
+import {
+  Effect,
+  FileSystem,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Random,
+  Schedule,
+  Schema,
+} from "effect"
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./text-width-adapter"
 import {
@@ -185,6 +195,27 @@ export const ClientError = (message: string): ClientError => ({
 })
 
 export type UiError = GentClientRpcError | ClientError
+
+/**
+ * A failure of the connection, not an answer from the server: the request
+ * may have landed and only its reply was lost.
+ */
+export const isConnectionLoss: (error: UiError) => boolean = Predicate.or(
+  Predicate.isTagged("RpcClientError"),
+  Predicate.isTagged("@gent/core/GentConnectionError"),
+)
+
+/**
+ * How a send retries a lost connection: four more tries from 200 ms. Every
+ * try carries the first request id, so a try that landed with a lost reply
+ * does not run the message a second time. An answer from the server (a
+ * refusal) is final at once.
+ */
+export const SEND_RETRY = {
+  schedule: Schedule.exponential("200 millis"),
+  times: 4,
+  while: isConnectionLoss,
+}
 
 export const formatError = (error: UiError): string => {
   switch (error._tag) {

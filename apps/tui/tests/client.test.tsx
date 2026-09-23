@@ -18,6 +18,8 @@ import {
   BranchId,
   dateFromMillis,
   EventEnvelope,
+  GentConnectionError,
+  GentRpcError,
   Message,
   MessageId,
   ModelId,
@@ -1237,6 +1239,66 @@ const isSessionEvent = Predicate.or(
   Predicate.isTagged("turn-ended"),
   Predicate.or(Predicate.isTagged("retrying"), Predicate.isTagged("error")),
 )
+
+// ── sends ───────────────────────────────────────────────────────────────────
+
+/**
+ * A lost connection is not an answer: the send may have landed. It is tried
+ * again under the same request id, so the server's dedup runs it at most
+ * once. A refusal is an answer, and it is final at once.
+ */
+describe("ClientProvider send", () => {
+  const refused = Schema.decodeSync(GentRpcError)({ _tag: "InvalidStateError", message: "refused" })
+  const target = { sessionId: FIRST.sessionId, branchId: FIRST.branchId }
+  const mountWithSend = (
+    send: (input: {
+      readonly requestId?: string
+    }) => Effect.Effect<void, GentConnectionError | GentRpcError>,
+  ) =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client: createMockClient({ message: { send } }),
+        }),
+      )
+      return yield* requireClient(ctx)
+    })
+
+  it.live("a lost connection retries the send under its first request id", () =>
+    Effect.gen(function* () {
+      const requestIds: Array<string> = []
+      const client = yield* mountWithSend((input) =>
+        Effect.suspend(() => {
+          requestIds.push(input.requestId ?? "<missing>")
+          if (requestIds.length === 1) {
+            return Effect.fail(new GentConnectionError({ message: "socket closed" }))
+          }
+          return Effect.void
+        }),
+      )
+      yield* client.sendMessage(target, "once")
+      expect(requestIds).toHaveLength(2)
+      expect(new Set(requestIds).size).toBe(1)
+      expect(requestIds[0]).not.toBe("<missing>")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("a refusal is final at once", () =>
+    Effect.gen(function* () {
+      let calls = 0
+      const client = yield* mountWithSend(() =>
+        Effect.suspend(() => {
+          calls++
+          return Effect.fail(refused)
+        }),
+      )
+      const exit = yield* Effect.exit(client.sendMessage(target, "refused"))
+      expect(exit._tag).toBe("Failure")
+      expect(calls).toBe(1)
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+})
 
 describe("useSessionFeed", () => {
   it.live("changes route when a branch event changes the active client identity", () =>

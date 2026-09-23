@@ -167,6 +167,7 @@ Special prefixes at input start trigger different modes:
 
 - A submit leaves the composer before it is sent. A send the server refuses, or a `!cmd` that cannot spawn, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
 - A `!cmd` that ran but whose output the server refused comes back as that output, a plain message, and the reason says the command ran. Enter sends the output; it never runs the command again
+- A lost connection is not a refusal: the send may have landed. It retries four times under its first request id (`SEND_RETRY` in `utils.ts`, shared with the startup prompt and the headless send's predicate), and the text comes back only after the last try
 - None is lost: refused texts come back in send order, ahead of what the reader has typed since. A draft of refused commands only stays in shell mode; a mixed draft writes each command with its `!`
 - A refusal for a session the reader has left waits there: its text joins that branch's kept draft, and its reason (`client.setErrorIn`) shows when the reader returns. The session in view shows neither
 - Large output (>2000 lines or 50KB) truncated, full saved to `shell-output/` in the data directory (`GENT_DATA_DIR`, else `~/.gent`)
