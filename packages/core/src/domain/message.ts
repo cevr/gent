@@ -1,6 +1,6 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
+import { BranchId, ClientRequestGrant, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
 import * as Response from "effect/unstable/ai/Response"
@@ -352,6 +352,12 @@ export const SteerCommand = Schema.Union([
      * being answered, a child reporting back — says so here.
      */
     wake: Schema.optional(Schema.Boolean),
+    /**
+     * The client request this steer was sent under. The loop gives the
+     * interjection the client origin only if that request still runs when
+     * the loop admits it. The server drops one a client sets.
+     */
+    clientRequest: Schema.optional(ClientRequestGrant),
   }),
 ])
 export type SteerCommand = typeof SteerCommand.Type

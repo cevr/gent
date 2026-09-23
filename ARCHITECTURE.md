@@ -426,9 +426,10 @@ Shape:
   child outcome. Actor Idle is not completion proof.
 - Every admitted turn ends with exactly one `TurnCompleted`. A turn phase that
   fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
-  `completeFailedTurn` appends the receipt with `streamFailed: true`. The stored
-  turn duration is the receipt's mark, so a failure after `finalizeTurn` stored
-  it appends no second one. `ErrorOccurred` with `notice: true` is a notice the
+  `completeFailedTurn` appends the receipt with `streamFailed: true`, and the
+  turn's `turnAfter` hooks run once after it, under the turn's profile. The
+  stored turn duration is the receipt's mark, so a failure after `finalizeTurn`
+  stored it appends no second receipt and runs no second hook. `ErrorOccurred` with `notice: true` is a notice the
   turn goes on past (a compaction that fell back to truncation); a client ends
   the turn on `TurnCompleted`, never on `ErrorOccurred`.
 - New turn-stream start/end receipts include the user-message ID and model-step

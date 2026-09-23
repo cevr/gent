@@ -85,14 +85,21 @@ import { CurrentWorkspaceId, WorkspaceId, workspaceIdForCwd } from "../../src/se
 import {
   ActorCommandId,
   BranchId,
+  ClientRequestGrant,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
   RequestId,
   SessionId,
 } from "../../src/domain/ids"
-import { dateFromMillis, Session, Branch, messagePartsDisplayText } from "../../src/domain/message"
-import { GentPlatform } from "../../src/runtime/gent-platform"
+import {
+  dateFromMillis,
+  Session,
+  Branch,
+  type MessageMetadata,
+  messagePartsDisplayText,
+} from "../../src/domain/message"
+import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
 import {
   type ModelDriverContribution,
   ProviderAuthInfo,
@@ -717,7 +724,9 @@ describe("session profile resolution", () => {
       const projectConfig = path.join(launch, ".gent", "config.json")
       yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
       const disable = (ids: ReadonlyArray<string>) =>
-        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+        // Replaced, as gent and most editors save: two same-size edits in one
+        // millisecond differ only by the new file's inode (`fileVersion`).
+        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
 
       yield* Effect.gen(function* () {
         const cache = yield* SessionProfileCache
@@ -788,7 +797,9 @@ describe("session profile resolution", () => {
       const projectConfig = path.join(launch, ".gent", "config.json")
       yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
       const disable = (ids: ReadonlyArray<string>) =>
-        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+        // Replaced, as gent and most editors save: two same-size edits in one
+        // millisecond differ only by the new file's inode (`fileVersion`).
+        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
       // The interrupt lands on the first profile's build log, the last step
       // of its build.
       const interrupted = MutableRef.make(false)
@@ -839,7 +850,9 @@ describe("session profile resolution", () => {
       const projectConfig = path.join(launch, ".gent", "config.json")
       yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
       const disable = (ids: ReadonlyArray<string>) =>
-        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+        // Replaced, as gent and most editors save: two same-size edits in one
+        // millisecond differ only by the new file's inode (`fileVersion`).
+        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
       // The first config read waits, after it read, until the test lets it go.
       const firstRead = yield* Deferred.make<void>()
       const letGo = yield* Deferred.make<void>()
@@ -997,8 +1010,9 @@ describe("session profile resolution", () => {
         ]
         const projectConfig = path.join(launch, ".gent", "config.json")
         yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        // Replaced, as gent and most editors save: see `fileVersion`.
         const disable = (names: ReadonlyArray<string>) =>
-          fs.writeFileString(
+          writeFileAtomic(
             projectConfig,
             encodeJson({
               disabledExtensions: names.map((name) => `@gent/test-session-profile/${name}`),
@@ -2681,6 +2695,85 @@ describe("host session facet", () => {
       expect(listed).toHaveLength(1)
       expect(listed[0]!.id).toBe(BRANCH_ID)
     }).pipe(
+      Effect.provide(
+        Layer.merge(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ),
+      ),
+    ),
+  )
+})
+
+/**
+ * A client request's send carries its grant, and the host decides no origin.
+ * The loop decides it when it admits the message (`admitWithOrigin`), so a
+ * send the request started but the loop admits after the request ended is an
+ * extension send. Here the loop's control is held between the send and the
+ * admission: what reaches it must still carry no client origin.
+ */
+describe("client request origin", () => {
+  it.live("a send held before admission carries the grant, never the client origin", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* sessions.createSession(
+        new Session({
+          id: SESSION_ID,
+          name: "test",
+          cwd: "/tmp",
+          createdAt: FIXTURE_DATE,
+          updatedAt: FIXTURE_DATE,
+        }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: BRANCH_ID, sessionId: SESSION_ID, createdAt: FIXTURE_DATE }),
+      )
+      const reached = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      interface Reached {
+        readonly metadata?: MessageMetadata
+        readonly clientRequest?: ClientRequestGrant
+      }
+      const reachedLoop = yield* Ref.make<ReadonlyArray<Reached>>([])
+      const hold = (input: Reached) =>
+        Deferred.succeed(reached, void 0).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Ref.update(reachedLoop, (all) => [...all, input])),
+        )
+      const provider = yield* makeExtensionHostContextProvider({
+        host: testHostFacts().host,
+        sessionControl: {
+          queueFollowUp: hold,
+          dequeueFollowUp: () => Effect.succeed(false),
+          send: () => Effect.void,
+          steer: (command) => {
+            if (command._tag !== "Interject") return Effect.void
+            return hold(command)
+          },
+        },
+      })
+      const grant = ClientRequestGrant.make("request-grant")
+      const ctx = provider.forRun({
+        sessionId: SESSION_ID,
+        branchId: BRANCH_ID,
+        interactive: true,
+        clientRequest: Option.some({ grant }),
+      })
+      const sends = Effect.all([
+        ctx.Session.send({ delivery: "queue", sourceId: "held", content: "queued" }),
+        ctx.Session.send({ delivery: "steer", content: "steered" }),
+      ])
+      const fiber = yield* sends.pipe(Effect.forkChild)
+      yield* Deferred.await(reached)
+      // The request ends here; the loop has not admitted anything yet.
+      yield* Deferred.succeed(release, void 0)
+      yield* Fiber.join(fiber)
+      const admitted = yield* Ref.get(reachedLoop)
+      expect(admitted.map((input) => input.clientRequest)).toEqual([grant, grant])
+      expect(admitted.map((input) => input.metadata?.fromClient === true)).toEqual([false, false])
+    }).pipe(
+      Effect.timeout("5 seconds"),
       Effect.provide(
         Layer.merge(
           SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),

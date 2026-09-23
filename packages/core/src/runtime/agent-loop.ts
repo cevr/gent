@@ -29,6 +29,7 @@ import {
 import {
   type ActorCommandId,
   type BranchId,
+  ClientRequestGrant,
   type InteractionRequestId,
   MessageId,
   RpcId,
@@ -44,6 +45,7 @@ import {
   Message,
   type MessageMetadata,
   messagePartsTextLines,
+  openedByClient,
   type QueuedTurnItem,
   type QueueEntryInfo,
   QueueSnapshot,
@@ -96,6 +98,7 @@ import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
   completeFailedTurn,
+  emitFailedTurnAfter,
   interjectionMessageIdForCommand,
   makeAgentLoopTurnExecution,
   makeTurnLedger,
@@ -1268,6 +1271,7 @@ type EnqueueFollowUp = (input: {
   content: string
   metadata?: MessageMetadata
   wake?: boolean
+  clientRequest?: ClientRequestGrant
 }) => Effect.Effect<void, AgentLoopError | StorageError>
 
 /** Removes a queued follow-up by its source; false when absent or already running. */
@@ -1521,12 +1525,29 @@ const makeAgentLoopBehavior = (
       recordTurnFailure,
       publishEvent,
       completeFailedTurn: (state) =>
-        completeFailedTurn({
-          sessionId,
-          branchId,
-          messageId: state.message.id,
-          startedAtMs: state.startedAtMs,
+        Effect.gen(function* () {
+          const completed = yield* completeFailedTurn({
+            sessionId,
+            branchId,
+            messageId: state.message.id,
+            startedAtMs: state.startedAtMs,
+          })
+          // The receipt this call appended marks the one run of the hooks.
+          if (Option.isNone(completed)) return
+          const metrics = yield* turnLedger.total
+          const context = yield* branchContext
+          const profile = yield* resolveTurnProfile({
+            openedByClient: openedByClient(state.message),
+          })
+          yield* emitFailedTurnAfter({
+            sessionId,
+            branchId,
+            messageId: state.message.id,
+            durationMs: completed.value,
+            metrics,
+          }).pipe(runAgentLoopTurnProfile(profile), Effect.provideContext(context))
         }).pipe(
+          Effect.scoped,
           provideAgentLoopRuntimeContext(runtimeContext),
           Effect.catchCause((cause) =>
             Effect.logWarning("failed to complete the failed turn").pipe(
@@ -1880,6 +1901,12 @@ const buildAgentLoopActorHandlers = (config: {
     // Set by admissions that run under the side-mutation permit. The wake runs
     // after the permit is released, so admission never starts a turn re-entrantly.
     const wakeRequested = yield* Ref.make(false)
+    // The client requests running on this branch (`RequestExtension`). An
+    // admission reads a message's grant here under `clientRequestPermit`,
+    // which a request's end takes too: the message gets the client origin
+    // only if its request still ran when it was admitted.
+    const liveClientRequests = yield* Ref.make<ReadonlySet<ClientRequestGrant>>(new Set())
+    const clientRequestPermit = yield* Semaphore.make(1)
     // Serializes per-entity `handle` rebuild. The actor mailbox is
     // `concurrency: "unbounded"`, so concurrent ops can both observe a
     // closed loop and race into `openLoop`, leaking the first behavior's
@@ -2080,7 +2107,47 @@ const buildAgentLoopActorHandlers = (config: {
       readonly content?: string
       readonly metadata?: MessageMetadata
       readonly wake?: boolean
+      readonly clientRequest?: ClientRequestGrant
     }
+
+    /**
+     * Admits an item with its origin decided at this point. A grant still live
+     * (see `liveClientRequests`) gives it the client origin; the check and the
+     * admission hold the permit a request's end takes, so no request ends
+     * between them. Returns what `admit` returns and the item it admitted.
+     */
+    const admitWithOrigin = <A, E, R>(
+      item: QueuedTurnItem,
+      grant: Option.Option<ClientRequestGrant>,
+      admit: (item: QueuedTurnItem) => Effect.Effect<A, E, R>,
+    ) =>
+      Effect.gen(function* () {
+        const live = yield* Ref.get(liveClientRequests)
+        const running = Option.filter(grant, (value) => live.has(value))
+        const admitted = Option.match(running, {
+          onNone: () => item,
+          onSome: (): QueuedTurnItem => ({
+            ...item,
+            message: { ...item.message, metadata: { ...item.message.metadata, fromClient: true } },
+          }),
+        })
+        return { result: yield* admit(admitted), item: admitted }
+      }).pipe(clientRequestPermit.withPermits(1))
+
+    /** Marks a client request running on this branch until the scope closes. */
+    const holdClientRequest = Effect.fn("AgentLoopActor.holdClientRequest")(function* () {
+      const grant = ClientRequestGrant.make(yield* platform.randomId)
+      yield* Effect.acquireRelease(
+        Ref.update(liveClientRequests, (live) => new Set([...live, grant])),
+        () =>
+          Ref.update(liveClientRequests, (live) => {
+            const rest = new Set(live)
+            rest.delete(grant)
+            return rest
+          }).pipe(clientRequestPermit.withPermits(1)),
+      )
+      return grant
+    })
 
     const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
       input: FollowUpInput,
@@ -2125,7 +2192,9 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       yield* markWrite
       const item = yield* buildFollowUpItem(input)
-      yield* handle.inbox.admit(item, { queueOnly: true })
+      yield* admitWithOrigin(item, Option.fromUndefinedOr(input.clientRequest), (admitted) =>
+        handle.inbox.admit(admitted, { queueOnly: true }),
+      )
       if (yield* shouldWake(handle, input)) {
         yield* Ref.set(wakeRequested, true)
         // A retained facade can enqueue after its original turn has ended.
@@ -2139,8 +2208,13 @@ const buildAgentLoopActorHandlers = (config: {
       input: FollowUpInput,
     ) {
       const wasAlreadyWarm = yield* markWrite
-      const item = yield* buildFollowUpItem(input)
-      yield* reserveAndStart(handle, item, { queueOnly: !wasAlreadyWarm })
+      const built = yield* buildFollowUpItem(input)
+      const { result: reserved, item } = yield* admitWithOrigin(
+        built,
+        Option.fromUndefinedOr(input.clientRequest),
+        (admitted) => handle.inbox.admit(admitted, { queueOnly: !wasAlreadyWarm }),
+      )
+      if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
       if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
         yield* startNextQueuedTurnIfIdle(handle)
       }
@@ -2410,7 +2484,11 @@ const buildAgentLoopActorHandlers = (config: {
           // and steered second would race a turn that ended in between.
           // `startTurn` re-reads the state under its own permit, so it is a
           // no-op when a turn did begin meanwhile.
-          const before = yield* handle.inbox.steer(item)
+          const { result: before } = yield* admitWithOrigin(
+            item,
+            Option.fromUndefinedOr(command.clientRequest),
+            (admitted) => handle.inbox.steer(admitted),
+          )
           if (command.wake !== true || before._tag !== "Idle") return
           const next = yield* handle.inbox.takeIfIdle
           if (Option.isNone(next)) return
@@ -2442,6 +2520,7 @@ const buildAgentLoopActorHandlers = (config: {
             yield* enqueueMessage(handle, {
               message: operation.message,
               wake: operation.wake,
+              clientRequest: operation.clientRequest,
             })
           }).pipe(provideActorWorkspace),
       ),
@@ -2487,11 +2566,8 @@ const buildAgentLoopActorHandlers = (config: {
             const handle = yield* ensureStarted
             // A request comes from a client, which can answer, and sends to
             // its own branch as that client until the request ends.
-            const handling = yield* Ref.make(true)
-            yield* Effect.addFinalizer(() => Ref.set(handling, false))
-            const environment = yield* handle.resolveTurnProfile({
-              clientRequest: { handling },
-            })
+            const grant = yield* holdClientRequest()
+            const environment = yield* handle.resolveTurnProfile({ clientRequest: { grant } })
             const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())

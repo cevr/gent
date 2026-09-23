@@ -11,7 +11,6 @@ import {
   Path,
   type PlatformError,
   Predicate,
-  Ref,
   Result,
   Schema,
   Scope,
@@ -59,6 +58,7 @@ import {
 } from "../domain/extension.js"
 import {
   type BranchId,
+  type ClientRequestGrant,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
@@ -2364,6 +2364,7 @@ interface ExtensionSessionControlService {
     readonly content: string
     readonly metadata?: MessageMetadata
     readonly wake?: boolean
+    readonly clientRequest?: ClientRequestGrant
   }) => Effect.Effect<void, Error>
   readonly dequeueFollowUp: (input: {
     readonly sourceId: string
@@ -2386,18 +2387,18 @@ interface ExtensionHostContextInput {
 }
 
 /**
- * A client's extension request while it runs. `handling` is true until the
- * request ends, when the request's scope sets it false.
+ * A client's extension request while it runs: the grant its branch's loop
+ * holds live until the request ends (`ClientRequestGrant`).
  */
 interface ClientRequest {
-  readonly handling: Ref.Ref<boolean>
+  readonly grant: ClientRequestGrant
 }
 
 /**
  * What opened a run. A turn knows whether a client sent its opening message.
  * A client's extension request (a slash command, say) is client-opened, and
  * while it runs a message it sends to its own branch keeps the client origin
- * (`clientRequestOrigin`).
+ * (`clientRequestGrant`).
  */
 export type RunOpener =
   | { readonly openedByClient: boolean }
@@ -2540,28 +2541,26 @@ export const makeExtensionHostContextProvider = (
     })
 
     /**
-     * The envelope of a message a run sends. The extension boundary already
+     * The grant a message a run sends carries. The extension boundary already
      * removed any client origin the sender claimed (`extensionMetadata`).
      * A client's extension request sends as its client while it runs, to its
      * own branch only: the user who typed the slash command watches that
-     * branch. A send to any other branch, or one made after the request ended
-     * (from a fiber it left behind), stays an extension send. The rule is the
-     * same for every extension, since any request a client calls gets it.
+     * branch. Only a message to that branch carries the request's grant, and
+     * the loop decides the origin when it admits the message: a message
+     * admitted after the request ended (from a fiber it left behind) stays an
+     * extension send. The rule is the same for every extension, since any
+     * request a client calls gets it.
      */
-    const clientRequestOrigin = Effect.fn("ExtensionHost.clientRequestOrigin")(function* (
+    const clientRequestGrant = (
       runInfo: MakeExtensionHostContextRunInfo,
       target: { readonly sessionId: SessionId; readonly branchId: BranchId },
-    ) {
-      const none: MessageMetadata = {}
-      const request = Option.filter(
-        runInfo.clientRequest,
-        () => target.sessionId === runInfo.sessionId && target.branchId === runInfo.branchId,
+    ) =>
+      Option.getOrUndefined(
+        Option.filter(
+          Option.map(runInfo.clientRequest, (request) => request.grant),
+          () => target.sessionId === runInfo.sessionId && target.branchId === runInfo.branchId,
+        ),
       )
-      if (Option.isNone(request)) return none
-      if (!(yield* Ref.get(request.value.handling))) return none
-      const client: MessageMetadata = { fromClient: true }
-      return client
-    })
 
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
@@ -2680,14 +2679,14 @@ export const makeExtensionHostContextProvider = (
                   Effect.gen(function* () {
                     const target = targetIn(runInfo, queued)
                     yield* requireTarget("send", target)
-                    const origin = yield* clientRequestOrigin(runInfo, target)
                     yield* control((loop) =>
                       loop.queueFollowUp({
                         ...target,
                         sourceId: queued.sourceId,
                         content: queued.content,
-                        metadata: { ...queued.metadata, ...origin },
+                        metadata: queued.metadata,
                         wake: queued.wake,
+                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
@@ -2696,15 +2695,15 @@ export const makeExtensionHostContextProvider = (
                     const target = targetIn(runInfo, steered)
                     yield* requireTarget("send", target)
                     const requestId = steered.requestId ?? RequestId.make(yield* host.randomId)
-                    const origin = yield* clientRequestOrigin(runInfo, target)
                     yield* control((loop) =>
                       loop.steer({
                         _tag: "Interject",
                         ...target,
                         requestId,
                         message: steered.content,
-                        metadata: { ...steered.metadata, ...origin },
+                        metadata: steered.metadata,
                         wake: steered.wake,
+                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),

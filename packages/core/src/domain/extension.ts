@@ -366,7 +366,9 @@ export interface TurnAfterInput {
    *
    * The driver already retries a stream that breaks before any output, and the
    * loop already spends its continuations on one that breaks after partial
-   * output. This is true only once both are exhausted.
+   * output. This is true only once both are exhausted, and for a turn a
+   * failed phase stopped (a storage write, a stream defect), which gets its
+   * hooks once, after its receipt.
    */
   readonly streamFailed: boolean
   /** The turn spent its continuations and never answered. */
