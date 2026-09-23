@@ -324,7 +324,12 @@ describe("recorded cell execution", () => {
         const cancelled = yield* Fiber.join(running)
         expect(cancelled).toMatchObject({
           isFailure: true,
-          result: { reason: "cancelled", stateLost: true },
+          result: {
+            reason: "cancelled",
+            stateLost: true,
+            // The host recorded no operation, so no effect is claimed.
+            message: "Cell cancelled. Its source was not replayed. It made no host operation.",
+          },
         })
         expect(yield* Fiber.join(queued)).toMatchObject({
           isFailure: true,
@@ -1643,6 +1648,15 @@ describe("cell approvals", () => {
         ])
         const results = yield* cellResultsAfterTurn(started).pipe(Effect.timeout("5 seconds"))
         expect(results).toHaveLength(1)
+        // The text follows the records: `mark` has its result, the asking call never got an answer.
+        expect(results[0]?.result).toMatchObject({
+          message: expect.stringContaining(
+            "1 operation stopped at an approval that was not answered",
+          ),
+        })
+        expect(results[0]?.result).toMatchObject({
+          message: expect.not.stringContaining("may have occurred"),
+        })
         // The cell ended at the call; nothing after it ran, and nothing acted.
         expect(yield* Ref.get(cell.marks)).toEqual(["before"])
         expect(yield* Ref.get(cell.allowed)).toBe(0)
@@ -2310,6 +2324,9 @@ it.scopedLive(
         expect(recovered.isFailure).toBe(true)
         expect(recovered.result).toMatchObject({
           stateLost: true,
+          error: expect.stringContaining(
+            "1 operation ran with no recorded result; its effects may have occurred.",
+          ),
           // An operation with no recorded outcome is an incomplete receipt.
           operations: expect.arrayContaining([
             {
@@ -2326,6 +2343,57 @@ it.scopedLive(
       }).pipe(Effect.provideContext(context))
     }).pipe(Effect.timeout("15 seconds")),
   20000,
+)
+
+it.scopedLive(
+  "a lost cell whose operations all have results says no effect is unrecorded",
+  () =>
+    Effect.gen(function* () {
+      const extensions: ReadonlyArray<LoadedExtension> = [
+        {
+          manifest: { id: ExtensionId.make("recorded-host") },
+          scope: "builtin",
+          sourcePath: "recorded-host",
+          artifactIdentity: LoadedArtifactIdentity.make("recorded-host-source"),
+          contributions: {
+            tools: [
+              tool({
+                id: "count",
+                description: "Count execution",
+                params: Schema.Struct({ valid: Schema.Boolean }),
+                output: Schema.Finite,
+                execute: () => Effect.succeed(1),
+              }),
+            ],
+          },
+        },
+      ]
+      const context = yield* Layer.build(
+        createE2ELayer({
+          agents: [],
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          extensions,
+          providerLayer: LanguageModelLayers.debug(),
+        }),
+      )
+      yield* Effect.gen(function* () {
+        yield* prepareCell
+        const hostParams = yield* currentHostParams
+        const host = yield* makeCellToolHost(hostParams)
+        expect(yield* host.call(requestToolHost("1", "count"))).toBe(1)
+        // The worker is lost after its one operation completed.
+        const recovered = yield* recoverCellExecution(hostParams)
+        expect(recovered.isFailure).toBe(true)
+        expect(recovered.result).toMatchObject({
+          stateLost: true,
+          error:
+            "The cell worker state was lost. Its source was not replayed. Every host operation it made has its result in operations.",
+          operations: [expect.objectContaining({ tool: "count", outcome: "succeeded" })],
+        })
+      }).pipe(Effect.provideContext(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  12000,
 )
 
 it.scopedLive(

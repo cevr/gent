@@ -148,6 +148,8 @@ const LocatedRow = Schema.Struct({
   session_id: SessionId,
 })
 const hasInteraction = Predicate.or(Predicate.isTagged("Waiting"), Predicate.isTagged("Resuming"))
+/** Started or resuming after its answer, with no result recorded: it may have acted. */
+const mayHaveActed = Predicate.or(Predicate.isTagged("Started"), Predicate.isTagged("Resuming"))
 
 interface CellToolOperationKey {
   readonly cell: OwnedToolCallAddress
@@ -1741,6 +1743,28 @@ const withCellOperationReceipts = Effect.fn("CellOperationReceipt.attach")(funct
   return { ...result, result: { ...value.value, [CELL_OPERATIONS_KEY]: receipts } }
 })
 
+/**
+ * What a cell that ended without its result says about its host operations.
+ * A completed operation's result is in its receipt. One that started with no
+ * recorded result may have acted. One that waited for an approval stopped
+ * before its answer.
+ */
+const operationEffectsNote = (operations: ReadonlyArray<CellToolOperation>): string => {
+  if (operations.length === 0) return "It made no host operation."
+  const count = (n: number) => {
+    if (n === 1) return "1 operation"
+    return `${n} operations`
+  }
+  const unrecorded = operations.filter((operation) => mayHaveActed(operation.state)).length
+  const waiting = operations.filter((operation) => operation.state._tag === "Waiting").length
+  const notes: Array<string> = []
+  if (unrecorded > 0)
+    notes.push(`${count(unrecorded)} ran with no recorded result; its effects may have occurred.`)
+  if (waiting > 0) notes.push(`${count(waiting)} stopped at an approval that was not answered.`)
+  if (notes.length === 0) return "Every host operation it made has its result in operations."
+  return notes.join(" ")
+}
+
 // ── tool call ───────────────────────────────────────────────────────────────
 
 const JsonText = Schema.fromJsonString(Schema.Json)
@@ -2103,6 +2127,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
       CellExecution,
       Effect.gen(function* () {
         const storage = (yield* CellStorage).executions
+        const operations = (yield* CellStorage).operations
         const namespaces = (yield* CellStorage).namespaces
         const scope = yield* Effect.scope
         const platform = yield* Effect.context<
@@ -2116,7 +2141,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         const cancelled = () =>
           new CellKernelError({
             reason: "cancelled",
-            message: "Cell cancelled. Its effects may have occurred; its source was not replayed.",
+            message: "Cell cancelled. Its source was not replayed.",
             diagnostics: "",
             stateLost: true,
           })
@@ -2259,10 +2284,28 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               onFailure: (error): Effect.Effect<Prompt.ToolResultPart, StorageError> => {
                 if (error._tag === "StorageError") return Effect.fail(error)
                 if (error._tag !== "CellEvaluationError") recoveryPending = true
-                return Schema.encodeEffect(CellFailure)(error).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new StorageError({ message: "Failed to encode cell failure", cause }),
+                // A cancelled cell says what its operations did, from their records.
+                let described: Effect.Effect<typeof error, StorageError> = Effect.succeed(error)
+                if (error._tag === "CellKernelError" && error.reason === "cancelled")
+                  described = operations.listForToolCall(address).pipe(
+                    Effect.map(
+                      (listed) =>
+                        new CellKernelError({
+                          reason: error.reason,
+                          message: `${error.message} ${operationEffectsNote(listed.map((entry) => entry.operation))}`,
+                          diagnostics: error.diagnostics,
+                          stateLost: error.stateLost,
+                        }),
+                    ),
+                  )
+                return described.pipe(
+                  Effect.flatMap((failure) =>
+                    Schema.encodeEffect(CellFailure)(failure).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new StorageError({ message: "Failed to encode cell failure", cause }),
+                      ),
+                    ),
                   ),
                   Effect.map((value) =>
                     Prompt.toolResultPart({
@@ -2471,8 +2514,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
     isFailure: true,
     providerExecuted: false,
     result: {
-      error:
-        "The cell worker state was lost. Its source was not replayed. Unrecorded operation effects may have occurred.",
+      error: `The cell worker state was lost. Its source was not replayed. ${operationEffectsNote(latest.map((entry) => entry.operation))}`,
       stateLost: true,
       [CELL_OPERATIONS_KEY]: receipts,
     },
