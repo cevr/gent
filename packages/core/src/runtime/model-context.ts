@@ -1280,6 +1280,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
               sessionId: params.sessionId,
               branchId: params.branchId,
               error: `Context compaction failed (${error.reason}); continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+              notice: true,
             }),
           )
           return Option.none()

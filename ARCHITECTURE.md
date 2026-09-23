@@ -428,7 +428,9 @@ Shape:
   fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
   `completeFailedTurn` appends the receipt with `streamFailed: true`. The stored
   turn duration is the receipt's mark, so a failure after `finalizeTurn` stored
-  it appends no second one. A client ends the turn on `TurnCompleted`.
+  it appends no second one. `ErrorOccurred` with `notice: true` is a notice the
+  turn goes on past (a compaction that fell back to truncation); a client ends
+  the turn on `TurnCompleted`, never on `ErrorOccurred`.
 - New turn-stream start/end receipts include the user-message ID and model-step
   number. Model, failure, and interruption paths keep that identity.
   Historical receipts can omit it and must not be treated

@@ -8044,6 +8044,8 @@ describe("streaming", () => {
         expect(tags).toContain("TurnCompleted")
         const error = events.find((event) => event._tag === "ErrorOccurred")
         expect(error).toEqual(expect.objectContaining({ error: "native response part failed" }))
+        // A stream failure may end the turn: it is not marked as a notice.
+        expect(error).not.toHaveProperty("notice")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])

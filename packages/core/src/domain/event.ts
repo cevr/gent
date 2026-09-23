@@ -215,6 +215,12 @@ export const AgentEvent = Schema.TaggedUnion({
     sessionId: SessionId,
     branchId: Schema.optional(BranchId),
     error: Schema.String,
+    /**
+     * The turn goes on past this error: it is a notice, such as a compaction
+     * that fell back to truncation. Absent on an error the turn may end on and
+     * on historical events. A turn always ends with its `TurnCompleted`.
+     */
+    notice: Schema.optional(Schema.Literal(true)),
   },
   ProviderRetrying: {
     sessionId: SessionId,
