@@ -91,6 +91,18 @@ export class InteractionDecisionConflictError extends Schema.TaggedError<Interac
   requestId: InteractionRequestId,
 }) {}
 
+/**
+ * An ask by an inner call of a dispatching tool while another call of the
+ * same step has parked on an approval. The parked call keeps the branch's one
+ * slot until its step runs again, which the dispatcher's step prevents.
+ */
+export class InteractionSlotBusyError extends Schema.TaggedError<InteractionSlotBusyError>(
+  "@gent/core/src/domain/interaction/InteractionSlotBusyError",
+)("InteractionSlotBusyError", {
+  message: Schema.String,
+  requestId: InteractionRequestId,
+}) {}
+
 export class InteractionRequestMismatchError extends Schema.TaggedError<InteractionRequestMismatchError>(
   "@gent/core/src/domain/interaction/InteractionRequestMismatchError",
 )("InteractionRequestMismatchError", {
@@ -181,7 +193,10 @@ export interface InteractionService {
     ctx: BranchRef,
   ) => Effect.Effect<
     ApprovalDecision,
-    EventStoreError | InteractionPendingError | InteractionOwnerMissingError
+    | EventStoreError
+    | InteractionPendingError
+    | InteractionOwnerMissingError
+    | InteractionSlotBusyError
   >
   readonly pendingRequestId: (ctx: {
     sessionId: SessionId
@@ -744,7 +759,7 @@ export const makeInteractionService = (
         yield* settle(selected)
       }
       const requestId = InteractionRequestId.make(yield* platform.randomId)
-      type Look = Effect.Effect<boolean, EventStoreError>
+      type Look = Effect.Effect<boolean, EventStoreError | InteractionSlotBusyError>
       // A claim, once made, runs to admission or release. Only waits are interruptible.
       const claim = Effect.uninterruptibleMask((restore) =>
         Effect.flatten(
@@ -770,8 +785,10 @@ export const makeInteractionService = (
             if (!open.admitted) return [wait, current]
             if (Option.exists(open.owner, (other) => branch.running.has(other.toolCallId)))
               return [wait, current]
-            const busy = new EventStoreError({
-              message: "Another interaction is open on this branch",
+            const busy = new InteractionSlotBusyError({
+              message:
+                "Another call in this step is waiting for an approval, so this call cannot ask now. Run it again after that approval is answered.",
+              requestId: open.requestId,
             })
             return [Effect.fail(busy), current]
           }),

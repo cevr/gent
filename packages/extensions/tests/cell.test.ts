@@ -4227,7 +4227,8 @@ it.scopedLive(
       // No running call owns the open request, so the peer is refused rather
       // than left waiting for a slot nothing would free.
       const blocked = yield* askAs(peer, "Second?").pipe(Effect.flip)
-      expect(blocked._tag).toBe("EventStoreError")
+      expect(blocked._tag).toBe("InteractionSlotBusyError")
+      expect(blocked.message).toContain("Another call in this step is waiting for an approval")
       expect((yield* storage.get(peer)).state._tag).toBe("Started")
       expect(
         (yield* storedEvents(cellOperationStorage)).filter(
