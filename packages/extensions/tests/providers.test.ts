@@ -163,6 +163,12 @@ const remotePayload = {
         cost: { input: 1.25, output: 10 },
         limit: { context: 400_000 },
         release_date: "2026-07-24",
+        tool_call: true,
+      },
+      "text-embedding-3-small": {
+        name: "text-embedding-3-small",
+        cost: { input: 0.02, output: 0 },
+        tool_call: false,
       },
       broken: { name: 42 },
     },
@@ -171,6 +177,7 @@ const remotePayload = {
     models: {
       "claude-opus-5": {
         name: "Claude Opus 5",
+        cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
         limit: { context: 1_000_000 },
         release_date: "2026-07-24",
       },
@@ -381,6 +388,40 @@ describe("models.dev catalog", () => {
 
       const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
       expect(opus?.releaseDate).toBe("2026-07-24")
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("carries the prompt-cache prices onto the parsed model", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("cache-price")
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+
+      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
+      expect(opus?.pricing).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 })
+      const gpt = models.find((model) => model.id === "openai/gpt-5.4")
+      expect(gpt?.pricing).toEqual({ input: 1.25, output: 10 })
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("a model without tool calling stays out of the catalog", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("tool-call")
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+
+      const ids = models.map((model) => model.id)
+      expect(ids).not.toContain(ModelId.make("openai/text-embedding-3-small"))
+      // No flag means unknown, and the model stays.
+      expect(ids).toContain(ModelId.make("anthropic/claude-opus-5"))
     }).pipe(Effect.provide(platformLayer)),
   )
 

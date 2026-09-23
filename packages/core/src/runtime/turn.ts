@@ -1547,7 +1547,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
 // same cost, even if ModelRegistry pricing later refreshes.
 const computeStreamEndedCost: (params: {
   modelId: ModelId
-  usage: Option.Option<{ inputTokens: number; outputTokens: number }>
+  usage: Option.Option<Parameters<typeof calculateCost>[0]>
 }) => Effect.Effect<Option.Option<number>, never, ModelRegistry | ExtensionRegistry> = Effect.fn(
   "TurnHelpers.computeStreamEndedCost",
 )(function* (params) {

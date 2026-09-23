@@ -3,6 +3,7 @@ import { Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
+  calculateCost,
   DEFAULT_AGENT_NAME,
   DriverRef,
   effectiveModelDriver,
@@ -204,5 +205,32 @@ describe("model id parsing", () => {
     expect(parseModelId("anthropic")).toEqual(Option.none())
     expect(parseModelId("/claude-sonnet")).toEqual(Option.none())
     expect(parseModelId("anthropic/")).toEqual(Option.none())
+  })
+})
+
+describe("step cost", () => {
+  // One live Sonnet 5 step: 13,486 input tokens, 13,462 of them read from the cache.
+  const usage = {
+    inputTokens: 13_486,
+    outputTokens: 5,
+    cacheReadTokens: 13_462,
+    cacheWriteTokens: 22,
+  }
+
+  test("cache reads and writes take their own price", () => {
+    const cost = calculateCost(
+      usage,
+      Option.some({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }),
+    )
+    expect(cost).toBeCloseTo((2 * 2 + 13_462 * 0.2 + 22 * 2.5 + 5 * 10) / 1_000_000, 12)
+  })
+
+  test("a price without cache rates charges every input token at the input price", () => {
+    const cost = calculateCost(usage, Option.some({ input: 2, output: 10 }))
+    expect(cost).toBeCloseTo((13_486 * 2 + 5 * 10) / 1_000_000, 12)
+  })
+
+  test("no price costs nothing", () => {
+    expect(calculateCost(usage, Option.none())).toBe(0)
   })
 })
