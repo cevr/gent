@@ -131,6 +131,9 @@ import {
   CellProtocolError,
   CellRequest,
   CellResponse,
+  decodeCellResponse,
+  encodeCellRequest,
+  makeCellFrameReader,
 } from "../src/cell-protocol.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 import {
@@ -1357,6 +1360,115 @@ describe("cell worker process", () => {
         expect((yield* platform.signal(pid, 0).pipe(Effect.flip))._tag).toBe("SignalError")
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
     10000,
+  )
+
+  it.scopedLive(
+    "a worker whose cell holds the thread exits when its host process dies",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const worker = yield* buildCellWorker
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const marker = path.join(directory, "worker.pid")
+        const hostEntry = new URL("./helpers/cell-host-process.ts", import.meta.url).pathname
+        const host = yield* ChildProcess.make(yield* platform.execPath, [hostEntry], {
+          cwd: packageDirectory,
+          env: {
+            CELL_WORKER_SCRIPT: worker.scriptPath,
+            CELL_SOURCE:
+              'require("node:fs").writeFileSync(process.env.CELL_PID_MARKER, String(process.pid)); while (true) {}',
+            CELL_PID_MARKER: marker,
+          },
+          extendEnv: true,
+          stdout: "ignore",
+          stderr: "inherit",
+        })
+        // The cell writes its pid right before the loop, so the loop runs once the file exists.
+        const text = yield* waitFor(
+          fs.readFileString(marker),
+          (value) => value !== "",
+          5000,
+          "worker pid",
+        )
+        const pid = Number(text)
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+        // A red run must not leave a spinning orphan behind.
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(pid, "SIGKILL")))
+        yield* host.kill({ killSignal: "SIGKILL" })
+        yield* waitFor(
+          platform.signal(pid, 0).pipe(Effect.exit),
+          Exit.isFailure,
+          3000,
+          "orphaned worker exit",
+        )
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(platformLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "SIGTERM ends a worker whose cell holds the thread",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+          evaluationTimeoutMs: 20_000,
+        })
+        // The signal arrives before the loop starts, so a JavaScript handler never gets to run.
+        const error = yield* kernel
+          .evaluate('process.kill(process.pid, "SIGTERM"); while (true) {}')
+          .pipe(
+            Effect.provideService(CellOperationHost, { call: () => Effect.succeed(true) }),
+            Effect.flip,
+            Effect.timeout("4 seconds"),
+          )
+        expect(error._tag).toBe("CellKernelError")
+        if (error._tag !== "CellKernelError") return yield* error
+        expect(error.reason).toBe("process")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a worker exits when its request pipe closes, even with a cell timer open",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const worker = yield* buildCellWorker
+        const handle = yield* ChildProcess.make(yield* platform.execPath, [worker.scriptPath], {
+          cwd: packageDirectory,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "inherit",
+          additionalFds: { fd3: { type: "output" }, fd4: { type: "input" } },
+        })
+        const frame = yield* encodeCellRequest(
+          CellRequest.cases.Evaluate.make({
+            cellId: "timer-cell",
+            outputToken: "timer-output",
+            source: "setInterval(() => {}, 1000); 1",
+          }),
+        )
+        const requests = yield* Queue.unbounded<Uint8Array, Cause.Done>()
+        yield* Stream.fromQueue(requests).pipe(Stream.run(handle.getInputFd(4)), Effect.forkScoped)
+        yield* Queue.offer(requests, frame)
+        // The cell has run and its timer is open once its result frame arrives.
+        const reader = makeCellFrameReader()
+        const evaluated = yield* handle.getOutputFd(3).pipe(
+          Stream.mapEffect(reader.push),
+          Stream.flatMap(Stream.fromIterable),
+          Stream.mapEffect(decodeCellResponse),
+          Stream.filter((response) => response._tag === "Evaluated"),
+          Stream.runHead,
+        )
+        expect(Option.isSome(evaluated)).toBe(true)
+        // The host closes the request pipe and stays alive.
+        yield* Queue.end(requests)
+        expect(Number(yield* handle.exitCode.pipe(Effect.timeout("3 seconds")))).toBe(0)
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
   )
 })
 
