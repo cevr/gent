@@ -1200,6 +1200,55 @@ describe("a forked child", () => {
       ),
     12_000,
   )
+  it.live(
+    "with no answer reports neither the parent's reply nor the parent's calls",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const parentReply = "PARENT-OWN-REPLY"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const calls = promptToolCallIds(options.prompt)
+            // The forked child ends every step without writing anything.
+            if (texts.some((text) => text.endsWith(childTask))) {
+              return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+            }
+            if (texts.at(-1) === "first") {
+              if (calls.includes("rn-1")) return Effect.succeed(reply(parentReply))
+              return Effect.succeed(toolStep("rename_session", { name: "parent work" }, "rn-1"))
+            }
+            if (texts.at(-1) === "second: fork a child") {
+              if (calls.includes("fork-empty")) return Effect.succeed(reply("started, ending"))
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: childTask, context: "fork" }, "fork-empty"),
+              )
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "first")
+          yield* waitFor(
+            harness.client.session.getSnapshot({
+              sessionId: harness.sessionId,
+              branchId: harness.branchId,
+            }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes(parentReply),
+            5_000,
+            "the parent's first turn ended",
+          )
+          yield* sendPrompt(harness, "second: fork a child")
+          const snapshot = yield* afterCompletion(harness)
+          const completion = completionMessages(snapshot.messages)[0]
+          expect(messageTexts(completionMessages(snapshot.messages)).join("")).not.toContain(
+            parentReply,
+          )
+          expect(completion?.metadata?.details).toMatchObject({ tools: [], toolCount: 0 })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
 describe("session.send", () => {

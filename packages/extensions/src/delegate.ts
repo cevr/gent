@@ -226,12 +226,20 @@ export const childOutcomeWords = (outcome: ChildOutcome): string => {
 }
 
 /** The child branch's messages, from the session detail. */
-const childMessages = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+/**
+ * The child's messages from its start turn onward. A forked child's branch
+ * begins with a copy of the parent's window; those rows are the parent's
+ * reply and calls, never the child's.
+ */
+const childMessages = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const detail = yield* ctx.Session.getDetail(target.sessionId)
-    const branch = detail.branches.find((entry) => entry.branch.id === target.branchId)
-    return branch?.messages ?? []
+    const detail = yield* ctx.Session.getDetail(entry.sessionId)
+    const branch = detail.branches.find((current) => current.branch.id === entry.branchId)
+    const messages = branch?.messages ?? []
+    const start = messages.findIndex((message) => message.id === startMessageId(entry.requestId))
+    if (start === -1) return []
+    return messages.slice(start)
   })
 
 const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
