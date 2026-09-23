@@ -324,6 +324,37 @@ describe("expandFileRefs", () => {
     }),
   )
 
+  fileRefsTest("keeps every dollar pattern in the file text as written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      const content = "pid $$\nwhole [$&]\nbefore $`\nafter $'\ngroup $1\n"
+      yield* fs.writeFileString(`${testDir}/dollar.sh`, content)
+      const result = yield* expandFileRefs("look at @dollar.sh please", testDir)
+      expect(result).toBe(`look at \`\`\`dollar.sh\n${content}\n\`\`\` please`)
+    }),
+  )
+
+  fileRefsTest("expands a reference whose text repeats inside an earlier file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      yield* fs.writeFileString(`${testDir}/a.md`, "see @src/bar.ts\n")
+      const result = yield* expandFileRefs("@a.md then @src/bar.ts", testDir)
+      expect(result).toBe(
+        "```a.md\nsee @src/bar.ts\n\n``` then ```src/bar.ts\nexport const bar = 1\n\n```",
+      )
+    }),
+  )
+
+  fileRefsTest("expands a line number written with a leading zero", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("see @src/foo.ts#03", testDir)
+      expect(result).toBe("see ```src/foo.ts:3\nline3\n```")
+    }),
+  )
+
   fileRefsTest("handles root-level files", () =>
     Effect.gen(function* () {
       const testDir = yield* makeFixture

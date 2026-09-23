@@ -782,6 +782,13 @@ interface FileRef {
   endLine?: number
 }
 
+/** A reference and the span of text it was written as. */
+interface FileRefMatch {
+  readonly ref: FileRef
+  readonly start: number
+  readonly end: number
+}
+
 const FILE_REF_PATTERN = /@([^\s#]+)(?:#(\d+)(?:-(\d+))?)?/g
 
 export function isAbsPath(path: string): boolean {
@@ -799,7 +806,11 @@ export function fileUrl(path: string): string {
  * @example "@src/foo.ts#10-20" → { path: "src/foo.ts", startLine: 10, endLine: 20 }
  */
 export function parseFileRefs(text: string): FileRef[] {
-  const refs: FileRef[] = []
+  return matchFileRefs(text).map((match) => match.ref)
+}
+
+const matchFileRefs = (text: string): FileRefMatch[] => {
+  const refs: FileRefMatch[] = []
   const pattern = new RegExp(FILE_REF_PATTERN.source, "g")
   for (const match of text.matchAll(pattern)) {
     const path = Option.fromNullishOr(match[1])
@@ -814,7 +825,7 @@ export function parseFileRefs(text: string): FileRef[] {
         ref.endLine = parseInt(endLine.value, 10)
       }
     }
-    refs.push(ref)
+    refs.push({ ref, start: match.index, end: match.index + match[0].length })
   }
 
   return refs
@@ -854,15 +865,6 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     const relativePathValue = path.relative(cwd, absolutePath)
     const content = yield* readFileContent(absolutePath, startLine, endLine)
 
-    // Build the original match string
-    let matchStr = `@${ref.path}`
-    if (Option.isSome(startLine)) {
-      matchStr += `#${startLine.value}`
-      if (Option.isSome(endLine)) {
-        matchStr += `-${endLine.value}`
-      }
-    }
-
     // Build range label
     let rangeLabel = relativePathValue
     if (Option.isSome(startLine)) {
@@ -873,31 +875,35 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     }
 
     // Build code block
-    const codeBlock = `\`\`\`${rangeLabel}\n${content}\n\`\`\``
-    return Option.some({ matchStr, codeBlock })
+    return Option.some(`\`\`\`${rangeLabel}\n${content}\n\`\`\``)
   }).pipe(Effect.catchEager(() => Effect.succeedNone))
 }
 
 /**
- * Expand file references in text by reading file contents
+ * Expand file references in text by reading file contents.
+ * Each code block is spliced in at the span its reference was written at, so
+ * the file text is never read as a replacement pattern (`$&`, `$$`) and a
+ * reference inside an earlier file's text is never expanded.
  * @example "@src/foo.ts#10-20" → "```src/foo.ts:10-20\n<content>\n```"
  */
 export const expandFileRefs = (text: string, cwd: string) => {
-  const refs = parseFileRefs(text)
-  if (refs.length === 0) return Effect.succeed(text)
+  const matches = matchFileRefs(text)
+  if (matches.length === 0) return Effect.succeed(text)
 
   return Effect.gen(function* () {
-    const expanded = yield* Effect.forEach(refs, (ref) => expandSingleRef(ref, cwd), {
-      concurrency: 16,
-    })
+    const expanded = yield* Effect.forEach(
+      matches,
+      (match) => Effect.map(expandSingleRef(match.ref, cwd), (block) => ({ match, block })),
+      { concurrency: 16 },
+    )
 
-    let result = text
-    for (const exp of expanded) {
-      if (Option.isSome(exp)) {
-        result = result.replace(exp.value.matchStr, exp.value.codeBlock)
-      }
+    let result = ""
+    let cursor = 0
+    for (const { match, block } of expanded) {
+      if (Option.isNone(block)) continue
+      result += text.slice(cursor, match.start) + block.value
+      cursor = match.end
     }
-
-    return result
+    return result + text.slice(cursor)
   })
 }
