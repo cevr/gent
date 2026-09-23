@@ -1310,8 +1310,8 @@ describe("classifyBashCommand", () => {
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs env",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs nohup",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs timeout 5",
-      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
-      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env sh -c {}",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env sh -c",
       "echo 'reset --hard' | xargs git",
       "printf 'push --force' | xargs git",
     ]) {
@@ -1329,7 +1329,7 @@ describe("classifyBashCommand", () => {
   test("a custom xargs replace string stands for the input", () => {
     for (const command of [
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % sh -c %",
-      "echo 'reset --hard' | xargs -I % git %",
+      "printf 'reset\\n' | xargs -I % git % --hard",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs --replace=X sh -c X",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -J % sh -c %",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -i% sh -c %",
@@ -1341,6 +1341,12 @@ describe("classifyBashCommand", () => {
     for (const command of [
       "echo a | xargs -I % echo %",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % echo {}",
+      // `-I` passes each line as one argument: git has no `reset --hard` command.
+      "echo 'reset --hard' | xargs -I % git %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
+      // parallel quotes each line it passes: `env` gets one argument.
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
+      "printf 'a b\\n' | xargs -I{} git checkout {}",
       // Without a replace option, `{}` is text xargs passes as it is.
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs sh -c {}",
     ]) {
@@ -1393,12 +1399,42 @@ describe("classifyBashCommand", () => {
       "echo 'a b' | xargs git checkout",
       "echo 'a b' | xargs -n2 git checkout",
       "echo 'a b' | xargs -L1 git checkout",
-      "printf 'a b\\n' | xargs -I{} git checkout {}",
       "printf 'x\\n-rf /nonexistent/gent-probe-x\\n' | xargs -L1 rm",
       // `--max-lines` takes its value only after `=`: `rm` is the command.
       "xargs --max-lines rm -rf /nonexistent/gent-probe-x",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("xargs input is divided as xargs divides it: quotes, escapes, lines, delimiters", () => {
+    const db = "sqlite3 /nonexistent/gent-probe-x/db.sqlite"
+    for (const command of [
+      `echo "'DROP TABLE t'" | xargs -n1 ${db}`,
+      `echo '"DROP TABLE t"' | xargs -n1 ${db}`,
+      `echo 'DROP\\ TABLE\\ t' | xargs -n1 ${db}`,
+      `echo "x 'DROP TABLE t'" | xargs -L1 ${db}`,
+      `echo "'DROP TABLE t'" | xargs ${db}`,
+      "echo \"'rm -rf /nonexistent/gent-probe-x'\" | xargs -n1 sh -c",
+      "echo \"  'rm -rf /nonexistent/gent-probe-x'\" | xargs -I % sh -c %",
+      "echo \"'-rf' /nonexistent/gent-probe-x\" | xargs -L1 rm",
+      "printf 'rm -rf /nonexistent/gent-probe-x\\nls' | xargs -0 sh -c",
+      "echo 'ls,rm -rf /nonexistent/gent-probe-x' | xargs -d , -n1 sh -c",
+      // Quoting or a delimiter the guard cannot rebuild asks.
+      'echo "\'a" | xargs -n1 git checkout',
+      "echo a | xargs -d '\\x2c' -n1 git checkout",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo \"'a b'\" | xargs -n1 git checkout",
+      "echo 'a\\ b' | xargs -n1 git checkout",
+      "echo 'a,b' | xargs -d , -n1 git checkout",
+      "printf 'a b\\n' | xargs -0 git checkout",
+      // xargs runs no shell: `;` in its input is an argument.
+      "echo 'a; rm -rf /nonexistent/gent-probe-x' | xargs echo",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
 
@@ -1517,6 +1553,11 @@ describe("classifyBashCommand", () => {
       "sqlite3 db 'delete from t;'",
       "psql -c 'DELETE FROM a WHERE id = 1; DELETE FROM t'",
       "echo 'DELETE FROM t' | psql",
+      "psql -c 'DELETE FROM t /* WHERE */'",
+      "psql -c 'DELETE FROM t -- WHERE'",
+      'psql -c "DELETE FROM t -- \' WHERE"',
+      "mysql -e 'DELETE FROM t # WHERE'",
+      "printf 'DELETE FROM t -- x\\nWHERE id = 1' | psql",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1524,6 +1565,8 @@ describe("classifyBashCommand", () => {
       "psql -c 'SELECT TRUNCATE(1.5, 1)'",
       "psql -c 'DELETE FROM t WHERE id = 1'",
       "psql -c 'delete from t where id in (1, 2)'",
+      "psql -c \"DELETE FROM t WHERE id = 1; SELECT 'WHERE'\"",
+      "psql -c 'DELETE FROM t WHERE id = 1 -- only one'",
       "psql -c 'SELECT 1' drop_db",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")

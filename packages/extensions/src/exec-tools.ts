@@ -1849,28 +1849,82 @@ const joinedRuns = (name: string, script: ReadonlyArray<ShellWord>): SegmentRuns
   return { scripts: Option.toArray(joined), unreadable }
 }
 
+/**
+ * How `xargs` or `parallel` divides its input into arguments: xargs at
+ * blanks and newlines, with quotes and backslash escapes; xargs `-I` at
+ * newlines only, with the same quoting and leading blanks dropped; or at a
+ * delimiter with no quoting (`-0`, `-d`, and every parallel line).
+ */
+const InputDivision = Schema.TaggedUnion({
+  Blanks: {},
+  Lines: {},
+  Delimiter: { text: Schema.String },
+})
+type InputDivision = typeof InputDivision.Type
+
 /** How `xargs` or `parallel` builds its commands from its input. */
 interface InputUse {
   /** The text in its command that stands for the input. */
   readonly placeholder: Option.Option<string>
-  /** The input only replaces the placeholder and is never appended (`xargs -I`). */
-  readonly replaceOnly: boolean
-  /** One command per input word (`-n1`) or line (`-L1`, `-I`), or one for all of it. */
+  /**
+   * `within`: the placeholder takes one input line inside any word and the
+   * input is never appended (`xargs -I`); `word`: a placeholder word takes
+   * every argument (`xargs -J`); `insert`: the placeholder takes the
+   * arguments, or they are appended.
+   */
+  readonly replace: "within" | "word" | "insert"
+  /** One command per input argument (`-n1`) or line (`-L1`, `-I`), or one for all of it. */
   readonly split: "word" | "line" | "all"
+  /** None: a delimiter the guard does not read. */
+  readonly division: Option.Option<InputDivision>
+  /** parallel runs its command words as one shell script; xargs runs them as they are. */
+  readonly shell: boolean
+}
+
+/** A `-d` value as a character: a literal one, or `\n`, `\t`, `\0`. */
+const DELIMITER_ESCAPES = new Map([
+  ["\\n", "\n"],
+  ["\\t", "\t"],
+  ["\\0", "\0"],
+])
+
+const delimiterDivision = (value: string): Option.Option<InputDivision> => {
+  let text = Option.fromUndefinedOr(DELIMITER_ESCAPES.get(value))
+  if (value.length === 1) text = Option.some(value)
+  return Option.map(text, (delimiter) => InputDivision.cases.Delimiter.make({ text: delimiter }))
+}
+
+/** `-0`/`--null`, or the last `-d`/`--delimiter`: the delimiter that divides the input. */
+const givenDelimiter = (
+  parsed: ParsedArguments,
+  texts: ReadonlyArray<string>,
+): Option.Option<Option.Option<InputDivision>> => {
+  let division = Option.none<Option.Option<InputDivision>>()
+  for (const option of parsed.options) {
+    if (isNamed(option, "0", ["null"])) {
+      division = Option.some(Option.some(InputDivision.cases.Delimiter.make({ text: "\0" })))
+    } else if (isNamed(option, "d", ["delimiter"])) {
+      const value = Option.map(option.value, (at) => valueText(texts, at))
+      division = Option.some(Option.flatMap(value, delimiterDivision))
+    }
+  }
+  return division
 }
 
 /**
  * The input use of an `xargs` or `parallel` invocation. For xargs, `-I R`,
  * `--replace[=R]` and `-i[R]` (R is `{}` when not given) replace R in each
- * line; BSD `-J R` replaces R with all of the input. `-n1` runs one command
- * per word, `-L1` and `-l` one per line; the last of them counts. `parallel`
- * runs one command per line with `{}` (or its `-I` value), or appends the
- * line when its command has none; `-m`, `-X` or a count other than 1 joins.
+ * line; BSD `-J R` replaces the word R with all of the input. `-n1` runs one
+ * command per argument, `-L1` and `-l` one per line; the last of them
+ * counts. `parallel` runs one command per line with `{}` (or its `-I` value),
+ * or appends the line when its command has none; `-m`, `-X` or a count other
+ * than 1 joins.
  */
 const inputUse = ({ path, words, spec }: ResolvedCommand): InputUse => {
   const texts = words.slice(1).map((word) => word.text)
   const parsed = parseArguments(texts, spec.valued, "leading")
   const value = (option: ParsedOption) => Option.map(option.value, (at) => valueText(texts, at))
+  const delimiter = givenDelimiter(parsed, texts)
   if (path === "parallel") {
     const replace = Arr.last(optionValues(parsed, "I")).pipe(
       Option.map((at) => valueText(texts, at)),
@@ -1885,18 +1939,29 @@ const inputUse = ({ path, words, spec }: ResolvedCommand): InputUse => {
     if (joins) split = "all"
     return {
       placeholder: Option.orElse(replace, () => Option.some("{}")),
-      replaceOnly: false,
+      replace: "insert",
       split,
+      division: Option.getOrElse(delimiter, () =>
+        Option.some(InputDivision.cases.Delimiter.make({ text: "\n" })),
+      ),
+      shell: true,
     }
   }
-  let use: InputUse = { placeholder: Option.none(), replaceOnly: false, split: "all" }
+  let use: InputUse = {
+    placeholder: Option.none(),
+    replace: "insert",
+    split: "all",
+    division: Option.some(InputDivision.cases.Blanks.make({})),
+    shell: false,
+  }
   for (const option of parsed.options) {
     const given = value(option)
     if (isNamed(option, "Ii", ["replace"])) {
       const placeholder = Option.orElse(given, () => Option.some("{}"))
-      use = { placeholder, replaceOnly: true, split: "line" }
+      const division = Option.some(InputDivision.cases.Lines.make({}))
+      use = { ...use, placeholder, replace: "within", split: "line", division }
     } else if (isNamed(option, "J")) {
-      use = { ...use, placeholder: given, replaceOnly: true }
+      use = { ...use, placeholder: given, replace: "word" }
     } else if (isNamed(option, "n", ["max-args"])) {
       use = { ...use, split: "all" }
       if (Option.contains(given, "1")) use = { ...use, split: "word" }
@@ -1906,28 +1971,158 @@ const inputUse = ({ path, words, spec }: ResolvedCommand): InputUse => {
       if (Option.getOrElse(given, () => "1") === "1") use = { ...use, split: "line" }
     }
   }
-  return use
+  return { ...use, division: Option.getOrElse(delimiter, () => use.division) }
 }
 
-/** The input texts one command each receives. */
-const inputItems = (inputs: ReadonlyArray<ShellWord>, split: InputUse["split"]) => {
-  const texts = inputs.map((word) => word.text)
-  if (split === "all") return [texts.join(" ")]
-  let pattern = /\n/
-  if (split === "word") pattern = /\s+/
-  return texts.flatMap((text) => text.split(pattern)).filter((item) => item.trim().length > 0)
+/** The state of the xargs quoting reader. */
+interface QuoteReader {
+  readonly lines: Array<Array<string>>
+  line: Array<string>
+  arg: string
+  inArg: boolean
+  quote: string
+  escaped: boolean
+}
+
+const endArg = (reader: QuoteReader) => {
+  if (reader.inArg) reader.line.push(reader.arg)
+  reader.arg = ""
+  reader.inArg = false
+}
+
+/** Read one character outside quotes and escapes; blanks end an argument only with `blanks`. */
+const readUnquoted = (reader: QuoteReader, char: string, blanks: boolean) => {
+  if (char === "\\") {
+    reader.escaped = true
+  } else if (char === "'" || char === '"') {
+    reader.quote = char
+    reader.inArg = true
+  } else if (char === "\n") {
+    endArg(reader)
+    reader.lines.push(reader.line)
+    reader.line = []
+  } else if ((char === " " || char === "\t") && (blanks || !reader.inArg)) {
+    endArg(reader)
+  } else {
+    reader.arg += char
+    reader.inArg = true
+  }
+}
+
+/**
+ * The arguments of each input line as xargs reads them: quotes and backslash
+ * escapes, blanks between arguments (or, without `blanks`, inside the one
+ * argument of a line, whose leading blanks are dropped). None when a quote
+ * is open at a newline or at the end, as xargs then fails.
+ */
+const quotedLines = (
+  text: string,
+  blanks: boolean,
+): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+  const reader: QuoteReader = {
+    lines: [],
+    line: [],
+    arg: "",
+    inArg: false,
+    quote: "",
+    escaped: false,
+  }
+  for (const char of text) {
+    if (reader.escaped) {
+      reader.arg += char
+      reader.inArg = true
+      reader.escaped = false
+    } else if (reader.quote === "") {
+      readUnquoted(reader, char, blanks)
+    } else if (char === reader.quote) {
+      reader.quote = ""
+    } else if (char === "\n") {
+      return Option.none()
+    } else {
+      reader.arg += char
+    }
+  }
+  if (reader.quote !== "" || reader.escaped) return Option.none()
+  endArg(reader)
+  reader.lines.push(reader.line)
+  return Option.some(reader.lines.filter((line) => line.length > 0))
+}
+
+/** The arguments of each input line: one per line for a delimiter, whose final empty item ends the input. */
+const dividedLines = (
+  text: string,
+  division: InputDivision,
+): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+  if (division._tag === "Blanks") return quotedLines(text, true)
+  if (division._tag === "Lines") return quotedLines(text, false)
+  const items = text.split(division.text)
+  if (items.at(-1) === "") items.pop()
+  return Option.some(items.map((item) => [item]))
+}
+
+/** The argument lists of the commands the input builds: per argument, per line, or all at once. */
+const argumentGroups = (
+  lines: ReadonlyArray<ReadonlyArray<string>>,
+  split: InputUse["split"],
+): ReadonlyArray<ReadonlyArray<string>> => {
+  if (split === "word") return lines.flat().map((arg) => [arg])
+  if (split === "line") return lines.filter((line) => line.length > 0)
+  return [lines.flat()]
+}
+
+/** `text` as one single-quoted shell word. */
+const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
+
+/**
+ * The script of one command the wrapper builds from `args`. parallel's
+ * command is a shell script that takes the arguments quoted; xargs runs its
+ * words as they are, so each word is quoted.
+ */
+const builtCommand = (
+  commandTexts: ReadonlyArray<string>,
+  use: InputUse,
+  args: ReadonlyArray<string>,
+): Option.Option<string> => {
+  const quoted = args.map(shellQuote).join(" ")
+  const placeholder = Option.getOrElse(use.placeholder, () => "")
+  const replaces = placeholder !== "" && commandTexts.some((text) => text.includes(placeholder))
+  if (use.shell) {
+    const script = commandTexts.join(" ")
+    if (replaces) return Option.some(script.replaceAll(placeholder, quoted))
+    return Option.some(`${script} ${quoted}`)
+  }
+  if (use.replace === "insert") {
+    return Option.some([...commandTexts.map(shellQuote), quoted].join(" "))
+  }
+  if (!replaces) return Option.none()
+  if (use.replace === "within") {
+    const line = args.join(" ")
+    return Option.some(
+      commandTexts.map((text) => shellQuote(text.replaceAll(placeholder, line))).join(" "),
+    )
+  }
+  return Option.some(
+    commandTexts
+      .map((text) => {
+        if (text === placeholder) return quoted
+        return shellQuote(text)
+      })
+      .join(" "),
+  )
 }
 
 /**
  * `xargs` and `parallel` run their command with the input appended, or put
  * into the placeholder; `parallel ::: a b` also runs each word after `:::`
  * when it has no command, and `parallel` with no command runs each input
- * line. Bare `xargs` runs `echo`. When the input can be read, each command it
- * builds is classified whole, so a runner (`xargs env`) or a subcommand in
- * the input (`xargs git`) is read as the shell would run it. When it cannot,
- * the wrapper asks only if the input names what runs (see
- * `inputNamesCommand`); anything else stays quiet (`find … | xargs rm`). A
- * shell under the wrapper reads its input through `shellRuns`.
+ * line. Bare `xargs` runs `echo`. When the input can be read, it is divided
+ * into arguments as the wrapper divides it, and each command it builds is
+ * classified whole, so a runner (`xargs env`) or a subcommand in the input
+ * (`xargs git`) is read as it would run. Input the guard cannot divide asks.
+ * When the input cannot be read, the wrapper asks only if the input names
+ * what runs (see `inputNamesCommand`); anything else stays quiet
+ * (`find … | xargs rm`). A shell under the wrapper reads its input through
+ * `shellRuns`.
  */
 const inputWrapperRuns = ({ segment }: Invocation, resolved: ResolvedCommand): SegmentRuns => {
   const { words, spec } = resolved
@@ -1961,17 +2156,18 @@ const inputWrapperRuns = ({ segment }: Invocation, resolved: ResolvedCommand): S
     if (inputs.unreadable.length > 0) return { scripts: [], unreadable: inputs.unreadable }
     return unreadableRun(`the input of \`${name}\``)
   }
-  const replaces = commandTexts.some(isPlaceholder)
+  let lines = Option.some<ReadonlyArray<ReadonlyArray<string>>>(listed.map((word) => [word.text]))
+  if (listed.length === 0) {
+    const text = inputs.scripts.map((word) => word.text).join("\n")
+    lines = Option.flatMap(use.division, (division) => dividedLines(text, division))
+  }
+  if (Option.isNone(lines)) {
+    return unreadableRun(`\`${name}\` input whose quoting or delimiter the guard does not read`)
+  }
   const dynamic = inputs.scripts.some((word) => word.dynamic)
-  const scripts = inputItems(inputs.scripts, use.split).flatMap((item) => {
-    const text = commandTexts.join(" ")
-    if (replaces) {
-      const placeholder = Option.getOrElse(use.placeholder, () => "")
-      return [derivedWord(text.replaceAll(placeholder, item), dynamic)]
-    }
-    if (use.replaceOnly) return []
-    return [derivedWord(`${text} ${item}`, dynamic)]
-  })
+  const scripts = argumentGroups(lines.value, use.split).flatMap((args) =>
+    Option.toArray(builtCommand(commandTexts, use, args)).map((text) => derivedWord(text, dynamic)),
+  )
   return scriptRuns(scripts)
 }
 
@@ -2290,11 +2486,13 @@ const killsHard = (args: ReadonlyArray<string>) =>
  * A SQL statement that destroys data: any `DROP <object>` (a table, a
  * function, a user, and `ALTER TABLE … DROP COLUMN`), `TRUNCATE` with or
  * without `TABLE` (Postgres and MySQL make it optional), and a `DELETE FROM`
- * with no `WHERE` before the statement ends. The name after `TRUNCATE` is
- * not a `(`: MySQL's `TRUNCATE(x, d)` rounds a number.
+ * with no `WHERE` before the statement ends. A `WHERE` after a comment
+ * marker (`--`, `/*`, `#`) does not count: it may be the comment's text. The
+ * name after `TRUNCATE` is not a `(`: MySQL's `TRUNCATE(x, d)` rounds a
+ * number.
  */
 const SQL_DESTRUCTIVE =
-  /\b(drop\s+(?:materialized\s+)?[a-z_]+)|\b(truncate)(?:\s+table)?\s+(?!\()\S|\b(delete\s+from)\b(?![^;]*\bwhere\b)/i
+  /\b(drop\s+(?:materialized\s+)?[a-z_]+)|\b(truncate)(?:\s+table)?\s+(?!\()\S|\b(delete\s+from)\b(?!(?:(?!--|\/\*|#)[^;])*\bwhere\b)/i
 
 /** A SQL client that drops, truncates or deletes everything, in its arguments or its input. */
 const sqlRisk: CommandRisk = ({ texts, invocation }) => {
