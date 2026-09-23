@@ -15,13 +15,11 @@
 
 import * as os from "node:os"
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
-import { fileURLToPath as nodeFileURLToPath, pathToFileURL } from "node:url"
+import { fileURLToPath as nodeFileURLToPath } from "node:url"
 import { Effect, Layer, Option, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform, SignalError } from "./gent-platform.js"
-
-declare const __GENT_COMPILED__: boolean
 
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
@@ -39,15 +37,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
     pid: Effect.sync(() => process.pid),
 
     execPath: Effect.sync(() => process.execPath),
-
-    siblingBinaryPath: (name: string) =>
-      Effect.sync(() => {
-        // oxlint-disable-next-line effect/noRuntimeTypeof -- This build symbol is absent in source runs; it is not external input.
-        if (typeof __GENT_COMPILED__ !== "undefined" && __GENT_COMPILED__) {
-          return nodeFileURLToPath(new URL(name, pathToFileURL(process.execPath)))
-        }
-        return nodeFileURLToPath(new URL(`../../dist/${name}`, import.meta.url))
-      }),
 
     homeDirectory: Effect.sync(() => os.homedir()),
 

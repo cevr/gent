@@ -84,15 +84,6 @@ interface GentPlatformApi {
   readonly osInfo: Effect.Effect<GentPlatformOsInfo>
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
-  /**
-   * Absolute path to a helper binary shipped alongside this build.
-   *
-   * A compiled build carries its helpers next to the executable; a source run
-   * finds them in `dist/`. Which of the two applies is platform knowledge.
-   * *Which* helper a caller wants is not — the name is the caller's, so core
-   * never has to name a product feature's worker.
-   */
-  readonly siblingBinaryPath: (name: string) => Effect.Effect<string>
   readonly homeDirectory: Effect.Effect<string>
   readonly pathListSeparator: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
@@ -127,7 +118,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           }),
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
-          siblingBinaryPath: (name) => Effect.succeed(`/usr/bin/${name}`),
           homeDirectory: Effect.succeed("/tmp"),
           pathListSeparator: Effect.succeed(":"),
           signal: () => Effect.void,

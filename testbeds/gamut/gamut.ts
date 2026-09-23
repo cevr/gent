@@ -426,18 +426,48 @@ export const isSettled = (paneText: string): boolean => {
   )
 }
 
+/**
+ * Sessions whose newest turn has not ended. The pane shows the agents tray
+ * only while it is on screen, so a child still working can be invisible
+ * there; the run's own events are the record. A turn ends with
+ * `TurnCompleted`, or with `ErrorOccurred` when it fails.
+ */
+export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
+  (
+    db
+      .query(
+        `SELECT session_id FROM events GROUP BY session_id
+         HAVING MAX(CASE WHEN event_tag IN ('MessageReceived', 'StreamStarted') THEN id END)
+           > COALESCE(MAX(CASE WHEN event_tag IN ('TurnCompleted', 'ErrorOccurred') THEN id END), 0)`,
+      )
+      .all() as Array<{ session_id: string }>
+  ).map((row) => row.session_id)
+
+const openTurnsIn = (dataDir: string): ReadonlyArray<string> => {
+  const dbPath = join(dataDir, "data.db")
+  if (!existsSync(dbPath)) return []
+  const db = new Database(dbPath, { readonly: true })
+  try {
+    return openTurnSessions(db)
+  } finally {
+    db.close()
+  }
+}
+
 const wait = async (timeoutSeconds: string) => {
   const state = await readState()
   const deadline = Date.now() + Number(timeoutSeconds) * 1000
   let settledReads = 0
+  let open: ReadonlyArray<string> = []
   while (Date.now() < deadline) {
     const text = await $`herdr pane read ${state.pane} --lines 12`.text()
-    settledReads = isSettled(text) ? settledReads + 1 : 0
+    open = openTurnsIn(state.data)
+    settledReads = isSettled(text) && open.length === 0 ? settledReads + 1 : 0
     // Two reads in a row: a background child's result starts a new turn by itself.
     if (settledReads >= 2) return
     await Bun.sleep(3000)
   }
-  console.error(`not settled after ${timeoutSeconds}s`)
+  console.error(`not settled after ${timeoutSeconds}s; open turns: ${open.join(", ") || "none"}`)
   process.exitCode = 1
 }
 

@@ -581,6 +581,8 @@ export class ProcessLocalToolReplay extends Context.Service<
 interface BranchToolLayerInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  /** The session's working directory, where branch work such as a worker process runs. */
+  readonly cwd: string
   /** Lets branch work notice that the turn was interrupted, and stop. */
   readonly turnInterruption: TurnInterruptionStatus
 }
