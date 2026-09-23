@@ -2287,20 +2287,25 @@ const killsHard = (args: ReadonlyArray<string>) =>
   })
 
 /**
- * `DROP` of a table, database, schema, view or index, and `TRUNCATE` with or
- * without `TABLE` (Postgres and MySQL make it optional). The name after
- * `TRUNCATE` is not a `(`: MySQL's `TRUNCATE(x, d)` rounds a number.
+ * A SQL statement that destroys data: any `DROP <object>` (a table, a
+ * function, a user, and `ALTER TABLE … DROP COLUMN`), `TRUNCATE` with or
+ * without `TABLE` (Postgres and MySQL make it optional), and a `DELETE FROM`
+ * with no `WHERE` before the statement ends. The name after `TRUNCATE` is
+ * not a `(`: MySQL's `TRUNCATE(x, d)` rounds a number.
  */
 const SQL_DESTRUCTIVE =
-  /\b(drop\s+(?:table|database|schema|view|index|materialized\s+view))\b|\b(truncate)(?:\s+table)?\s+(?!\()\S/i
+  /\b(drop\s+(?:materialized\s+)?[a-z_]+)|\b(truncate)(?:\s+table)?\s+(?!\()\S|\b(delete\s+from)\b(?![^;]*\bwhere\b)/i
 
-/** A SQL client that drops or truncates something, in its arguments or its input. */
+/** A SQL client that drops, truncates or deletes everything, in its arguments or its input. */
 const sqlRisk: CommandRisk = ({ texts, invocation }) => {
   const input = segmentInputs(invocation.segment).scripts.map((word) => word.text)
   const statement = Option.fromNullishOr(SQL_DESTRUCTIVE.exec([...texts, ...input].join(" ")))
-  return Option.flatMap(statement, (match) =>
-    destructive((match[1] ?? match[2] ?? "").toUpperCase().replace(/\s+/g, " ")),
-  )
+  return Option.flatMap(statement, (match) => {
+    if (Option.isSome(Option.fromUndefinedOr(match[3]))) {
+      return destructive("DELETE FROM without WHERE")
+    }
+    return destructive((match[1] ?? match[2] ?? "").toUpperCase().replace(/\s+/g, " "))
+  })
 }
 
 /**

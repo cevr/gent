@@ -1501,16 +1501,32 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("TRUNCATE without TABLE, and DROP VIEW or INDEX, are destructive", () => {
+  test("TRUNCATE, any DROP, and DELETE without WHERE are destructive", () => {
     for (const command of [
       "psql -c 'TRUNCATE t'",
       "psql -c 'DROP VIEW v'",
       "psql -c 'DROP INDEX i'",
       "echo 'drop materialized view m' | psql",
+      "psql -c 'DROP FUNCTION f'",
+      "psql -c 'DROP USER u'",
+      "psql -c 'DROP TRIGGER t ON x'",
+      "psql -c 'ALTER TABLE t DROP COLUMN c'",
+      "mysql -e 'ALTER TABLE t DROP c'",
+      "psql -c 'DELETE FROM t'",
+      "sqlite3 db 'delete from t;'",
+      "psql -c 'DELETE FROM a WHERE id = 1; DELETE FROM t'",
+      "echo 'DELETE FROM t' | psql",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("psql -c 'SELECT TRUNCATE(1.5, 1)'").level).toBe("safe")
+    for (const command of [
+      "psql -c 'SELECT TRUNCATE(1.5, 1)'",
+      "psql -c 'DELETE FROM t WHERE id = 1'",
+      "psql -c 'delete from t where id in (1, 2)'",
+      "psql -c 'SELECT 1' drop_db",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
   })
 
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
