@@ -789,14 +789,17 @@ describe("message part projection", () => {
     expect(output.stderr).toBe("")
     expect(LONE_SURROGATE.test(output.stdout)).toBe(false)
     const [cut] = operation?.cuts ?? []
-    expect(cut?.field).toBe("stdout")
-    expect(cut?.lines).toBe(3_000)
-    const tailLine = cut?.tailLine ?? 0
+    expect(cut?._tag).toBe("Text")
+    if (cut?._tag !== "Text") return
+    expect(cut.field).toBe("stdout")
+    expect(cut.lines).toBe(3_000)
+    const tailLine = cut.tailLine
     // The excerpt is head lines, one marker line, then the tail from `tailLine` to the end.
     const excerpt = output.stdout.split("\n")
     const tail = excerpt.slice(-(3_000 - tailLine + 1))
     expect(excerpt[0]).toBe("😀 line 1")
     expect(tail.at(-1)).toBe("😀 line 3000")
+    expect(tail[0]).toBe(`😀 line ${tailLine}`)
     expect(tail[1]).toBe(`😀 line ${tailLine + 1}`)
     expect(encodeJson(operation).length).toBeLessThanOrEqual(8_192)
   })
@@ -873,6 +876,180 @@ describe("message part projection", () => {
     expect(bashOutput.stdout).toBe(stdout)
     // The edit keeps the whole strings its diff is built from, and its path.
     expect(editOp?.input).toEqual(editInput)
+  })
+
+  /** One op a cell admitted, projected as a reload reads it. */
+  const projectOperation = (
+    toolName: string,
+    input: Readonly<Record<string, string>>,
+    output: string,
+  ) => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const cell = ToolCallId.make("tc-cell-op")
+    const op = ToolCallId.make("tc-op")
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [
+          Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
+        ]),
+      ],
+      toolCallReceipts([
+        EventEnvelope.make({
+          id: EventId.make(1),
+          createdAt: 1,
+          event: AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName,
+            input,
+            parentToolCallId: cell,
+          }),
+        }),
+        EventEnvelope.make({
+          id: EventId.make(2),
+          createdAt: 2,
+          event: AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName,
+            summary: "done",
+            output,
+            parentToolCallId: cell,
+          }),
+        }),
+      ]),
+    )
+    const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
+    return operation
+  }
+  const encodeValue = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+  const BashOutputJson = Schema.fromJsonString(
+    Schema.Struct({ stdout: Schema.String, stderr: Schema.String, exitCode: Schema.Finite }),
+  )
+  const GrepOutputJson = Schema.fromJsonString(
+    Schema.Struct({
+      matches: Schema.Array(
+        Schema.Struct({ file: Schema.String, line: Schema.Finite, content: Schema.String }),
+      ),
+      truncated: Schema.Boolean,
+    }),
+  )
+
+  test("a cut inside one long line records the characters it leaves out", () => {
+    const json = encodeValue({
+      rows: Array.from({ length: 800 }, (_, index) => ({ id: index, name: `row-${index}` })),
+    })
+    expect(json.length).toBeGreaterThan(20_000)
+    expect(json.includes("\n")).toBe(false)
+    const operation = projectOperation(
+      "bash",
+      { command: "curl api" },
+      encodeValue({ stdout: json, stderr: "", exitCode: 0 }),
+    )
+    const output = Schema.decodeUnknownSync(BashOutputJson)(operation?.output)
+    const [cut] = operation?.cuts ?? []
+    expect(cut?._tag).toBe("Text")
+    if (cut?._tag !== "Text") return
+    expect(cut).toMatchObject({ field: "stdout", lines: 1, tailLine: 1 })
+    const [head = "", tail = ""] = output.stdout.split("\n…\n")
+    // Head, cut and tail together are the whole line: nothing goes missing unmarked.
+    expect(head.length + cut.chars + tail.length).toBe(json.length)
+    expect(json.startsWith(head)).toBe(true)
+    expect(json.endsWith(tail)).toBe(true)
+    expect(encodeValue(operation).length).toBeLessThanOrEqual(8_192)
+  })
+
+  test("a cut across lines keeps whole lines at its head and tail", () => {
+    const stdout = Array.from({ length: 900 }, (_, index) => `${index + 1}:${"x".repeat(37)}`).join(
+      "\n",
+    )
+    const operation = projectOperation(
+      "bash",
+      { command: "seq" },
+      encodeValue({ stdout, stderr: "", exitCode: 0 }),
+    )
+    const output = Schema.decodeUnknownSync(BashOutputJson)(operation?.output)
+    const [cut] = operation?.cuts ?? []
+    expect(cut?._tag).toBe("Text")
+    if (cut?._tag !== "Text") return
+    const [head = "", tail = ""] = output.stdout.split("\n…\n")
+    const whole = stdout.split("\n")
+    const headLines = head.split("\n")
+    const tailLines = tail.split("\n")
+    expect(headLines).toEqual(whole.slice(0, headLines.length))
+    expect(tailLines).toEqual(whole.slice(cut.tailLine - 1))
+  })
+
+  test("a reloaded grep op keeps the head and tail of its matches with a cut record", () => {
+    const matches = Array.from({ length: 200 }, (_, index) => ({
+      file: `src/module-${Math.floor(index / 20)}.ts`,
+      line: index + 1,
+      content: `const value${index} = compute(${index})`,
+      context: { before: ["// above"], after: ["// below"] },
+    }))
+    const operation = projectOperation(
+      "grep",
+      { pattern: "value" },
+      encodeValue({ matches, truncated: false }),
+    )
+    const output = Schema.decodeUnknownSync(GrepOutputJson)(operation?.output)
+    const [cut] = operation?.cuts ?? []
+    expect(cut?._tag).toBe("Items")
+    if (cut?._tag !== "Items") return
+    expect(cut).toMatchObject({ field: "matches", items: 200 })
+    const tailCount = 200 - cut.tailItem + 1
+    const headCount = output.matches.length - tailCount
+    expect(headCount).toBeGreaterThan(0)
+    expect(tailCount).toBeGreaterThan(0)
+    const drawn = (match: (typeof matches)[number]) => ({
+      file: match.file,
+      line: match.line,
+      content: match.content,
+    })
+    expect(output.matches.slice(0, headCount)).toEqual(matches.slice(0, headCount).map(drawn))
+    expect(output.matches.slice(headCount)).toEqual(matches.slice(cut.tailItem - 1).map(drawn))
+    expect(output.truncated).toBe(false)
+    expect(encodeValue(operation).length).toBeLessThanOrEqual(8_192)
+  })
+
+  test("a reloaded grep op that fits keeps every match and no cut", () => {
+    const matches = Array.from({ length: 12 }, (_, index) => ({
+      file: `src/module-${index % 3}.ts`,
+      line: index + 1,
+      content: `hit ${index}`,
+    }))
+    const operation = projectOperation(
+      "grep",
+      { pattern: "hit" },
+      encodeValue({ matches, truncated: false }),
+    )
+    expect(Schema.decodeUnknownSync(GrepOutputJson)(operation?.output).matches).toEqual(matches)
+    expect(operation?.cuts).toBeUndefined()
+  })
+
+  test("a reloaded edit keeps diff strings larger than the input share", () => {
+    const input = {
+      path: "/workspace/src/module.ts",
+      oldString: Array.from(
+        { length: 60 },
+        (_, index) => `old line ${index} ${"a".repeat(40)}`,
+      ).join("\n"),
+      newString: Array.from(
+        { length: 60 },
+        (_, index) => `new line ${index} ${"b".repeat(40)}`,
+      ).join("\n"),
+    }
+    expect(encodeValue(input).length).toBeGreaterThan(4_096)
+    const operation = projectOperation(
+      "edit",
+      input,
+      encodeValue({ path: input.path, replacements: 1 }),
+    )
+    expect(operation?.input).toEqual(input)
+    expect(encodeValue(operation).length).toBeLessThanOrEqual(8_192)
   })
 
   test("projects Gent transcript parts without exposing persisted field names", () => {
