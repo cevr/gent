@@ -486,6 +486,10 @@ export interface SessionIdentity {
   readonly branchId: BranchId
 }
 
+/** One session and branch: the one comparison every identity check uses. */
+export const sameIdentity = (left: SessionIdentity, right: SessionIdentity): boolean =>
+  left.sessionId === right.sessionId && left.branchId === right.branchId
+
 interface ClientSessionValue {
   // Session state (union)
   sessionState: () => SessionState
@@ -703,9 +707,7 @@ export function ClientProvider(props: ClientProviderProps) {
       })),
     Option.none<SessionIdentity>(),
     {
-      equals: Option.makeEquivalence<SessionIdentity>(
-        (left, right) => left.sessionId === right.sessionId && left.branchId === right.branchId,
-      ),
+      equals: Option.makeEquivalence<SessionIdentity>(sameIdentity),
     },
   )
   const activeSessionId = createMemo(

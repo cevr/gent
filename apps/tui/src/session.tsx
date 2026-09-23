@@ -61,6 +61,7 @@ import type { RGBA } from "@opentui/core"
 import {
   type ClientContextValue,
   type ClientLog,
+  sameIdentity,
   type SessionIdentity,
   type SessionMetrics,
   shutdownLog,
@@ -2917,9 +2918,8 @@ export function createSessionController(props: {
   ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
-    const stillHere = Option.exists(
-      client.sessionIdentity(),
-      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
+    const stillHere = Option.exists(client.sessionIdentity(), (current) =>
+      sameIdentity(current, target),
     )
     if (mode === "interject" && stillHere && client.isStreaming()) {
       return client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))

@@ -45,7 +45,7 @@ import {
   type SelectListRow,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
-import { type SessionIdentity, useClient, useRuntime } from "./client"
+import { sameIdentity, type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
   AutocompleteItem,
@@ -742,10 +742,7 @@ function useComposerController(): ComposerController {
    */
   const draftedIn = (): Option.Option<SessionIdentity> => client.sessionIdentity()
   const stillIn = (target: SessionIdentity) =>
-    Option.exists(
-      client.sessionIdentity(),
-      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
-    )
+    Option.exists(client.sessionIdentity(), (current) => sameIdentity(current, target))
 
   const submitShellCommand = (text: string) => {
     const drafted = draftedIn()
