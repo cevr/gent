@@ -78,7 +78,7 @@ export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
 const delegateAgent = AgentDefinition.make({
   name: DELEGATE_AGENT_NAME,
   description:
-    "The default subagent: runs one delegated task and cannot delegate further. It asks its parent with session.send when blocked.",
+    "The default subagent: runs one delegated task and cannot delegate further. When blocked in its task turn, it ends the turn with its question; in a later turn, it asks its parent with session.send.",
   deniedTools: CHILD_DENIED_TOOLS,
 })
 
@@ -463,16 +463,17 @@ const CHILD_TASK_PREFIX = "Task from your parent session "
  * in this turn is the reply too: a child that also sent it woke its parent
  * twice with the same news. Only a later turn that nobody waits for reports
  * with session.send: one a wake, a monitor or a goal starts, and one the
- * parent's answer starts. No user starts a child's turns, so its approvals
- * are declined, and no message can grant one: a child told "go ahead" asked
- * again. The first message stays in every later turn's context, whichever
+ * parent's answer starts. A turn that no client opened in the child's own
+ * session cannot ask, so its approvals are declined, and no message can grant
+ * one: a child told "go ahead" asked again. A turn a user opens in the child
+ * (from the agents pane) can ask. The first message stays in every later turn's context, whichever
  * agent runs that turn.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
   [
     `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply in this turn is your result: it returns to the parent as your completion by itself, so do not also send it with session.send. When you are blocked in this turn, end it with your question as that reply.`,
     `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result or question with session.send to "parent".`,
-    `No user starts your turns, so a command that needs an approval is declined at once, and no message from your parent can grant it: report the command and why you need it, and the parent runs it or gives you another way.`,
+    `A turn that your parent, a wake, a monitor or a goal starts cannot ask for an approval: a command that needs one is declined at once, and no message from your parent can grant it. Report the command and why you need it, and the parent runs it or gives you another way. Only a turn that a user opens in this session can ask.`,
     "",
     prompt,
   ].join("\n")
