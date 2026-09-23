@@ -547,6 +547,21 @@ describe("Bun cell evaluation", () => {
     }).pipe(Effect.timeout("2 seconds")),
   )
 
+  it.scopedLive("a logged system error keeps its code, path and syscall on one line", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+      const shown = yield* kernel.evaluate(
+        "try { require('node:fs').readFileSync('/nonexistent/gent-probe-x') } catch (e) { console.log(e) }",
+      )
+      const [head, fields, ...rest] = shown.display.split("\n")
+      expect(head).toContain("ENOENT")
+      expect(fields).toBe(
+        "  code: ENOENT, errno: -2, syscall: open, path: /nonexistent/gent-probe-x",
+      )
+      expect(rest).toEqual([])
+    }).pipe(Effect.timeout("2 seconds")),
+  )
+
   it.scopedLive("limits captured output and rejects oversized source before execution", () =>
     Effect.gen(function* () {
       const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })

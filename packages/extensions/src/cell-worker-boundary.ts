@@ -229,10 +229,26 @@ const BuildPosition = Schema.Struct({
   lineText: Schema.optional(Schema.String),
 })
 
+/** The fields a Node or Bun system error carries beside its message, in the order shown. */
+const SYSTEM_ERROR_FIELDS = ["code", "errno", "syscall", "path", "dest", "address", "port"]
+/** The longest value one system error field shows. */
+const SYSTEM_ERROR_FIELD_LIMIT = 200
+
+/** One line of the system error fields an error holds as scalars; none gives no line. */
+const systemErrorFields = (error: Error): ReadonlyArray<string> => {
+  const fields = SYSTEM_ERROR_FIELDS.flatMap((key) => {
+    const value: unknown = Reflect.get(error, key)
+    if (!Predicate.isString(value) && !Predicate.isNumber(value)) return []
+    return [`${key}: ${String(value).slice(0, SYSTEM_ERROR_FIELD_LIMIT)}`]
+  })
+  if (fields.length === 0) return []
+  return [`  ${fields.join(", ")}`]
+}
+
 /**
  * The detail an error keeps outside its message, one line each and with no
- * stack: an `AggregateError`'s inner errors, a `BuildMessage`'s position, and
- * a `ShellError`'s stderr.
+ * stack: an `AggregateError`'s inner errors, a `BuildMessage`'s position, a
+ * `ShellError`'s stderr, or a system error's code, path and syscall.
  */
 const errorDetail = (error: Error): ReadonlyArray<string> => {
   if (error instanceof AggregateError) {
@@ -259,7 +275,7 @@ const errorDetail = (error: Error): ReadonlyArray<string> => {
     if (stderr.length === 0) return []
     return [`stderr: ${stderr.slice(-SHELL_STDERR_LIMIT)}`]
   }
-  return []
+  return systemErrorFields(error)
 }
 
 export const makeBunCellEvaluator = Effect.gen(function* () {
