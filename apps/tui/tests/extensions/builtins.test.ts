@@ -458,6 +458,29 @@ describe("files popup finder", () => {
       expect(counts).toEqual({ created: 1, destroyed: 1 })
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // The session is rooted outside the launch directory, and fff resolves a
+  // relative pick against the process's directory. The pick names the
+  // session's file, so the next ranking puts it first.
+  filesTest("a pick in a session rooted elsewhere raises that file for the same query", () =>
+    Effect.gen(function* () {
+      const files = ["pick/zeta-note.md", "pick/alpha-note.md"]
+      const picked = yield* withFilesPopup(files, (popup) =>
+        Effect.gen(function* () {
+          yield* popup.items("")
+          const first = (yield* popup.items("note")).map((item) => item.id)
+          const other = Option.getOrThrow(
+            Option.fromUndefinedOr(first.find((id) => id !== first[0])),
+          )
+          for (let i = 0; i < 5; i++) popup.select(other, "note")
+          const second = (yield* popup.items("note")).map((item) => item.id)
+          return { first, other, second }
+        }),
+      )
+      expect(picked.first.length).toBe(2)
+      expect(picked.second[0]).toBe(picked.other)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 /** A `ClientContext` layer over a test transport; `deps` replaces any default. */

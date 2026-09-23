@@ -8,7 +8,7 @@ import {
   Exit,
   Fiber,
   Option,
-  type Path,
+  Path,
   Queue,
   Schema,
 } from "effect"
@@ -260,6 +260,7 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
     const { workspace, transport, lifecycle } = yield* ClientContext
     const dbDir = `${workspace.home}/.gent/fff`
     const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     type FinderClaim = Deferred.Deferred<FinderEntry, FileFinderUnavailableError | FileFinderError>
     // One finder per directory. A key claims the directory before its first
     // wait, so keys typed while the first listing is out join that creation.
@@ -410,7 +411,9 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         if (Option.isNone(rankedIn)) return
         const cwd = rankedIn.value
         const entry = Option.fromUndefinedOr(ready.get(cwd))
-        if (Option.isSome(entry)) entry.value.finder.trackQuery(filter, id)
+        // fff resolves a relative path against the process's directory, not
+        // the finder's, so the pick names the session's file absolutely.
+        if (Option.isSome(entry)) entry.value.finder.trackQuery(filter, path.resolve(cwd, id))
       },
     })
   }),
