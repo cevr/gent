@@ -2213,14 +2213,29 @@ export const buildAnthropicModelDriver = (
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
-      // Precedence: stored API key > env API key > keychain/OAuth
+      const config = buildAnthropicConfig(Option.fromNullishOr(hints))
+
+      // Precedence, the same as OpenAI: stored Claude Code sign-in, then
+      // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
+      // Code in /auth is not billed on a shell API key.
+      if (Option.isSome(auth) && auth.value.type === "oauth") {
+        // The credential cache and the beta cache are built over the
+        // extension-closure-owned cells, so cross-request beta learning and
+        // credential reuse survive. The credentials are checked before the
+        // layer exists, so an expired sign-in fails with its own message.
+        const creds = yield* buildLiveCredentialCache(credentialCellRef, platform)
+        yield* checkCredentials(creds)
+        return AiModel.make(
+          "anthropic",
+          modelName,
+          makeOauthAnthropicLayer(modelName, config, creds, betaCellRef, platform),
+        )
+      }
+
       let apiKey = envApiKey
       if (Option.isSome(auth) && auth.value.type === "api") {
         apiKey = Option.fromNullishOr(auth.value.key)
       }
-
-      const config = buildAnthropicConfig(Option.fromNullishOr(hints))
-
       if (Option.isSome(apiKey)) {
         return AiModel.make(
           "anthropic",
@@ -2229,31 +2244,11 @@ export const buildAnthropicModelDriver = (
         )
       }
 
-      // Fail closed — no stored API key, no env var, and no stored OAuth.
-      // (The OAuth layer builds over `authInfo` — with `authInfo` absent
-      // it builds an unauthenticated client that fails late as a generic
-      // HTTP error, masking the real auth failure for non-TUI callers.
-      // Keychain fallback is handled by the extension's `authorize` flow
-      // upstream; by the time we reach `resolveModel`, any valid creds
-      // have already been staged into `authInfo`.)
-      if (Option.isNone(auth) || auth.value.type !== "oauth") {
-        return yield* new ProviderAuthError({
-          message:
-            "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
-        })
-      }
-
-      // OAuth path: the credential cache and the beta cache are built over
-      // the extension-closure-owned cells, so cross-request beta learning
-      // and credential reuse survive. The credentials are checked before
-      // the layer exists, so an expired sign-in fails with its own message.
-      const creds = yield* buildLiveCredentialCache(credentialCellRef, platform)
-      yield* checkCredentials(creds)
-      return AiModel.make(
-        "anthropic",
-        modelName,
-        makeOauthAnthropicLayer(modelName, config, creds, betaCellRef, platform),
-      )
+      // Fail closed: no stored sign-in, no stored API key, no env var.
+      return yield* new ProviderAuthError({
+        message:
+          "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
+      })
     }),
   auth: {
     methods: [

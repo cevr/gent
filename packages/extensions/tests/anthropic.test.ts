@@ -2753,6 +2753,64 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 })
+describe("buildAnthropicModelDriver — credential order", () => {
+  it.live("a stored Claude Code sign-in beats ANTHROPIC_API_KEY", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+        {
+          _tag: "Durable",
+          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          at: yield* Clock.currentTimeMillis,
+          invalidated: false,
+        },
+      )
+      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriver(
+        credentialCellRef,
+        betaCellRef,
+        Option.some("sk-env-key"),
+      )
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      const headers = fetchState.captured.at(-1)!.headers
+      expect(headers["authorization"]).toBe("Bearer sign-in-token")
+      expect(headers["x-api-key"]).toBeUndefined()
+    }),
+  )
+  it.live("a stored API key beats ANTHROPIC_API_KEY", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriver(
+        credentialCellRef,
+        betaCellRef,
+        Option.some("sk-env-key"),
+      )
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-stored"))
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      expect(fetchState.captured.at(-1)!.headers["x-api-key"]).toBe("sk-stored")
+    }),
+  )
+  it.live("ANTHROPIC_API_KEY applies when nothing is stored", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriver(
+        credentialCellRef,
+        betaCellRef,
+        Option.some("sk-env-key"),
+      )
+      const model = yield* driver.resolveModel("claude-opus-4-6")
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      expect(fetchState.captured.at(-1)!.headers["x-api-key"]).toBe("sk-env-key")
+    }),
+  )
+})
 describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   it.live("API-key resolveModel layer sends x-api-key (no Bearer)", () =>
     Effect.gen(function* () {
