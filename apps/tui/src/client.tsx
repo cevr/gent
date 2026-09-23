@@ -23,7 +23,6 @@ import {
   type BranchTreeNode,
   buildLogPaths,
   type ConnectionState,
-  type Session as DomainSession,
   ensureLogDir,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
@@ -828,7 +827,6 @@ interface ClientSessionValue {
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
-  listSessions: Effect.Effect<readonly DomainSession[], GentClientRpcError>
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
@@ -1466,8 +1464,6 @@ export function ClientProvider(props: ClientProviderProps) {
       if (Option.isNone(currentSession)) return [] satisfies readonly Message[]
       return yield* client.message.list({ branchId: currentSession.value.branchId })
     }),
-
-    listSessions: client.session.list(),
 
     listBranches: Effect.gen(function* () {
       const currentSession = sessionOption()

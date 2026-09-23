@@ -34,6 +34,7 @@ const row = (id: string, live = true): AgentRowEntry => ({
   section: "idle",
   live,
   depth: 0,
+  sideThread: false,
 })
 
 const detail = (turns: number): ExtensionAgentDetail => ({
@@ -176,6 +177,7 @@ const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
   name,
   live: false,
   depth,
+  sideThread: false,
 })
 
 /**
@@ -823,6 +825,7 @@ const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => (
   section,
   live: section !== "inactive",
   depth: 0,
+  sideThread: false,
 })
 
 const child = (id: string, section: AgentRowEntry["section"], parent: string): AgentRowEntry => ({
@@ -976,6 +979,7 @@ const rowStaleReply = (id: string): AgentRowEntry => ({
   section: "idle",
   live: true,
   depth: 0,
+  sideThread: false,
 })
 
 describe("Agents controller across a session switch", () => {

@@ -67,6 +67,7 @@ import {
 } from "@gent/core/test-utils"
 import { createMemo, createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
+import { waitForRenderedFrame } from "./helpers-boundary"
 import { runEffectBoundary, runRuntimeEffectBoundary } from "./run-effect-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
@@ -1026,6 +1027,54 @@ const waitForAgentError = (
     }),
   )
 describe("ClientProvider session lifecycle", () => {
+  it.live("a new session carries the workspace cwd and becomes the active one", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const createdSessionId = SessionId.make("session-created")
+      const createdBranchId = BranchId.make("branch-created")
+      const createInputs: Array<{ cwd?: string; requestId?: string }> = []
+      const workspaceCwd = process.cwd()
+      const client = createMockClient({
+        session: {
+          create: (input: { cwd?: string; requestId?: string }) =>
+            Effect.sync(() => {
+              createInputs.push(input)
+              return { sessionId: createdSessionId, branchId: createdBranchId, name: "Created" }
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client,
+          cwd: workspaceCwd,
+        }),
+      )
+      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+      const active = ctx.value
+      active.createSession()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          () => active.session()?.sessionId === createdSessionId,
+          "created session active",
+        ),
+      )
+      expect(createInputs).toHaveLength(1)
+      const firstInput = Option.fromNullishOr(createInputs[0])
+      if (Option.isNone(firstInput)) return yield* Effect.die("session create was not called")
+      expect(firstInput.value.cwd).toBe(workspaceCwd)
+      expect(Predicate.isString(firstInput.value.requestId)).toBe(true)
+      // The created session becomes the active one; the shell mounts what the
+      // client says, so there is no second place a navigation could go wrong.
+      expect(active.session()).toEqual({
+        sessionId: createdSessionId,
+        branchId: createdBranchId,
+        name: "Created",
+        modelId: absent,
+        reasoningLevel: absent,
+      })
+    }),
+  )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

@@ -150,8 +150,7 @@ describe("palette theme level", () => {
           "commands root",
         ),
       )
-      setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() => setup.renderOnce())
+      // Theme is the first row.
       setup.mockInput.pressEnter()
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("System"), "theme level"),
@@ -182,8 +181,7 @@ describe("palette theme level", () => {
           "commands root",
         ),
       )
-      setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() => setup.renderOnce())
+      // Mode is the second row.
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()

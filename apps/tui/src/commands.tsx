@@ -14,7 +14,6 @@ import { truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
 import { useClient } from "./client"
-import type { Session as DomainSession } from "@gent/sdk"
 import {
   ChromePanel,
   PickerFrame,
@@ -363,58 +362,6 @@ const selectedTitle = (title: string, selected: boolean): string => {
   return title
 }
 
-type SessionNode = {
-  readonly session: DomainSession
-  readonly children: SessionNode[]
-}
-
-/**
- * Whether this session was spawned beside its parent's work rather than
- * continuing it.
- *
- * A compaction handoff inherits the parent's thread. A delegate run or a `/btw`
- * fork is admitted under a parent but opens a thread of its own, so it
- * is the session whose thread is itself while still having a parent. The reader
- * sees which rows are side work before opening one.
- */
-const isSpawn = (session: DomainSession): boolean =>
-  Option.isSome(Option.fromNullishOr(session.parentSessionId)) &&
-  Option.match(Option.fromNullishOr(session.threadId), {
-    onNone: () => false,
-    onSome: (threadId) => threadId === session.id,
-  })
-
-const buildSessionTree = (list: readonly DomainSession[]): SessionNode[] => {
-  const nodes = new Map<string, SessionNode>()
-  for (const session of list) {
-    nodes.set(session.id, { session, children: [] })
-  }
-
-  const roots: SessionNode[] = []
-  for (const session of list) {
-    const node = Option.fromNullishOr(nodes.get(session.id))
-    if (Option.isNone(node)) continue
-    const parent = Option.fromNullishOr(session.parentSessionId).pipe(
-      Option.flatMap((id) => Option.fromNullishOr(nodes.get(id))),
-    )
-    if (Option.isSome(parent)) {
-      parent.value.children.push(node.value)
-    } else {
-      roots.push(node.value)
-    }
-  }
-
-  const sortNodes = (tree: SessionNode[]) => {
-    tree.sort((a, b) => b.session.updatedAt.getTime() - a.session.updatedAt.getTime())
-    for (const node of tree) {
-      if (node.children.length > 0) sortNodes(node.children)
-    }
-  }
-
-  sortNodes(roots)
-  return roots
-}
-
 export function CommandPalette() {
   const command = useCommand()
   const ext = useExtensionUI()
@@ -493,64 +440,6 @@ export function CommandPalette() {
     },
   })
 
-  const sessionsLevel = (): PaletteLevel => {
-    const [sessions] = createResource(() => client.runtime.run(client.listSessions))
-
-    const newSessionItem: PaletteItem = {
-      id: "session.new",
-      title: "+ New Session",
-      onSelect: () => {
-        client.createSession()
-        closePalette()
-      },
-    }
-
-    const flattenSessionTree = (nodes: readonly SessionNode[], depth = 0): PaletteItem[] => {
-      const items: PaletteItem[] = []
-      let prefix = ""
-      if (depth > 0) prefix = `${"  ".repeat(depth)}- `
-      for (const node of nodes) {
-        const session = node.session
-        const currentSession = client.session()
-        const isActive = currentSession?.sessionId === session.id
-        const title = selectedTitle(`${prefix}${session.name ?? "Unnamed"}`, isActive)
-
-        const spawnLabel = Option.getOrUndefined(
-          Option.map(Option.liftPredicate(session, isSpawn), () => "side thread"),
-        )
-
-        items.push({
-          id: `session.${session.id}`,
-          title,
-          description: spawnLabel,
-          onSelect: () => {
-            const branchId = Option.fromNullishOr(session.activeBranchId)
-            if (Option.isNone(branchId)) return
-            client.switchSession(session.id, branchId.value, session.name ?? "Unnamed")
-            closePalette()
-          },
-        })
-
-        if (node.children.length > 0) {
-          items.push(...flattenSessionTree(node.children, depth + 1))
-        }
-      }
-      return items
-    }
-
-    return {
-      id: "sessions",
-      title: "Sessions",
-      source: () =>
-        Option.getOrUndefined(
-          Option.map(Option.fromNullishOr(sessions()), (data) => [
-            newSessionItem,
-            ...flattenSessionTree(buildSessionTree(data)),
-          ]),
-        ),
-    }
-  }
-
   const branchesLevel = (): PaletteLevel => {
     const [branches] = createResource(() => client.runtime.run(client.listBranches))
     return {
@@ -586,13 +475,6 @@ export function CommandPalette() {
     title: "Commands",
     source: (): readonly PaletteItem[] => [
       {
-        id: "sessions",
-        title: "Sessions",
-        description: "Browse and switch sessions",
-        category: "Session",
-        onSelect: () => pushLevel(sessionsLevel()),
-      },
-      {
         id: "theme",
         title: "Theme",
         description: "Switch color theme",
@@ -613,20 +495,17 @@ export function CommandPalette() {
         category: "Session",
         onSelect: () => pushLevel(branchesLevel()),
       },
-      ...ext
-        .commands()
-        .filter((cmd) => cmd.id !== "session.sessions")
-        .map((cmd) => ({
-          id: `ext:${cmd.id}`,
-          title: cmd.title,
-          description: cmd.description,
-          category: cmd.category ?? "General",
-          shortcut: cmd.keybind,
-          onSelect: () => {
-            cmd.onSelect()
-            closePalette()
-          },
-        })),
+      ...ext.commands().map((cmd) => ({
+        id: `ext:${cmd.id}`,
+        title: cmd.title,
+        description: cmd.description,
+        category: cmd.category ?? "General",
+        shortcut: cmd.keybind,
+        onSelect: () => {
+          cmd.onSelect()
+          closePalette()
+        },
+      })),
     ],
   })
 
