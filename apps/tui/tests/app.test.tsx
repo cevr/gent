@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Clock, Context, Deferred, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Option, Schema } from "effect"
 import {
   AgentName,
   BranchId,
@@ -39,7 +39,6 @@ import { onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import { waitForRenderedFrame } from "./helpers-boundary"
-import { runEffectBoundary } from "./run-effect-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
@@ -418,7 +417,7 @@ const waitForMessage = (
   }[],
   content: string,
   timeoutMs = 2000,
-): Promise<void> => {
+): Effect.Effect<void, MessageTimeoutError> => {
   const poll = (startedAt: number): Effect.Effect<void, MessageTimeoutError> =>
     Effect.gen(function* () {
       yield* Effect.promise(() => setup.renderOnce())
@@ -433,7 +432,7 @@ const waitForMessage = (
       yield* Effect.sleep("10 millis")
       return yield* poll(startedAt)
     })
-  return runEffectBoundary(Clock.currentTimeMillis.pipe(Effect.flatMap(poll)))
+  return Clock.currentTimeMillis.pipe(Effect.flatMap(poll))
 }
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
@@ -675,7 +674,7 @@ describe("App auth gate", () => {
           },
         ),
       )
-      yield* Effect.promise(() => waitForMessage(setup, sentMessages, startupPrompt))
+      yield* waitForMessage(setup, sentMessages, startupPrompt)
       expect(sentMessages).toHaveLength(1)
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       ctx.value.createSession()
@@ -1064,7 +1063,7 @@ describe("App auth gate", () => {
           initialPrompt: Option.some("send after retry"),
         }),
       )
-      yield* Effect.promise(() => waitForMessage(setup, sentMessages, "send after retry"))
+      yield* waitForMessage(setup, sentMessages, "send after retry")
       expect(authChecks).toBeGreaterThan(1)
       setup.renderer.destroy()
     }),
@@ -1305,14 +1304,14 @@ describe("App auth gate", () => {
         waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth overlay closed"),
       )
       expect(hasOpenAiKey).toBe(true)
-      yield* Effect.promise(() => waitForMessage(setup, sentMessages, initialPrompt))
+      yield* waitForMessage(setup, sentMessages, initialPrompt)
       expect(sentMessages.find((message) => message.content === initialPrompt)).toMatchObject({
         sessionId: alphaSessionId,
         branchId: betaBranchId,
       })
       yield* Effect.promise(() => setup.mockInput.typeText(historyPrompt))
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() => waitForMessage(setup, sentMessages, historyPrompt))
+      yield* waitForMessage(setup, sentMessages, historyPrompt)
       setup.mockInput.pressKey("r", { ctrl: true })
       yield* Effect.promise(() =>
         waitForRenderedFrame(
@@ -1460,7 +1459,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved"),
       )
-      yield* Effect.promise(() => waitForMessage(setup, sentMessages, initialPrompt))
+      yield* waitForMessage(setup, sentMessages, initialPrompt)
       yield* Deferred.succeed(staleSessionCheck, [
         {
           provider: "openai",
@@ -1516,7 +1515,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* Effect.promise(() => waitForMessage(setup, sentMessages, initialPrompt))
+      yield* waitForMessage(setup, sentMessages, initialPrompt)
       // The server names the session after the first turn. The record is new;
       // the session is the same one.
       clientContext.switchSession(
@@ -1574,7 +1573,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* Effect.promise(() => waitForMessage(setup, attempts, initialPrompt))
+      yield* waitForMessage(setup, attempts, initialPrompt)
       // Nothing else changes: the send itself goes again.
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => attempts.length >= 2, "second send"),
@@ -1690,9 +1689,6 @@ const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnaps
 
 const healthyHealth: ExtensionHealthSnapshot = { _tag: "Healthy", extensions: [] }
 
-const runWithEmptyContext = <A, E, R>(effect: Effect.Effect<A, E, R>): Promise<A> =>
-  runEffectBoundary(Effect.provideContext(effect, Context.makeUnsafe<R>(new Map<string, never>())))
-
 const HealthControlsProbe = (props: {
   expose: (controls: {
     switchSession: () => void
@@ -1725,12 +1721,7 @@ const createMutableRuntime = (initialState: ConnectionState) => {
   let state = initialState
   const listeners = new Set<(state: ConnectionState) => void>()
   const runtime: GentRuntime = {
-    cast: <A, E, R>(effect: Effect.Effect<A, E, R>) => {
-      Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect)
-    },
-    fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      Effect.runForkWith(Context.makeUnsafe<R>(new Map<string, never>()))(effect),
-    run: runWithEmptyContext,
+    ...createMockRuntime(),
     lifecycle: {
       getState: () => state,
       subscribe: (listener) => {

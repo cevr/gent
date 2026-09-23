@@ -12,7 +12,6 @@ import {
   type ClientContributions,
   type ClientEffect,
   type ClientRuntime,
-  type ClientRuntimeServices,
   ClientSetupError,
   ClientContext,
   type ClientShellTransport,
@@ -51,7 +50,7 @@ import {
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
-import { runRuntimeEffectBoundary, runRuntimeExitBoundary } from "../run-effect-boundary"
+import { inRuntime } from "../helpers-boundary"
 import { SessionUiState, slashAutocompleteItems, transitionSessionUi } from "../../src/session"
 import { builtinClientModules } from "../../src/extensions/builtins"
 import type { Command } from "../../src/commands"
@@ -413,10 +412,10 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
       )
       const grant = encode({ trustedProjects: [canonicalRoot] })
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
-      yield* Effect.promise(() => loadTuiExtensions({ userDir, projectDir, runtime }))
+      yield* loadTuiExtensions({ userDir, projectDir, runtime })
       expect(yield* fs.exists(marker)).toBe(false)
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
-      yield* Effect.promise(() => loadTuiExtensions({ userDir, projectDir, runtime }))
+      yield* loadTuiExtensions({ userDir, projectDir, runtime })
       expect(yield* fs.readFileString(marker)).toBe("ran")
     }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -443,9 +442,7 @@ export default {
 };
 `,
       )
-      const result = yield* Effect.promise(() =>
-        loadTuiExtensions({ userDir, projectDir, runtime }),
-      )
+      const result = yield* loadTuiExtensions({ userDir, projectDir, runtime })
       expect(result.failures).toEqual([
         { id: "@user/stale-labels", reason: 'unknown contribution "borderLabels"' },
       ])
@@ -468,14 +465,12 @@ export default {
         })
       })
       const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
-      const result = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: [ext],
-          userDir: "/tmp/u-c9-1-fx",
-          projectDir: "/tmp/p-c9-1-fx",
-          runtime,
-        }),
-      )
+      const result = yield* loadTuiExtensions({
+        builtins: [ext],
+        userDir: "/tmp/u-c9-1-fx",
+        projectDir: "/tmp/p-c9-1-fx",
+        runtime,
+      })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
     }),
   )
@@ -500,14 +495,12 @@ export default {
           }),
         ),
       }
-      const result = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: [good, broken],
-          userDir: "/tmp/u-c9-1-fx-failure",
-          projectDir: "/tmp/p-c9-1-fx-failure",
-          runtime,
-        }),
-      )
+      const result = yield* loadTuiExtensions({
+        builtins: [good, broken],
+        userDir: "/tmp/u-c9-1-fx-failure",
+        projectDir: "/tmp/p-c9-1-fx-failure",
+        runtime,
+      })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
       expect(result.failures.map((failure) => failure.id)).toEqual(["@test/broken"])
     }),
@@ -525,15 +518,13 @@ export default {
         ),
       }
       const hung: ExtensionClientModule = { id: "@test/hung", setup: Effect.never }
-      const result = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: [good, hung],
-          userDir: "/tmp/u-hung-setup",
-          projectDir: "/tmp/p-hung-setup",
-          loadTimeout: "50 millis",
-          runtime,
-        }),
-      )
+      const result = yield* loadTuiExtensions({
+        builtins: [good, hung],
+        userDir: "/tmp/u-hung-setup",
+        projectDir: "/tmp/p-hung-setup",
+        loadTimeout: "50 millis",
+        runtime,
+      })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
       expect(result.failures.map((failure) => failure.id)).toEqual(["@test/hung"])
       expect(result.failures[0]?.reason).toContain("setup timed out")
@@ -576,9 +567,7 @@ export default {
     it.scopedLive("imports + runs an Effect-valued setup discovered from userDir", () =>
       Effect.gen(function* () {
         yield* discoveryFixture
-        const result = yield* Effect.promise(() =>
-          loadTuiExtensions({ userDir, projectDir, runtime }),
-        )
+        const result = yield* loadTuiExtensions({ userDir, projectDir, runtime })
         expect(result.autocompleteItems.map((c) => c.prefix)).toContain("#")
       }),
     )
@@ -670,7 +659,7 @@ describe("autocomplete Effect items() through the client transport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport({ currentSession: () => Option.none() })
       const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
+      const exit = yield* Effect.exit(inRuntime(runtime, listThings))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         // The cause should carry the typed NoActiveSessionError.
@@ -711,7 +700,7 @@ describe("autocomplete Effect items() through the client transport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport({ requestReply: ["effect-v4", "react"] })
       const runtime = makeTestRuntime(transport)
-      const result = yield* Effect.promise(() => runRuntimeEffectBoundary(runtime, listThings))
+      const result = yield* inRuntime(runtime, listThings)
       expect(result).toEqual(["effect-v4", "react"])
       yield* Effect.promise(() => runtime.dispose())
     }),
@@ -726,7 +715,7 @@ describe("autocomplete Effect items() through the client transport", () => {
         requestEffect: () => Effect.fail(new AutocompleteTestError({ message: "transport boom" })),
       })
       const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
+      const exit = yield* Effect.exit(inRuntime(runtime, listThings))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const causeStr = String(exit.cause)
@@ -740,7 +729,7 @@ describe("autocomplete Effect items() through the client transport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport({ requestReply: { nope: true } })
       const runtime = makeTestRuntime(transport)
-      const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
+      const exit = yield* Effect.exit(inRuntime(runtime, listThings))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const causeStr = String(exit.cause)
@@ -753,11 +742,9 @@ describe("autocomplete Effect items() through the client transport", () => {
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
-      const resolved: ClientTransport = yield* Effect.promise(() =>
-        runRuntimeEffectBoundary<ClientTransport, never, ClientContext>(
-          runtime,
-          ClientContext.use((context) => Effect.succeed(context.transport)),
-        ),
+      const resolved: ClientTransport = yield* inRuntime(
+        runtime,
+        ClientContext.use((context) => Effect.succeed(context.transport)),
       )
       expect(resolved.currentSession()).toEqual(
         Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
@@ -1127,11 +1114,8 @@ const testRuntime = makeClientRuntime({
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
 const loadTuiExtensions = (
   opts: Parameters<typeof _loadTuiExtensions>[0] & { readonly runtime?: ClientRuntime },
-): Promise<ResolvedTuiExtensions> =>
-  runRuntimeEffectBoundary<ResolvedTuiExtensions, never, ClientRuntimeServices>(
-    opts.runtime ?? testRuntime,
-    _loadTuiExtensions(opts),
-  )
+): Effect.Effect<ResolvedTuiExtensions> =>
+  inRuntime(opts.runtime ?? testRuntime, _loadTuiExtensions(opts))
 const TEST_DIR = join(import.meta.dir, "../../.tmp-ext-integration")
 const encodeTrustGrant = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
@@ -1217,13 +1201,11 @@ describe("loadTuiExtensions", () => {
       const emptyProject = join(TEST_DIR, "empty-project")
       mkdirSync(emptyUser, { recursive: true })
       mkdirSync(emptyProject, { recursive: true })
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: emptyUser,
-          projectDir: emptyProject,
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: emptyUser,
+        projectDir: emptyProject,
+      })
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.renderers.has("bash")).toBe(true)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
@@ -1239,14 +1221,12 @@ describe("loadTuiExtensions", () => {
       const emptyProject = join(TEST_DIR, "empty-project-handoff")
       mkdirSync(emptyUser, { recursive: true })
       mkdirSync(emptyProject, { recursive: true })
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: emptyUser,
-          projectDir: emptyProject,
-          disabled: ["@gent/interaction-tools"],
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: emptyUser,
+        projectDir: emptyProject,
+        disabled: ["@gent/interaction-tools"],
+      })
       expect(resolved.interactionRenderers.has("handoff")).toBe(false)
       expect(resolved.interactionRenderers.has("ask-user")).toBe(false)
       rmSync(emptyUser, { recursive: true, force: true })
@@ -1256,13 +1236,11 @@ describe("loadTuiExtensions", () => {
   it.scopedLive("user extensions can add visible renderer, widget, and command surfaces", () =>
     Effect.gen(function* () {
       yield* integrationFixture
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: USER_DIR,
-          projectDir: join(TEST_DIR, "no-project"),
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: USER_DIR,
+        projectDir: join(TEST_DIR, "no-project"),
+      })
       expect(resolved.renderers.has("my_custom_tool")).toBe(true)
       expect(resolved.widgets.some((widget) => widget.id === "test-widget")).toBe(true)
       expect(commandsOf(resolved).some((command) => command.id === "test-cmd")).toBe(true)
@@ -1273,13 +1251,11 @@ describe("loadTuiExtensions", () => {
     () =>
       Effect.gen(function* () {
         yield* integrationFixture
-        const resolved = yield* Effect.promise(() =>
-          loadTuiExtensions({
-            builtins: [],
-            userDir: USER_DIR,
-            projectDir: PROJECT_DIR,
-          }),
-        )
+        const resolved = yield* loadTuiExtensions({
+          builtins: [],
+          userDir: USER_DIR,
+          projectDir: PROJECT_DIR,
+        })
         const commandIds = commandsOf(resolved).map((command) => command.id)
         expect(commandIds).toContain("prebuilt")
         expect(commandIds).not.toContain("hidden")
@@ -1307,13 +1283,11 @@ export default defineClientExtension("@test/user-bash", {
   ),
 })`,
       )
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: userOverrideDir,
-          projectDir: PROJECT_DIR,
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: userOverrideDir,
+        projectDir: PROJECT_DIR,
+      })
       const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
       if (Option.isNone(bashRenderer)) return yield* Effect.die("expected bash renderer")
       expect(
@@ -1345,14 +1319,12 @@ export default {
   setup: Effect.sync(() => { throw new Error("setup() should not be called for disabled extension") }),
 }`,
       )
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: disabledDir,
-          projectDir: join(TEST_DIR, "no-project"),
-          disabled: ["@gent/tools", "@test/bomb"],
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: disabledDir,
+        projectDir: join(TEST_DIR, "no-project"),
+        disabled: ["@gent/tools", "@test/bomb"],
+      })
       expect(resolved.renderers.has("read")).toBe(false)
       expect(resolved.renderers.has("bash")).toBe(false)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
@@ -1366,13 +1338,11 @@ export default {
       const badDir = join(TEST_DIR, "bad-ext")
       mkdirSync(badDir, { recursive: true })
       writeFileSync(join(badDir, "bad.client.ts"), "export default { not: 'an extension' }")
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: badDir,
-          projectDir: join(TEST_DIR, "no-project"),
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: badDir,
+        projectDir: join(TEST_DIR, "no-project"),
+      })
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.failures).toEqual([
         { id: join(badDir, "bad.client.ts"), reason: "missing id" },
@@ -1403,13 +1373,11 @@ export default defineClientExtension("@test/b", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "b")),
 })`,
       )
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: collisionDir,
-          projectDir: join(TEST_DIR, "no-project"),
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: collisionDir,
+        projectDir: join(TEST_DIR, "no-project"),
+      })
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.renderers.has("bash")).toBe(true)
       const myTool = Option.fromNullishOr(resolved.renderers.get("my_tool"))
@@ -1428,13 +1396,11 @@ export default defineClientExtension("@test/b", {
       const emptyProject = join(TEST_DIR, "empty-project-ac")
       mkdirSync(emptyUser, { recursive: true })
       mkdirSync(emptyProject, { recursive: true })
-      const resolved = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: emptyUser,
-          projectDir: emptyProject,
-        }),
-      )
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: emptyUser,
+        projectDir: emptyProject,
+      })
       const prefixes = new Set(resolved.autocompleteItems.map((entry) => entry.prefix))
       expect(prefixes.has("$")).toBe(true)
       expect(prefixes.has("@")).toBe(true)
@@ -1463,14 +1429,12 @@ export default defineClientExtension("@test/b", {
       mkdirSync(emptyUser, { recursive: true })
       mkdirSync(emptyProject, { recursive: true })
       yield* Effect.gen(function* () {
-        const resolved = yield* Effect.promise(() =>
-          loadTuiExtensions({
-            builtins: builtinClientModules,
-            userDir: emptyUser,
-            projectDir: emptyProject,
-            runtime: activeSessionRuntime,
-          }),
-        )
+        const resolved = yield* loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: emptyUser,
+          projectDir: emptyProject,
+          runtime: activeSessionRuntime,
+        })
         // The goal label is the one builtin status label.
         expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40])
       }).pipe(
@@ -1506,13 +1470,11 @@ describe("tool renderer reach", () => {
       // The model sees only `cell`, and a cell hands each op to the renderer
       // registered for its tool: a renderer is reachable exactly when its name
       // is a real tool id.
-      const loaded = yield* Effect.promise(() =>
-        loadTuiExtensions({
-          builtins: builtinClientModules,
-          userDir: "/tmp/u-renderer-reach",
-          projectDir: "/tmp/p-renderer-reach",
-        }),
-      )
+      const loaded = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: "/tmp/u-renderer-reach",
+        projectDir: "/tmp/p-renderer-reach",
+      })
       const toolIds = new Set<string>()
       for (const extension of BuiltinExtensions) {
         const contributions = yield* collectTestContributions(extension.setup, {
