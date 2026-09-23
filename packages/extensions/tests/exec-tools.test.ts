@@ -1486,6 +1486,21 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a < file redirect replaces the pipe as the input of xargs or parallel", () => {
+    for (const command of [
+      "echo status | xargs git < /nonexistent/gent-probe-x",
+      "echo status | parallel git < /nonexistent/gent-probe-x",
+      "echo x | xargs -I{} sh -c '{}' < /nonexistent/gent-probe-x",
+      // A stdin file is the pipe.
+      "echo 'reset --hard' | xargs git < /dev/stdin",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo x | xargs wc -l < /nonexistent/gent-probe-x").level).toBe(
+      "safe",
+    )
+  })
+
   test("parallel combines its input sources and reads its replacement strings", () => {
     for (const command of [
       "parallel git ::: reset ::: --hard",
@@ -1721,6 +1736,15 @@ describe("classifyBashCommand", () => {
       "psql -c 'DELETE FROM t RETURNING $$ where $$'",
       "psql -c 'WITH x AS (DELETE FROM t RETURNING *) SELECT 1 FROM x WHERE true'",
       "psql -c 'DELETE FROM t USING (SELECT 1 WHERE true) s'",
+      // Any target list: a statement that starts with DELETE needs its own WHERE.
+      "mysql --socket=/nonexistent/gent-probe-x/mysql.sock -e 'DELETE `probe`.`t` FROM `probe`.`t`'",
+      "mysql -e 'DELETE probe . t FROM probe . t'",
+      "mysql -e 'DELETE `a` FROM `t` AS `a`'",
+      "mysql -e 'DELETE `t1`, `t2` FROM `t1` JOIN `t2` ON `t1`.a = `t2`.a'",
+      "mysql -e 'DELETE FROM t1, t2 USING t1 JOIN t2'",
+      'psql -c \'DELETE FROM "s"."t" AS a USING u\'',
+      "psql -c 'WITH x AS (SELECT 1) DELETE FROM s . t'",
+      "psql -c '/* note */ DELETE FROM ONLY s.t'",
       // MySQL may read a backslash in a string as an escape, or not.
       `mysql -e "SELECT 'a\\\\'; DELETE FROM t; -- '"`,
     ]) {
@@ -1729,6 +1753,8 @@ describe("classifyBashCommand", () => {
     for (const command of [
       "mysql -e 'DELETE t FROM t JOIN u ON t.a = u.a WHERE u.b = 1'",
       "mysql -e 'DELETE LOW_PRIORITY FROM t WHERE id = 1'",
+      "mysql -e 'DELETE `probe`.`t` FROM `probe`.`t` WHERE id = 1'",
+      "psql -c 'WITH x AS (SELECT 1) DELETE FROM s.t USING x WHERE t.id = x.id'",
       "psql -c 'DELETE FROM \"t\" WHERE id = 1'",
       "psql -c \"SELECT 'delete from t'\"",
       "psql -c 'CREATE TABLE t (a int REFERENCES u ON DELETE CASCADE)'",

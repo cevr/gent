@@ -330,6 +330,8 @@ interface ShellSegment {
   readonly stdin: Array<ShellWord>
   /** The targets of its output redirections: files it writes. */
   readonly writes: Array<ShellWord>
+  /** The targets of its `<` redirections: files it reads on stdin in place of its pipe. */
+  readonly reads: Array<ShellWord>
   /**
    * The segment whose output this one reads on stdin: the command piped into
    * it, or into the subshell, group, loop or `if` around it.
@@ -406,6 +408,7 @@ const makeSegment = (pipedFrom: Option.Option<ShellSegment>): ShellSegment => ({
   words: [],
   stdin: [],
   writes: [],
+  reads: [],
   pipedFrom,
   inputFile: Option.none(),
 })
@@ -553,6 +556,8 @@ const endWord = (reader: CommandReader) => {
     // `bash < <(cmd)`: the shell reads a script that only exists at run time.
     if (reader.role === "input-target" && isProcessSubstitution(word)) {
       reader.segment.stdin.push(word)
+    } else if (reader.role === "input-target") {
+      reader.segment.reads.push(word)
     }
     if (reader.role === "heredoc-delimiter") {
       reader.heredocs.push({
@@ -2362,6 +2367,10 @@ const wrapperSegment = (
     ...use.argFiles,
     ...sources.filter(isFileSource).map((source) => source.words[0]?.text ?? ""),
   ]
+  // `< file` replaces the pipe when the wrapper reads its stdin.
+  if (files.length === 0 && sources.length === 0) {
+    files.push(...Option.toArray(Arr.last(segment.reads)).map((word) => word.text))
+  }
   const file = Arr.findFirst(files, (name) => !STDIN_FILES.has(name))
   if (Option.isSome(file)) return { ...segment, inputFile: file }
   if (sources.length === 0) return segment
@@ -3022,15 +3031,17 @@ const sqlCode = (sql: string, dialect: SqlDialect): string => {
 }
 
 /**
- * A `DELETE`, with MySQL's modifiers and table list before `FROM`
- * (`DELETE LOW_PRIORITY t1, t2 FROM …`).
+ * A statement that starts with `DELETE`: at the start of the text, after
+ * `;`, after `(` (a query inside another), after the `)` that closes a WITH
+ * query, or in a trigger or block body (`BEGIN`, `THEN`, `ELSE`, `DO`). Its
+ * target list may take any shape (`DELETE s . t FROM …`, `DELETE t1, t2`).
+ * `ON DELETE`, `AFTER DELETE` and `GRANT DELETE` are not statements.
  */
-const SQL_DELETE =
-  /\bdelete\s+(?:(?:low_priority|quick|ignore)\s+)*(?:[\w.*]+(?:\s*,\s*[\w.*]+)*\s+)?from\b/gi
+const SQL_DELETE = /(?:^|[;()]|\b(?:begin|then|else|do)\b)\s*delete\b/gi
 const SQL_SCOPE = /[();]|\bwhere\b/gi
 
 /**
- * Whether a `DELETE` in `code` has no `WHERE` of its own: none before its
+ * Whether a `DELETE` statement in `code` has no `WHERE` of its own: none before its
  * statement ends at `;`, or at the `)` that closes the query around it
  * (`WITH x AS (DELETE FROM t RETURNING *) SELECT … WHERE …`), and none inside
  * a parenthesis of its own.
