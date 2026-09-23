@@ -251,7 +251,8 @@ const queueWake = (
       yield* modifyWakeEntries((current) => [...current, notice])
       return yield* ctx.State.changed()
     }
-    yield* ctx.Session.queueFollowUp({
+    yield* ctx.Session.send({
+      delivery: "queue",
       sourceId: `wake:${entry.wakeId}:${details.firedAt}`,
       content,
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },

@@ -1556,7 +1556,7 @@ describe("extension capability registries", () => {
             const extensionCtx = yield* ExtensionContext
             const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
             const followUpExit = yield* Effect.exit(
-              extensionCtx.Session.queueFollowUp({ sourceId: "request", content: "ok" }),
+              extensionCtx.Session.send({ delivery: "queue", sourceId: "request", content: "ok" }),
             )
             const interactionExit = yield* Effect.exit(
               extensionCtx.Interaction.present({ content: "ok", title: "request" }),
@@ -1578,7 +1578,7 @@ describe("extension capability registries", () => {
           sessionId: SessionId.make("request-session"),
           branchId: BranchId.make("request-branch"),
           host: { ...testExtensionHostContext().host, parentEnv: { TEST_VALUE: "visible" } },
-          Session: { queueFollowUp: () => Effect.void },
+          Session: { send: () => Effect.void },
           Interaction: { present: () => Effect.void },
         }),
       )
@@ -3793,8 +3793,8 @@ describe("ExternalDriver registry", () => {
 //
 // Every extension gets the same facade, so a child runner is buildable
 // outside core. Each verb is exercised through the RPC path with real
-// per-request scopes: create a child, prompt it, read its receipt, queue a
-// follow-up on it, steer it, delete it.
+// per-request scopes: create a child, prompt it with a turn, read its
+// receipt, queue a follow-up on it, steer a message into it, stop it, delete it.
 
 describe("addressed session verbs via RPC", () => {
   const extensionId = ExtensionId.make("@gent/test-addressed")
@@ -3824,6 +3824,7 @@ describe("addressed session verbs via RPC", () => {
           detailBefore.branches.find((b) => b.branch.id === child.branchId)?.messages.length ?? 0
         // A commandId waits for the child's turn to end.
         yield* ctx.Session.send({
+          delivery: "turn",
           ...child,
           content: input.prompt,
           commandId: ActorCommandId.make(`spawn:${input.requestId}`),
@@ -3854,7 +3855,8 @@ describe("addressed session verbs via RPC", () => {
       output: Schema.Struct({ queued: Schema.Boolean }),
       execute: Effect.fn("QueueOn.execute")(function* (target) {
         const ctx = yield* ExtensionContext
-        yield* ctx.Session.queueFollowUp({
+        yield* ctx.Session.send({
+          delivery: "queue",
           ...target,
           sourceId: "addressed-test",
           content: "follow-up for the child",
@@ -3869,6 +3871,7 @@ describe("addressed session verbs via RPC", () => {
       execute: Effect.fn("SendToSelf.execute")(function* () {
         const ctx = yield* ExtensionContext
         const result = yield* ctx.Session.send({
+          delivery: "turn",
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
           content: "loop on myself",
@@ -3876,18 +3879,30 @@ describe("addressed session verbs via RPC", () => {
         return { refused: Exit.isFailure(result) }
       }),
     }),
-    Steer: request({
-      id: "steer",
+    SteerInto: request({
+      id: "steer-into",
       input: Target,
       output: Schema.Struct({ steered: Schema.Boolean }),
-      execute: Effect.fn("Steer.execute")(function* (target) {
+      execute: Effect.fn("SteerInto.execute")(function* (target) {
         const ctx = yield* ExtensionContext
-        yield* ctx.Session.steer({
-          _tag: "Cancel",
+        // The child is idle; without `wake` the message would park in its queue.
+        yield* ctx.Session.send({
+          delivery: "steer",
           ...target,
-          requestId: RequestId.make("addressed-interrupt"),
+          content: "steered into the child",
+          wake: true,
         })
         return { steered: true }
+      }),
+    }),
+    Stop: request({
+      id: "stop",
+      input: Target,
+      output: Schema.Struct({ stopped: Schema.Boolean }),
+      execute: Effect.fn("Stop.execute")(function* (target) {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Session.stop({ ...target, requestId: RequestId.make("addressed-stop") })
+        return { stopped: true }
       }),
     }),
     Delete: request({
@@ -3932,13 +3947,14 @@ describe("addressed session verbs via RPC", () => {
       .pipe(Effect.flatMap(Schema.decodeUnknownEffect(capability.output)))
 
   it.scopedLive(
-    "a request creates, prompts, reads, queues on, steers, and deletes a child",
+    "a request creates, prompts, reads, queues on, steers into, stops, and deletes a child",
     () =>
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           textStep("parent answer"),
           textStep("child answer"),
           textStep("follow-up answer"),
+          textStep("steered answer"),
         ])
         const harness = yield* createRpcHarness({
           ...e2ePreset,
@@ -3985,10 +4001,34 @@ describe("addressed session verbs via RPC", () => {
         const self = yield* call(harness, Verbs.SendToSelf, {})
         expect(self.refused).toBe(true)
 
-        const steered = yield* call(harness, Verbs.Steer, child)
+        // Let the follow-up turn end, so the steered message wakes an idle child.
+        yield* waitFor(
+          harness.client.message.list(child),
+          (messages) =>
+            messages.some(
+              (m) =>
+                m.role === "assistant" && messagePartsDisplayText(m.parts) === "follow-up answer",
+            ),
+          5_000,
+          "follow-up answered",
+        )
+        const steered = yield* call(harness, Verbs.SteerInto, child)
         expect(steered.steered).toBe(true)
+        yield* waitFor(
+          harness.client.message.list(child),
+          (messages) =>
+            messages.some(
+              (m) =>
+                m.role === "assistant" && messagePartsDisplayText(m.parts) === "steered answer",
+            ),
+          5_000,
+          "steered message woke the child into a turn",
+        )
+
+        const stopped = yield* call(harness, Verbs.Stop, child)
+        expect(stopped.stopped).toBe(true)
         // A target that does not exist is refused before any loop is opened for it.
-        const phantom = yield* call(harness, Verbs.Steer, {
+        const phantom = yield* call(harness, Verbs.Stop, {
           sessionId: SessionId.make("no-such-session"),
           branchId: BranchId.make("no-such-branch"),
         }).pipe(Effect.exit)

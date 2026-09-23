@@ -610,8 +610,8 @@ const contextWith = (
       ...testToolContext().Session,
       // Recording the line and opening the latch in one step lets a test join the
       // fire instead of polling for it.
-      queueFollowUp: ({ content }) =>
-        Ref.update(queued, (all) => [...all, content]).pipe(
+      send: (params) =>
+        Ref.update(queued, (all) => [...all, params.content]).pipe(
           Effect.andThen(
             Option.match(fired, {
               onNone: () => Effect.void,

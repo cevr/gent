@@ -124,6 +124,22 @@ yield that service directly. Do not add ctx parameters, private builtin APIs,
 capability labels, or read/write metadata when ordinary Effect service access
 already expresses the authority.
 
+`ctx.Session.send` is the one verb that puts a user message into a branch.
+Its `delivery` picks how the message lands, and each mode takes only its own
+fields:
+
+| `delivery` | Lands                                   | Own fields                                                             |
+| ---------- | --------------------------------------- | ---------------------------------------------------------------------- |
+| `"turn"`   | starts a turn on another branch         | `completion`, `commandId`, `agentOverride`, `interactive`, `runSpec`   |
+| `"queue"`  | waits behind the running turn           | `sourceId` (idempotency and `dequeueFollowUp` key), `metadata`, `wake` |
+| `"steer"`  | joins the running turn at its next step | `requestId`, `metadata`, `agent`, `wake`                               |
+
+`"queue"` and `"steer"` target the current branch when no `sessionId` and
+`branchId` are named. A `"turn"` names its target, and the current branch
+refuses it: a turn that waits on its own loop never returns, so it takes
+`"queue"`. `ctx.Session.stop({ sessionId?, branchId?, messageId? })` stops a
+running turn.
+
 `ExtensionHost.host` and `ExtensionHost.Process` are the only public host
 platform views at setup time. They expose small, serializable facts and narrow
 host probes such as OS info, executable path, home directory, command-name
@@ -275,7 +291,11 @@ export default defineExtension({
     yield* host.on("turnAfter", () =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
-        yield* ctx.Session.queueFollowUp({ sourceId: "status-ext", content: "status updated" })
+        yield* ctx.Session.send({
+          delivery: "queue",
+          sourceId: "status-ext",
+          content: "status updated",
+        })
       }),
     )
   }),

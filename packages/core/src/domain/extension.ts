@@ -14,8 +14,8 @@ import {
 } from "effect"
 import {
   type AgentDefinition,
-  type AgentName,
-  type RunSpec,
+  AgentName,
+  RunSpecSchema,
   type SessionDepthLimitError,
 } from "./agent.js"
 import {
@@ -35,18 +35,18 @@ import type {
   RunProcessOptions,
 } from "../runtime/gent-platform.js"
 import {
-  type ActorCommandId,
-  type BranchId,
+  ActorCommandId,
+  BranchId,
   ExtensionId,
   type MessageId,
-  type RequestId,
-  type SessionId,
+  RequestId,
+  SessionId,
   type ToolCallId,
 } from "./ids.js"
 import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
-import type { Branch, Message, MessageMetadata, Session, SteerCommand } from "./message.js"
+import { type Branch, type Message, MessageMetadata, type Session } from "./message.js"
 import type { InvalidStateError, NotFoundError, StorageError } from "./errors.js"
 import type { SessionRuntimeError } from "../runtime/session.js"
 import type {
@@ -702,6 +702,58 @@ export const mapExtensionServiceError = <A, E, R>(
 ): Effect.Effect<A, ExtensionServiceError, R> =>
   effect.pipe(Effect.mapError(extensionServiceError(service, operation)))
 
+/**
+ * How `Session.send` puts a user message into a branch. Each mode takes only
+ * its own fields.
+ *
+ * - `turn` starts a turn on another branch. `completion: "admission"` returns
+ *   once that loop holds the turn; a `commandId` waits for the turn to end.
+ *   The current branch refuses a `turn`: a turn that waits on its own loop
+ *   never returns, so it takes `queue`. Two branches that send each other a
+ *   `turn` with a `commandId` wait on each other; `completion: "admission"` is
+ *   the safe shape for mutual traffic.
+ * - `queue` waits behind the running turn, keyed by `sourceId` so a repeat is
+ *   a no-op and `dequeueFollowUp` can take it back. `wake` starts a turn even
+ *   on a branch with no prior history.
+ * - `steer` joins the running turn at its next step. An idle branch parks it
+ *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op.
+ *
+ * `queue` and `steer` target the current branch when no target is named.
+ */
+export const SessionSendParams = Schema.Union([
+  Schema.Struct({
+    delivery: Schema.Literal("turn"),
+    sessionId: SessionId,
+    branchId: BranchId,
+    content: Schema.String,
+    commandId: Schema.optional(ActorCommandId),
+    agentOverride: Schema.optional(AgentName),
+    interactive: Schema.optional(Schema.Boolean),
+    runSpec: Schema.optional(RunSpecSchema),
+    completion: Schema.optional(Schema.Literal("admission")),
+  }),
+  Schema.Struct({
+    delivery: Schema.Literal("queue"),
+    sessionId: Schema.optional(SessionId),
+    branchId: Schema.optional(BranchId),
+    content: Schema.String,
+    sourceId: Schema.String,
+    metadata: Schema.optional(MessageMetadata),
+    wake: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    delivery: Schema.Literal("steer"),
+    sessionId: Schema.optional(SessionId),
+    branchId: Schema.optional(BranchId),
+    content: Schema.String,
+    requestId: Schema.optional(RequestId),
+    metadata: Schema.optional(MessageMetadata),
+    agent: Schema.optional(AgentName),
+    wake: Schema.optional(Schema.Boolean),
+  }),
+]).pipe(Schema.toTaggedUnion("delivery"))
+export type SessionSendParams = typeof SessionSendParams.Type
+
 export interface ExtensionSessionService {
   readonly getSession: (
     sessionId?: SessionId,
@@ -739,25 +791,21 @@ export interface ExtensionSessionService {
   /** Delete a session and every descendant. Their loops are tombstoned, not awaited; deleting the caller's own session ends its turn. */
   readonly delete: (sessionId: SessionId) => Effect.Effect<void, ExtensionServiceError>
   /**
-   * One user message on another branch. `completion: "admission"` returns
-   * once that loop holds the turn; a `commandId` waits for the turn to end.
-   * The current branch takes `queueFollowUp`, never `send`: a turn that
-   * waits on its own loop never returns. Two branches that `send` each other
-   * with a `commandId` wait on each other; `completion: "admission"` is the
-   * safe shape for mutual traffic.
+   * One user message into a branch; `delivery` picks how it lands. See
+   * `SessionSendParams` for the three modes.
    */
-  readonly send: (params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly content: string
-    readonly commandId?: ActorCommandId
-    readonly agentOverride?: AgentName
-    readonly interactive?: boolean
-    readonly runSpec?: RunSpec
-    readonly completion?: "admission"
+  readonly send: (params: SessionSendParams) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * Stop a branch's running turn; the current branch when no target is named.
+   * A `messageId` stops only the turn for that message. A `requestId` makes a
+   * repeat of the same stop a no-op.
+   */
+  readonly stop: (params: {
+    readonly sessionId?: SessionId
+    readonly branchId?: BranchId
+    readonly messageId?: MessageId
+    readonly requestId?: RequestId
   }) => Effect.Effect<void, ExtensionServiceError>
-  /** Cancel, interrupt, or interject into any branch's loop. */
-  readonly steer: (command: SteerCommand) => Effect.Effect<void, ExtensionServiceError>
   /**
    * A branch's events: the durable history first, one `StreamSynchronized`
    * marker, then live delivery. Take until the marker for a bounded read.
@@ -766,15 +814,6 @@ export interface ExtensionSessionService {
     readonly sessionId: SessionId
     readonly branchId?: BranchId
   }) => Stream.Stream<AgentEvent, ExtensionServiceError>
-  /** Queue a follow-up; the current branch when no target is named. */
-  readonly queueFollowUp: (params: {
-    readonly sourceId: string
-    readonly content: string
-    readonly metadata?: MessageMetadata
-    readonly sessionId?: SessionId
-    readonly branchId?: BranchId
-    readonly wake?: boolean
-  }) => Effect.Effect<void, ExtensionServiceError>
   /** Removes a queued follow-up by source; the current branch when no target is named. False when absent or already running. */
   readonly dequeueFollowUp: (params: {
     readonly sourceId: string

@@ -391,10 +391,7 @@ interface BackgroundBashTarget {
   readonly sessionId: SessionId
   readonly branchId: ExtensionContextService["branchId"]
   readonly toolCallId: ToolCallId
-  readonly Session: Pick<
-    ExtensionContextService["Session"],
-    "getSession" | "listBranches" | "queueFollowUp"
-  >
+  readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
 }
 
 /**
@@ -488,7 +485,8 @@ const queueBackgroundFollowUp = (params: {
 }) =>
   Effect.gen(function* () {
     if (!(yield* targetStillExists(params.target))) return
-    yield* params.target.Session.queueFollowUp({
+    yield* params.target.Session.send({
+      delivery: "queue",
       sourceId: params.sourceId,
       content: params.content,
     }).pipe(Effect.catchEager(() => Effect.void))

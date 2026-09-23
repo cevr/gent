@@ -298,7 +298,8 @@ const deliverCompletion = (
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const text = latestAssistantText(yield* childMessages(entry))
-    yield* ctx.Session.queueFollowUp({
+    yield* ctx.Session.send({
+      delivery: "queue",
       ...parent,
       sourceId: childCompletionSourceId(entry.requestId),
       // A parent with no prior turn still gets to read the completion.
@@ -349,6 +350,7 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* ctx.Session.send({
+      delivery: "turn",
       sessionId: entry.sessionId,
       branchId: entry.branchId,
       content: childTaskText(ctx.sessionId, entry.prompt),
@@ -504,8 +506,7 @@ const stopChild = (entry: DelegateEntry) =>
         return replaceEntry(entries, settled(current, { interrupted: true }, Option.none(), ""))
       })
       .pipe(Effect.ignore)
-    yield* ctx.Session.steer({
-      _tag: "Cancel",
+    yield* ctx.Session.stop({
       sessionId: entry.sessionId,
       branchId: entry.branchId,
       requestId: RequestId.make(`delegate-stop:${entry.sessionId}`),
@@ -691,8 +692,7 @@ export const CancelChild = tool({
     const ctx = yield* ExtensionContext
     const entry = yield* ownedChild(params.requestId)
     if (Predicate.isUndefined(entry.completed)) {
-      yield* ctx.Session.steer({
-        _tag: "Cancel",
+      yield* ctx.Session.stop({
         sessionId: entry.sessionId,
         branchId: entry.branchId,
         requestId: RequestId.make(`delegate-cancel:${params.requestId}`),
