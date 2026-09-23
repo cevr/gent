@@ -2477,6 +2477,36 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.scopedLive("a dangling symlink fails alone; its siblings still load", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
+      const dir = yield* fs.makeTempDirectoryScoped({
+        directory: repositoryRoot,
+        prefix: ".tmp-loader-dangling-",
+      })
+      yield* fs.writeFileString(
+        path.join(dir, "good.ts"),
+        'import { Effect } from "effect"\nexport default { manifest: { id: "good" }, setup: Effect.void }\n',
+      )
+      const danglingPath = path.join(dir, "zz-dangling.ts")
+      yield* fs.symlink(path.join(dir, "nowhere.ts"), danglingPath)
+
+      const result = yield* discoverExtensions({
+        userDir: dir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+
+      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+        ExtensionId.make("good"),
+      ])
+      expect(result.failed).toMatchObject([
+        { sourcePath: danglingPath, scope: "user", phase: "load" },
+      ])
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("a setup that returns the old contribution object is rejected", () =>
     Effect.gen(function* () {
       // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This old-contract setup is a boundary rejection fixture.
