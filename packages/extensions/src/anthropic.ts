@@ -50,6 +50,7 @@ import {
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
+  apiKeyFrom,
   readOptionalEnv,
   recoverUnauthorized,
   withHeaders,
@@ -86,8 +87,7 @@ interface ModelOverride {
   readonly exclude?: ReadonlyArray<string>
   /** Beta flags to add for this model on top of the base list. */
   readonly add?: ReadonlyArray<string>
-  /** Whether the model rejects the `output_config.effort` /
-   *  `thinking.effort` knobs. */
+  /** Whether the model rejects `output_config.effort` (Anthropic answers 400). */
   readonly disableEffort?: boolean
 }
 
@@ -105,7 +105,7 @@ interface ModelConfig {
  * `~/.cache/repo/griffinmartin/opencode-claude-auth/src/model-config.ts`.
  */
 export const MODEL_CONFIG: ModelConfig = {
-  ccVersion: "2.1.90",
+  ccVersion: "2.1.280",
   baseBetas: [
     "claude-code-20250219",
     "oauth-2025-04-20",
@@ -1107,7 +1107,6 @@ export const makeAnthropicCredentialCache = (
       label: "Anthropic",
       credentials: ClaudeCredentials,
       cellRef,
-      seed: Option.none(),
       expiresAt: (creds) => creds.expiresAt,
       // A keychain miss surfaces as ProviderAuthError; swallowing it
       // turns the miss into a refresh attempt instead of a failure.
@@ -1486,52 +1485,6 @@ const relocateThirdPartyIntoFirstUser = (
 }
 
 /**
- * Strip the effort knob for models that do not support it (the
- * override table sets `disableEffort` for the haiku family). Anthropic returns 400 if
- * effort is sent with a haiku model. We strip from BOTH
- * `output_config.effort` (the shape gent emits) AND `thinking.effort`
- * (the shape the upstream Anthropic SDK may emit in future versions —
- * matches the opencode reference). Each branch deletes the parent
- * object if it empties out.
- */
-const stripObjectKey = (parent: JsonRecord, key: string): Option.Option<JsonRecord> => {
-  if (!(key in parent)) return Option.some(parent)
-  const { [key]: _removed, ...rest } = parent
-  if (Object.keys(rest).length === 0) return Option.none()
-  return Option.some(rest)
-}
-
-const stripHaikuEffort = (payload: JsonRecord): JsonRecord => {
-  const model = payload["model"]
-  if (!Predicate.isString(model)) return payload
-  const override = getModelOverride(model)
-  if (Option.isNone(override) || override.value.disableEffort !== true) return payload
-
-  const next = { ...payload }
-  const outputConfig = next["output_config"]
-  if (isRecord(outputConfig)) {
-    const stripped = stripObjectKey(outputConfig, "effort")
-    Option.match(stripped, {
-      onNone: () => delete next["output_config"],
-      onSome: (value) => {
-        next["output_config"] = value
-      },
-    })
-  }
-  const thinking = next["thinking"]
-  if (isRecord(thinking)) {
-    const stripped = stripObjectKey(thinking, "effort")
-    Option.match(stripped, {
-      onNone: () => delete next["thinking"],
-      onSome: (value) => {
-        next["thinking"] = value
-      },
-    })
-  }
-  return next
-}
-
-/**
  * Apply every outgoing OAuth-billing transform. Order is load-bearing —
  * relocation MUST run BEFORE billing computation because the relocator
  * changes the first-user message text and the billing hash MUST match
@@ -1548,7 +1501,6 @@ const stripHaikuEffort = (payload: JsonRecord): JsonRecord => {
  *      billing hash in step 6 sees the final wire text.
  *   6. buildSystemArray — compute billing from FINAL (post-relocation)
  *      messages; emit the strict `[billing, identity]` system shape.
- *   7. stripHaikuEffort — final payload correction; independent.
  */
 export const transformPayload = (
   payload: JsonRecord,
@@ -1579,8 +1531,6 @@ export const transformPayload = (
     }
     result["messages"] = messagesAfterRelocate
     result["system"] = yield* buildSystemArray(messagesAfterRelocate)
-
-    result = stripHaikuEffort(result)
 
     return result
   })
@@ -1963,7 +1913,11 @@ const ANTHROPIC_EFFORT = new Map<string, "low" | "medium" | "high">([
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
 
-const buildAnthropicConfig = (hints: Option.Option<ProviderHints>): AnthropicConfig => {
+/** Sampling limits and effort for one model; a model that rejects effort gets none. */
+const buildAnthropicConfig = (
+  modelName: string,
+  hints: Option.Option<ProviderHints>,
+): AnthropicConfig => {
   let config: AnthropicConfig = {}
   if (Option.isSome(hints)) {
     const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
@@ -1971,7 +1925,11 @@ const buildAnthropicConfig = (hints: Option.Option<ProviderHints>): AnthropicCon
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
     const reasoning = Option.fromNullishOr(hints.value.reasoning)
-    if (Option.isSome(reasoning) && reasoning.value !== "none") {
+    const takesEffort = Option.match(getModelOverride(modelName), {
+      onNone: () => true,
+      onSome: (override) => override.disableEffort !== true,
+    })
+    if (takesEffort && Option.isSome(reasoning) && reasoning.value !== "none") {
       const effort = Option.fromNullishOr(ANTHROPIC_EFFORT.get(reasoning.value))
       if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
     }
@@ -2059,12 +2017,12 @@ export const buildAnthropicModelDriver = (
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
-      const config = buildAnthropicConfig(Option.fromNullishOr(hints))
+      const config = buildAnthropicConfig(modelName, Option.fromNullishOr(hints))
 
       // Precedence, the same as OpenAI: stored Claude Code sign-in, then
       // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
       // Code in /auth is not billed on a shell API key.
-      if (Option.isSome(auth) && auth.value.type === "oauth") {
+      if (Option.isSome(auth) && auth.value._tag === "Oauth") {
         // The credential cache and the beta cache are built over the
         // extension-closure-owned cells, so cross-request beta learning and
         // credential reuse survive. The credentials are checked before the
@@ -2078,10 +2036,7 @@ export const buildAnthropicModelDriver = (
         )
       }
 
-      let apiKey = envApiKey
-      if (Option.isSome(auth) && auth.value.type === "api") {
-        apiKey = Option.fromNullishOr(auth.value.key)
-      }
+      const apiKey = apiKeyFrom(auth, envApiKey)
       if (Option.isSome(apiKey)) {
         return AiModel.make(
           "anthropic",

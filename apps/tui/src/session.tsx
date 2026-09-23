@@ -1702,6 +1702,13 @@ const applyToolCallResult = (
   call.value.status = status
   call.value.summary = toolEvent.summary
   call.value.output = toolEvent.output
+  // A snapshot's cuts describe the output it came with, not this one.
+  delete call.value.cuts
+  // An op still running when its cell ends ended with the cell, as a reload
+  // projects it (`settledOperations` in core): it failed.
+  for (const operation of call.value.operations ?? []) {
+    if (operation.status === "running") operation.status = "error"
+  }
   if (Predicate.isNotUndefined(call.value.startedAt)) {
     call.value.durationMs = Math.max(0, completedAt - call.value.startedAt)
   }

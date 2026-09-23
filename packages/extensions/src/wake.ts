@@ -603,6 +603,14 @@ export const WakeTool = tool({
   ],
   params: WakeParams,
   output: WakeResult,
+  summary: (_input, output) =>
+    [
+      `${output.mode} at ${output.dueAt}`,
+      ...Option.toArray(
+        Option.map(Option.fromUndefinedOr(output.everySeconds), (every) => `every ${every}s`),
+      ),
+      output.note,
+    ].join(" · "),
   execute: Effect.fn("WakeTool.execute")(function* (params: typeof WakeParams.Type) {
     const now = yield* Clock.currentTimeMillis
     const dueAt = yield* dueAtOf(params, now)

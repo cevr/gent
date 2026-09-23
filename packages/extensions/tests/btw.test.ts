@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import { LanguageModelLayers, textStep, waitFor, createRpcHarness } from "@gent/core/test-utils"
-import { BranchId, SessionId } from "@gent/core/extensions/api"
+import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { BTW_EXTENSION_ID, ForkProgress } from "../src/btw.js"
 
@@ -30,8 +30,13 @@ type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
 
 const ForkHandle = Schema.Struct({ sessionId: SessionId, branchId: BranchId })
 
-const btw = (harness: Harness) => {
-  const target = { sessionId: harness.sessionId, branchId: harness.branchId }
+const btw = (
+  harness: Harness,
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId } = {
+    sessionId: harness.sessionId,
+    branchId: harness.branchId,
+  },
+) => {
   const progress = harness.client.extension
     .request({ ...target, extensionId: BTW_EXTENSION_ID, capabilityId: "btw.progress", input: {} })
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ForkProgress)))
@@ -137,6 +142,50 @@ describe("btw forks", () => {
           expect(forkSession?.parentSessionId).toBe(sessionId)
           const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
           expect(snapshot.messages.length).toBe(2)
+          yield* controls.assertDone
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "the fork runs as the session's agent, on the session's model and reasoning",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessionModel = ModelId.make("test/session-model")
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            {
+              ...textStep("pelican"),
+              assertRequest: (request) => {
+                expect(request.model).toBe(sessionModel)
+                expect(request.reasoning).toBe("low")
+              },
+              assertOptions: (options) => {
+                // The delegate agent denies delegation; the default agent would offer it.
+                const tools = options.tools.map((entry) => entry.name)
+                expect(tools.length).toBeGreaterThan(0)
+                expect(tools).not.toContain("delegate.start")
+              },
+            },
+          ])
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const session = yield* harness.client.session.create({
+            cwd: process.cwd(),
+            admission: { agent: AgentName.make("delegate") },
+          })
+          yield* harness.client.session.updateSettings({
+            sessionId: session.sessionId,
+            modelId: sessionModel,
+            reasoningLevel: "low",
+          })
+          const pane = btw(harness, session)
+          const handle = yield* pane.fork("What is the codeword?")
+          yield* pane.replied(1)
+          const fork = yield* harness.client.session.get({ sessionId: handle.sessionId })
+          expect(fork?.admission?.agent).toBe(AgentName.make("delegate"))
+          expect(fork?.modelId).toBe(sessionModel)
+          expect(fork?.reasoningLevel).toBe("low")
           yield* controls.assertDone
         }).pipe(Effect.timeout("8 seconds")),
       ),

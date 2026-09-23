@@ -17,6 +17,7 @@ import {
   assistantMessageIdForTurn,
   BranchId,
   dateFromMillis,
+  DEFAULT_AGENT_NAME,
   EventEnvelope,
   Message,
   MessageId,
@@ -26,6 +27,7 @@ import {
   type SessionSnapshot,
   ToolCallId,
   ToolInteraction,
+  OutputCut,
 } from "@gent/core/protocol"
 import { ExtensionId } from "@gent/core/extensions/api"
 import {
@@ -594,6 +596,44 @@ describe("ClientProvider session lifecycle", () => {
       })
     }),
   )
+  it.live("a new session after resuming another agent's session starts as the default agent", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const client = createMockClient({
+        session: {
+          create: () =>
+            Effect.succeed({
+              sessionId: SessionId.make("session-new"),
+              branchId: BranchId.make("branch-new"),
+              name: "New",
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client,
+          initialSession: {
+            id: SessionId.make("session-resumed"),
+            activeBranchId: BranchId.make("branch-resumed"),
+            name: "Resumed",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+          initialAgent: AgentName.make("deepwork"),
+        }),
+      )
+      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+      const active = ctx.value
+      expect(active.agent()).toBe(AgentName.make("deepwork"))
+      active.createSession()
+      yield* waitForFrame(
+        setup,
+        () => active.session()?.sessionId === SessionId.make("session-new"),
+        "new session active",
+      )
+      expect(active.agent()).toBe(DEFAULT_AGENT_NAME)
+    }),
+  )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
@@ -749,48 +789,48 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.isError()).toBe(true)
     }),
   )
-  it.live("switchSession activates the target session immediately and seeds the target agent", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+  it.live(
+    "switchSession activates the target session at once; its agent waits for the snapshot",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+            {
+              initialSession: {
+                id: SessionId.make("session-a"),
+                activeBranchId: BranchId.make("branch-a"),
+                name: "A",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+            },
+          ),
+        )
+        const client = yield* requireClientSessionState(ctx)
+        client.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
+        yield* waitForFrame(
+          setup,
+          () => {
+            const current = client.sessionState()
+            return current.status === "active"
           },
-        }),
-      )
-      const client = yield* requireClientSessionState(ctx)
-      client.switchSession(
-        SessionId.make("session-b"),
-        BranchId.make("branch-b"),
-        "B",
-        AgentName.make("deepwork"),
-      )
-      yield* waitForFrame(
-        setup,
-        () => {
-          const current = client.sessionState()
-          return current.status === "active"
-        },
-        "session state",
-      )
-      const state = client.sessionState()
-      expect(state).toEqual({
-        status: "active",
-        session: {
-          sessionId: SessionId.make("session-b"),
-          branchId: BranchId.make("branch-b"),
-          name: "B",
-          modelId: absent,
-          reasoningLevel: absent,
-        },
-      })
-      expect(client.agent()).toBe(AgentName.make("deepwork"))
-    }),
+          "session state",
+        )
+        const state = client.sessionState()
+        expect(state).toEqual({
+          status: "active",
+          session: {
+            sessionId: SessionId.make("session-b"),
+            branchId: BranchId.make("branch-b"),
+            name: "B",
+            modelId: absent,
+            reasoningLevel: absent,
+          },
+        })
+        expect(client.agent()).toBeUndefined()
+      }),
   )
   it.live("model() and agent() read the snapshot's server-resolved model and session agent", () =>
     Effect.gen(function* () {
@@ -920,7 +960,6 @@ describe("ClientProvider session lifecycle", () => {
         SessionId.make("session-target"),
         BranchId.make("branch-target"),
         "Target",
-        AgentName.make("deepwork"),
       )
       client.applySessionSnapshot({
         sessionId: SessionId.make("session-source"),
@@ -961,7 +1000,7 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
         },
       })
-      expect(client.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.agent()).toBeUndefined()
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
@@ -986,7 +1025,6 @@ describe("ClientProvider session lifecycle", () => {
         SessionId.make("session-branch-race"),
         BranchId.make("branch-new"),
         "New",
-        AgentName.make("deepwork"),
       )
       client.applySessionSnapshot({
         sessionId: SessionId.make("session-branch-race"),
@@ -1029,7 +1067,7 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
         },
       })
-      expect(client.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.agent()).toBeUndefined()
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
@@ -1078,12 +1116,7 @@ describe("ClientProvider session lifecycle", () => {
         },
         "session state",
       )
-      client.switchSession(
-        SessionId.make("session-next"),
-        BranchId.make("branch-next"),
-        "N",
-        AgentName.make("deepwork"),
-      )
+      client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
     }),
   )
@@ -1558,6 +1591,181 @@ describe("useSessionFeed", () => {
         expectNestedCellOperation(feed.value, innerId)
         dispose()
       })
+    }),
+  )
+
+  /** A feed over one snapshot and a live event stream. */
+  const openFeed = (snapshot: SessionSnapshot, envelopes: ReadonlyArray<EventEnvelope>) => {
+    let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+    const dispose = createRoot((disposeRoot) => {
+      const [active] = createSignal(makeSession(snapshot.sessionId, snapshot.branchId))
+      const client = {
+        sessionIdentity: identityOf(active),
+        client: createMockClient({
+          session: {
+            getSnapshot: () => Effect.succeed(snapshot),
+            events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+            watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+          },
+        }),
+        runtime: createMockRuntime(),
+        log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+        setConnectionIssue: () => {},
+        waitForTransportReady: Effect.void,
+        applySessionRuntime: () => {},
+        applySessionSnapshot: () => {},
+        applySessionEvent: () => {},
+        applyBufferedSessionEvent: () => {},
+      } satisfies FeedClient
+      feed = Option.some(
+        useSessionFeed(
+          () => snapshot.sessionId,
+          () => snapshot.branchId,
+          client,
+          client.runtime.cast,
+          {
+            onInteraction: () => {},
+            onInteractionDismissed: () => {},
+            onBranchSwitch: () => {},
+            onQueueSnapshot: () => {},
+          },
+        ),
+      )
+      return disposeRoot
+    })
+    const cellOf = () =>
+      Option.flatMap(feed, (value) =>
+        Option.fromNullishOr(
+          value.messages().find((message) => message.role === "assistant")?.toolCalls?.[0],
+        ),
+      )
+    return { cellOf, dispose }
+  }
+
+  it.live("an op still running when its cell fails reads as failed, as a reload draws it", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-interrupted-cell")
+      const branchId = BranchId.make("branch-feed-interrupted-cell")
+      const cellId = ToolCallId.make("tool-call-interrupted-cell")
+      const opId = ToolCallId.make("tool-call-interrupted-op")
+      const { cellOf, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            input: { code: "await tools.bash({command: 'sleep 60'})" },
+          }),
+        ),
+        makeEnvelope(
+          3,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: opId,
+            toolName: "bash",
+            input: { command: "sleep 60" },
+            parentToolCallId: cellId,
+          }),
+        ),
+        makeEnvelope(
+          4,
+          AgentEvent.cases.ToolCallFailed.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            summary: "The tool did not finish: the turn was interrupted.",
+          }),
+        ),
+      ])
+      yield* waitUntil(() => Option.exists(cellOf(), (cell) => cell.status === "error")).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            const cell = Option.getOrUndefined(cellOf())
+            expect(cell?.operations?.map((operation) => operation.status)).toEqual(["error"])
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
+
+  it.live("a live result on a reloaded op drops the cuts of the output it replaces", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-stale-cuts")
+      const branchId = BranchId.make("branch-feed-stale-cuts")
+      const cellId = ToolCallId.make("tool-call-stale-cuts-cell")
+      const opId = ToolCallId.make("tool-call-stale-cuts-op")
+      const cutOperation: NonNullable<ToolInteraction["operations"]>[number] = {
+        id: opId,
+        toolName: "bash",
+        status: "running",
+        input: { command: "seq 3000" },
+        summary: Option.getOrUndefined(Option.none()),
+        output: '{"stdout":"1\\n…\\n3000","stderr":"","exitCode":0}',
+        durationMs: Option.getOrUndefined(Option.none()),
+        cuts: [
+          OutputCut.cases.Text.make({ field: "stdout", lines: 3000, tailLine: 3000, chars: 9 }),
+        ],
+      }
+      const snapshot: SessionSnapshot = {
+        ...snapshotFor(sessionId, branchId, 1),
+        messages: [
+          projectMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("stale-cuts-assistant"),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [Prompt.textPart({ text: "" })],
+              createdAt: dateFromMillis(0),
+            }),
+            [
+              new ToolInteraction({
+                id: cellId,
+                toolName: "cell",
+                status: "running",
+                input: {},
+                summary: Option.getOrUndefined(Option.none()),
+                output: Option.getOrUndefined(Option.none()),
+                durationMs: Option.getOrUndefined(Option.none()),
+                operations: [cutOperation],
+              }),
+            ],
+          ),
+        ],
+      }
+      const wholeOutput = '{"stdout":"done","stderr":"","exitCode":0}'
+      const { cellOf, dispose } = openFeed(snapshot, [
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: opId,
+            toolName: "bash",
+            summary: "exit 0 · 1 line",
+            output: wholeOutput,
+            parentToolCallId: cellId,
+          }),
+        ),
+      ])
+      yield* waitUntil(() =>
+        Option.exists(cellOf(), (cell) => cell.operations?.[0]?.status === "completed"),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            const operation = Option.getOrUndefined(cellOf())?.operations?.[0]
+            expect(operation?.output).toBe(wholeOutput)
+            expect(operation?.cuts).toBeUndefined()
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
     }),
   )
 

@@ -106,6 +106,9 @@ export const CreateSessionInput = Schema.Struct({
   initialPrompt: Schema.optional(Schema.String),
   /** What every turn of the new session runs as. Fixed at creation. */
   admission: Schema.optional(SessionAdmission),
+  /** The session's own model and reasoning, as `session.updateSettings` would set them. */
+  modelId: Schema.optional(ModelId),
+  reasoningLevel: Schema.optional(ReasoningEffort),
   requestId: Schema.optional(RequestId),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type

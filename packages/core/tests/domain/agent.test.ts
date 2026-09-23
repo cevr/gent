@@ -13,7 +13,6 @@ import {
   ProviderId,
   resolveAgentDriver,
 } from "../../src/domain/agent"
-import { ToolCallId } from "../../src/domain/ids"
 import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction"
 
 // ── agent.test ──────────────────────────────────────────────────────────────
@@ -163,16 +162,12 @@ describe("run spec construction", () => {
     const spec = makeRunSpec({
       // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       overrides: undefined,
-      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-      parentToolCallId: undefined,
     })
     expect(Object.keys(spec)).toEqual([])
     expect("overrides" in spec).toBe(false)
-    expect("parentToolCallId" in spec).toBe(false)
   })
 
   test("threads each provided field through", () => {
-    const tcid = ToolCallId.make("tc-1")
     const spec = makeRunSpec({
       overrides: {
         modelId: ModelId.make("custom/model"),
@@ -181,19 +176,12 @@ describe("run spec construction", () => {
         reasoningEffort: "high",
         systemPromptAddendum: "extra",
       },
-      parentToolCallId: tcid,
     })
     expect(spec.overrides?.modelId).toBe(ModelId.make("custom/model"))
     expect(spec.overrides?.allowedTools).toEqual(["bash"])
     expect(spec.overrides?.deniedTools).toEqual(["read"])
     expect(spec.overrides?.reasoningEffort).toBe("high")
     expect(spec.overrides?.systemPromptAddendum).toBe("extra")
-    expect(spec.parentToolCallId).toBe(tcid)
-  })
-
-  test("partial input — only the parent tool call", () => {
-    const spec = makeRunSpec({ parentToolCallId: ToolCallId.make("tc-2") })
-    expect(Object.keys(spec)).toEqual(["parentToolCallId"])
   })
 })
 

@@ -1,4 +1,15 @@
-import { Context, Effect, Fiber, Layer, Option, Predicate, Ref, Schema, Stream } from "effect"
+import {
+  Context,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Predicate,
+  Record,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import {
   BranchId,
   defineExtension,
@@ -64,8 +75,8 @@ type AskInput = typeof AskInput.Type
 
 /**
  * `/btw` forks the branch. The fork is a child session seeded with this
- * branch's context window, run by the session's own agent with its tools; a
- * parallel session, not a side channel. Nothing the fork does lands on this
+ * branch's context window, run by the session's own agent and model with its
+ * tools; a parallel session, not a side channel. Nothing the fork does lands on this
  * branch. The pane reads it through `btw.progress`; opening it as the shell's
  * session is the client's `switchSession`, because the fork already is one.
  *
@@ -285,11 +296,26 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       const ctx = yield* ExtensionContext
       const forks = yield* OpenForks
       const parentBranchId = String(ctx.branchId)
+      const session = yield* ctx.Session.getSession().pipe(
+        Effect.mapError(
+          (error) => new ForkError({ message: `Cannot read this session: ${error.message}` }),
+        ),
+      )
+      // The fork is this session running beside itself: the same agent and
+      // admission, and the model and reasoning its `/model` choice set.
       const created = yield* ctx.Session.create({
         name: forkName(question),
         parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
         historyBranchId: ctx.branchId,
+        ...Record.filter(
+          {
+            admission: session?.admission,
+            modelId: session?.modelId,
+            reasoningLevel: session?.reasoningLevel,
+          },
+          Predicate.isNotUndefined,
+        ),
       }).pipe(
         Effect.mapError((error) => new ForkError({ message: `Cannot fork: ${error.message}` })),
       )

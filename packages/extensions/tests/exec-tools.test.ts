@@ -23,6 +23,7 @@ import {
   BashTool,
   classifyBashCommand,
   injectGitTrailers,
+  runBashCommand,
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
@@ -99,47 +100,121 @@ describe("splitCdCommand", () => {
 })
 
 describe("injectGitTrailers", () => {
-  test('git commit -m "msg" → injects --trailer', () => {
-    const result = injectGitTrailers('git commit -m "fix bug"', SessionId.make("sess-123"))
-    expect(result).toContain('--trailer "Session-Id: sess-123"')
-    expect(result).toContain("git commit")
+  const trailer = "--trailer=Session-Id:s1"
+  const inject = (command: string) => injectGitTrailers(command, SessionId.make("s1"))
+
+  test("a commit gets the session trailer right after the commit word", () => {
+    expect(inject('git commit -m "fix bug"')).toBe(`git commit ${trailer} -m "fix bug"`)
   })
 
   test("a commit after git global options gets the trailer", () => {
-    expect(injectGitTrailers("git -C sub commit -m a", SessionId.make("s1"))).toBe(
-      'git -C sub commit --trailer "Session-Id: s1" -m a',
-    )
+    expect(inject("git -C sub commit -m a")).toBe(`git -C sub commit ${trailer} -m a`)
+    expect(inject("git --no-pager commit -m a")).toBe(`git --no-pager commit ${trailer} -m a`)
+    expect(inject('git -C "my dir" commit -m a')).toBe(`git -C "my dir" commit ${trailer} -m a`)
   })
 
   test("a commit that passes its own trailer keeps it; the other commits get one", () => {
-    expect(
-      injectGitTrailers(
-        'git commit --trailer "X: 1" -m a && git commit -m b',
-        SessionId.make("s1"),
-      ),
-    ).toBe('git commit --trailer "X: 1" -m a && git commit --trailer "Session-Id: s1" -m b')
+    expect(inject('git commit --trailer "X: 1" -m a && git commit -m b')).toBe(
+      `git commit --trailer "X: 1" -m a && git commit ${trailer} -m b`,
+    )
   })
 
   test("every commit in a chained command gets the trailer", () => {
-    expect(injectGitTrailers("git commit -m a && git commit -m b", SessionId.make("s1"))).toBe(
-      'git commit --trailer "Session-Id: s1" -m a && git commit --trailer "Session-Id: s1" -m b',
+    expect(inject("git commit -m a && git commit -m b")).toBe(
+      `git commit ${trailer} -m a && git commit ${trailer} -m b`,
+    )
+    expect(inject("git add a.ts; git commit -m a | cat")).toBe(
+      `git add a.ts; git commit ${trailer} -m a | cat`,
+    )
+  })
+
+  test("a message that mentions git commit is left as written", () => {
+    for (const command of [
+      'git commit -m "revert git commit abc"',
+      "git commit -m 'fix git commit hook'",
+      'git commit -m "$(cat <<\'EOF\'\nexplain git commit -m "quoted"\nEOF\n)"',
+    ]) {
+      const result = inject(command)
+      expect(result, command).toBe(command.replace("git commit", `git commit ${trailer}`))
+    }
+  })
+
+  test("a heredoc body that mentions git commit is left as written", () => {
+    const command = "git commit -F - <<EOF\nsee git commit docs\nEOF"
+    expect(inject(command)).toBe(`git commit ${trailer} -F - <<EOF\nsee git commit docs\nEOF`)
+  })
+
+  test("text that only mentions git commit is not a commit", () => {
+    for (const command of [
+      "echo 'run git commit later'",
+      'git log --grep "git commit"',
+      "cat <<EOF\ngit commit -m x\nEOF",
+      "ls # git commit -m x",
+    ]) {
+      expect(inject(command), command).toBe(command)
+    }
+  })
+
+  test("a commit inside a script a shell runs gets the trailer", () => {
+    expect(inject("bash -c 'git commit -m a'")).toBe(`bash -c 'git commit ${trailer} -m a'`)
+    expect(inject('echo "$(git commit -m a)"')).toBe(`echo "$(git commit ${trailer} -m a)"`)
+  })
+
+  test("a commit in an escaped script word gets no trailer that would split the word", () => {
+    for (const command of ["bash -c git\\ commit\\ -m\\ x", 'bash -c "git "commit\\ -m\\ x']) {
+      expect(inject(command), command).toBe(command)
+    }
+    expect(inject("bash -c \"sh -c 'git commit -m x'\"")).toBe(
+      `bash -c "sh -c 'git commit ${trailer} -m x'"`,
+    )
+  })
+
+  test("a commit in a git alias runs with the trailer", () => {
+    expect(inject("git -c alias.c='!git commit -m x' c")).toBe(
+      `git -c alias.c='!git commit ${trailer} -m x' c`,
     )
   })
 
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
-    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+    expect(inject(cmd)).toBe(cmd)
   })
 
   test("git commit-tree → unchanged", () => {
     const cmd = "git commit-tree abc -m msg"
-    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+    expect(inject(cmd)).toBe(cmd)
   })
 
   test("already has --trailer → unchanged", () => {
     const cmd = 'git commit --trailer "Foo: bar" -m "msg"'
-    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+    expect(inject(cmd)).toBe(cmd)
   })
+
+  it.live("each rewritten commit runs in bash and records the message and trailer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const git = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false"
+      const script = [
+        `git init -q ${dir}/r && cd ${dir}/r`,
+        `${git} commit -q --allow-empty -m "revert git commit abc"`,
+        `${git} commit -q --allow-empty -m 'fix git commit hook'`,
+        `${git} commit -q --allow-empty -F - <<EOF\nsee git commit docs\nEOF`,
+        `git log --format=%B%x00`,
+      ].join("\n")
+      const result = yield* runBashCommand(inject(script), Option.none()).pipe(Effect.scoped)
+      expect(result.exitCode, result.stderr).toBe(0)
+      const messages = result.stdout
+        .split("\0")
+        .map((message) => message.trim())
+        .filter((message) => message.length > 0)
+      expect(messages).toEqual([
+        "see git commit docs\n\nSession-Id: s1",
+        "fix git commit hook\n\nSession-Id: s1",
+        "revert git commit abc\n\nSession-Id: s1",
+      ])
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
 })
 
 describe("stripBackground", () => {
@@ -332,6 +407,162 @@ describe("classifyBashCommand", () => {
   test("destructive and external patterns win over the read-only exemption", () => {
     expect(classifyBashCommand("cat x; rm -rf /").level).toBe("destructive")
     expect(classifyBashCommand("ls && git push").level).toBe("external")
+  })
+
+  // Git reads any unambiguous prefix of a long option as that option.
+  test("a shortened destructive long option is that option", () => {
+    for (const command of [
+      "git reset --ha",
+      "git reset --h",
+      "git switch --disc main",
+      "git switch --force-c main origin/main",
+      "git checkout --for other",
+      "git checkout --the a.txt",
+      "git checkout --ou a.txt",
+      "git checkout --conflict=merge a.ts",
+      "git checkout --pat a.ts",
+      "git push --del origin feature",
+      "git push --mirr",
+      "git push --pru origin",
+      "git push --forc origin main",
+      "git push --force-w=main origin main",
+      "git branch --for main HEAD~1",
+      "git add --al",
+      'git reset $"--hard"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git command that moves or overwrites an existing branch is destructive", () => {
+    for (const command of [
+      "git checkout -B main origin/main",
+      "git switch -C main origin/main",
+      "git switch --force-create main origin/main",
+      "git branch -M main",
+      "git branch -C old main",
+      "git stash -q drop",
+      "git worktree remove --force ../wt",
+      "git worktree remove -f ../wt",
+      "git checkout HEAD --pathspec-from-file=list.txt",
+      "git checkout -fq main",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("an option value or a dry run is not a destructive flag", () => {
+    for (const command of [
+      "git checkout -bfeat origin/main",
+      "git checkout -b fix-D origin/main",
+      "git switch -cfeat",
+      "git clean -n",
+      "git clean -fdn",
+      "git clean --dry-run -fd",
+      "git checkout main --",
+      "git worktree remove ../wt",
+      "git stash push -m drop",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a flag after a redirection operator stays in its command", () => {
+    for (const command of [
+      "git push &>/dev/null --force",
+      "git reset &>/dev/null --hard",
+      "git reset &>>log --hard",
+      "git push >| log --force",
+      "git reset --hard |& cat",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a script a shell reads from stdin is classified", () => {
+    for (const command of [
+      "bash <<< 'git push --force'",
+      "bash <<<'git reset --hard'",
+      "sh <<EOF\ngit push --force\nEOF",
+      "sh <<-'EOF'\n\tgit reset --hard\n\tEOF",
+      "echo 'git reset --hard' | bash",
+      "bash -o pipefail -c 'git reset --hard'",
+      "bash -lc 'git reset --hard'",
+      'eval "git reset --hard"',
+      'eval git "reset --hard"',
+      'echo "$(git reset --hard)"',
+      "cat <<EOF\n$(git reset --hard)\nEOF",
+      "diff <(git reset --hard) b",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a command after a wrapper is classified", () => {
+    for (const command of [
+      "xargs git reset --hard",
+      "env -i git reset --hard",
+      "nohup git reset --hard",
+      "time git reset --hard",
+      "sudo -u me git reset --hard",
+      "command git reset --hard",
+      "exec git reset --hard",
+      "nice -n 5 git reset --hard",
+      "timeout 5 git reset --hard",
+      "find . -exec git reset --hard \\;",
+      "find . -execdir sh -c 'git reset --hard' \\;",
+      "parallel git reset --hard ::: a",
+      "sudo eval 'git reset --hard'",
+      "env bash -c 'git reset --hard'",
+      "echo bash | xargs sh -c 'git reset --hard'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git alias that runs a script or a destructive subcommand is classified", () => {
+    for (const command of [
+      "git -c alias.wipe='! git reset --hard' wipe",
+      "git -c alias.wipe='!git push --force' wipe",
+      "git -c alias.wipe='reset --hard' wipe",
+      "git config alias.wipe '!git reset --hard'",
+      "git config --global alias.wipe 'reset --hard'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("git -c alias.st=status st").level).toBe("safe")
+    expect(classifyBashCommand("git config alias.st status").level).toBe("safe")
+  })
+
+  test("a shell script the guard cannot read takes its input as the script, or asks", () => {
+    for (const command of [
+      "echo 'git reset --hard' | xargs -I{} sh -c '{}'",
+      "echo 'git reset --hard' | parallel {}",
+      "parallel ::: 'git reset --hard'",
+      "printf 'git reset --hard' | xargs -0 bash -c",
+      'sh -c "$CMD"',
+      'bash -c "$(cat script.sh)"',
+      "xargs -a cmds.txt -I{} sh -c '{}'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo 'git status' | xargs -I{} sh -c '{}'").level).toBe("safe")
+  })
+
+  test("quoted text and heredoc notes that describe git work are data", () => {
+    for (const command of [
+      "git commit -m 'undo git reset --hard'",
+      'git commit -m "docs: explain why git push --force is dangerous"',
+      'git commit -m "make every git restore ask"',
+      "cat > notes.md <<EOF\nnever run git reset --hard\nEOF",
+      "cat > notes.md <<'EOF'\n$(git reset --hard) is literal here\nEOF",
+      "echo 'git push --force'",
+      "git log --grep 'reset --hard'",
+      "ls # git reset --hard",
+      "git commit -m \"$(cat <<'EOF'\nexplain git reset --hard\nEOF\n)\"",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
   })
 })
 
@@ -568,6 +799,22 @@ describe("BashTool summary", () => {
     expect(summary("a\nb\n", "warn\n", 0)).toBe("exit 0 · 3 lines")
     expect(summary("", "", 2)).toBe("exit 2 · 0 lines")
     expect(summary("one", "", 0)).toBe("exit 0 · 1 line")
+  })
+
+  test("a blocked or background command says so instead of an exit code", () => {
+    const summary = (result: {
+      stdout: string
+      stderr: string
+      exitCode: number
+      status: string
+    }) =>
+      toolResultSummary(Option.some(BashTool), { command: "make" }, { isFailure: false, result })
+    expect(
+      summary({ stdout: "Command blocked: git push", stderr: "", exitCode: 1, status: "blocked" }),
+    ).toBe("Command blocked: git push")
+    expect(
+      summary({ stdout: "Command started", stderr: "", exitCode: 0, status: "background" }),
+    ).toBe("started in background")
   })
 })
 

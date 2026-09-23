@@ -651,6 +651,115 @@ const renderLoaded = (items: SessionItem[], fullDetail?: boolean) =>
     )
   })
 
+/** One op a cell admitted, as its tool reported it. */
+interface CellOp {
+  readonly id: string
+  readonly toolName: string
+  readonly input: Readonly<Record<string, string>>
+  readonly summary: string
+  readonly output: string
+}
+
+/**
+ * One cell as the live feed carries it, each op whole, and as a reload
+ * projects it from the branch's stored tool events.
+ */
+const cellBeforeAndAfterReload = (messageId: string, ops: ReadonlyArray<CellOp>) =>
+  Effect.gen(function* () {
+    const sessionId = SessionId.make(`session-${messageId}`)
+    const branchId = BranchId.make(`branch-${messageId}`)
+    const cell = ToolCallId.make(`${messageId}-cell`)
+    const envelope = (id: number, event: AgentEvent) =>
+      EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+    const events = ops.flatMap((op, index) => [
+      envelope(
+        2 * index + 1,
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make(op.id),
+          toolName: op.toolName,
+          input: op.input,
+          parentToolCallId: cell,
+        }),
+      ),
+      envelope(
+        2 * index + 2,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make(op.id),
+          toolName: op.toolName,
+          summary: op.summary,
+          output: op.output,
+          parentToolCallId: cell,
+        }),
+      ),
+    ])
+    const [projected] = projectMessagesWithToolInteractions(
+      [
+        Message.cases.regular.make({
+          id: MessageId.make(messageId),
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [
+            Prompt.toolCallPart({
+              id: cell,
+              name: "cell",
+              params: { code: "await tools.grep({pattern: 'value'})" },
+              providerExecuted: false,
+            }),
+          ],
+          createdAt: dateFromMillis(0),
+        }),
+      ],
+      toolCallReceipts(events),
+    )
+    const interaction = Option.fromNullishOr(projected?.toolInteractions[0])
+    if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
+    const { operations, ...call } = interaction.value
+    const reloaded: ToolCall = {
+      ...call,
+      status: "completed",
+      operations: (operations ?? []).map((operation) => ({ ...operation })),
+    }
+    const live: ToolCall = {
+      ...reloaded,
+      operations: ops.map((op) => ({
+        id: op.id,
+        toolName: op.toolName,
+        status: "completed",
+        input: op.input,
+        summary: op.summary,
+        output: op.output,
+      })),
+    }
+    return { live, reloaded }
+  })
+
+/** The frame a transcript holding one cell draws, once `ready` holds. */
+const drawnCell = (
+  messageId: string,
+  call: ToolCall,
+  ready: (frame: string) => boolean,
+  label: string,
+  height = 80,
+) =>
+  Effect.gen(function* () {
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <RegisteredToolMessageLists items={[assistantToolMessage(messageId, call)]} fullDetail />
+        ),
+        { width: 110, height },
+      ),
+    )
+    const frame = yield* waitForFrame(setup, ready, label)
+    destroyRenderSetup(setup)
+    return frame
+  })
+
 describe("FX transcript treatment", () => {
   it.live("shows information excluded from model context in the transcript", () =>
     Effect.gen(function* () {
@@ -1446,6 +1555,176 @@ describe("FX transcript treatment", () => {
       expect(frame).toMatch(/3000 │ line 3000/)
       expect(frame).toContain("2994 more lines")
     }),
+  )
+
+  it.live("a reloaded grep op and a large edit draw as the live feed drew them", () =>
+    Effect.gen(function* () {
+      const matches = Array.from({ length: 12 }, (_, index) => ({
+        file: `src/module-${index % 4}.ts`,
+        line: index + 1,
+        content: `const value${index} = ${index}`,
+      }))
+      // Diff strings past the old 4 KB input share, still inside the 8 KB op budget.
+      const editInput = {
+        path: "/workspace/src/large.ts",
+        oldString: Array.from({ length: 60 }, (_, i) => `old ${i} ${"a".repeat(40)}`).join("\n"),
+        newString: Array.from({ length: 60 }, (_, i) => `new ${i} ${"b".repeat(40)}`).join("\n"),
+      }
+      const { live, reloaded } = yield* cellBeforeAndAfterReload("assistant-grep-edit", [
+        {
+          id: "op-grep",
+          toolName: "grep",
+          input: { pattern: "value" },
+          summary: "12 matches for value",
+          output: encodeJson({ matches, truncated: false }),
+        },
+        {
+          id: "op-edit",
+          toolName: "edit",
+          input: editInput,
+          summary: "/workspace/src/large.ts · 1 replacement",
+          output: encodeJson({ path: editInput.path, replacements: 1 }),
+        },
+      ])
+      const ready = (frame: string) => frame.includes("matches in") && frame.includes("+60 -60")
+      const liveFrame = yield* drawnCell("assistant-grep-edit", live, ready, "live grep and edit")
+      const frame = yield* drawnCell(
+        "assistant-grep-edit",
+        reloaded,
+        ready,
+        "reloaded grep and edit",
+      )
+      expect(frame).toBe(liveFrame)
+      expect(frame).toContain("12 matches in 4 files")
+      expect(frame).toContain("+1 more file")
+      expect(frame).toContain("+new 59")
+    }),
+  )
+
+  it.live("a reloaded op too large for the snapshot counts what it cut or draws its summary", () =>
+    Effect.gen(function* () {
+      const matches = Array.from({ length: 200 }, (_, index) => ({
+        file: `src/module-${Math.floor(index / 20)}.ts`,
+        line: index + 1,
+        content: `const value${index} = compute(${index})`,
+      }))
+      const editInput = {
+        path: "/workspace/src/huge.ts",
+        oldString: "a\n".repeat(6_000),
+        newString: "b\n".repeat(6_000),
+      }
+      const { reloaded } = yield* cellBeforeAndAfterReload("assistant-large-ops", [
+        {
+          id: "op-grep-large",
+          toolName: "grep",
+          input: { pattern: "value" },
+          summary: "200 matches for value",
+          output: encodeJson({ matches, truncated: false }),
+        },
+        {
+          id: "op-edit-large",
+          toolName: "edit",
+          input: editInput,
+          summary: "/workspace/src/huge.ts · 1 replacement",
+          output: encodeJson({ path: editInput.path, replacements: 1 }),
+        },
+      ])
+      const frame = yield* drawnCell(
+        "assistant-large-ops",
+        reloaded,
+        (next) => next.includes("matches in") && next.includes("1 replacement"),
+        "reloaded large ops",
+      )
+      // Every match and every file counts, the ones between head and tail too.
+      expect(frame).toContain("200 matches in 10 files")
+      expect(frame).toContain("+7 more files")
+      expect(frame).toContain("src/module-0.ts")
+      // The diff strings do not fit, so the edit draws the summary its tool wrote.
+      expect(frame).toContain("/workspace/src/huge.ts · 1 replacement")
+    }),
+  )
+
+  it.live("a reloaded op cut inside one long line marks the characters it left out", () =>
+    Effect.gen(function* () {
+      const json = encodeJson({
+        rows: Array.from({ length: 800 }, (_, index) => ({ id: index, name: `row-${index}` })),
+      })
+      const { reloaded } = yield* cellBeforeAndAfterReload("assistant-one-line", [
+        {
+          id: "op-bash-json",
+          toolName: "bash",
+          input: { command: "curl api" },
+          summary: "exit 0 · 1 line",
+          output: encodeJson({ stdout: json, stderr: "", exitCode: 0 }),
+        },
+        {
+          id: "op-read-json",
+          toolName: "read",
+          input: { path: "/workspace/data.json" },
+          summary: "/workspace/data.json · 1 line",
+          output: encodeJson({ path: "/workspace/data.json", content: `1\t${json}`, lineCount: 1 }),
+        },
+      ])
+      const frame = yield* drawnCell(
+        "assistant-one-line",
+        reloaded,
+        (next) => next.includes("data.json") && next.includes("exit 0"),
+        "reloaded one-line ops",
+        // Each op draws its one line wrapped, a few thousand characters of it.
+        400,
+      )
+      expect(frame).toMatch(/exit 0 · 1 line(?!s)/)
+      expect(frame).toMatch(/1 line(?!s)\s+1 │/)
+      expect(frame).toMatch(/\[[\d,]+ chars truncated\]/)
+      expect(frame).not.toContain("0 lines truncated")
+      // The read gutter numbers the one line once; the other line 1 is the cell's code.
+      expect(frame.match(/ 1 │/g)?.length).toBe(2)
+      expect(frame).toContain('1 │ {"rows"')
+    }),
+  )
+
+  it.live(
+    "a blocked command reads as declined and a background one as running on, not as exits",
+    () =>
+      Effect.gen(function* () {
+        const { live } = yield* cellBeforeAndAfterReload("assistant-declined", [
+          {
+            id: "op-bash-declined",
+            toolName: "bash",
+            input: { command: "git checkout HEAD -- README.md" },
+            summary: "exit 1 · 1 line",
+            output: encodeJson({
+              stdout: "Command blocked: git checkout that discards working-tree changes",
+              stderr: "",
+              exitCode: 1,
+              status: "blocked",
+            }),
+          },
+          {
+            id: "op-bash-background",
+            toolName: "bash",
+            input: { command: "bun run dev" },
+            summary: "started in background",
+            output: encodeJson({
+              stdout: "Command started in background: `bun run dev`",
+              stderr: "",
+              exitCode: 0,
+              status: "background",
+            }),
+          },
+        ])
+        const frame = yield* drawnCell(
+          "assistant-declined",
+          live,
+          (next) => next.includes("Command blocked"),
+          "declined op",
+        )
+        expect(frame).toContain("declined")
+        expect(frame).not.toContain("exit 1")
+        // A background command has not ended: it has no exit code yet.
+        expect(frame).toContain("in background")
+        expect(frame).not.toContain("exit 0")
+      }),
   )
 
   it.live("shows cell operation receipts in tree and detail frames", () =>

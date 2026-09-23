@@ -904,7 +904,7 @@ Explicit platform/runtime seams:
 
 ### FileIndex (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, cached finders per search root under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk. The walk applies every `.gitignore` from the search root down, with negation. It is the per-call fallback, and it lists an explicitly named gitignored target, so such a target never creates a finder or evicts the root finder. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
 
 App entrypoints bind concrete Bun/OS behavior:
 
@@ -1214,9 +1214,10 @@ Logging conventions:
 
 Log destinations:
 
-- `/tmp/gent/logs/` — server-side JSON (via the SDK's `GentObservability`)
-- `/tmp/gent-client.log` — TUI-side JSON (via `clientLog`)
-- `/tmp/gent-trace.log` — span traces (via `GentTracerLive`)
+- One directory, `/tmp/gent/logs/`, or `<GENT_DATA_DIR>/logs` when `GENT_DATA_DIR` is set (`resolveLogDir` in `packages/sdk/src/server.ts`), so an isolated run keeps its logs beside its database
+- `<hash>-<ts>-server.log` — server-side JSON lines (via the SDK's `GentObservability`)
+- `<hash>-<ts>-client.log` — TUI-side JSON lines (`clientLog` and `clientTraceLogger` in `apps/tui/src/client.tsx`); `<hash>` names the cwd, `<ts>` the process start
+- Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`); no trace file is written
 
 Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
 

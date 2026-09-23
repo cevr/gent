@@ -1,5 +1,5 @@
 import { Option, Predicate, Schema, SchemaGetter } from "effect"
-import { branded, SessionId, ToolCallId } from "./ids.js"
+import { branded, SessionId } from "./ids.js"
 import { omitUndefined } from "./guards.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
@@ -282,9 +282,8 @@ export const effectiveModelDriver = (
 
 // ── RunSpec — per-run dispatch configuration ──
 //
-// Separates per-run concerns from agent identity:
-//   - `overrides`     — per-turn model/tool/prompt overrides
-//   - `parentToolCallId` — links a child run to the tool call that spawned it
+// Separates per-run concerns from agent identity: `overrides` reshape the
+// agent's model, tools and prompt for every turn of the session.
 //
 // Every child is a durable session driven by the same loop as its parent.
 
@@ -300,9 +299,12 @@ export const AgentRunOverridesSchema = Schema.Struct({
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
+/**
+ * Rows written before `parentToolCallId` was dropped still carry it; a struct
+ * decode ignores the extra key.
+ */
 export const RunSpecSchema = Schema.Struct({
   overrides: Schema.optional(AgentRunOverridesSchema),
-  parentToolCallId: Schema.optional(ToolCallId),
 })
 export type RunSpec = typeof RunSpecSchema.Type
 

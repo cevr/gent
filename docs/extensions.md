@@ -134,9 +134,12 @@ fields:
 
 | `delivery` | Lands                                   | Own fields                                                             |
 | ---------- | --------------------------------------- | ---------------------------------------------------------------------- |
-| `"turn"`   | starts a turn on another branch         | `completion`, `commandId`, `agentOverride`, `interactive`, `runSpec`   |
+| `"turn"`   | starts a turn on another branch         | `completion`, `commandId`                                              |
 | `"queue"`  | waits behind the running turn           | `sourceId` (idempotency and `dequeueFollowUp` key), `metadata`, `wake` |
-| `"steer"`  | joins the running turn at its next step | `requestId`, `metadata`, `agent`, `wake`                               |
+| `"steer"`  | joins the running turn at its next step | `requestId`, `metadata`, `wake`                                        |
+
+A message carries no agent, run spec or interactive flag. Those belong to the
+target session: `ctx.Session.create` sets them once in its `admission`.
 
 `"queue"` and `"steer"` target the current branch when no `sessionId` and
 `branchId` are named. A `"turn"` names its target, and the current branch

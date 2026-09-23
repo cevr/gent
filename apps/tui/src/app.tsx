@@ -266,7 +266,6 @@ const resolveSessionRuntimeAgent = (
 export const resolveStartupAuthState = (input: {
   client: Pick<GentNamespacedClient, "auth" | "session">
   state: InitialState
-  requestedAgent?: AgentName
 }): Effect.Effect<StartupAuthState, GentClientRpcError> =>
   Effect.gen(function* () {
     if (input.state._tag === "branchPicker") {
@@ -282,11 +281,8 @@ export const resolveStartupAuthState = (input: {
       sessionAgent = yield* resolveSessionRuntimeAgent(input.client, input.state.session)
     }
 
-    // A session runs as its own agent; a requested one only names a session not yet made.
-    const candidateAgent = Option.orElse(sessionAgent, () =>
-      Option.fromNullishOr(input.requestedAgent),
-    )
-    const authAgent = Option.getOrElse(candidateAgent, () => DEFAULT_AGENT_NAME)
+    // A session runs as its own agent, which its snapshot names.
+    const authAgent = Option.getOrElse(sessionAgent, () => DEFAULT_AGENT_NAME)
 
     // Thread sessionId so per-session cwd resolves project-level
     // driverOverrides (counsel HIGH #2). Branch-picker has no session.
