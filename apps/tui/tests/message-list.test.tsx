@@ -18,7 +18,7 @@ import {
   transcriptFingerprint,
 } from "../src/message-list"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { type Message as DomainMessage, extractImages, extractText } from "@gent/sdk"
+import { type Message as DomainMessage } from "@gent/sdk"
 import {
   BranchId,
   dateFromMillis,
@@ -232,100 +232,6 @@ describe("worked-for row", () => {
 
 const absent = Option.getOrUndefined(Option.none())
 let messageIndex = 0
-
-describe("extractText", () => {
-  test("extracts text from text part", () => {
-    const parts: MessagePart[] = [Prompt.textPart({ text: "Hello world" })]
-    expect(extractText(parts)).toBe("Hello world")
-  })
-
-  test("returns empty string when no text part", () => {
-    const parts: MessagePart[] = [
-      Prompt.toolCallPart({
-        id: ToolCallId.make("tc1"),
-        name: "read",
-        params: {},
-        providerExecuted: false,
-      }),
-    ]
-    expect(extractText(parts)).toBe("")
-  })
-
-  test("concatenates all text parts", () => {
-    const parts: MessagePart[] = [
-      Prompt.textPart({ text: "First" }),
-      Prompt.textPart({ text: "Second" }),
-    ]
-    expect(extractText(parts)).toBe("FirstSecond")
-  })
-
-  test("handles mixed parts", () => {
-    const parts: MessagePart[] = [
-      Prompt.toolCallPart({
-        id: ToolCallId.make("tc1"),
-        name: "read",
-        params: {},
-        providerExecuted: false,
-      }),
-      Prompt.textPart({ text: "Response after tool" }),
-    ]
-    expect(extractText(parts)).toBe("Response after tool")
-  })
-
-  test("returns empty string for empty parts", () => {
-    expect(extractText([])).toBe("")
-  })
-})
-
-describe("extractImages", () => {
-  test("extracts images from parts", () => {
-    const parts: MessagePart[] = [
-      Prompt.filePart({ data: "data:image/png;base64,abc", mediaType: "image/png" }),
-      Prompt.textPart({ text: "Some text" }),
-      Prompt.filePart({ data: "data:image/jpeg;base64,xyz", mediaType: "image/jpeg" }),
-    ]
-
-    const images = extractImages(parts)
-    expect(images.length).toBe(2)
-    expect(images[0]).toEqual({ mediaType: "image/png" })
-    expect(images[1]).toEqual({ mediaType: "image/jpeg" })
-  })
-
-  test("returns empty array when no images", () => {
-    const parts: MessagePart[] = [Prompt.textPart({ text: "Just text" })]
-    expect(extractImages(parts)).toEqual([])
-  })
-
-  test("uses file mediaType for image parts", () => {
-    const parts: MessagePart[] = [Prompt.filePart({ data: "data:abc", mediaType: "image/png" })]
-
-    const images = extractImages(parts)
-    expect(images[0]).toEqual({ mediaType: "image/png" })
-  })
-
-  test("handles empty parts", () => {
-    expect(extractImages([])).toEqual([])
-  })
-
-  test("handles mixed content with images", () => {
-    const parts: MessagePart[] = [
-      Prompt.textPart({ text: "Before" }),
-      Prompt.filePart({ data: "abc", mediaType: "image/gif" }),
-      Prompt.toolCallPart({
-        id: ToolCallId.make("tc1"),
-        name: "read",
-        params: {},
-        providerExecuted: false,
-      }),
-      Prompt.filePart({ data: "xyz", mediaType: "image/webp" }),
-    ]
-
-    const images = extractImages(parts)
-    expect(images.length).toBe(2)
-    expect(images[0]?.mediaType).toBe("image/gif")
-    expect(images[1]?.mediaType).toBe("image/webp")
-  })
-})
 
 describe("projectMessagesWithToolInteractions", () => {
   const makeMsg = (role: "user" | "assistant" | "tool", parts: MessagePart[]): DomainMessage =>

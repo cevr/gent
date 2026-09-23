@@ -42,7 +42,7 @@ import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opent
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { GenericToolRenderer, type ToolCall } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
-import type { ImageInfo } from "@gent/sdk"
+import type { ImagePartProjection } from "@gent/core/protocol"
 import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
@@ -364,7 +364,7 @@ export type AssistantSegment =
   | { _tag: "text"; content: string }
   | { _tag: "reasoning"; content: string }
   | { _tag: "tool-call"; toolCall: ToolCall }
-  | { _tag: "image"; image: ImageInfo }
+  | { _tag: "image"; image: ImagePartProjection }
 
 interface MessageBase {
   id: string
@@ -374,7 +374,7 @@ interface MessageBase {
   content: string
   /** Concatenated reasoning (derived) */
   reasoning: string
-  images: ImageInfo[]
+  images: ReadonlyArray<ImagePartProjection>
   createdAt: number
   // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
@@ -440,7 +440,7 @@ const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
 
 function UserMessage(props: {
   content: string
-  images: ImageInfo[]
+  images: ReadonlyArray<ImagePartProjection>
   interjection: boolean
   pendingMode?: "queued" | "steer"
   customType?: string
@@ -546,7 +546,7 @@ function UserMessage(props: {
 function AssistantMessage(props: {
   content: string
   reasoning: string
-  images: ImageInfo[]
+  images: ReadonlyArray<ImagePartProjection>
   // eslint-disable-next-line effect/noNullish -- snapshot messages preserve absent tool-call data.
   toolCalls: ToolCall[] | undefined
   segments?: AssistantSegment[]

@@ -2,7 +2,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Exit, Option, Predicate, Random, Schema, Scope, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { extractImages, extractText, Gent } from "../src/client"
+import { Gent } from "../src/client"
 import type { Message as DomainMessage } from "../src/index"
 import { makeNamespacedClient } from "../src/namespaced-client"
 import { type GentRpcClient, GentRpcs } from "@gent/core-internal/server/rpc"
@@ -10,6 +10,7 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/
 import {
   dateFromMillis,
   Message,
+  messagePartsText,
   projectMessagesWithToolInteractions,
 } from "@gent/core-internal/domain/message"
 import {
@@ -22,18 +23,6 @@ import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils
 // ── client.test ─────────────────────────────────────────────────────────────
 
 describe("sdk client helpers", () => {
-  test("extractText extracts text from message parts", () => {
-    const parts = [Prompt.textPart({ text: "Hello world" })]
-    expect(extractText(parts)).toBe("Hello world")
-  })
-
-  test("extractImages extracts image metadata", () => {
-    const parts = [Prompt.filePart({ data: "base64data", mediaType: "image/png" })]
-    const images = extractImages(parts)
-    expect(images.length).toBe(1)
-    expect(images[0]?.mediaType).toBe("image/png")
-  })
-
   test("canonical tool interactions expose running calls", () => {
     const message = Message.cases.regular.make({
       id: MessageId.make("m1"),
@@ -348,7 +337,7 @@ describe("Gent.server workspace isolation", () => {
           })
 
           yield* waitFor(clientA.message.list({ branchId: created.branchId }), (messages) =>
-            messages.some((message) => extractText(message.parts) === "workspace-a-message"),
+            messages.some((message) => messagePartsText(message.parts) === "workspace-a-message"),
           )
 
           const sessionsB = yield* clientB.session.list()

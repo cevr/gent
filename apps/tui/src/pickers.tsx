@@ -15,11 +15,13 @@ import {
 import { useTheme } from "./theme"
 import { formatError, truncate } from "./utils"
 import { useClient, useRuntime } from "./client"
-import { type Branch, type BranchTreeNode, extractImages, extractText } from "@gent/sdk"
+import { type Branch, type BranchTreeNode } from "@gent/sdk"
 import {
   type BranchId,
   type Message,
   MessageId,
+  messagePartsImages,
+  messagePartsText,
   type Model,
   ReasoningEffort,
   type SessionId,
@@ -388,8 +390,8 @@ const buildItems = (messages: readonly Message[]): PickerItem[] =>
   messages.map((m) => {
     let rolePrefix = "A"
     if (m.role === "user") rolePrefix = "U"
-    let labelContent = extractText(m.parts).replace(/\s+/g, " ")
-    const images = extractImages(m.parts)
+    let labelContent = messagePartsText(m.parts).replace(/\s+/g, " ")
+    const images = messagePartsImages(m.parts)
     if (labelContent.length === 0 && images.length > 0) {
       let imageCount = ""
       if (images.length > 1) imageCount = ` x${images.length}`

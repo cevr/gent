@@ -55,4 +55,3 @@ export {
 } from "./logger.js"
 
 // Utility functions
-export { extractText, extractReasoning, extractImages, type ImageInfo } from "./client.js"

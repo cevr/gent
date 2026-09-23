@@ -6,12 +6,8 @@ import {
   ConnectionState,
   GentConnectionError,
   GentRpcs,
-  messagePartsImages,
-  messagePartsReasoning,
-  messagePartsText,
   type GentLifecycle,
   type GentRpcClient,
-  type MessagePart,
 } from "@gent/core/protocol"
 import { RpcHandlersLive } from "@gent/core-internal/server/server.js"
 import {
@@ -29,26 +25,6 @@ import {
   type GentServerOptions,
 } from "./server.js"
 import { workspaceHeadersForCwd } from "@gent/core-internal/server/workspace-rpc.js"
-
-// ---------------------------------------------------------------------------
-// Utility functions (unchanged)
-// ---------------------------------------------------------------------------
-
-export function extractText(parts: readonly MessagePart[]): string {
-  return messagePartsText(parts)
-}
-
-export function extractReasoning(parts: readonly MessagePart[]): string {
-  return messagePartsReasoning(parts)
-}
-
-export interface ImageInfo {
-  mediaType: string
-}
-
-export function extractImages(parts: readonly MessagePart[]): ImageInfo[] {
-  return messagePartsImages(parts).map((image) => ({ mediaType: image.mediaType }))
-}
 
 // ---------------------------------------------------------------------------
 // Internal: build runtime from captured services + lifecycle

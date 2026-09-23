@@ -478,7 +478,7 @@ export const summarizeOutput = (value: unknown): string => {
 
 // ── message-part-display ────────────────────────────────────────────────────
 
-interface ImagePartProjection {
+export interface ImagePartProjection {
   readonly mediaType: string
 }
 
