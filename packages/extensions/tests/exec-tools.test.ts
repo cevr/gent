@@ -1280,7 +1280,7 @@ describe("classifyBashCommand", () => {
     for (const command of [
       "find . -name x -exec sh -c '{}' \\;",
       "xargs -I{} sudo sh -c '{}' < list.txt",
-      "parallel sh -c '{}' ::: a",
+      "parallel sh -c '{}' ::: 'rm -rf /nonexistent/gent-probe-x'",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1433,6 +1433,127 @@ describe("classifyBashCommand", () => {
       "printf 'a b\\n' | xargs -0 git checkout",
       // xargs runs no shell: `;` in its input is an argument.
       "echo 'a; rm -rf /nonexistent/gent-probe-x' | xargs echo",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a count above one builds one command per group of that many arguments or lines", () => {
+    for (const command of [
+      "echo 'status x reset --hard' | xargs -n 2 git",
+      "echo 'status x reset --hard' | xargs -n2 git",
+      "echo 'status x reset --hard' | xargs --max-args=2 git",
+      "echo 'status x y reset --hard z' | xargs -n 3 git",
+      "printf 'status\\nx\\nreset\\n--hard\\n' | xargs -L 2 git",
+      // A line that ends in a blank goes on into the next one.
+      "printf 'status x\\nreset \\n--hard\\n' | xargs -L1 git",
+      "printf 'status\\nx\\nreset\\n--hard\\n' | parallel -N 2 git",
+      "printf 'status\\nx\\nreset\\n--hard\\n' | parallel -n 2 git",
+      "parallel -N 2 git ::: status x reset --hard",
+      // `-m` and `-X` divide the input among the job slots: the groups are not known.
+      "printf 'status\\nreset\\n' | parallel -m git",
+      // GNU and BSD xargs read `-I` with a count differently.
+      "echo status | xargs -I{} -n 1 git {}",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo 'status x reset --hard' | xargs -n 3 git",
+      "printf 'status\\nreset\\n--hard\\n' | xargs -L 2 git",
+      "printf 'status\\nx\\nreset\\n' | parallel -N 2 git",
+      "printf 'a\\n' | parallel -m wc -l",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("-a/--arg-file input is a file, not the pipe", () => {
+    for (const command of [
+      "echo status | xargs -a /nonexistent/gent-probe-x git",
+      "echo status | xargs --arg-file=/nonexistent/gent-probe-x git",
+      "echo reset | parallel --arg-file /nonexistent/gent-probe-x git",
+      "echo x | xargs -a /nonexistent/gent-probe-x -I{} sh -c '{}'",
+      "echo ls | parallel sh -c {} :::: /nonexistent/gent-probe-x",
+      "echo 'reset --hard' | xargs -a /dev/stdin git",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo x | xargs -a /nonexistent/gent-probe-x wc -l",
+      "echo status | xargs -a /dev/stdin git",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("parallel combines its input sources and reads its replacement strings", () => {
+    for (const command of [
+      "parallel git ::: reset ::: --hard",
+      "parallel git {1} {2} ::: reset ::: --hard",
+      "parallel git {2} {1} ::: --hard ::: reset",
+      "parallel git ::: reset :::+ --hard",
+      "parallel ::: git ::: reset ::: --hard",
+      "echo reset | parallel git {1} --hard",
+      "echo reset.txt | parallel git {.} --hard",
+      "echo /nonexistent/gent-probe-x/reset | parallel git {/} --hard",
+      "cat /nonexistent/gent-probe-x | parallel git {1}",
+      "cat /nonexistent/gent-probe-x | parallel sh -c {1}",
+      // A perl expression or `--plus` makes text the guard does not rebuild.
+      "echo reset | parallel git '{= s/x// =}' --hard",
+      "echo x | parallel --plus git {..} --hard",
+      // `--colsep` divides a line into arguments at a pattern.
+      "printf 'reset,--hard\\n' | parallel --colsep , git",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "parallel git ::: status ::: x",
+      "parallel git {2} {1} ::: x ::: status",
+      "echo a.txt | parallel wc -l {.}.md",
+      "parallel echo {#} {} ::: a b",
+      "parallel -I @ echo {} @ ::: reset",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("BSD xargs -J appends the input when no word is the replace string", () => {
+    for (const command of [
+      "echo 'reset --hard' | xargs -J % git",
+      "echo 'reset --hard' | xargs -J % git --no-pager",
+      "echo '--hard' | xargs -J % git reset x%y",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo status | xargs -J % git % --short").level).toBe("safe")
+  })
+
+  test("unreadable input that fills a runner's environment or script asks", () => {
+    const u = "cat /nonexistent/gent-probe-x |"
+    for (const command of [
+      `${u} xargs env A=b git`,
+      `${u} xargs env A=b`,
+      `${u} xargs sudo A=b git`,
+      `${u} xargs ssh host`,
+      `${u} xargs ssh host ls`,
+      `${u} xargs -I{} ssh host ls {}`,
+      `${u} xargs watch`,
+      `${u} xargs eval echo`,
+      `${u} xargs sg wheel`,
+      `${u} xargs sg wheel -c`,
+      `${u} xargs su -c`,
+      `${u} xargs su`,
+      `${u} xargs nix-shell --run`,
+      `${u} xargs env -S`,
+      `${u} xargs find /nonexistent/gent-probe-x`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `${u} xargs env A=b grep x`,
+      `${u} xargs sudo -u root ls`,
+      `${u} xargs -I{} su -c 'ls' root`,
+      `${u} xargs flock /nonexistent/gent-probe-x wc -l`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }

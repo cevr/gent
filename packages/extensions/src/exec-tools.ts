@@ -335,6 +335,11 @@ interface ShellSegment {
    * it, or into the subshell, group, loop or `if` around it.
    */
   readonly pipedFrom: Option.Option<ShellSegment>
+  /**
+   * A file the command reads its input from in place of its stdin: the
+   * `-a`/`--arg-file` or `::::` file of the `xargs` or `parallel` that runs it.
+   */
+  readonly inputFile: Option.Option<string>
 }
 
 interface PendingHeredoc {
@@ -402,6 +407,7 @@ const makeSegment = (pipedFrom: Option.Option<ShellSegment>): ShellSegment => ({
   stdin: [],
   writes: [],
   pipedFrom,
+  inputFile: Option.none(),
 })
 
 const sourceOffset = (source: ShellSource, index: number) => source.map[index] ?? index
@@ -1494,20 +1500,16 @@ const commandStart = (
   return end
 }
 
-/** `parallel … ::: a b` (`:::+` links), `:::: file`: where its command ends and its input starts. */
-const PARALLEL_SOURCE = /^::::?\+?$/
-
 /** The commands a run starts, each from its command word. */
 const runCommands = (
-  { words, spec: { valued } }: ResolvedCommand,
+  resolved: ResolvedCommand,
   run: Run,
 ): ReadonlyArray<ReadonlyArray<ShellWord>> => {
-  if (run._tag === "Stdin") {
-    const rest = words.slice(commandStart(words, valued, {}))
-    let end = rest.findIndex((word) => PARALLEL_SOURCE.test(word.text))
-    if (end === -1) end = rest.length
-    return [rest.slice(0, end)]
-  }
+  const {
+    words,
+    spec: { valued },
+  } = resolved
+  if (run._tag === "Stdin") return [wrapperWords(resolved).command]
   if (run._tag === "FindExec") {
     return words.flatMap((word, index) => {
       if (!run.actions.includes(word.text)) return []
@@ -1552,17 +1554,24 @@ const inputShellRuns = (
   resolved: ResolvedCommand,
   run: typeof Run.cases.InputShell.Type,
 ): SegmentRuns => {
+  if (!inputShellStarts(resolved, run)) return NO_RUNS
+  return segmentInputs(invocation.segment)
+}
+
+/** Whether an `InputShell` run starts a shell that reads its input, with no script of its own. */
+const inputShellStarts = (
+  resolved: ResolvedCommand,
+  run: typeof Run.cases.InputShell.Type,
+): boolean => {
   const parsed = parseWords(resolved.words, resolved.spec.valued, "leading")
   const any = run.short === "" && run.long.length === 0
-  if (!any && !hasShort(parsed, ...run.short) && !hasLong(parsed, ...run.long)) return NO_RUNS
-  const scripted = resolved.spec.runs.some((other) => {
+  if (!any && !hasShort(parsed, ...run.short) && !hasLong(parsed, ...run.long)) return false
+  return !resolved.spec.runs.some((other) => {
     if (other._tag === "OptionScript") {
       return hasShort(parsed, ...other.short) || hasLong(parsed, ...other.long)
     }
     return runCommands(resolved, other).some((wrapped) => wrapped.length > 0)
   })
-  if (scripted) return NO_RUNS
-  return segmentInputs(invocation.segment)
 }
 
 /** What a `Joined`, `OptionScript`, `Stdin` or `InputShell` run runs beyond the commands it starts. */
@@ -1587,10 +1596,10 @@ interface Invocation {
   /** The `NAME=value` words before it: its environment. */
   readonly assignments: ReadonlyArray<ShellWord>
   /**
-   * Reached through `xargs`, `parallel` or `find -exec`: the text in its
-   * words that stands for the input (`{}`, or `xargs -I %`).
+   * Reached through `xargs`, `parallel` or `find -exec`: matches a word that
+   * holds the input (`{}`, `xargs -I %`, parallel's `{1}`).
    */
-  readonly placeholder: Option.Option<string>
+  readonly placeholder: Option.Option<RegExp>
 }
 
 /** The commands `words` runs: the first after env assignments, and each command a run of its path starts. */
@@ -1598,7 +1607,7 @@ const collectInvocations = (
   segment: ShellSegment,
   words: ReadonlyArray<ShellWord>,
   into: Array<Invocation>,
-  placeholder = Option.none<string>(),
+  placeholder = Option.none<RegExp>(),
 ): void => {
   let start = words.findIndex((word) => !ASSIGNMENT.test(word.text))
   if (start === -1) start = words.length
@@ -1609,10 +1618,16 @@ const collectInvocations = (
   const resolved = resolveCommand(command)
   for (const run of resolved.spec.runs) {
     let fed = placeholder
-    if (run._tag === "FindExec") fed = Option.some("{}")
-    if (run._tag === "Stdin") fed = Option.orElse(inputUse(resolved).placeholder, () => placeholder)
+    let input = segment
+    if (run._tag === "FindExec") fed = Option.some(/\{\}/)
+    if (run._tag === "Stdin") {
+      // The command reads what the wrapper reads: its pipe, its file or its sources.
+      const use = inputUse(resolved)
+      fed = Option.orElse(use.marker, () => placeholder)
+      input = wrapperSegment(segment, use, wrapperWords(resolved).sources)
+    }
     for (const wrapped of runCommands(resolved, run)) {
-      collectInvocations(segment, wrapped, into, fed)
+      collectInvocations(input, wrapped, into, fed)
     }
   }
 }
@@ -1725,6 +1740,8 @@ const printfRuns = (args: ReadonlyArray<ShellWord>): SegmentRuns => {
  * group), and text a shell expands at run time, cannot.
  */
 const segmentInputs = (segment: ShellSegment): SegmentRuns => {
+  const file = Option.filter(segment.inputFile, (name) => !STDIN_FILES.has(name))
+  if (Option.isSome(file)) return unreadableRun(`the input file \`${file.value}\``)
   const runs: Array<SegmentRuns> = [scriptRuns(segment.stdin)]
   if (Option.isSome(segment.pipedFrom)) {
     const from = segment.pipedFrom.value
@@ -1818,7 +1835,7 @@ const shellOperandRuns = (
   }
   const literal = Option.filter(
     operand,
-    (word) => !word.dynamic && !Option.exists(placeholder, (text) => word.text.includes(text)),
+    (word) => !word.dynamic && !Option.exists(placeholder, (marker) => marker.test(word.text)),
   )
   if (Option.isSome(literal)) return scriptRuns([literal.value])
   const inputs = segmentInputs(segment)
@@ -1862,23 +1879,46 @@ const InputDivision = Schema.TaggedUnion({
 })
 type InputDivision = typeof InputDivision.Type
 
+/**
+ * How many input arguments (`-n N`, parallel `-N N`) or lines (`-L N`, `-I`)
+ * one command takes, or all of the input in one command.
+ */
+const InputBatch = Schema.TaggedUnion({
+  Args: { size: Schema.Int },
+  Lines: { size: Schema.Int },
+  All: {},
+})
+type InputBatch = typeof InputBatch.Type
+
 /** How `xargs` or `parallel` builds its commands from its input. */
 interface InputUse {
-  /** The text in its command that stands for the input. */
+  /** The text in its command that stands for the input: `{}`, or the `-I`/`-J` value. */
   readonly placeholder: Option.Option<string>
   /**
+   * Matches a command word that holds the input: the placeholder, and for
+   * parallel every replacement string (`{1}`, `{.}`, `{/}`).
+   */
+  readonly marker: Option.Option<RegExp>
+  /**
    * `within`: the placeholder takes one input line inside any word and the
-   * input is never appended (`xargs -I`); `word`: a placeholder word takes
-   * every argument (`xargs -J`); `insert`: the placeholder takes the
-   * arguments, or they are appended.
+   * input is never appended (`xargs -I`); `word`: the first word that is the
+   * placeholder takes every argument, else they are appended (BSD
+   * `xargs -J`); `insert`: the placeholder takes the arguments, or they are
+   * appended.
    */
   readonly replace: "within" | "word" | "insert"
-  /** One command per input argument (`-n1`) or line (`-L1`, `-I`), or one for all of it. */
-  readonly split: "word" | "line" | "all"
+  /** None: a count the guard does not read (`-n "$N"`, `-I` with `-n`). */
+  readonly batch: Option.Option<InputBatch>
   /** None: a delimiter the guard does not read. */
   readonly division: Option.Option<InputDivision>
   /** parallel runs its command words as one shell script; xargs runs them as they are. */
   readonly shell: boolean
+  /** `-a`/`--arg-file`: the files it reads its input from in place of its stdin. */
+  readonly argFiles: ReadonlyArray<string>
+  /** parallel `-m`, `-X`, `--xargs`: the input is divided among the job slots. */
+  readonly spread: boolean
+  /** parallel options that make replacement strings the guard does not rebuild (`--plus`, `--er`). */
+  readonly otherReplacements: boolean
 }
 
 /** A `-d` value as a character: a literal one, or `\n`, `\t`, `\0`. */
@@ -1911,77 +1951,166 @@ const givenDelimiter = (
   return division
 }
 
+/** A count option's value: a whole number above zero. */
+const batchSize = (text: string): Option.Option<number> => {
+  if (!/^[1-9]\d{0,5}$/.test(text)) return Option.none()
+  return Option.some(Number(text))
+}
+
+/** `text` as a pattern that matches only itself. */
+const literalPattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")
+
+/**
+ * parallel's replacement strings: `{}` (or the `-I` value), `{.}` without
+ * the extension, `{/}` the base name, `{//}` the directory, `{/.}` both,
+ * `{#}` the job number, `{%}` the slot, each with an argument number before
+ * the modifier (`{1}`, `{2.}`, `{-1}`), and `{= perl =}`, which the guard
+ * does not rebuild.
+ */
+const PARALLEL_REPLACEMENT = "\\{(-?\\d+)?(//|/\\.|/|\\.|#|%)?\\}|\\{-?\\d*="
+
+/** parallel options that add replacement strings: their text is not rebuilt. */
+const PARALLEL_REPLACE_OPTIONS = [
+  ...["extensionreplace", "er", "basenamereplace", "bnr", "dirnamereplace", "dnr"],
+  ...["basenameextensionreplace", "bner", "seqreplace", "slotreplace"],
+]
+
+const replacementPattern = (replace: string) =>
+  new RegExp(`${literalPattern(replace)}|${PARALLEL_REPLACEMENT}`, "g")
+
+/**
+ * The input use of `parallel`: one command per line, or per `-N`/`-n`/`-L`
+ * lines; `{}` (or its `-I` value) and the other replacement strings take the
+ * input, else it is appended.
+ */
+const parallelInputUse = (
+  parsed: ParsedArguments,
+  texts: ReadonlyArray<string>,
+  argFiles: ReadonlyArray<string>,
+): InputUse => {
+  const replace = Option.getOrElse(
+    Option.map(Arr.last(optionValues(parsed, "I")), (at) => valueText(texts, at)),
+    () => "{}",
+  )
+  let batch = Option.some<InputBatch>(InputBatch.cases.Args.make({ size: 1 }))
+  for (const option of parsed.options) {
+    const size = Option.flatMap(
+      Option.map(option.value, (at) => valueText(texts, at)),
+      batchSize,
+    )
+    if (isNamed(option, "nN", ["max-args", "max-replace-args"])) {
+      batch = Option.map(size, (value) => InputBatch.cases.Args.make({ size: value }))
+    } else if (isNamed(option, "L", ["max-lines"])) {
+      batch = Option.map(size, (value) => InputBatch.cases.Lines.make({ size: value }))
+    }
+  }
+  // `--colsep` divides a line into arguments at a pattern.
+  let division = Option.getOrElse(givenDelimiter(parsed, texts), () =>
+    Option.some(InputDivision.cases.Delimiter.make({ text: "\n" })),
+  )
+  if (hasShort(parsed, "C") || hasLong(parsed, "colsep")) division = Option.none()
+  return {
+    placeholder: Option.some(replace),
+    marker: Option.some(new RegExp(replacementPattern(replace).source)),
+    replace: "insert",
+    batch,
+    division,
+    shell: true,
+    argFiles,
+    spread: hasShort(parsed, "m", "X") || hasLong(parsed, "xargs"),
+    otherReplacements: hasLong(parsed, "plus", ...PARALLEL_REPLACE_OPTIONS),
+  }
+}
+
 /**
  * The input use of an `xargs` or `parallel` invocation. For xargs, `-I R`,
  * `--replace[=R]` and `-i[R]` (R is `{}` when not given) replace R in each
- * line; BSD `-J R` replaces the word R with all of the input. `-n1` runs one
- * command per argument, `-L1` and `-l` one per line; the last of them
- * counts. `parallel` runs one command per line with `{}` (or its `-I` value),
- * or appends the line when its command has none; `-m`, `-X` or a count other
- * than 1 joins.
+ * line; BSD `-J R` replaces the first word R with all of the input. `-n N`
+ * runs one command per N arguments, `-L N` and `-l` one per N lines; the
+ * last of them counts. GNU and BSD xargs differ on `-I` with `-n` or `-L`,
+ * so that count is not read.
  */
 const inputUse = ({ path, words, spec }: ResolvedCommand): InputUse => {
   const texts = words.slice(1).map((word) => word.text)
   const parsed = parseArguments(texts, spec.valued, "leading")
   const value = (option: ParsedOption) => Option.map(option.value, (at) => valueText(texts, at))
-  const delimiter = givenDelimiter(parsed, texts)
-  if (path === "parallel") {
-    const replace = Arr.last(optionValues(parsed, "I")).pipe(
-      Option.map((at) => valueText(texts, at)),
-    )
-    const joins =
-      hasShort(parsed, "m", "X") ||
-      hasLong(parsed, "xargs") ||
-      optionValues(parsed, "nN", ["max-args", "max-replace-args"]).some(
-        (at) => valueText(texts, at) !== "1",
-      )
-    let split: InputUse["split"] = "line"
-    if (joins) split = "all"
-    return {
-      placeholder: Option.orElse(replace, () => Option.some("{}")),
-      replace: "insert",
-      split,
-      division: Option.getOrElse(delimiter, () =>
-        Option.some(InputDivision.cases.Delimiter.make({ text: "\n" })),
-      ),
-      shell: true,
-    }
-  }
+  const argFiles = optionValues(parsed, "a", ["arg-file"]).map((at) => valueText(texts, at))
+  if (path === "parallel") return parallelInputUse(parsed, texts, argFiles)
   let use: InputUse = {
     placeholder: Option.none(),
+    marker: Option.none(),
     replace: "insert",
-    split: "all",
+    batch: Option.some(InputBatch.cases.All.make({})),
     division: Option.some(InputDivision.cases.Blanks.make({})),
     shell: false,
+    argFiles,
+    spread: false,
+    otherReplacements: false,
   }
+  let replaced = false
+  let counted = false
   for (const option of parsed.options) {
     const given = value(option)
     if (isNamed(option, "Ii", ["replace"])) {
       const placeholder = Option.orElse(given, () => Option.some("{}"))
       const division = Option.some(InputDivision.cases.Lines.make({}))
-      use = { ...use, placeholder, replace: "within", split: "line", division }
+      const batch = Option.some(InputBatch.cases.Lines.make({ size: 1 }))
+      replaced = true
+      use = {
+        ...use,
+        placeholder,
+        marker: Option.map(placeholder, (text) => new RegExp(literalPattern(text))),
+        replace: "within",
+        batch,
+        division,
+      }
     } else if (isNamed(option, "J")) {
-      use = { ...use, placeholder: given, replace: "word" }
+      use = {
+        ...use,
+        placeholder: given,
+        marker: Option.map(given, (text) => new RegExp(`^${literalPattern(text)}$`)),
+        replace: "word",
+      }
     } else if (isNamed(option, "n", ["max-args"])) {
-      use = { ...use, split: "all" }
-      if (Option.contains(given, "1")) use = { ...use, split: "word" }
+      counted = true
+      use = {
+        ...use,
+        batch: Option.map(Option.flatMap(given, batchSize), (size) =>
+          InputBatch.cases.Args.make({ size }),
+        ),
+      }
     } else if (isNamed(option, "Ll", ["max-lines"])) {
       // `-l` and `--max-lines` with no value mean one line.
-      use = { ...use, split: "all" }
-      if (Option.getOrElse(given, () => "1") === "1") use = { ...use, split: "line" }
+      counted = true
+      use = {
+        ...use,
+        batch: Option.map(batchSize(Option.getOrElse(given, () => "1")), (size) =>
+          InputBatch.cases.Lines.make({ size }),
+        ),
+      }
     }
   }
-  return { ...use, division: Option.getOrElse(delimiter, () => use.division) }
+  if (replaced && counted) use = { ...use, batch: Option.none() }
+  return { ...use, division: Option.getOrElse(givenDelimiter(parsed, texts), () => use.division) }
+}
+
+/** One input line: its arguments, and whether it ends in a blank. */
+interface InputLine {
+  readonly args: ReadonlyArray<string>
+  /** `-L` reads a line that ends in a blank as going on into the next one. */
+  readonly continued: boolean
 }
 
 /** The state of the xargs quoting reader. */
 interface QuoteReader {
-  readonly lines: Array<Array<string>>
+  readonly lines: Array<InputLine>
   line: Array<string>
   arg: string
   inArg: boolean
   quote: string
   escaped: boolean
+  /** The character read before the current one. */
+  previous: string
 }
 
 const endArg = (reader: QuoteReader) => {
@@ -1989,6 +2118,8 @@ const endArg = (reader: QuoteReader) => {
   reader.arg = ""
   reader.inArg = false
 }
+
+const isBlank = (char: string) => char === " " || char === "\t"
 
 /** Read one character outside quotes and escapes; blanks end an argument only with `blanks`. */
 const readUnquoted = (reader: QuoteReader, char: string, blanks: boolean) => {
@@ -1999,9 +2130,9 @@ const readUnquoted = (reader: QuoteReader, char: string, blanks: boolean) => {
     reader.inArg = true
   } else if (char === "\n") {
     endArg(reader)
-    reader.lines.push(reader.line)
+    reader.lines.push({ args: reader.line, continued: isBlank(reader.previous) })
     reader.line = []
-  } else if ((char === " " || char === "\t") && (blanks || !reader.inArg)) {
+  } else if (isBlank(char) && (blanks || !reader.inArg)) {
     endArg(reader)
   } else {
     reader.arg += char
@@ -2012,13 +2143,11 @@ const readUnquoted = (reader: QuoteReader, char: string, blanks: boolean) => {
 /**
  * The arguments of each input line as xargs reads them: quotes and backslash
  * escapes, blanks between arguments (or, without `blanks`, inside the one
- * argument of a line, whose leading blanks are dropped). None when a quote
- * is open at a newline or at the end, as xargs then fails.
+ * argument of a line, whose leading blanks are dropped). Blank lines are
+ * dropped. None when a quote is open at a newline or at the end, as xargs
+ * then fails.
  */
-const quotedLines = (
-  text: string,
-  blanks: boolean,
-): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+const quotedLines = (text: string, blanks: boolean): Option.Option<ReadonlyArray<InputLine>> => {
   const reader: QuoteReader = {
     lines: [],
     line: [],
@@ -2026,6 +2155,7 @@ const quotedLines = (
     inArg: false,
     quote: "",
     escaped: false,
+    previous: "",
   }
   for (const char of text) {
     if (reader.escaped) {
@@ -2041,73 +2171,269 @@ const quotedLines = (
     } else {
       reader.arg += char
     }
+    reader.previous = char
   }
   if (reader.quote !== "" || reader.escaped) return Option.none()
   endArg(reader)
-  reader.lines.push(reader.line)
-  return Option.some(reader.lines.filter((line) => line.length > 0))
+  reader.lines.push({ args: reader.line, continued: false })
+  return Option.some(reader.lines.filter((line) => line.args.length > 0))
 }
 
 /** The arguments of each input line: one per line for a delimiter, whose final empty item ends the input. */
 const dividedLines = (
   text: string,
   division: InputDivision,
-): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+): Option.Option<ReadonlyArray<InputLine>> => {
   if (division._tag === "Blanks") return quotedLines(text, true)
   if (division._tag === "Lines") return quotedLines(text, false)
   const items = text.split(division.text)
   if (items.at(-1) === "") items.pop()
-  return Option.some(items.map((item) => [item]))
+  return Option.some(items.map((item) => ({ args: [item], continued: /[ \t]$/.test(item) })))
 }
 
-/** The argument lists of the commands the input builds: per argument, per line, or all at once. */
-const argumentGroups = (
-  lines: ReadonlyArray<ReadonlyArray<string>>,
-  split: InputUse["split"],
-): ReadonlyArray<ReadonlyArray<string>> => {
-  if (split === "word") return lines.flat().map((arg) => [arg])
-  if (split === "line") return lines.filter((line) => line.length > 0)
-  return [lines.flat()]
+/**
+ * The lines `-L` counts: with blank division, a line that ends in a blank
+ * and the next one are one line. Other divisions: none when such a line is
+ * not the last, as the implementations differ there.
+ */
+const logicalLines = (
+  lines: ReadonlyArray<InputLine>,
+  division: InputDivision,
+): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+  if (division._tag !== "Blanks") {
+    if (lines.slice(0, -1).some((line) => line.continued)) return Option.none()
+    return Option.some(lines.map((line) => line.args))
+  }
+  const merged: Array<Array<string>> = []
+  let open = false
+  for (const line of lines) {
+    const last = Arr.last(merged)
+    if (open && Option.isSome(last)) last.value.push(...line.args)
+    else merged.push([...line.args])
+    open = line.continued
+  }
+  return Option.some(merged)
+}
+
+/** The argument lists of the commands `batch` builds from the input lines. */
+const commandGroups = (
+  lines: ReadonlyArray<InputLine>,
+  batch: InputBatch,
+  division: InputDivision,
+): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+  const args = lines.flatMap((line) => line.args)
+  if (batch._tag === "All") return Option.some([args])
+  if (batch._tag === "Args") return Option.some(Arr.chunksOf(args, batch.size))
+  return Option.map(logicalLines(lines, division), (logical) =>
+    Arr.chunksOf(logical, batch.size).map((chunk) => chunk.flat()),
+  )
 }
 
 /** `text` as one single-quoted shell word. */
 const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
 /**
- * The script of one command the wrapper builds from `args`. parallel's
- * command is a shell script that takes the arguments quoted; xargs runs its
- * words as they are, so each word is quoted.
+ * The script of one command xargs builds from `args`. xargs runs its words
+ * as they are, so each word is quoted.
  */
-const builtCommand = (
+const xargsCommand = (
   commandTexts: ReadonlyArray<string>,
   use: InputUse,
   args: ReadonlyArray<string>,
-): Option.Option<string> => {
-  const quoted = args.map(shellQuote).join(" ")
+): string => {
   const placeholder = Option.getOrElse(use.placeholder, () => "")
-  const replaces = placeholder !== "" && commandTexts.some((text) => text.includes(placeholder))
-  if (use.shell) {
-    const script = commandTexts.join(" ")
-    if (replaces) return Option.some(script.replaceAll(placeholder, quoted))
-    return Option.some(`${script} ${quoted}`)
-  }
-  if (use.replace === "insert") {
-    return Option.some([...commandTexts.map(shellQuote), quoted].join(" "))
-  }
-  if (!replaces) return Option.none()
   if (use.replace === "within") {
     const line = args.join(" ")
-    return Option.some(
-      commandTexts.map((text) => shellQuote(text.replaceAll(placeholder, line))).join(" "),
-    )
+    const replaced = (text: string) => {
+      if (placeholder === "") return text
+      return text.replaceAll(placeholder, line)
+    }
+    return commandTexts.map((text) => shellQuote(replaced(text))).join(" ")
   }
-  return Option.some(
-    commandTexts
-      .map((text) => {
-        if (text === placeholder) return quoted
-        return shellQuote(text)
+  const quoted = commandTexts.map(shellQuote)
+  let at = -1
+  if (use.replace === "word") at = commandTexts.indexOf(placeholder)
+  if (at === -1) return [...quoted, ...args.map(shellQuote)].join(" ")
+  return [...quoted.slice(0, at), ...args.map(shellQuote), ...quoted.slice(at + 1)].join(" ")
+}
+
+/** An argument as a parallel replacement modifier shows it. */
+const modifiedArgument = (arg: string, modifier: string) => {
+  const slash = arg.lastIndexOf("/")
+  const base = arg.slice(slash + 1)
+  const noExtension = (text: string) => text.replace(/\.[^./]*$/, "")
+  if (modifier === ".") return arg.slice(0, slash + 1) + noExtension(base)
+  if (modifier === "/") return base
+  if (modifier === "/.") return noExtension(base)
+  if (modifier !== "//") return arg
+  if (slash === -1) return "."
+  return arg.slice(0, slash)
+}
+
+/** Job argument `number` (from 1; negative counts from the end), or empty when the job has fewer. */
+const numberedArgument = (args: ReadonlyArray<string>, number: number): string => {
+  let index = args.length + number
+  if (number > 0) index = number - 1
+  return Option.getOrElse(Arr.get(args, index), () => "")
+}
+
+/**
+ * The script of one parallel job: every replacement string takes the job's
+ * arguments, quoted (not when the arguments are the command); with none, the
+ * arguments are appended. None for a perl expression.
+ */
+const parallelScript = (
+  commandTexts: ReadonlyArray<string>,
+  replace: string,
+  args: ReadonlyArray<string>,
+  quote: boolean,
+): Option.Option<string> => {
+  const script = commandTexts.join(" ")
+  const shown = (text: string) => {
+    if (quote) return shellQuote(text)
+    return text
+  }
+  let built = ""
+  let last = 0
+  let found = false
+  for (const match of script.matchAll(replacementPattern(replace))) {
+    const text = match[0]
+    const modifier = Option.getOrElse(Option.fromUndefinedOr(match[2]), () => "")
+    if (text.endsWith("=")) return Option.none()
+    if (text === "{}" && replace !== "{}") continue
+    found = true
+    let value = "1"
+    if (modifier !== "#" && modifier !== "%") {
+      const values = Option.match(Option.fromUndefinedOr(match[1]), {
+        onNone: () => args,
+        onSome: (number) => [numberedArgument(args, Number(number))],
       })
-      .join(" "),
+      value = values.map((arg) => shown(modifiedArgument(arg, modifier))).join(" ")
+    }
+    built += script.slice(last, match.index) + value
+    last = match.index + text.length
+  }
+  if (found) return Option.some(built + script.slice(last))
+  return Option.some([script, ...args.map(shown)].filter((text) => text.length > 0).join(" "))
+}
+
+/** `parallel … ::: a b` (`:::+` links), `:::: file`: where its command ends and its input starts. */
+const PARALLEL_SOURCE = /^::::?\+?$/
+
+/** One input source of parallel after its command: `::: a b`, `:::+ a b`, `:::: file`. */
+interface ParallelSource {
+  readonly marker: string
+  readonly words: Array<ShellWord>
+}
+
+const isFileSource = (source: ParallelSource) => source.marker.startsWith("::::")
+
+/** The command an `xargs` or `parallel` runs, and parallel's input sources after it. */
+interface WrapperWords {
+  readonly command: ReadonlyArray<ShellWord>
+  readonly sources: ReadonlyArray<ParallelSource>
+}
+
+const wrapperWords = ({ path, words, spec: { valued } }: ResolvedCommand): WrapperWords => {
+  const rest = words.slice(commandStart(words, valued, {}))
+  if (path !== "parallel") return { command: rest, sources: [] }
+  const command: Array<ShellWord> = []
+  const sources: Array<ParallelSource> = []
+  for (const word of rest) {
+    const source = Arr.last(sources)
+    if (PARALLEL_SOURCE.test(word.text)) sources.push({ marker: word.text, words: [] })
+    else if (Option.isSome(source)) source.value.words.push(word)
+    else command.push(word)
+  }
+  return { command, sources }
+}
+
+/**
+ * The segment whose input the wrapper and the commands it runs read: its
+ * own, the `-a`/`::::` file in place of its stdin, or the words of its
+ * `:::` sources.
+ */
+const wrapperSegment = (
+  segment: ShellSegment,
+  use: InputUse,
+  sources: ReadonlyArray<ParallelSource>,
+): ShellSegment => {
+  const files = [
+    ...use.argFiles,
+    ...sources.filter(isFileSource).map((source) => source.words[0]?.text ?? ""),
+  ]
+  const file = Arr.findFirst(files, (name) => !STDIN_FILES.has(name))
+  if (Option.isSome(file)) return { ...segment, inputFile: file }
+  if (sources.length === 0) return segment
+  return {
+    ...segment,
+    stdin: sources.flatMap((source) => source.words),
+    pipedFrom: Option.none(),
+  }
+}
+
+/** Past this many jobs, the product of parallel's sources is not rebuilt. */
+const MAX_PARALLEL_JOBS = 1024
+
+/**
+ * The arguments of each job of parallel's `:::` sources: every combination,
+ * the first source varying slowest; a `:::+` source is linked to the one
+ * before it, the shorter one wrapping.
+ */
+const sourceJobs = (
+  sources: ReadonlyArray<ParallelSource>,
+): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+  const groups: Array<Array<ReadonlyArray<string>>> = []
+  for (const source of sources) {
+    const items = source.words.map((word) => word.text)
+    const group = Arr.last(groups)
+    if (source.marker.endsWith("+") && Option.isSome(group)) group.value.push(items)
+    else groups.push([items])
+  }
+  let jobs: ReadonlyArray<ReadonlyArray<string>> = [[]]
+  for (const group of groups) {
+    const size = Math.max(...group.map((items) => items.length))
+    const rows = Array.from({ length: size }, (_, index) =>
+      group.map((items) => items[index % items.length] ?? ""),
+    )
+    jobs = jobs.flatMap((job) => rows.map((row) => [...job, ...row]))
+    if (jobs.length > MAX_PARALLEL_JOBS) return Option.none()
+  }
+  return Option.some(jobs)
+}
+
+/**
+ * The arguments of each parallel job: one per `:::` combination, or per
+ * input line; `-N`/`-n`/`-L` group them from one source. None when the
+ * groups are not known: several sources with a count, or `-m`/`-X` with
+ * more than one argument.
+ */
+const parallelGroups = (
+  text: string,
+  use: InputUse,
+  sources: ReadonlyArray<ParallelSource>,
+): Option.Option<ReadonlyArray<ReadonlyArray<string>>> => {
+  if (sources.some(isFileSource) || use.otherReplacements) return Option.none()
+  if (sources.length > 0 && use.argFiles.length > 0) return Option.none()
+  let lines: Option.Option<ReadonlyArray<InputLine>>
+  if (sources.length > 0) {
+    lines = Option.map(sourceJobs(sources), (jobs) =>
+      jobs.map((args) => ({ args, continued: false })),
+    )
+  } else {
+    lines = Option.flatMap(use.division, (division) => dividedLines(text, division))
+  }
+  return Option.flatMap(
+    Option.all([lines, use.batch, use.division]),
+    ([found, batch, division]) => {
+      const args = found.flatMap((line) => line.args)
+      if (use.spread && args.length > 1) return Option.none()
+      if (use.spread) return Option.some([args])
+      if (batch._tag !== "All" && batch.size === 1)
+        return Option.some(found.map((line) => line.args))
+      if (sources.length > 1) return Option.none()
+      return commandGroups(found, batch, division)
+    },
   )
 }
 
@@ -2116,86 +2442,136 @@ const builtCommand = (
  * into the placeholder; `parallel ::: a b` also runs each word after `:::`
  * when it has no command, and `parallel` with no command runs each input
  * line. Bare `xargs` runs `echo`. When the input can be read, it is divided
- * into arguments as the wrapper divides it, and each command it builds is
- * classified whole, so a runner (`xargs env`) or a subcommand in the input
- * (`xargs git`) is read as it would run. Input the guard cannot divide asks.
- * When the input cannot be read, the wrapper asks only if the input names
- * what runs (see `inputNamesCommand`); anything else stays quiet
- * (`find … | xargs rm`). A shell under the wrapper reads its input through
- * `shellRuns`.
+ * into arguments and grouped into commands as the wrapper does it, and each
+ * command it builds is classified whole, so a runner (`xargs env`) or a
+ * subcommand in the input (`xargs git`) is read as it would run. Input the
+ * guard cannot divide or group asks. When the input cannot be read, the
+ * wrapper asks only if the input names what runs (see `inputNamesCommand`);
+ * anything else stays quiet (`find … | xargs rm`). A shell under the wrapper
+ * reads its input through `shellRuns`.
  */
 const inputWrapperRuns = ({ segment }: Invocation, resolved: ResolvedCommand): SegmentRuns => {
-  const { words, spec } = resolved
-  const name = commandName(words[0]?.text ?? "")
+  const name = commandName(resolved.words[0]?.text ?? "")
   const use = inputUse(resolved)
-  const isPlaceholder = (text: string) =>
-    Option.exists(use.placeholder, (placeholder) => text.includes(placeholder))
-  const rest = words.slice(commandStart(words, spec.valued, {}))
-  const separator = rest.findIndex((word) => PARALLEL_SOURCE.test(word.text))
-  let command = rest
-  let listed: ReadonlyArray<ShellWord> = []
-  let fromFiles = false
-  if (separator !== -1) {
-    command = rest.slice(0, separator)
-    listed = rest.slice(separator + 1).filter((word) => !PARALLEL_SOURCE.test(word.text))
-    fromFiles = rest.slice(separator).some((word) => word.text.startsWith("::::"))
-  }
-  let inputs = segmentInputs(segment)
-  if (listed.length > 0) inputs = scriptRuns(listed)
-  if (fromFiles) inputs = unreadableRun(`the input files of \`${name} ::::\``)
+  const { command, sources } = wrapperWords(resolved)
+  const inputs = segmentInputs(wrapperSegment(segment, use, sources))
   const commandTexts = command.map((word) => word.text)
+  const isMarked = (text: string) => Option.exists(use.marker, (marker) => marker.test(text))
+  const placeholder = Option.getOrElse(use.placeholder, () => "")
   if (command.length === 0 && name === "xargs") return NO_RUNS
-  if (
-    command.length === 0 ||
-    commandTexts.every((text) => Option.contains(use.placeholder, text))
-  ) {
-    return inputs
+  const holdsInput = (text: string) => {
+    if (use.shell) return isMarked(text)
+    return text === placeholder
   }
+  // The input is the command: `parallel`, `xargs -I{} {}`.
+  const inputIsCommand = command.length === 0 || commandTexts.every(holdsInput)
+  if (inputIsCommand && !use.shell) return inputs
   if (inputs.scripts.length === 0 || inputs.unreadable.length > 0) {
-    if (!inputNamesCommand(command, isPlaceholder)) return NO_RUNS
+    let appends = !commandTexts.some(isMarked)
+    if (use.replace === "within") appends = false
+    if (!inputNamesCommand(command, isMarked, appends)) return NO_RUNS
     if (inputs.unreadable.length > 0) return { scripts: [], unreadable: inputs.unreadable }
     return unreadableRun(`the input of \`${name}\``)
   }
-  let lines = Option.some<ReadonlyArray<ReadonlyArray<string>>>(listed.map((word) => [word.text]))
-  if (listed.length === 0) {
-    const text = inputs.scripts.map((word) => word.text).join("\n")
-    lines = Option.flatMap(use.division, (division) => dividedLines(text, division))
+  const text = inputs.scripts.map((word) => word.text).join("\n")
+  let groups: Option.Option<ReadonlyArray<ReadonlyArray<string>>>
+  if (use.shell) {
+    groups = parallelGroups(text, use, sources)
+  } else {
+    groups = Option.flatMap(Option.all([use.division, use.batch]), ([division, batch]) =>
+      Option.flatMap(dividedLines(text, division), (lines) =>
+        commandGroups(lines, batch, division),
+      ),
+    )
   }
-  if (Option.isNone(lines)) {
-    return unreadableRun(`\`${name}\` input whose quoting or delimiter the guard does not read`)
+  const built = Option.flatMap(groups, (found) =>
+    Option.all(
+      found.map((args) => {
+        if (use.shell) return parallelScript(commandTexts, placeholder, args, !inputIsCommand)
+        return Option.some(xargsCommand(commandTexts, use, args))
+      }),
+    ),
+  )
+  if (Option.isNone(built)) {
+    return unreadableRun(`\`${name}\` input the guard cannot rebuild into commands`)
   }
   const dynamic = inputs.scripts.some((word) => word.dynamic)
-  const scripts = argumentGroups(lines.value, use.split).flatMap((args) =>
-    Option.toArray(builtCommand(commandTexts, use, args)).map((text) => derivedWord(text, dynamic)),
-  )
-  return scriptRuns(scripts)
+  return scriptRuns(built.value.map((script) => derivedWord(script, dynamic)))
+}
+
+/**
+ * Whether the input fills the script a `Joined`, `OptionScript` or
+ * `InputShell` run runs: its script is missing or holds the placeholder, or
+ * the appended input joins it (`ssh host ls`, `env -S`), or it starts a
+ * shell whose options the appended input gives (`su`). A `FindExec` run
+ * takes its actions from the appended input.
+ */
+const inputFillsScript = (
+  resolved: ResolvedCommand,
+  run: Run,
+  isMarked: (text: string) => boolean,
+  appends: boolean,
+): boolean => {
+  const { words, spec } = resolved
+  if (run._tag === "Joined") {
+    const start = commandStart(words, spec.valued, run)
+    const script = words.slice(start, start + run.take)
+    // The script reaches past the last word: appended input joins it.
+    const reachesEnd = start + run.take > words.length
+    return (
+      script.length === 0 || script.some((word) => isMarked(word.text)) || (appends && reachesEnd)
+    )
+  }
+  if (run._tag === "OptionScript") {
+    let order: OptionOrder = "anywhere"
+    if (run.rest) order = "leading"
+    const values = optionValues(parseWords(words, spec.valued, order), run.short, run.long)
+    return values.some((value) =>
+      Option.match(valueWord(words, value), {
+        onNone: () => true,
+        onSome: (word) => isMarked(word.text) || (run.rest && appends),
+      }),
+    )
+  }
+  if (run._tag === "InputShell") return appends && inputShellStarts(resolved, run)
+  return run._tag === "FindExec" && appends
 }
 
 /**
  * Whether input that cannot be read names what `command` runs under `xargs`
- * or `parallel`: follow its runners (`env`, `sudo`, `timeout 5`) to the
- * innermost command, whose word is missing or is the placeholder, or which is
- * git with a risky subcommand, or with its subcommand missing or the
- * placeholder.
+ * or `parallel`: follow its runners (`env A=b`, `sudo`, `timeout 5`) to the
+ * innermost command, whose word is missing or is the placeholder, or whose
+ * script the input fills, or which is git with a risky subcommand, or with
+ * its subcommand missing or the placeholder. `appends`: the input is
+ * appended to the command.
  */
 const inputNamesCommand = (
   command: ReadonlyArray<ShellWord>,
-  isPlaceholder: (text: string) => boolean,
+  isMarked: (text: string) => boolean,
+  appends: boolean,
 ): boolean => {
-  const head = Option.fromUndefinedOr(command[0])
-  if (Option.isNone(head) || isPlaceholder(head.value.text)) return true
-  const resolved = resolveCommand(command)
+  let start = command.findIndex((word) => !ASSIGNMENT.test(word.text))
+  if (start === -1) start = command.length
+  const words = command.slice(start)
+  const head = Option.fromUndefinedOr(words[0])
+  if (Option.isNone(head) || isMarked(head.value.text)) return true
+  const resolved = resolveCommand(words)
+  if (resolved.spec.runs.some((run) => inputFillsScript(resolved, run, isMarked, appends))) {
+    return true
+  }
   const wrapped = resolved.spec.runs.flatMap((run) => {
-    if (run._tag !== "Command") return []
+    if (run._tag !== "Command" && run._tag !== "Stdin") return []
     return runCommands(resolved, run)
   })
-  if (wrapped.length > 0) return wrapped.some((inner) => inputNamesCommand(inner, isPlaceholder))
+  if (wrapped.length > 0) {
+    return wrapped.some((inner) => inputNamesCommand(inner, isMarked, appends))
+  }
   if (commandName(head.value.text) !== "git") return false
   if (resolved.spec.risks.length > 0) return true
-  const subcommand = Option.fromUndefinedOr(command[commandStart(command, GIT_GLOBAL_OPTIONS, {})])
+  const subcommand = Option.fromUndefinedOr(words[commandStart(words, GIT_GLOBAL_OPTIONS, {})])
   return Option.match(subcommand, {
     onNone: () => true,
-    onSome: (word) => isPlaceholder(word.text),
+    onSome: (word) => isMarked(word.text),
   })
 }
 
@@ -2677,7 +3053,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     parallel: spec(
       options(
         "aCdEIjLnNPSs",
-        "arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay",
+        `arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay ${PARALLEL_REPLACE_OPTIONS.join(" ")}`,
       ),
       [Run.cases.Stdin.make({})],
     ),
