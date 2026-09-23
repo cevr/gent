@@ -8,16 +8,19 @@
  * child and returns its handle at admission, never its answer: the child
  * reports through the delegate's own `turnAfter` hook, as a message on the
  * parent branch that wakes it. The same hook stops a parent's running children
- * when the parent's turn is interrupted. The parent's next turn and every
- * `delegate.list` reconcile what a crash left.
+ * when the parent's turn is interrupted. The parent's first turn in a
+ * process and every `delegate.list` reconcile what a crash left.
  */
 import {
   Cause,
+  Context,
   Effect,
+  Layer,
   Option,
   type PlatformError,
   Predicate,
   Record,
+  Ref,
   Schema,
   Stream,
 } from "effect"
@@ -29,6 +32,7 @@ import {
   BranchId,
   defineExtension,
   defineRequests,
+  defineResource,
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
@@ -413,6 +417,45 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
       return { next, result: next }
     }),
   )
+})
+
+/**
+ * Branches this process has reconciled on a turn. Reconcile repairs what a
+ * crash left, and a crash starts a new process, so a branch's turns need one
+ * pass per process; the turnAfter hook delivers every completion after that.
+ * Without the gate every model step replays each running child's event log.
+ * `delegate.list` and `delegate.children` still reconcile on each call.
+ */
+class ReconciledBranches extends Context.Service<
+  ReconciledBranches,
+  {
+    readonly has: (key: string) => Effect.Effect<boolean>
+    readonly add: (key: string) => Effect.Effect<void>
+  }
+>()("@gent/extensions/src/delegate/ReconciledBranches") {}
+
+const ReconciledBranchesResource = defineResource({
+  id: "@gent/delegate/reconciled-branches",
+  scope: "process",
+  layer: Layer.effect(
+    ReconciledBranches,
+    Effect.map(Ref.make<ReadonlySet<string>>(new Set()), (seen) =>
+      ReconciledBranches.of({
+        has: (key) => Effect.map(Ref.get(seen), (all) => all.has(key)),
+        add: (key) => Ref.update(seen, (all) => new Set([...all, key])),
+      }),
+    ),
+  ),
+})
+
+/** The turn-time reconcile: once per branch per process, retried on the next step if it fails. */
+const reconcileOnce = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const reconciled = yield* ReconciledBranches
+  const key = `${ctx.sessionId}:${ctx.branchId}`
+  if (yield* reconciled.has(key)) return
+  yield* reconcile()
+  yield* reconciled.add(key)
 })
 
 // ── admission ───────────────────────────────────────────────────────────────
@@ -821,6 +864,7 @@ export const DelegateExtension = defineExtension({
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("request", DelegateRpc.Children)
+    yield* host.register("resource", ReconciledBranchesResource)
     // Every turn end is read twice: as a child's receipt for its parent, and
     // as a parent's interrupt for its children.
     yield* host.on("turnAfter", (input) =>
@@ -834,9 +878,9 @@ export const DelegateExtension = defineExtension({
       ),
     )
     // A crash between a child's receipt and its hook leaves an undelivered
-    // entry; the parent's next turn picks it up.
+    // entry; the parent's first turn in the new process picks it up.
     yield* host.on("turnProjection", () =>
-      reconcile().pipe(
+      reconcileOnce.pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.reconcile.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),

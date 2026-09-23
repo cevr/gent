@@ -102,13 +102,13 @@ const clipMessageText = (text: string): string => {
   return `${text.slice(0, MODEL_COMPACTION_MESSAGE_CHARS)}\n[… ${omitted} more characters; read the message by id]`
 }
 
+const formatMessage = (message: Message): string =>
+  `${message.role} (${message.id}): ${clipMessageText(message.parts.map(partToText).join("\n"))}`
+
+const MESSAGE_SEPARATOR = "\n\n"
+
 const formatConversation = (messages: ReadonlyArray<Message>): string =>
-  messages
-    .map(
-      (message) =>
-        `${message.role} (${message.id}): ${clipMessageText(message.parts.map(partToText).join("\n"))}`,
-    )
-    .join("\n\n")
+  messages.map(formatMessage).join(MESSAGE_SEPARATOR)
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
@@ -168,13 +168,23 @@ export const selectSummarySource = (
   inputTokens: number,
   retainedBindings: ReadonlyArray<string>,
 ): ReadonlyArray<Message> => {
-  for (let start = 0; start < history.length; start += 1) {
-    const candidate = history.slice(start)
-    if (estimateTextTokens(summaryPromptText(candidate, retainedBindings)) <= inputTokens) {
-      return candidate
-    }
+  // The prompt is the fixed text plus each message and its separator, so its
+  // length is a sum: one pass from the newest message finds the longest run
+  // that fits, instead of formatting every suffix (quadratic on a long
+  // branch). The estimate rounds the whole text once, so the pass sums
+  // characters and checks the total the way `estimateTextTokens` would.
+  const fits = (length: number) => Math.ceil(length / 4) <= inputTokens
+  // Every message after the first adds one separator; start with it credited back.
+  let length =
+    SUMMARY_USER_PREFIX.length + bindingsNote(retainedBindings).length - MESSAGE_SEPARATOR.length
+  let start = history.length
+  for (const message of history.toReversed()) {
+    const next = length + MESSAGE_SEPARATOR.length + formatMessage(message).length
+    if (!fits(next)) break
+    length = next
+    start -= 1
   }
-  return []
+  return history.slice(start)
 }
 
 const failureMessage = (value: AiError.AiError | ProviderAuthError | ProviderError): string => {
