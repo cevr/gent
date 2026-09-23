@@ -150,6 +150,23 @@ describe("ReadTool", () => {
     }),
   )
 
+  readTest("a trailing newline ends the last line; an empty file has no lines", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/two.txt`, "a\nb\n")
+      yield* fs.writeFileString(`${tmpDir}/empty.txt`, "")
+
+      const two = yield* runToolWithCtx(ReadTool, { path: `${tmpDir}/two.txt` }, ctx)
+      expect(two.lineCount).toBe(2)
+      expect(two.content).toBe("1\ta\n2\tb")
+      const empty = yield* runToolWithCtx(ReadTool, { path: `${tmpDir}/empty.txt` }, ctx)
+      expect(empty.lineCount).toBe(0)
+      expect(empty.content).toBe("")
+      expect(empty.truncated).toBe(false)
+    }),
+  )
+
   readTest("returns error for directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

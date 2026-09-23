@@ -18,7 +18,7 @@ import {
   Stream,
 } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { countOf } from "./fs-tools.js"
+import { countOf, lineCount } from "./fs-tools.js"
 import {
   type BranchId,
   defineExtension,
@@ -1064,13 +1064,9 @@ const BashResult = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.String,
   exitCode: Schema.Finite,
+  /** Absent when the command ran to its end. A blocked or background command has no real exit code yet. */
+  status: Schema.optional(Schema.Literals(["blocked", "background"])),
 })
-
-/** Lines a stream printed; a trailing newline ends a line, it does not start one. */
-const outputLineCount = (text: string): number => {
-  if (text.length === 0) return 0
-  return text.replace(/\n$/, "").split("\n").length
-}
 
 const SIGKILL_DELAY_MS = 3000
 
@@ -1408,8 +1404,11 @@ export const BashTool = tool({
   promptSnippet: "Execute shell commands",
   params: BashParams,
   output: BashResult,
-  summary: (_input, output) =>
-    `exit ${output.exitCode} · ${countOf(outputLineCount(output.stdout) + outputLineCount(output.stderr), "line")}`,
+  summary: (_input, output) => {
+    if (output.status === "blocked") return output.stdout
+    if (output.status === "background") return "started in background"
+    return `exit ${output.exitCode} · ${countOf(lineCount(output.stdout) + lineCount(output.stderr), "line")}`
+  },
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
     const ctx = yield* ExtensionContext
     const timeout = Math.min(
@@ -1448,6 +1447,7 @@ export const BashTool = tool({
           stdout: `Command blocked: ${risk.reason}`,
           stderr: "",
           exitCode: 1,
+          status: "blocked",
         }
       }
     }
@@ -1463,6 +1463,7 @@ export const BashTool = tool({
         stdout: `Command started in background: \`${command}\`\nYou will be notified when it completes.`,
         stderr: "",
         exitCode: 0,
+        status: "background",
       }
     }
 

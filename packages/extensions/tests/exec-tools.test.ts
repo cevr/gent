@@ -734,6 +734,22 @@ describe("BashTool summary", () => {
     expect(summary("", "", 2)).toBe("exit 2 · 0 lines")
     expect(summary("one", "", 0)).toBe("exit 0 · 1 line")
   })
+
+  test("a blocked or background command says so instead of an exit code", () => {
+    const summary = (result: {
+      stdout: string
+      stderr: string
+      exitCode: number
+      status: string
+    }) =>
+      toolResultSummary(Option.some(BashTool), { command: "make" }, { isFailure: false, result })
+    expect(
+      summary({ stdout: "Command blocked: git push", stderr: "", exitCode: 1, status: "blocked" }),
+    ).toBe("Command blocked: git push")
+    expect(
+      summary({ stdout: "Command started", stderr: "", exitCode: 0, status: "background" }),
+    ).toBe("started in background")
+  })
 })
 
 describe("BashTool execution", () => {

@@ -427,6 +427,15 @@ const ReadResult = Schema.Struct({
   nextOffset: Schema.optional(Schema.Finite),
 })
 
+/** The lines of a text. A trailing newline ends the last line; it does not start one. */
+const splitLines = (text: string): Array<string> => {
+  if (text.length === 0) return []
+  return text.replace(/\n$/, "").split("\n")
+}
+
+/** How many lines a text holds, by the `splitLines` rule. */
+export const lineCount = (text: string): number => splitLines(text).length
+
 /** `1 line`, `3 lines`: the counted noun of a one-line tool summary. */
 export const countOf = (count: number, noun: string, plural = `${noun}s`): string => {
   if (count === 1) return `1 ${noun}`
@@ -486,7 +495,7 @@ export const ReadTool = tool({
       ),
     )
 
-    const lines = content.split("\n")
+    const lines = splitLines(content)
     const totalLines = lines.length
     const offset = params.offset ?? 1
     const limit = params.limit ?? 2000
