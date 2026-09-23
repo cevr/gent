@@ -18,6 +18,7 @@ import {
   Gent,
   resolveLogDir,
   serverLock,
+  type ServerLockEntry,
   type ServerLockStatus,
 } from "@gent/sdk"
 import type { GentPlatform } from "@gent/core/host"
@@ -459,6 +460,34 @@ export const sessions = Command.make(
     }),
 )
 
+/**
+ * Lay out a table: each column is as wide as its widest cell, one space apart,
+ * so a long value (a scratch `GENT_DATA_DIR` database path) never pushes the
+ * columns after it out from under their headers. The rule spans the table.
+ */
+const formatTable = (
+  headers: ReadonlyArray<string>,
+  rows: ReadonlyArray<ReadonlyArray<string>>,
+): string => {
+  const widths = headers.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => (row[column] ?? "").length)),
+  )
+  const line = (cells: ReadonlyArray<string>) =>
+    cells
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join(" ")
+      .trimEnd()
+  const width = widths.reduce((sum, w) => sum + w, 0) + widths.length - 1
+  return [line(headers), "─".repeat(width), ...rows.map(line)].join("\n")
+}
+
+/** The `server status` table: a header, a rule, and the one server's row. */
+export const formatServerStatus = (label: string, entry: ServerLockEntry): string =>
+  formatTable(
+    ["PID", "STATUS", "SERVER ID", "DB PATH", "URL"],
+    [[String(entry.pid), label, entry.serverId, entry.dbPath, entry.rpcUrl]],
+  )
+
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const status = yield* serverLock.status(yield* readHome)
@@ -472,17 +501,9 @@ const serverStatus = Command.make("status", {}, () =>
     }
 
     yield* Console.log("Shared server:\n")
-    yield* Console.log(
-      `${"PID".padEnd(8)} ${"STATUS".padEnd(10)} ${"SERVER ID".padEnd(40)} ${"DB PATH".padEnd(40)} ${"URL"}`,
-    )
-    yield* Console.log("─".repeat(120))
-
     let label = "alive"
     if (status._tag === "Stale") label = "dead"
-    const { entry } = status
-    yield* Console.log(
-      `${String(entry.pid).padEnd(8)} ${label.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
-    )
+    yield* Console.log(formatServerStatus(label, status.entry))
   }),
 )
 
