@@ -1174,6 +1174,18 @@ export const aiError = (method: string, message: string) =>
     reason: new AiError.UnknownError({ description: message }),
   })
 
+/**
+ * The debug model's injected 429: the rate-limit reason, which core's retry
+ * honours like a real provider's. It names a short wait, so a scripted run
+ * shows the retry without the default backoff.
+ */
+const debugRateLimit = (method: string) =>
+  AiError.make({
+    module: "LanguageModelLayers",
+    method,
+    reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(1) }),
+  })
+
 const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
   const latest = [...Prompt.make(promptInput).content]
     .reverse()
@@ -1265,7 +1277,7 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
 
         if (seen < retryBudget) {
           attempts.set(latestUserText, seen + 1)
-          return Effect.fail(aiError("Debug.streamText", "Rate limit exceeded (429)"))
+          return Effect.fail(debugRateLimit("Debug.streamText"))
         }
 
         attempts.delete(latestUserText)
