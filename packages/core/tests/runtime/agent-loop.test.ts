@@ -4,6 +4,7 @@ import {
   Clock,
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -7028,6 +7029,64 @@ describe("streaming", () => {
           ])
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
+      )
+    }),
+  )
+  it.live("a cancel during a retry wait ends the turn without waiting out the delay", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const sessionId = SessionId.make("retry-cancel-session")
+      const branchId = BranchId.make("retry-cancel-branch")
+      let streamCalls = 0
+      // The provider asks for a long wait before the next attempt.
+      const rateLimited = AiError.make({
+        module: "Test",
+        method: "streamText",
+        reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(20) }),
+      })
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          if (streamCalls === 1) return Stream.fail(rateLimited)
+          return Stream.fromIterable([
+            textDeltaPart("never after cancel"),
+            finishPart({ finishReason: "stop" }),
+          ])
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const message = makeMessage(sessionId, branchId, "wait for the rate limit")
+        const turn = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        yield* waitForOption(
+          () =>
+            Ref.get(eventsRef).pipe(
+              Effect.map((events) =>
+                Option.liftPredicate(events, (all) =>
+                  all.some((event) => event._tag === "ProviderRetrying"),
+                ),
+              ),
+            ),
+          "the retry wait began",
+        )
+        yield* steerAgentLoop({
+          _tag: "Cancel",
+          sessionId,
+          branchId,
+          requestId: "req-cancel-retry-wait",
+        })
+        // The cancel reaches the wait: the turn ends well before 20 seconds.
+        const ended = yield* Fiber.join(turn).pipe(Effect.timeoutOption("2 seconds"))
+        expect(Option.isSome(ended)).toBe(true)
+        expect(streamCalls).toBe(1)
+        const completed = (yield* Ref.get(eventsRef)).find(
+          (event) => event._tag === "TurnCompleted" && event.messageId === message.id,
+        )
+        expect(completed?._tag === "TurnCompleted" && completed.interrupted).toBe(true)
+      }).pipe(
+        Effect.timeout("6 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)),
       )
     }),
   )

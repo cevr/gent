@@ -788,13 +788,15 @@ interface RetryAttemptInfo {
  * Retry a provider call on transient failure under the driver's policy. The
  * provider's own retry-after wins over the backoff; both are capped at
  * `maxDelay`. `onRetry` runs before each wait with the delay the schedule
- * will take.
+ * will take. `stop` ends a wait early: once it completes, no further attempt
+ * runs and the last failure is the result.
  */
 export const retryProviderCall =
   <R2 = never>(
     config: RetryPolicy,
     options?: {
       readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
+      readonly stop?: Effect.Effect<void>
     },
   ): (<A, R>(
     effect: Effect.Effect<A, ProviderOrAuthError, R>,
@@ -826,7 +828,18 @@ export const retryProviderCall =
               error,
             })
           }
-          return [meta.attempt, Duration.millis(delayMs)] satisfies [number, Duration.Duration]
+          const stop = options?.stop
+          if (Predicate.isUndefined(stop)) {
+            return [meta.attempt, Duration.millis(delayMs)] satisfies [number, Duration.Duration]
+          }
+          // The wait runs here, not in the schedule, so a stop can cut it
+          // short instead of holding the caller for the whole delay.
+          const stopped = yield* Effect.raceFirst(
+            Effect.sleep(Duration.millis(delayMs)).pipe(Effect.as(false)),
+            stop.pipe(Effect.as(true)),
+          )
+          if (stopped) return yield* Cause.done(meta.attempt)
+          return [meta.attempt, Duration.zero] satisfies [number, Duration.Duration]
         })
       }),
     )

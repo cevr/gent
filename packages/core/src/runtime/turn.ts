@@ -1453,6 +1453,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // transient `ProviderError` only.
       effect.pipe(
         retryProviderCall(retryPolicy, {
+          // A cancel during a backoff ends the wait; the failure it leaves
+          // reads as an interrupted step below.
+          stop: Deferred.await(params.activeStream.interrupted),
           onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
             publishEventOrDie(
               ProviderRetrying.make({
