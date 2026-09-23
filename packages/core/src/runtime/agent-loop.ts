@@ -1124,11 +1124,13 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     }).pipe(scope.sideMutationSemaphore.withPermits(1))
 
   /**
-   * Drops a turn that was admitted as the next run but has not started.
-   * Callers usually hold the side-mutation permit already (extension requests
-   * and hooks), so this takes none; the admission gate and the in-flight
-   * marker together prove the turn is only queued. The next queued item (if
-   * any) takes its place.
+   * Drops a turn that was admitted as the next run but has not started. It
+   * takes no side-mutation permit: a re-entrant caller (an extension request
+   * or hook) already holds it, and the `RemoveFollowUp` handler holds none.
+   * The admission gate serializes it against the worker's claim, and the
+   * in-flight marker proves the turn is only queued. The next queued item (if
+   * any) takes its place under the interrupt permit, as every other hand-over
+   * does, so an interrupt latched for the withdrawn turn never stops it.
    */
   const withdrawAdmittedTurn = Effect.fn("AgentLoop.withdrawAdmittedTurn")((messageId: MessageId) =>
     Effect.gen(function* () {
@@ -1147,7 +1149,11 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         yield* Ref.update(scope.admissionGateRef, (gate) => ({ ...gate, withdrawn: Option.none() }))
         return false
       }
-      yield* advanceOrIdle(yield* scope.inbox.take)
+      yield* Effect.gen(function* () {
+        const nextItem = yield* scope.inbox.take
+        yield* scope.turnInterruption.beginTurn
+        yield* advanceOrIdle(nextItem)
+      }).pipe(scope.interruptSemaphore.withPermits(1))
       return true
     }),
   )

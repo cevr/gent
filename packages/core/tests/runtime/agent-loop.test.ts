@@ -2732,6 +2732,28 @@ describe("admitted turn withdrawal", () => {
     }),
   )
 
+  it.live("an interrupt aimed at a withdrawn admission does not stop the next turn", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const second = queuedItem("second")
+      const harness = yield* makeHarness(admitted(first, [second]), { settles: true })
+      // The user stops `first` before the worker claims it, then withdraws it.
+      yield* harness.worker.interrupt(first.message.id)
+      expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(true)
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      const ran = yield* waitForOption(
+        () =>
+          Ref.get(harness.interruptedTurns).pipe(
+            Effect.map(Option.liftPredicate((all) => all.length === 1)),
+          ),
+        "the promoted follow-up ran",
+      )
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
+      expect(ran).toEqual([false])
+      yield* Fiber.interrupt(loop)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.effect("a promoted follow-up can be withdrawn in turn", () =>
     Effect.gen(function* () {
       const first = queuedItem("first")
