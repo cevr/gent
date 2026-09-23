@@ -815,15 +815,19 @@ describe("continuation", () => {
         })
         // Release the gated step so the interrupted turn can finalize
         yield* controls.emitAll(1)
-        // Wait for the follow-up to complete
-        yield* waitForPhase(
-          agentLoop,
-          { sessionId: contSessionId, branchId: contBranchId },
-          "Idle",
-          200,
+        // Wait for the follow-up to complete: the second TurnCompleted, which
+        // is what the assertions read. The loop is idle for a moment between
+        // the two turns, so the phase alone does not say the follow-up ran.
+        const turnCompleted = yield* waitForOption(
+          () =>
+            Ref.get(eventsRef).pipe(
+              Effect.map((events) => {
+                const completed = events.filter(Schema.is(TurnCompleted))
+                return Option.some(completed).pipe(Option.filter((all) => all.length >= 2))
+              }),
+            ),
+          "two completed turns",
         )
-        const events = yield* Ref.get(eventsRef)
-        const turnCompleted = events.filter(Schema.is(TurnCompleted))
         // Both turns should have completed
         expect(turnCompleted.length).toBe(2)
         const interruptedTurns = turnCompleted.filter((e) => e.interrupted === true)
@@ -832,7 +836,7 @@ describe("continuation", () => {
         // Follow-up used the third provider step
         expect(yield* controls.callCount).toBe(3)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 

@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 // A write or a caller in test support proves a reader works, not that
-// production supplies it; the lint rule reads the same definition.
-import { isTestSupport } from "./gent-rules"
+// production supplies it; the lint rules read the same definitions.
+import { isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
 
 /** What every guard reports: a place in a file, and what is wrong there. */
 export interface Finding {
@@ -626,11 +626,9 @@ export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<F
 /** Every seam family core declares now lives in one file; each scan is anchored on its own interface name. */
 const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 
-/** Files that may fill a seam: shipped extensions and the apps, never tests. */
+/** Files that may fill a seam: shipped extensions and the apps, never test support. */
 const isAdapterSource = (file: string): boolean =>
-  (file.startsWith("packages/extensions/src/") || file.startsWith("apps/")) &&
-  !file.includes("/tests/") &&
-  !/\.test\.[cm]?[jt]sx?$/.test(file)
+  (file.startsWith("packages/extensions/src/") || file.startsWith("apps/")) && !isTestSupport(file)
 
 /**
  * Reads the member names of a single interface or object-literal body.
@@ -1269,13 +1267,12 @@ export const findReadersWithoutWriters = (
 
 // ── no code duplicates an Effect platform service ───────────────────────────
 
-/** Shipped source under `packages/` and `apps/`: not tests, fixtures or build output. */
+/** Shipped source under `packages/` and `apps/`: not test support, not build output. */
 const shippedSourceFile = (file: string): boolean =>
   /^(?:packages|apps)\//.test(file) &&
   /\.(?:[cm]?[jt]sx?)$/.test(file) &&
   file !== GUARDS_FILE &&
-  !file.includes("/tests/") &&
-  !file.includes("/fixtures/") &&
+  !isTestSupport(file) &&
   !file.includes("/dist/")
 
 const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
@@ -1324,6 +1321,11 @@ export const findPlatformDuplicationViolations = (
  * line, an import specifier's module basename, or the file path itself. The
  * guard source is exempt: the table names every retired surface on purpose.
  *
+ * The steering files and the authoring docs are read too, for every `line`
+ * row whatever its scope: an agent reads them before the code, and a deleted
+ * name there is an instruction to bring it back. `docs/research/` is out; like
+ * `plans/`, it holds dated receipts that name what existed at the time.
+ *
  * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
  * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
  * `gent-rules.ts` instead, because only the AST sees a member access.
@@ -1336,9 +1338,10 @@ interface RetiredSurface {
   readonly on: "line" | "import" | "path"
   readonly match: RegExp
   /**
-   * `shipped`: source under `packages/` and `apps/`, not tests or fixtures.
-   * `shipped-and-tests`: also the `tests/` trees, where a test that builds the
-   * retired layer again is the same regrowth; the tooling package is out.
+   * `shipped`: shipped source and the test harness, not the tests. A test may
+   * name a retired surface to assert it is gone.
+   * `shipped-and-tests`: also the tests, where a test that builds the retired
+   * layer again is the same regrowth; the tooling package is out.
    */
   readonly scope: "shipped" | "shipped-and-tests"
   readonly message: string
@@ -1583,13 +1586,83 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     message:
       "the transport session DTOs are removed; the contract carries the domain Session and Branch schemas",
   },
+  {
+    on: "line",
+    match: identifiers("ExtensionStatePublisher", "ExtensionStatePublisherLive"),
+    scope: "shipped-and-tests",
+    message:
+      "ExtensionStatePublisher is removed; the State facet of ExtensionContext publishes through EventStore",
+  },
+  {
+    on: "line",
+    match: identifiers("EventPublisher", "EventPublisherLive", "EventPublisherService"),
+    // Shipped only: a test asserts the public API does not export the name.
+    scope: "shipped",
+    message: "the EventPublisher pass-through is removed; runtime code yields EventStore",
+  },
+  {
+    on: "line",
+    match: identifiers("ConnectionTracker", "ConnectionTrackerService"),
+    scope: "shipped-and-tests",
+    message:
+      "the connection tracker is removed with shared server mode and idle shutdown; a server lives as long as its owner",
+  },
+  {
+    on: "line",
+    match: /["'`]runtime\.status["'`]/,
+    scope: "shipped-and-tests",
+    message:
+      "the runtime.status RPC is removed with shared server mode; the server identity endpoint names the build",
+  },
+  {
+    on: "line",
+    match: identifiers("driverList", "driverListReply"),
+    scope: "shipped-and-tests",
+    message:
+      "transport.driverList is removed; /driver sends driver.set and the server rejects an unknown id",
+  },
+  {
+    on: "line",
+    match: /\b(?:inbox|LoopInbox)\.(?:claimStart|releaseStart)\b/,
+    scope: "shipped-and-tests",
+    message:
+      "the inbox start reservation is removed; a reserved start runs in the loop scope, so no caller releases it",
+  },
+  {
+    on: "line",
+    match: new RegExp(`\\bserver-root\\b|${identifiers("buildServerRoot").source}`),
+    scope: "shipped-and-tests",
+    message:
+      "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
+  },
+  {
+    on: "path",
+    match: /^packages\/core\/src\/server\/server-root\.ts$/,
+    scope: "shipped",
+    message:
+      "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
+  },
 ]
 
-const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
+/** Source under `packages/` and `apps/` but the tooling package, which names the rows. */
+const RETIRED_SOURCE = /^(?:packages|apps)\/(?!tooling\/).+\.[cm]?[jt]sx?$/
 
-const inRetiredScope = (file: string, scope: RetiredSurface["scope"]): boolean => {
-  if (scope === "shipped") return shippedSourceFile(file)
-  return SHIPPED_AND_TESTS.test(file) && file !== GUARDS_FILE
+/**
+ * The prose the retired rows read: the steering files, a package's own
+ * `AGENTS.md` or `CLAUDE.md`, and `docs/` but its dated research.
+ */
+const RETIRED_PROSE =
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md)$/
+
+/** A prose file the retired-surface rows read. */
+export const isRetiredSurfaceProse = (file: string): boolean => RETIRED_PROSE.test(file)
+
+const inRetiredScope = (file: string, row: RetiredSurface): boolean => {
+  if (isRetiredSurfaceProse(file)) return row.on === "line"
+  if (!RETIRED_SOURCE.test(file) || file.includes("/dist/")) return false
+  // The harness ships no product, but it is where a removed test layer grows back.
+  if (row.scope === "shipped") return shippedSourceFile(file) || isTestHarness(file)
+  return shippedSourceFile(file) || isTestCode(file)
 }
 
 const importedModule = (line: string): Option.Option<string> =>
@@ -1612,7 +1685,7 @@ const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => 
 
 /** Every line, import, or path in `file` that brings back a retired surface. */
 export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<Finding> => {
-  const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row.scope))
+  const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row))
   if (rows.length === 0) return []
   const findings: Array<Finding> = []
   for (const row of rows) {
@@ -2940,11 +3013,12 @@ export const findUnconsumedExports = (
 // ---------------------------------------------------------------------------
 
 export interface PackageJson {
+  readonly name?: string
   readonly private?: boolean
   readonly exports?: Readonly<Record<string, string>>
 }
 
-interface TsConfigJson {
+export interface TsConfigJson {
   readonly compilerOptions?: {
     readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
   }
@@ -3053,6 +3127,13 @@ const packageFindings = (
   packageJson: PackageJson,
 ): ReadonlyArray<Finding> => {
   const findings: Array<Finding> = []
+  if (packageJson.name !== surface.alias) {
+    findings.push({
+      file: surface.packageJson,
+      line: 1,
+      message: `name: the package is ${Option.getOrElse(Option.fromNullishOr(packageJson.name), () => "unnamed")}, its package-surface row names ${surface.alias}; make them agree`,
+    })
+  }
   if (surface.mustBePrivate && packageJson.private !== true) {
     findings.push({
       file: surface.packageJson,
@@ -3087,14 +3168,26 @@ const packageFindings = (
 /**
  * `@gent/*` resolves one way: through each package's `exports`, which the
  * rows above check. A `paths` alias is a second resolution TypeScript alone
- * reads, so it could publish a module the `exports` check never sees.
+ * reads, so it could publish a module the `exports` check never sees. Every
+ * tsconfig counts: a package tsconfig that sets `paths` replaces the root's.
  */
-const pathFindings = (tsconfigJson: TsConfigJson): ReadonlyArray<Finding> =>
-  Object.keys(tsconfigJson.compilerOptions?.paths ?? {}).map((key) => ({
-    file: "tsconfig.json",
-    line: 1,
-    message: `compilerOptions.paths["${key}"]: workspace packages resolve through their package.json exports; drop the alias`,
-  }))
+const pathFindings = (tsconfigs: ReadonlyMap<string, TsConfigJson>): ReadonlyArray<Finding> =>
+  [...tsconfigs].flatMap(([file, tsconfig]) =>
+    Object.keys(tsconfig.compilerOptions?.paths ?? {}).map((key) => ({
+      file,
+      line: 1,
+      message: `compilerOptions.paths["${key}"]: workspace packages resolve through their package.json exports; drop the alias`,
+    })),
+  )
+
+/**
+ * The tsconfigs the paths check reads: every tracked one except the fixtures,
+ * which are apps and lint subjects of their own, not workspace resolution.
+ */
+export const workspaceTsconfigs = (trackedFiles: ReadonlyArray<string>): ReadonlyArray<string> =>
+  trackedFiles.filter(
+    (file) => /(?:^|\/)tsconfig\.json$/.test(file) && !/(?:^|\/)fixtures?\//.test(file),
+  )
 
 /**
  * Check every workspace manifest against its row. `packageJsons` holds every
@@ -3103,7 +3196,7 @@ const pathFindings = (tsconfigJson: TsConfigJson): ReadonlyArray<Finding> =>
  */
 export const findPackageSurfaceFindings = (
   packageJsons: ReadonlyMap<string, PackageJson>,
-  tsconfigJson: TsConfigJson,
+  tsconfigs: ReadonlyMap<string, TsConfigJson>,
 ): ReadonlyArray<Finding> => {
   const rows = new Set(PACKAGE_SURFACES.map((surface) => surface.packageJson))
   const unlisted = [...packageJsons.keys()]
@@ -3125,5 +3218,5 @@ export const findPackageSurfaceFindings = (
       onSome: (packageJson) => packageFindings(surface, packageJson),
     }),
   )
-  return [...unlisted, ...checked, ...pathFindings(tsconfigJson)]
+  return [...unlisted, ...checked, ...pathFindings(tsconfigs)]
 }

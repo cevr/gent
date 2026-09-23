@@ -140,18 +140,36 @@ const hasAllowComment = (
 /** A lint fixture: a file the rule tests run through the rules. */
 const LINT_FIXTURE = /(?:^|\/)packages\/tooling\/fixtures\//
 
+// ── what is a test ──────────────────────────────────────────────────────────
+//
+// One vocabulary for every rule here and every guard in `guards.ts`. Each
+// predicate takes a repo-relative or an absolute path.
+
 /**
- * Test support: files that exist to test gent, not to ship it -- the tests,
- * the e2e fixtures, the core harness, the testbeds, and the lint fixtures.
- * One definition for two readers: the `core-entry-boundary` rule calls
- * everything else product code, and the guards (`guards.ts`) never count a
- * caller or an env write here as proof of production use. Takes a
- * repo-relative or an absolute path.
+ * A test: a `*.test.*` file, or any file in a `tests/` or `integration/` tree
+ * (the helpers and fixtures a test file imports sit beside it there).
+ */
+export const isTest = (file: string): boolean =>
+  /\.test\.[cm]?[jt]sx?$/.test(file) || /(?:^|\/)(?:tests|integration)\//.test(file)
+
+/**
+ * The test harness: source that exists only for tests but ships as a package
+ * or package entry -- `@gent/e2e` and `@gent/core/test-utils`.
+ */
+export const isTestHarness = (file: string): boolean =>
+  /(?:^|\/)packages\/(?:e2e|core\/src\/test-utils)\//.test(file)
+
+/** Test code: a test or the harness. The test-code rules read this. */
+export const isTestCode = (file: string): boolean => isTest(file) || isTestHarness(file)
+
+/**
+ * Test support: files that exist to test gent, not to ship it -- test code,
+ * the testbeds, and the lint fixtures. The `core-entry-boundary` rule calls
+ * everything else product code, and the guards never count a caller or an env
+ * write here as proof of production use.
  */
 export const isTestSupport = (file: string): boolean =>
-  LINT_FIXTURE.test(file) ||
-  /\.test\.[cm]?[jt]sx?$/.test(file) ||
-  /(?:^|\/)(?:tests|testbeds|packages\/e2e|packages\/core\/src\/test-utils)\//.test(file)
+  isTestCode(file) || LINT_FIXTURE.test(file) || /(?:^|\/)testbeds\//.test(file)
 
 /**
  * A lint fixture mirrors the repo layout, so a rule judges it as the file at
@@ -162,10 +180,8 @@ const fixtureSubject = (filename: string): string => {
   return match === null ? filename : filename.slice(match.index + match[0].length)
 }
 
-const isTestFilename = (filename: string): boolean =>
-  /\.test\.tsx?$/.test(filename) || /\/tests\/.*\.[cm]?tsx?$/.test(filename)
-
-const isTestBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
+/** A `-boundary` file holds a module's Promise edges; in a test tree it is a test's. */
+const isBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
 
 const isExtensionFilename = (filename: string): boolean => {
   if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
@@ -320,8 +336,8 @@ const runPromiseMethodName = (node: AstNode): string | undefined => {
 const platformBoundaryFilename = (filename: string): boolean => {
   if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return true
   if (/-adapter\.tsx?$/.test(filename)) return true
-  if (/\/packages\/tooling\/fixtures\//.test(filename)) return false
-  return /\/(?:packages\/tooling|packages\/e2e|tests)\/|\.test\.tsx?$/.test(filename)
+  if (LINT_FIXTURE.test(filename)) return false
+  return /\/packages\/tooling\//.test(filename) || isTestCode(filename)
 }
 
 const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
@@ -1176,8 +1192,8 @@ const plugin: Plugin = {
     "no-promise-control-flow-in-tests": {
       create(context) {
         const filename = context.filename
-        if (!isTestFilename(filename)) return {}
-        if (isTestBoundaryFilename(filename)) return {}
+        if (!isTest(fixtureSubject(filename))) return {}
+        if (isBoundaryFilename(filename)) return {}
 
         // Filled as the import declarations are visited, before any call.
         const effectBindings = new Set<string>()
@@ -1421,13 +1437,7 @@ const plugin: Plugin = {
           return found
         }
 
-        const filename = context.filename
-        if (!isTestFilename(filename) && !isTestBoundaryFilename(filename)) {
-          const inTestsTree = /\/tests\//.test(filename)
-          const inIntegrationTree = /\/integration\//.test(filename)
-          const inTestUtils = /\/test-utils\//.test(filename)
-          if (!inTestsTree && !inIntegrationTree && !inTestUtils) return {}
-        }
+        if (!isTestCode(fixtureSubject(context.filename))) return {}
 
         return {
           CallExpression(node) {
@@ -1480,28 +1490,17 @@ const plugin: Plugin = {
      * specific sleep is intentional.
      *
      * Matches both `Effect.sleep(...)` and `Bun.sleep(...)`. Scoped to test
-     * files (`*.test.ts`, `*.test.tsx`, `tests/**`) and test-adjacent
-     * fixtures (`pty-fixture.ts`, `server-process-fixture.ts`, `helpers.ts`
-     * inside `tests/`, `helpers-boundary.ts`). The rule does NOT apply to
-     * product code — production retries/timeouts/debounces are unaffected.
+     * code (`isTestCode`): the tests, their `tests/` and `integration/`
+     * trees, and the harness (`packages/e2e`, core's `test-utils`). The rule
+     * does NOT apply to product code — production retries/timeouts/debounces
+     * are unaffected.
      */
     "no-sleep": {
       create(context) {
-        const filename = context.filename
-        if (!isTestFilename(filename) && !isTestBoundaryFilename(filename)) {
-          // Also cover test fixtures and helpers that don't end in
-          // `.test.ts` but live alongside tests (`pty-fixture.ts`,
-          // `server-process-fixture.ts`, `tests/.../helpers.ts`,
-          // `integration/helpers.ts`).
-          const inTestsTree = /\/tests\//.test(filename)
-          const inIntegrationTree = /\/integration\//.test(filename)
-          const isPackageE2eSrc = /\/packages\/e2e\/src\//.test(filename)
-          if (!inTestsTree && !inIntegrationTree && !isPackageE2eSrc) return {}
-        }
-        // Fixtures directory verifies rule behavior — let the fixture
-        // files participate normally (including the allow-comment carveout)
-        // so the fixtures test can count diagnostics on the invalid fixture
-        // and zero diagnostics on the valid fixture.
+        // A lint fixture is judged as the file at its mirrored path, and it
+        // keeps the allow-comment carveout, so the fixture tests count the
+        // diagnostics on the invalid fixture and none on the valid one.
+        if (!isTestCode(fixtureSubject(context.filename))) return {}
 
         return {
           CallExpression(node) {

@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
+import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 import { randomUUID } from "node:crypto"
@@ -17,8 +17,17 @@ mkdirSync(binDir, { recursive: true })
 console.log("Transforming Solid JSX, bundling, and compiling to binary...")
 
 // Turbo builds the declared extensions dependency before packaging this app;
-// the cell ships as a sibling binary the runtime resolves by name.
-copyFileSync(join(rootDir, "../../packages/extensions/dist/gent-cell"), join(binDir, "gent-cell"))
+// the cell ships as a sibling binary the runtime resolves by name. Run this
+// script through the root build (`bun run build`), or it packages whatever
+// worker the last turbo build left.
+const cellWorker = join(rootDir, "../../packages/extensions/dist/gent-cell")
+if (!existsSync(cellWorker)) {
+  console.error(
+    `No cell worker at ${cellWorker}. Run \`bun run build\` from the repo root: turbo builds @gent/extensions first.`,
+  )
+  process.exit(1)
+}
+copyFileSync(cellWorker, join(binDir, "gent-cell"))
 
 const buildResult = await Bun.build({
   entrypoints: [join(rootDir, "src/main.tsx")],

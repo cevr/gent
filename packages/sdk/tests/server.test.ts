@@ -510,7 +510,7 @@ describe("Server Lock", () => {
           )
           expect(identity.serverId).toBe(ownerEntry.serverId)
           expect(identity.pid).toBe(process.pid)
-        }),
+        }).pipe(Effect.timeout("20 seconds")),
       ),
   )
 
@@ -545,6 +545,7 @@ describe("Server Lock", () => {
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnvRecord({ GENT_BUILD_FINGERPRINT: "operator-pinned" }),
           ),
+          Effect.timeout("20 seconds"),
         ),
       ),
   )
@@ -729,7 +730,7 @@ describe("Server Lock Ownership", () => {
       expect(result._tag).toBe("Owned")
       expect(signals).toEqual([])
       expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).not.toBe("test-server-1")
-    })
+    }).pipe(Effect.timeout("20 seconds"))
 
   it.scopedLive("a lock whose pid now belongs to another live process does not block startup", () =>
     provideFs(startOverLockNaming(process.ppid)),

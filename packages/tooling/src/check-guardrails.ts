@@ -1,5 +1,5 @@
 import { BunRuntime } from "@effect/platform-bun"
-import { Console, Effect, Option, Schema } from "effect"
+import { Console, Effect, Option, Result, Schema } from "effect"
 import {
   adaptedSeamsIn,
   collectExportFacts,
@@ -27,10 +27,12 @@ import {
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
+  isRetiredSurfaceProse,
   isSteeringFile,
   OxlintConfigSchema,
   type PackageJson,
   workspaceManifests,
+  workspaceTsconfigs,
 } from "./guards"
 import gentRules from "./gent-rules"
 
@@ -94,13 +96,13 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findBannedEslintDisableBlocks,
   findSuppressionInventoryFindings,
   findHookWithoutGuards,
+  findRetiredSurfaces,
 ]
 
 /** Findings a source file answers on its own, without the rest of the tree. */
 const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findPlatformDuplicationViolations,
   findCoreFeatureIndependenceFindings,
-  findRetiredSurfaces,
   findCoreVendorModelPins,
   findAliasTestLayers,
   findE2eFixtureImportFindings,
@@ -116,21 +118,53 @@ const RootManifestSchema = Schema.Struct({
   workspaces: Schema.optional(Schema.Array(Schema.String)),
 })
 
-/** The findings that read every workspace manifest and the root tsconfig. */
+/** The one tsconfig field the paths check reads. */
+const TsConfigSchema = Schema.Struct({
+  compilerOptions: Schema.optional(
+    Schema.Struct({
+      paths: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+    }),
+  ),
+})
+
+/** A tsconfig is JSON with comments and trailing commas, which TypeScript accepts. */
+const readTsconfig = Effect.fn("Tooling.readTsconfig")(function* (path: string) {
+  const text = yield* Effect.promise(() => Bun.file(path).text())
+  return yield* Effect.try({
+    try: () => Bun.JSONC.parse(text),
+    catch: (error) => String(error),
+  }).pipe(
+    Effect.flatMap((parsed) =>
+      Schema.decodeUnknownEffect(TsConfigSchema)(parsed).pipe(
+        Effect.mapError((error) => error.message),
+      ),
+    ),
+    Effect.result,
+  )
+})
+
+/** The findings that read every workspace manifest and every workspace tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* (
   trackedFiles: ReadonlyArray<string>,
 ) {
-  const [rootManifest, tsconfigJson] = yield* Effect.all(
-    [readJsonFile("package.json"), readJsonFile("tsconfig.json")],
-    { concurrency: "unbounded" },
-  )
+  const rootManifest = yield* readJsonFile("package.json")
   const { workspaces } = yield* Schema.decodeUnknownEffect(RootManifestSchema)(rootManifest)
   const manifests = workspaceManifests(workspaces ?? [], trackedFiles)
   const packageJsons = yield* Effect.forEach(manifests, readJsonFile, { concurrency: 8 })
   const packageJsonByPath = new Map<string, PackageJson>(
     manifests.map((path, index) => [path, packageJsons[index]]),
   )
-  return findPackageSurfaceFindings(packageJsonByPath, tsconfigJson)
+  const tsconfigPaths = workspaceTsconfigs(trackedFiles)
+  const tsconfigs = yield* Effect.forEach(tsconfigPaths, readTsconfig, { concurrency: 8 })
+  const unreadable: Array<Finding> = []
+  const tsconfigByPath = new Map<string, typeof TsConfigSchema.Type>()
+  for (const [index, read] of tsconfigs.entries()) {
+    const path = tsconfigPaths.at(index) ?? "tsconfig.json"
+    if (Result.isSuccess(read)) tsconfigByPath.set(path, read.success)
+    else
+      unreadable.push({ file: path, line: 1, message: `not a readable tsconfig: ${read.failure}` })
+  }
+  return [...unreadable, ...findPackageSurfaceFindings(packageJsonByPath, tsconfigByPath)]
 })
 
 /** One tracked file the scan reads: its path and its text. */
@@ -198,11 +232,14 @@ const program = Effect.gen(function* () {
   const symlinks = yield* trackedSymlinks
   const textFiles = yield* Effect.forEach(
     trackedFiles
-      // The steering files are Markdown and the hook is YAML; both join the
-      // pass so their own scans get the text.
+      // The steering files and docs are Markdown and the hook is YAML; they
+      // join the pass so their own scans get the text.
       .filter(
         (file) =>
-          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
+          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) ||
+          isSteeringFile(file) ||
+          isRetiredSurfaceProse(file) ||
+          file === HOOK_FILE,
       )
       .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
     readTrackedFile,

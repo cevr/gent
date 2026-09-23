@@ -184,6 +184,30 @@
       }
     },
     {
+      // The gamut driver is a plain Bun script too: it drives herdr, git and
+      // SQLite with async shell calls, and its polls wait one step at a time.
+      // Its tests read it as such. Type assertions stay banned: it decodes
+      // the SQLite rows it reads.
+      "files": ["testbeds/gamut/gamut.ts", "testbeds/gamut/tests/**"],
+      "rules": {
+        "effect/noAs": "off",
+        "effect/noAsyncFunction": "off",
+        "effect/noGlobals": "off",
+        "effect/noKnownValueWidening": "off",
+        "effect/noNewError": "off",
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noNullish": "off",
+        "effect/noRuntimeTypeof": "off",
+        "effect/noTernary": "off",
+        "effect/noThrowStatement": "off",
+        "effect/noTryCatch": "off",
+        "effect/noUnknownParameters": "off",
+        "effect/noUnsafeDictionaryType": "off",
+        "eslint/no-await-in-loop": "off",
+        "gent/no-bun-outside-adapter": "off"
+      }
+    },
+    {
       "files": ["packages/tooling/src/check-guardrails.ts"],
       "rules": {
         "effect/noGlobals": "off"

@@ -1,23 +1,16 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
-  "globalDependencies": ["tsconfig.json", "package.json", "patches/**"],
+  "globalDependencies": ["tsconfig.json", "package.json", "patches/*.patch"],
   "tasks": {
     "typecheck": {
       "dependsOn": ["^typecheck"],
-      "inputs": [
-        "src/**",
-        "tests/**",
-        "integration/**",
-        "tsconfig.json",
-        "../../tsconfig.json",
-        "package.json"
-      ],
+      "inputs": ["src/**", "tests/**", "integration/**", "tsconfig.json", "package.json"],
       "outputs": []
     },
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "tsconfig.json", "../../tsconfig.json", "package.json"],
+      "inputs": ["src/**", "tsconfig.json", "package.json"],
       "outputs": ["dist/**"]
     },
     "test": {

@@ -1,12 +1,11 @@
 import {
   DriverError,
   DriverFailureId,
-  EventStoreError,
   NotFoundError,
   ProviderError,
   SessionRuntimeError,
-  StorageError,
 } from "@gent/core/test-utils"
+import { EventStoreError, StorageError } from "@gent/core/extensions/branch-tools"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import { lineCount } from "@gent/core/protocol"

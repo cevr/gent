@@ -6,8 +6,7 @@
 **/*.d.ts
 packages/tooling/fixtures/
 apps/tui/tests/.tmp-*/
-# Testbeds are driver scripts and the apps they drive, not shipped runtime.
-# `testbeds/gamut/gamut.ts` is a plain Bun script; `testbeds/gamut/fixture/`
-# is the deliberately broken ledgerline app the agent under test is asked to
-# repair.
-testbeds/
+# `testbeds/gamut/fixture/` is the deliberately broken ledgerline app the
+# agent under test is asked to repair. The gamut driver and its tests are
+# linted and formatted like the rest of the repo.
+testbeds/gamut/fixture/
