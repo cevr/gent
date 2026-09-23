@@ -638,14 +638,11 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
         .driverClear({ agentName })
         .pipe(Effect.catch((error) => notify(`Failed to clear driver override: ${String(error)}`)))
 
+    // The server names an unknown driver id in its rejection.
     const setDriver = (agentName: AgentName, driverId: string) =>
-      Effect.gen(function* () {
-        const { drivers } = yield* transport.driverList
-        if (!drivers.some((driver) => driver.id === driverId)) {
-          return yield* notify(`Unknown driver "${driverId}".`)
-        }
-        yield* transport.driverSet({ agentName, driver: DriverRef.make({ id: driverId }) })
-      }).pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
+      transport
+        .driverSet({ agentName, driver: DriverRef.make({ id: driverId }) })
+        .pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
 
     const route = (args: string): Effect.Effect<void> => {
       const parts = args.trim().split(/\s+/)

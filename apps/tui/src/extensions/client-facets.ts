@@ -14,7 +14,6 @@ import {
   type AgentName,
   type ApprovalResult,
   type BranchId,
-  type DriverListResult,
   type EventEnvelope,
   type ImagePartProjection,
   type Message,
@@ -201,8 +200,6 @@ export interface ClientTransport {
   readonly listMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, ClientTransportRequestError>
-  /** Every registered driver plus the per-agent override map. */
-  readonly driverList: Effect.Effect<DriverListResult, ClientTransportRequestError>
   /** Route one agent to a driver; the server rejects unknown driver ids. */
   readonly driverSet: (input: {
     readonly agentName: AgentName
@@ -246,11 +243,6 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   listMessages: (branchId) =>
     shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
   // Drivers belong to the active session's profile: its project drivers count.
-  driverList: Effect.suspend(() =>
-    shellRead(payload, "driver.list", (client) =>
-      client.driver.list(activeSessionPayload(payload)),
-    ),
-  ),
   driverSet: (input) =>
     shellRead(payload, "driver.set", (client) =>
       client.driver.set({ ...input, ...activeSessionPayload(payload) }),
