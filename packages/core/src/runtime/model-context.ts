@@ -1224,7 +1224,11 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // Summarising is an extension's job. With no compactor installed the
   // transcript is truncated and the omission is reported as usual.
   const compactor = yield* Effect.serviceOption(ModelContextCompactor)
-  if (!(requested || overflowing) || history.length === 0 || Option.isNone(compactor)) {
+  // A history that is only an earlier marker has nothing new to summarize: a
+  // second handoff to the same anchor would reuse that marker's id, spend a
+  // summary call, and report a compaction that changed nothing.
+  const summarizable = history.some((message) => Option.isNone(windowDetails(message)))
+  if (!(requested || overflowing) || !summarizable || Option.isNone(compactor)) {
     return { durableMessages, compacted: false } satisfies WindowProjection
   }
   const summary = yield* compactor.value

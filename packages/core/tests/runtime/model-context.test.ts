@@ -1039,6 +1039,69 @@ describe("turn window projection", () => {
     }),
   )
 
+  it.scopedLive(
+    "a second compaction with only the marker behind the anchor asks for no summary",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("recompact-session")
+        const branchId = BranchId.make("recompact-branch")
+        const line = (id: string, role: "user" | "assistant", ordinal: number) =>
+          Message.cases.regular.make({
+            id: MessageId.make(id),
+            sessionId,
+            branchId,
+            role,
+            parts: [Prompt.textPart({ text: id })],
+            createdAt: dateFromMillis(1_000 + ordinal),
+          })
+        const prompt = line("recompact-prompt", "user", 2)
+        const budget = ModelContextBudget.make({
+          contextLimitTokens: 40_000,
+          reservedSystemTokens: 0,
+          reservedToolTokens: 0,
+          reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+        })
+        const requests: Array<CompactionRequest> = []
+        const compactor = Layer.succeed(
+          ModelContextCompactor,
+          ModelContextCompactor.of({
+            compact: (request) => {
+              requests.push(request)
+              return Effect.succeed({ notice: "summary", modelId: modelIdTurnWindow })
+            },
+          }),
+        )
+        const publisher = yield* recordingPublisher
+        const compact = (messages: ReadonlyArray<Message>) =>
+          projectContextWindow({
+            sessionId,
+            branchId,
+            modelId: modelIdTurnWindow,
+            messages,
+            budget,
+            directive: Option.some(ContextDirective.cases.Compact.make({})),
+            project: projectWith(budget),
+            persist: (message) => Effect.succeed(message),
+            summaryModel,
+          }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
+
+        const first = yield* compact([
+          line("recompact-old-0", "user", 0),
+          line("recompact-old-1", "assistant", 1),
+          prompt,
+        ])
+        expect(first.compacted).toBe(true)
+        expect(requests).toHaveLength(1)
+        // The same turn asks again: behind its anchor sits only the marker.
+        const second = yield* compact([
+          ...first.durableMessages,
+          line("recompact-step", "assistant", 3),
+        ])
+        expect(requests).toHaveLength(1)
+        expect(second.compacted).toBe(false)
+      }),
+  )
+
   it.scopedLive("a failing compactor truncates the window and names the omission", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("degrade-session")
