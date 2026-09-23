@@ -311,11 +311,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // host's message.
   const errorText = (cause: unknown): string => {
     if (!Predicate.isError(cause)) return display(cause)
-    const head = [`${cause.name}: ${cause.message}`, ...errorDetail(cause)].join("\n")
+    const head = [errorLine(cause), ...errorDetail(cause)].join("\n")
     if (Predicate.isUndefined(cause.cause)) return head
-    let inner = display(cause.cause)
-    if (Predicate.isError(cause.cause)) inner = `${cause.cause.name}: ${cause.cause.message}`
-    return `${head}\ncaused by ${inner}`
+    // An Error cause stops at its own line: never recurse, so a looped or deep chain cannot overflow.
+    if (Predicate.isError(cause.cause)) return `${head}\ncaused by ${errorLine(cause.cause)}`
+    return `${head}\ncaused by ${display(cause.cause)}`
   }
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
