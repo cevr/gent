@@ -4,7 +4,6 @@ import {
   AutocompletePopup,
   Composer,
   ComposerFrame,
-  countLines,
   createPasteManager,
   executeShell,
   isLargePaste,
@@ -221,26 +220,6 @@ describe("executeShell", () => {
 // The paste manager is per-controller: each composer owns its id counter and
 // store, so every test makes its own rather than resetting shared state.
 
-describe("countLines", () => {
-  test("counts single line", () => {
-    expect(countLines("hello")).toBe(1)
-  })
-
-  test("counts multiple lines", () => {
-    expect(countLines("line1\nline2")).toBe(2)
-    expect(countLines("a\nb\nc")).toBe(3)
-    expect(countLines("1\n2\n3\n4\n5")).toBe(5)
-  })
-
-  test("handles empty string", () => {
-    expect(countLines("")).toBe(1)
-  })
-
-  test("handles trailing newline", () => {
-    expect(countLines("line1\nline2\n")).toBe(3)
-  })
-})
-
 describe("isLargePaste", () => {
   test("returns false for short single-line text", () => {
     expect(isLargePaste("hello")).toBe(false)
@@ -296,6 +275,12 @@ describe("createPlaceholder", () => {
   test("each manager owns its own id sequence", () => {
     expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
     expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
+  })
+
+  // The count follows the shared line rule: a final newline ends the last
+  // line and starts none, as every other count in gent reads it.
+  test("a trailing newline does not count as a line", () => {
+    expect(createPasteManager().createPlaceholder("a\nb\nc\n")).toBe("[Pasted ~3 lines #paste-1]")
   })
 })
 

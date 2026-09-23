@@ -65,7 +65,7 @@ import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
 import { useEnv } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
-import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
+import { type ActiveInteraction, type ApprovalResult, lineCount } from "@gent/core/protocol"
 
 // ── shell execution ─────────────────────────────────────────────────────────
 
@@ -476,12 +476,8 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
 
-export function countLines(text: string): number {
-  return text.split("\n").length
-}
-
 export function isLargePaste(inserted: string): boolean {
-  return countLines(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
+  return lineCount(inserted) >= PASTE_THRESHOLD_LINES || inserted.length >= PASTE_THRESHOLD_LENGTH
 }
 
 /** Per-controller: each composer owns its placeholder ids and store. */
@@ -493,7 +489,7 @@ export function createPasteManager() {
     createPlaceholder(text: string): string {
       const id = `paste-${++idCounter}`
       store.set(id, text)
-      const lines = countLines(text)
+      const lines = lineCount(text)
       return `[Pasted ~${lines} lines #${id}]`
     },
     expandPlaceholders(text: string): string {
