@@ -144,12 +144,6 @@ const decodeSystemBlocks = Schema.decodeUnknownSync(
 const decodeToolChoice = Schema.decodeUnknownSync(
   Schema.Struct({ type: Schema.String, name: Schema.String }),
 )
-const decodeOutputConfig = Schema.decodeUnknownSync(
-  Schema.Struct({ effort: Schema.optional(Schema.String), other: Schema.optional(Schema.Finite) }),
-)
-const decodeThinking = Schema.decodeUnknownSync(
-  Schema.Struct({ type: Schema.optional(Schema.String), effort: Schema.optional(Schema.String) }),
-)
 const decodeContentBlocks = Schema.decodeUnknownSync(Schema.Array(WireContentBlock))
 
 // ── transformPayload ──
@@ -583,75 +577,6 @@ describe("transformPayload — system content relocation", () => {
     expect(userMsg.value.content[2]?.text).toBe("third-party prefix")
     expect(userMsg.value.content[3]?.type).toBe("text")
     expect(userMsg.value.content[3]?.text).toBe("follow-up")
-  })
-})
-
-// ── haiku effort-strip (opencode parity C) ──
-
-describe("transformPayload — haiku effort-strip", () => {
-  test("strips output_config.effort when model starts with claude-haiku", () => {
-    const payload = {
-      model: "claude-haiku-4-5",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: "hi" }],
-      output_config: { effort: "high" },
-    }
-    const result = transformPayload(payload)
-    expect(result["output_config"]).toBeUndefined()
-  })
-
-  test("preserves other output_config keys when stripping effort", () => {
-    const payload = {
-      model: "claude-haiku-4-5",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: "hi" }],
-      output_config: { effort: "high", other: 123 },
-    }
-    const result = transformPayload(payload)
-    const oc = decodeOutputConfig(result["output_config"])
-    expect(oc.effort).toBeUndefined()
-    expect(oc.other).toBe(123)
-  })
-
-  test("leaves output_config.effort intact for non-haiku models", () => {
-    const payload = {
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: "hi" }],
-      output_config: { effort: "high" },
-    }
-    const result = transformPayload(payload)
-    const oc = decodeOutputConfig(result["output_config"])
-    expect(oc.effort).toBe("high")
-  })
-
-  test("strips thinking.effort for haiku models (defensive — opencode parity)", () => {
-    // gent's anthropic/index.ts only emits output_config.effort today,
-    // but the upstream Anthropic SDK may emit thinking.effort in
-    // future shapes. Counsel  follow-up — match the opencode reference
-    // and strip both, so the haiku 400 stays away regardless of which
-    // shape carries the knob.
-    const payload = {
-      model: "claude-haiku-4-5",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: "hi" }],
-      thinking: { type: "enabled", effort: "high" },
-    }
-    const result = transformPayload(payload)
-    const thinking = decodeThinking(result["thinking"])
-    expect(thinking.effort).toBeUndefined()
-    expect(thinking.type).toBe("enabled")
-  })
-
-  test("removes thinking entirely when stripping leaves it empty", () => {
-    const payload = {
-      model: "claude-haiku-4-5",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: "hi" }],
-      thinking: { effort: "high" },
-    }
-    const result = transformPayload(payload)
-    expect(result["thinking"]).toBeUndefined()
   })
 })
 
@@ -2598,6 +2523,52 @@ describe("buildAnthropicModelDriver — credential order", () => {
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       expect(fetchState.captured.at(-1)!.headers["x-api-key"]).toBe("sk-env-key")
+    }),
+  )
+})
+describe("buildAnthropicModelDriver — reasoning effort", () => {
+  const sentOutputConfig = (body: Option.Option<string>) =>
+    Schema.decodeSync(
+      Schema.fromJsonString(
+        Schema.Struct({ output_config: Schema.optional(Schema.Struct({ effort: Schema.String })) }),
+      ),
+    )(Option.getOrElse(body, () => "{}")).output_config
+  const sentFor = (modelName: string, authInfo: ProviderAuthInfo) =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+        {
+          _tag: "Durable",
+          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          at: yield* Clock.currentTimeMillis,
+          invalidated: false,
+        },
+      )
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
+      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const model = yield* driver.resolveModel(modelName, authInfo, { reasoning: "high" })
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      return sentOutputConfig(
+        Option.flatMap(Option.fromUndefinedOr(fetchState.captured.at(-1)), (request) =>
+          Option.fromUndefinedOr(request.body),
+        ),
+      )
+    })
+
+  // Anthropic answers 400 when a haiku request names an effort.
+  it.live("a haiku request names no effort on either auth path", () =>
+    Effect.gen(function* () {
+      expect(yield* sentFor("claude-haiku-4-5", makeApiAuthInfo("sk-test"))).toBeUndefined()
+      expect(yield* sentFor("claude-haiku-4-5", makeOAuthInfo())).toBeUndefined()
+    }),
+  )
+
+  it.live("a model that takes effort gets it on either auth path", () =>
+    Effect.gen(function* () {
+      expect(yield* sentFor("claude-opus-4-6", makeApiAuthInfo("sk-test"))).toEqual({
+        effort: "high",
+      })
+      expect(yield* sentFor("claude-opus-4-6", makeOAuthInfo())).toEqual({ effort: "high" })
     }),
   )
 })
