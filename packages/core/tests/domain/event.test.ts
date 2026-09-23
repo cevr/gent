@@ -25,8 +25,6 @@ import { EventStoreLive } from "../../src/runtime/session"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { BranchStorage, SessionStorage, SqliteStorage } from "../../src/storage/storage"
 
-// ── event.test ──────────────────────────────────────────────────────────────
-
 const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")
 
@@ -78,7 +76,7 @@ describe("event branch routing", () => {
   })
 })
 
-// ── event-publisher.test ────────────────────────────────────────────────────
+// ── event publisher ─────────────────────────────────────────────────────────
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 
@@ -315,7 +313,7 @@ describe("EventPublisher server layer", () => {
   )
 })
 
-// ── event-stream-delivery.test ──────────────────────────────────────────────
+// ── event stream delivery ───────────────────────────────────────────────────
 
 const sessionId = SessionId.make("session-delivery")
 const branchId = BranchId.make("branch-delivery")
@@ -478,7 +476,7 @@ describe("event stream delivery", () => {
   }
 })
 
-// ── schema-tagged-union.test ────────────────────────────────────────────────
+// ── schema tagged union ─────────────────────────────────────────────────────
 
 /**
  * `Schema.TaggedUnion` regression locks.

@@ -17,7 +17,7 @@ import type { ApprovalDecision, ExtensionContextService } from "@gent/core/exten
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 
-// ── interaction-tools/ask-user.test ─────────────────────────────────────────
+// ── ask user ────────────────────────────────────────────────────────────────
 
 const makeCtx = (
   decision: Effect.Effect<{ readonly approved: boolean; readonly notes?: string }>,
@@ -168,7 +168,7 @@ describe("AskUser Tool", () => {
   })
 })
 
-// ── interaction-tools/prompt.test ───────────────────────────────────────────
+// ── prompt tool ─────────────────────────────────────────────────────────────
 
 const interactionDeciding = (
   decision: ApprovalDecision,
@@ -251,7 +251,7 @@ describe("Prompt Tool", () => {
   )
 })
 
-// ── interaction-tools/interaction-tools-rpc.test ────────────────────────────
+// ── interaction tools rpc ───────────────────────────────────────────────────
 
 /**
  * Interaction-tools RPC acceptance test — exercises the `ask_user` and
@@ -519,7 +519,7 @@ describe("InteractionToolsExtension via model turn", () => {
   )
 })
 
-// ── interaction-tools/handoff.test ───────────────────────────────────────────
+// ── handoff ──────────────────────────────────────────────────────────────────
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 

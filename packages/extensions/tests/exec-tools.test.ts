@@ -56,7 +56,7 @@ import { maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 
-// ── exec-tools/bash.test ────────────────────────────────────────────────────
+// ── bash command parsing ────────────────────────────────────────────────────
 
 describe("splitCdCommand", () => {
   test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {
@@ -802,7 +802,7 @@ describe("classifyBashCommand", () => {
   })
 })
 
-// ── exec-tools/bash-execution.test ──────────────────────────────────────────
+// ── bash execution ──────────────────────────────────────────────────────────
 
 const makeProcessLayer = <A, E>(storageLayer: Layer.Layer<A, E>) => {
   const base = Layer.mergeAll(
@@ -1559,7 +1559,7 @@ describe("BashTool execution", () => {
   )
 })
 
-// ── exec-tools/exec-tools-rpc.test ──────────────────────────────────────────
+// ── exec tools rpc ──────────────────────────────────────────────────────────
 
 /**
  * Exec-tools RPC acceptance test — exercises the `bash` tool through a real

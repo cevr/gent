@@ -73,7 +73,7 @@ import { createHash } from "node:crypto"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 
-// ── anthropic/anthropic-keychain.test ───────────────────────────────────────
+// ── long-context errors ─────────────────────────────────────────────────────
 
 describe("isLongContextError", () => {
   test("detects extra usage error", () => {
@@ -100,7 +100,7 @@ describe("isLongContextError", () => {
   })
 })
 
-// ── anthropic/anthropic-keychain-client.test ────────────────────────────────
+// ── payload transforms ──────────────────────────────────────────────────────
 
 const testPlatformLayer = Layer.succeed(
   AnthropicPlatform,
@@ -581,7 +581,7 @@ describe("transformPayload — system content relocation", () => {
   })
 })
 
-// ── anthropic/anthropic-keychain-transform.test ─────────────────────────────
+// ── keychain transform client ───────────────────────────────────────────────
 
 /**
  * keychainTransformClient — auth-headers middleware.
@@ -1190,7 +1190,7 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
 void Layer
 void Ref
 
-// ── anthropic/anthropic-credential-service.test ─────────────────────────────
+// ── credential cache ────────────────────────────────────────────────────────
 
 /**
  * Anthropic credential cache — Effect-native, over `makeCredentialCache`.
@@ -1431,7 +1431,7 @@ describe("Anthropic credential cache — keychain miss falls through to refresh"
 void Layer
 void Ref
 
-// ── anthropic/anthropic-oauth-refresh.test ──────────────────────────────────
+// ── oauth refresh ───────────────────────────────────────────────────────────
 
 /**
  * Tests for the pure helpers backing Claude Code OAuth refresh +
@@ -1569,7 +1569,7 @@ describe("updateCredentialBlob", () => {
   })
 })
 
-// ── anthropic/anthropic-signing.test ────────────────────────────────────────
+// ── request signing ─────────────────────────────────────────────────────────
 
 /**
  * Tests for the Claude Code billing-header signing helpers — the
@@ -1711,7 +1711,7 @@ describe("buildBillingHeaderValue", () => {
   })
 })
 
-// ── anthropic/anthropic-model-config.test ───────────────────────────────────
+// ── model config ────────────────────────────────────────────────────────────
 
 /**
  * Per-model Anthropic configuration — beta lists + ccVersion + override
@@ -1892,7 +1892,7 @@ describe("getModelBetas", () => {
   })
 })
 
-// ── anthropic/anthropic-platform-adapter.test ───────────────────────────────
+// ── platform adapter ────────────────────────────────────────────────────────
 
 /**
  * AnthropicPlatform.fromSetup invariant lock.
@@ -1953,7 +1953,7 @@ describe("AnthropicPlatform.fromSetup", () => {
   })
 })
 
-// ── anthropic/anthropic-extension-driver.test ───────────────────────────────
+// ── model driver ────────────────────────────────────────────────────────────
 
 /**
  * AnthropicExtension model-driver wiring — extension-level regression

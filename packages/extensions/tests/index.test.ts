@@ -9,7 +9,7 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { GentPlatform } from "@gent/core/host"
 import { collectTestContributions } from "@gent/core/test-utils"
 
-// ── starting-extensions.test ────────────────────────────────────────────────
+// ── starting extensions ─────────────────────────────────────────────────────
 
 const hasPublicExtensionContract = (extension: (typeof BuiltinExtensions)[number]) =>
   Schema.is(ExtensionId)(extension.manifest.id) && Effect.isEffect(extension.setup)
@@ -21,7 +21,7 @@ describe("starting extensions", () => {
   })
 })
 
-// ── tool-schema.test ────────────────────────────────────────────────────────
+// ── tool schemas ────────────────────────────────────────────────────────────
 
 describe("builtin tool schemas", () => {
   it.live("are compatible with Anthropic tool structured output", () => {

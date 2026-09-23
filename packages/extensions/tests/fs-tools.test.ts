@@ -21,7 +21,7 @@ import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 
-// ── fs-tools/read.test ──────────────────────────────────────────────────────
+// ── read tool ───────────────────────────────────────────────────────────────
 
 const ctx = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -180,7 +180,7 @@ describe("ReadTool", () => {
   )
 })
 
-// ── fs-tools/write.test ─────────────────────────────────────────────────────
+// ── write tool ──────────────────────────────────────────────────────────────
 
 describe("WriteTool", () => {
   const writeTest = it.scopedLive.layer(ToolLayer)
@@ -282,7 +282,7 @@ describe("WriteTool", () => {
   )
 })
 
-// ── fs-tools/edit.test ──────────────────────────────────────────────────────
+// ── edit tool ───────────────────────────────────────────────────────────────
 
 describe("detectRedaction", () => {
   test("clean replacement has no redaction", () => {
@@ -584,7 +584,7 @@ describe("EditTool execution", () => {
   )
 })
 
-// ── fs-tools/grep.test ──────────────────────────────────────────────────────
+// ── grep tool ───────────────────────────────────────────────────────────────
 
 const ToolLayerGrep = Layer.merge(
   BunServices.layer,
@@ -740,7 +740,7 @@ describe("GrepTool", () => {
   )
 })
 
-// ── fs-tools/file-index.test ────────────────────────────────────────────────
+// ── file index ──────────────────────────────────────────────────────────────
 
 const PlatformLayerFileIndex = BunServices.layer
 const FallbackLayer = Layer.merge(

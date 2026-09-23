@@ -11,8 +11,6 @@ import {
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
 
-// ── gent-platform.test ──────────────────────────────────────────────────────
-
 /**
  * Locks the GentPlatform service contract end-to-end.
  *
@@ -130,7 +128,7 @@ describe("GentPlatform", () => {
   })
 })
 
-// ── run-process.test ────────────────────────────────────────────────────────
+// ── run process ─────────────────────────────────────────────────────────────
 
 const makePlatformLayer = (): Layer.Layer<ChildProcessSpawner.ChildProcessSpawner> =>
   BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)))
@@ -248,7 +246,7 @@ describe("runProcess", () => {
   )
 })
 
-// ── write-file-atomic ───────────────────────────────────────────────────────
+// ── atomic file writes ──────────────────────────────────────────────────────
 
 describe("writeFileAtomic", () => {
   const atomicTest = it.scopedLive.layer(BunServices.layer)

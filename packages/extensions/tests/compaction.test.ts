@@ -35,7 +35,7 @@ import {
 } from "../src/compaction.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 
-// ── compaction/model-compaction.test ────────────────────────────────────────
+// ── context handoff ─────────────────────────────────────────────────────────
 
 const sessionId = SessionId.make("compaction-session")
 const branchId = BranchId.make("compaction-branch")
@@ -420,7 +420,7 @@ describe("context handoff", () => {
   })
 })
 
-// ── compaction/model-compaction-rpc.test ────────────────────────────────────
+// ── model compaction rpc ────────────────────────────────────────────────────
 
 describe("model compaction RPC boundary", () => {
   it.scopedLive(

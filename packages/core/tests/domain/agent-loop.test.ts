@@ -6,7 +6,7 @@ import { DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { AgentEvent } from "../../src/domain/event"
 import { ModelId } from "../../src/domain/agent"
 
-// ── ../runtime/agent/agent-loop.entity-id.test ──────────────────────────────
+// ── entity id ───────────────────────────────────────────────────────────────
 
 const cases: ReadonlyArray<{ readonly session: string; readonly branch: string }> = [
   { session: "session-a", branch: "branch-main" },
@@ -78,7 +78,7 @@ describe("agent-loop.entity-id", () => {
   )
 })
 
-// ── ../runtime/agent-loop/session-metrics-fold.test ─────────────────────────
+// ── session metrics fold ────────────────────────────────────────────────────
 
 const sessionId = SessionId.make("s")
 const branchId = BranchId.make("b")

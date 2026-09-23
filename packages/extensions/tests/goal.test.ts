@@ -42,8 +42,6 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import * as AiError from "effect/unstable/ai/AiError"
 
-// ── goal/goal.test ──────────────────────────────────────────────────────────
-
 /**
  * `/goal` keeps a durable per-branch objective and re-prompts the loop after
  * each ordinary turn until the goal completes or its token budget runs out.
@@ -178,7 +176,7 @@ describe("goals", () => {
   )
 })
 
-// ── goal/goal-store.test ────────────────────────────────────────────────────
+// ── goal store ──────────────────────────────────────────────────────────────
 
 /**
  * Goal state lives in one file per branch. Writes replace the file atomically
@@ -267,7 +265,7 @@ describe("goal store", () => {
   )
 })
 
-// ── goal/goal-stream-failure.test ───────────────────────────────────────────
+// ── stream failure ──────────────────────────────────────────────────────────
 
 /**
  * A goal must not be driven on by a turn that never answered.
@@ -447,7 +445,7 @@ describe("goal stream failure on a spent budget", () => {
   )
 })
 
-// ── goal/goal-partial-usage.test ────────────────────────────────────────────
+// ── partial usage ───────────────────────────────────────────────────────────
 
 /**
  * A turn whose usage is partly unknown still spent its known tokens.
@@ -540,7 +538,7 @@ describe("goal partial usage", () => {
   )
 })
 
-// ── goal/goal-interrupted-turn.test ─────────────────────────────────────────
+// ── interrupted turn ────────────────────────────────────────────────────────
 
 /**
  * Every turn end is charged. An interrupted turn spent its known tokens and

@@ -13,7 +13,7 @@ import { SessionStorage, type SessionStorageService } from "../../src/storage/st
 import { ExtensionRegistry } from "../../src/runtime/extension-host"
 import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
 
-// ── ensure-storage-parents.test ─────────────────────────────────────────────
+// ── ensure storage parents ──────────────────────────────────────────────────
 
 const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
   Layer.succeed(SessionStorage, {
@@ -56,7 +56,7 @@ describe("ensureStorageParents", () => {
   )
 })
 
-// ── extension-tool-layer.test ───────────────────────────────────────────────
+// ── extension tool layer ────────────────────────────────────────────────────
 
 class ResourceInstance extends Context.Service<ResourceInstance, { readonly id: number }>()(
   "@gent/core/tests/test-utils/index.test/ResourceInstance",
@@ -145,7 +145,7 @@ describe("extension tool test layer", () => {
   )
 })
 
-// ── e2e-layer-agents.test ───────────────────────────────────────────────────
+// ── e2e layer agents ────────────────────────────────────────────────────────
 
 describe("createE2ELayer agents", () => {
   const reviewer = AgentDefinition.make({

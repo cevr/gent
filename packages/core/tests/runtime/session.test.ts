@@ -85,7 +85,7 @@ import { SessionRuntime } from "../../src/runtime/session"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { e2ePreset } from "../helpers/test-preset"
 
-// ── session-runtime.test ────────────────────────────────────────────────────
+// ── session runtime ─────────────────────────────────────────────────────────
 
 const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   const mainAgent = AgentDefinition.make({
@@ -719,7 +719,7 @@ describe("SessionRuntime", () => {
   )
 })
 
-// ── session-metrics.test ────────────────────────────────────────────────────
+// ── session metrics ─────────────────────────────────────────────────────────
 
 const cowork = AgentDefinition.make({
   name: AgentName.make("cowork"),
@@ -984,7 +984,7 @@ describe("session metrics", () => {
   )
 })
 
-// ── branch-resources.test ───────────────────────────────────────────────────
+// ── branch resources ────────────────────────────────────────────────────────
 
 class BranchCounter extends Context.Service<BranchCounter, { readonly instance: number }>()(
   "@gent/core/tests/runtime/session.test/BranchCounter",

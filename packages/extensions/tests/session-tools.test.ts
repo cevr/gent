@@ -32,8 +32,6 @@ import {
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolEventFor } from "./helpers/tool-event.js"
 
-// ── session-tools.test ──────────────────────────────────────────────────────
-
 /**
  * SessionToolsExtension prompt-slot behavior locks.
  *
@@ -80,7 +78,7 @@ describe("SessionToolsExtension", () => {
   )
 })
 
-// ── session-tools/read-session.test ─────────────────────────────────────────
+// ── read session ────────────────────────────────────────────────────────────
 
 describe("session.send summary", () => {
   it.live("a sent message reads as who got it and what it said, not JSON", () =>
@@ -226,7 +224,7 @@ describe("renderSessionTree", () => {
   })
 })
 
-// ── session-tools/session-tools-rpc.test ────────────────────────────────────
+// ── session tools rpc ───────────────────────────────────────────────────────
 
 const toolEventsFor = <E>(stream: Stream.Stream<EventEnvelope, E>, toolName: string) =>
   stream.pipe(

@@ -39,7 +39,7 @@ import { EventStoreLive } from "../../src/runtime/session"
 import { noBranchTools } from "../../src/runtime/tools"
 import { ensureStorageParents } from "../../src/test-utils/harness"
 
-// ── agent-turn-response.test ────────────────────────────────────────────────
+// ── turn response collectors ────────────────────────────────────────────────
 
 const sessionId = SessionId.make("collector-session")
 const branchId = BranchId.make("collector-branch")
@@ -217,7 +217,7 @@ describe("agent turn response collectors", () => {
   )
 })
 
-// ── agent-loop/step-outcome.test ────────────────────────────────────────────
+// ── step outcome ────────────────────────────────────────────────────────────
 
 const collected = (
   responseParts: ReadonlyArray<Response.AnyPart>,
@@ -276,7 +276,7 @@ describe("classifyStep", () => {
   })
 })
 
-// ── agent-loop/tool-outcome-recording.test ──────────────────────────────────
+// ── tool outcome recording ──────────────────────────────────────────────────
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
@@ -450,7 +450,7 @@ describe("tool outcome recording", () => {
   )
 })
 
-// ── agent/turn-persistence.test ─────────────────────────────────────────────
+// ── turn persistence ────────────────────────────────────────────────────────
 
 /**
  * Durable message persistence. Summaries, window markers and turn messages

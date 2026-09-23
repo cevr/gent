@@ -31,7 +31,7 @@ import {
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 
-// ── agents-view/projection.test ─────────────────────────────────────────────
+// ── projection ──────────────────────────────────────────────────────────────
 
 const sid = (value: string) => SessionId.make(value)
 const bid = (value: string) => BranchId.make(value)
@@ -429,9 +429,7 @@ describe("agents view projection", () => {
   })
 })
 
-// ── agents-view/agents-view-rpc.test ────────────────────────────────────────
-
-// ── agents-view/activity.test ───────────────────────────────────────────────
+// ── live activity ───────────────────────────────────────────────────────────
 
 describe("agents view live activity", () => {
   const sessionId = sid("activity-session")

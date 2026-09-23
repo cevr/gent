@@ -26,8 +26,6 @@ import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Option, Schema } from "effect"
 import * as Response from "effect/unstable/ai/Response"
 
-// ── message.test ────────────────────────────────────────────────────────────
-
 describe("steer command", () => {
   test("a stored Interrupt row still decodes", () => {
     const decoded = Schema.decodeSync(SteerCommand)({
@@ -146,7 +144,7 @@ describe("message branch copies", () => {
   })
 })
 
-// ── head-tail.test ──────────────────────────────────────────────────────────
+// ── head tail ───────────────────────────────────────────────────────────────
 
 describe("tool summary", () => {
   test("a multi-line author summary keeps its first line", () => {
@@ -234,7 +232,7 @@ describe("headTailChars", () => {
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
-// ── message-part-projection.test ────────────────────────────────────────────
+// ── message part projection ─────────────────────────────────────────────────
 
 describe("message part projection", () => {
   const absent = Option.getOrUndefined(Option.none<number>())

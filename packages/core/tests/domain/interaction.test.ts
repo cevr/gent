@@ -19,8 +19,6 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "../../src
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 
-// ── interaction-request.test ────────────────────────────────────────────────
-
 const persistInteraction = (is: InteractionStorageService, record: InteractionRequestRecord) =>
   is.persist(record).pipe(
     Effect.asVoid,

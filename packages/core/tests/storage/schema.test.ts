@@ -18,7 +18,7 @@ import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
 
-// ── feature-migrations.test ─────────────────────────────────────────────────
+// ── feature migrations ──────────────────────────────────────────────────────
 
 /**
  * Core's migration chain leaves room for the tables a feature owns.
@@ -73,7 +73,7 @@ describe("feature migrations", () => {
   )
 })
 
-// ── message-search-index-drop.test ──────────────────────────────────────────
+// ── message search index drop ───────────────────────────────────────────────
 
 /**
  * Migration 020 removes `messages_fts`.

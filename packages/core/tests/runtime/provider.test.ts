@@ -62,7 +62,7 @@ import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type { ToolkitInput } from "effect/unstable/ai/LanguageModel"
 import * as Prompt from "effect/unstable/ai/Prompt"
 
-// ── retry.test ──────────────────────────────────────────────────────────────
+// ── provider retry ──────────────────────────────────────────────────────────
 
 /**
  * Provider retry: which failures are retried, how long the schedule waits,
@@ -221,7 +221,7 @@ describe("provider retry", () => {
   )
 })
 
-// ── model-registry.test ─────────────────────────────────────────────────────
+// ── model catalog resolution ────────────────────────────────────────────────
 
 /**
  * ModelRegistry now concatenates what each driver lists. Where a driver's
@@ -578,7 +578,7 @@ describe("model catalog resolution", () => {
   )
 })
 
-// ── ../domain/auth.test ─────────────────────────────────────────────────────
+// ── auth ────────────────────────────────────────────────────────────────────
 
 /**
  * Locks the consolidated `domain/auth` module — the `Auth` service and
@@ -887,7 +887,7 @@ describe("Auth", () => {
   })
 })
 
-// ── ../domain/auth-guard.test ───────────────────────────────────────────────
+// ── auth provider listing ───────────────────────────────────────────────────
 
 /**
  * listAuthProviders tests
@@ -990,7 +990,7 @@ describe("ListAuthProvidersPayload schema", () => {
   })
 })
 
-// ── ../providers/provider-auth.test ─────────────────────────────────────────
+// ── provider auth ───────────────────────────────────────────────────────────
 
 const pendingCallbacks = new Map<string, (code?: string) => string>()
 const oauthProvider: ModelDriverContribution = {
@@ -1160,7 +1160,7 @@ describe("ProviderAuth", () => {
   )
 })
 
-// ── ../providers/provider-resolution.test ───────────────────────────────────
+// ── provider model resolution ───────────────────────────────────────────────
 
 // oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined
