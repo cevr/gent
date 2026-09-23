@@ -686,6 +686,21 @@ const sessionModelMigration = Effect.gen(function* () {
     .pipe(ignoreAlreadyAppliedSqliteError("017_session_model", "ADD COLUMN model_id"))
 })
 
+/**
+ * The call that owns an interaction request, so an answer goes back to the
+ * call that asked after a restart. Both columns are nullable: a row stored
+ * before this migration has no owner and loads as before.
+ */
+const interactionOwnerMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql
+    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN owner_tool_call_id TEXT`)
+    .pipe(ignoreAlreadyAppliedSqliteError("021_interaction_owner", "ADD COLUMN owner_tool_call_id"))
+  yield* sql
+    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN owner_occurrence INTEGER`)
+    .pipe(ignoreAlreadyAppliedSqliteError("021_interaction_owner", "ADD COLUMN owner_occurrence"))
+})
+
 const turnRecordsMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
@@ -766,6 +781,7 @@ const makeStorageMigratorLive = (
       "018_turn_records": turnRecordsMigration,
       "019_session_thread": sessionThreadMigration,
       "020_drop_message_search_index": dropMessageSearchIndexMigration,
+      "021_interaction_owner": interactionOwnerMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

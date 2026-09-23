@@ -28,8 +28,6 @@ import { causeMessage } from "../domain/guards.js"
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
  *   - `homeDirectory`    — current user home directory
- *   - `pathListSeparator`— PATH-like list separator (`;` on Windows, `:`
- *                          elsewhere)
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
  *   - `hash(alg, input)` — content-addressed hex digest. `sha256` for durable
  *                          ids and cache keys; `md5` for non-cryptographic
@@ -83,7 +81,6 @@ interface GentPlatformApi {
   readonly pid: Effect.Effect<number>
   readonly execPath: Effect.Effect<string>
   readonly homeDirectory: Effect.Effect<string>
-  readonly pathListSeparator: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
 }
@@ -115,7 +112,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
           homeDirectory: Effect.succeed("/tmp"),
-          pathListSeparator: Effect.succeed(":"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
           // Length matches the real `sha256`/`md5` hex output (64/32) so

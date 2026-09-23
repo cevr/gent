@@ -87,13 +87,13 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           expect((yield* cfg.get()).trustedProjects).toBeUndefined()
-          expect((yield* cfg.getFresh(cwd)).trustedProjects).toBeUndefined()
+          expect((yield* cfg.getFresh(cwd)).config.trustedProjects).toBeUndefined()
           // Trust arrives the way it really does: the user edits the file.
           yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
           yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects }))
-          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual(trustedProjects)
+          expect((yield* cfg.getFresh(cwd)).config.trustedProjects).toEqual(trustedProjects)
           yield* checkTrustPreservation
-          expect((yield* cfg.getFresh(cwd)).trustedProjects).toEqual(trustedProjects)
+          expect((yield* cfg.getFresh(cwd)).config.trustedProjects).toEqual(trustedProjects)
           const persistedText = yield* fs.readFileString(userConfigPath)
           const persisted = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
             persistedText,
@@ -334,6 +334,65 @@ describe("user configuration", () => {
           // The user's settings are still on disk, byte for byte.
           const after = yield* fs.readFileString(userConfigPath)
           expect(after).toEqual(original)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a user config broken after startup is never overwritten by a later write", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        yield* fs.writeFileString(userConfigPath, '{"trustedProjects":["/keep/me"]}')
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          // The user edits the file while gent runs and leaves a trailing comma.
+          const broken = '{"trustedProjects":["/keep/me", "/new"],}'
+          yield* fs.writeFileString(userConfigPath, broken)
+          const fresh = yield* cfg.getFresh(cwd)
+          expect(fresh.failures.map((failure) => failure.path)).toEqual([userConfigPath])
+          // Reads keep the last user config that loaded.
+          expect(fresh.config.trustedProjects).toEqual(["/keep/me"])
+          const outcome = yield* Effect.exit(
+            cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" })),
+          )
+          expect(outcome._tag).toBe("Failure")
+          expect(yield* fs.readFileString(userConfigPath)).toEqual(broken)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a launch project config that breaks drops its cached settings", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.writeFileString(projectConfigPath, encodeJson({ disabledExtensions: ["x"] }))
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          yield* fs.writeFileString(projectConfigPath, '{ "disabledExtensions": ["x"], }')
+          const fresh = yield* cfg.getFresh(cwd)
+          expect(fresh.failures.map((failure) => failure.path)).toEqual([projectConfigPath])
+          // The fresh read and the cached launch read agree: the broken file sets nothing.
+          expect(fresh.config.disabledExtensions).toBeUndefined()
+          expect((yield* cfg.get()).disabledExtensions).toBeUndefined()
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),

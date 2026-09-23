@@ -843,12 +843,12 @@ describe("session command persistence", () => {
 // ── session-nesting-depth.test ──────────────────────────────────────────────
 
 describe("session.create nesting depth", () => {
-  it.live("handoff chain stops at the shared agent-run depth cap", () =>
+  it.live("spawned child chain stops at the shared agent-run depth cap", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
         const root = yield* client.session.create({ cwd: process.cwd() })
-        // Root is depth 0; each handoff nests one level deeper.
+        // Root is depth 0; each spawned child nests one level deeper.
         let parent: { sessionId: SessionId; branchId: BranchId } = root
         for (let depth = 1; depth <= DEFAULT_MAX_AGENT_RUN_DEPTH; depth++) {
           parent = yield* client.session.create({
@@ -870,7 +870,57 @@ describe("session.create nesting depth", () => {
     ),
   )
 
-  it.live("handoff below the cap still creates a child session", () =>
+  it.live("a handoff chain past the cap still spawns children", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const root = yield* client.session.create({ cwd: process.cwd() })
+        // A handoff continues the parent's thread; it is not a spawn edge.
+        let parent: { sessionId: SessionId; branchId: BranchId } = root
+        for (let handoff = 1; handoff <= DEFAULT_MAX_AGENT_RUN_DEPTH + 1; handoff++) {
+          parent = yield* client.session.create({
+            cwd: process.cwd(),
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            continueThread: true,
+          })
+        }
+        // The last handoff sits at spawn depth 0: it spawns up to the cap.
+        for (let depth = 1; depth <= DEFAULT_MAX_AGENT_RUN_DEPTH; depth++) {
+          parent = yield* client.session.create({
+            cwd: process.cwd(),
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+          })
+        }
+        const error = yield* client.session
+          .create({
+            cwd: process.cwd(),
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+          })
+          .pipe(Effect.flip)
+        expect(error._tag).toBe("SessionDepthLimitError")
+        // A child at the cap hands off: the new session keeps its depth.
+        const handedOff = yield* client.session.create({
+          cwd: process.cwd(),
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+          continueThread: true,
+        })
+        const past = yield* client.session
+          .create({
+            cwd: process.cwd(),
+            parentSessionId: handedOff.sessionId,
+            parentBranchId: handedOff.branchId,
+          })
+          .pipe(Effect.flip)
+        expect(past._tag).toBe("SessionDepthLimitError")
+      }).pipe(Effect.timeout("6 seconds")),
+    ),
+  )
+
+  it.live("child below the cap still creates a child session", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()

@@ -24,8 +24,6 @@ import {
   parseModelId,
   parseModelProvider,
   ProviderId,
-  resolveAgentModel,
-  resolveDefaultAgentModel,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
 import { ExtensionRegistry, listModelCatalog } from "./extension-host.js"
@@ -144,12 +142,6 @@ export const ListAuthProvidersPayload = Schema.Struct({
   sessionId: Schema.optional(SessionId),
 })
 export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
-
-/** Internal query passed from the RPC handler into `AuthGuard`. */
-const AuthProviderQuery = Schema.Struct({
-  agentName: Schema.optional(AgentName),
-})
-type AuthProviderQuery = typeof AuthProviderQuery.Type
 
 // ── Auth service ────────────────────────────────────────────────────────
 
@@ -292,95 +284,39 @@ export class Auth extends Context.Service<Auth, AuthService>()(
 
 // ── Auth guard ──────────────────────────────────────────────────────────
 
-interface AuthGuardService {
-  readonly listProviders: (
-    query?: AuthProviderQuery,
-  ) => Effect.Effect<readonly AuthProviderInfo[], AuthError>
-}
-
-export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
-  "@gent/core/src/runtime/provider/AuthGuard",
+/**
+ * Every registered model driver with its stored auth. A driver is `required`
+ * when one of `modelIds` routes to it; the caller resolves those models for
+ * the session it asks about (its registry, config, and model override).
+ */
+export const listAuthProviders = Effect.fn("AuthGuard.listProviders")(function* (
+  modelIds: ReadonlyArray<ModelId>,
 ) {
-  // ↑ co-located with `Auth`; the deterministic-keys rule allows the
-  //   secondary tag to keep `<file>/<ClassName>`.
-
-  /**
-   * Live `AuthGuard`. The guard's logic is inseparable from the auth model,
-   * so it lives beside it.
-   *
-   * Composes auth info (`Auth.get`) with registry-derived metadata
-   * (the resolved model drivers) and per-session routing
-   * (`resolveDefaultAgentModel` + resolved extension agents) to compute
-   * which providers are required *and* present.
-   */
-  static Live: Layer.Layer<AuthGuard, never, Auth | ExtensionRegistry> = Layer.effect(
-    AuthGuard,
-    Effect.gen(function* () {
-      const auth = yield* Auth
-      const extensionRegistry = yield* ExtensionRegistry
-      const registeredProviders = [...extensionRegistry.getResolved().modelDrivers.values()]
-      const registeredIds = new Set(registeredProviders.map((p) => p.id))
-
-      const requiredProviders = (query: AuthProviderQuery = {}): ProviderId[] => {
-        const agents = [...extensionRegistry.getResolved().agents.values()]
-        const providers: ProviderId[] = []
-        const seen = new Set<string>()
-        const modelIds: ModelId[] = Option.toArray(resolveDefaultAgentModel(agents))
-
-        if (!Predicate.isUndefined(query.agentName)) {
-          const selectedAgent = agents.find((agent) => agent.name === query.agentName)
-          if (!Predicate.isUndefined(selectedAgent)) {
-            if (!Predicate.isUndefined(selectedAgent.model)) {
-              modelIds.push(resolveAgentModel(selectedAgent))
-            }
-          }
-        }
-
-        for (const modelId of modelIds) {
-          const provider = parseModelProvider(modelId)
-          if (
-            Option.isSome(provider) &&
-            registeredIds.has(provider.value) &&
-            !seen.has(provider.value)
-          ) {
-            providers.push(provider.value)
-            seen.add(provider.value)
-          }
-        }
-
-        return providers
-      }
-
-      const listProviders = Effect.fn("AuthGuard.listProviders")(function* (
-        query: AuthProviderQuery = {},
-      ) {
-        const requiredSet = new Set(requiredProviders(query))
-        const providers: AuthProviderInfo[] = []
-
-        for (const provider of registeredProviders) {
-          const storedInfo = yield* auth.get(provider.id)
-          const required = requiredSet.has(ProviderId.make(provider.id))
-
-          if (!Predicate.isUndefined(storedInfo)) {
-            providers.push({
-              provider: ProviderId.make(provider.id),
-              hasKey: true,
-              source: "stored",
-              authType: storedInfo.type,
-              required,
-            })
-            continue
-          }
-          providers.push({ provider: ProviderId.make(provider.id), hasKey: false, required })
-        }
-
-        return providers
-      })
-
-      return AuthGuard.of({ listProviders })
-    }),
-  )
-}
+  const auth = yield* Auth
+  const registry = yield* ExtensionRegistry
+  const required = new Set<string>()
+  for (const modelId of modelIds) {
+    const provider = parseModelProvider(modelId)
+    if (Option.isSome(provider)) required.add(provider.value)
+  }
+  const providers: AuthProviderInfo[] = []
+  for (const driver of registry.getResolved().modelDrivers.values()) {
+    const provider = ProviderId.make(driver.id)
+    const storedInfo = yield* auth.get(driver.id)
+    if (Predicate.isUndefined(storedInfo)) {
+      providers.push({ provider, hasKey: false, required: required.has(driver.id) })
+      continue
+    }
+    providers.push({
+      provider,
+      hasKey: true,
+      source: "stored",
+      authType: storedInfo.type,
+      required: required.has(driver.id),
+    })
+  }
+  return providers
+})
 
 // ── provider-auth ───────────────────────────────────────────────────────────
 

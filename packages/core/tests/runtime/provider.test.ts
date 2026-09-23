@@ -27,7 +27,7 @@ import {
   Auth,
   AuthApi,
   AuthError,
-  AuthGuard,
+  listAuthProviders,
   AuthInfo,
   AuthMethod,
   type AuthService,
@@ -46,14 +46,7 @@ import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import {
-  AgentDefinition,
-  AgentName,
-  DEFAULT_AGENT_NAME,
-  ModelId,
-  ProviderId,
-  Model,
-} from "../../src/domain/agent"
+import { DEFAULT_AGENT_NAME, ModelId, ProviderId, Model } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -695,7 +688,7 @@ describe("Auth", () => {
 // ── ../domain/auth-guard.test ───────────────────────────────────────────────
 
 /**
- * AuthGuard tests
+ * listAuthProviders tests
  */
 
 const stubModel = AiModel.make(
@@ -711,118 +704,58 @@ const testProviders: ModelDriverContribution[] = [
   { id: "mistral", name: "Mistral", resolveModel: () => Effect.succeed(stubModel) },
 ]
 
-const testAgents = [
-  AgentDefinition.make({
-    name: DEFAULT_AGENT_NAME,
-    model: ModelId.make("anthropic/claude-opus-4-6"),
-  }),
-]
+const testRegistryLayer = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: ExtensionId.make("test-providers") },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: { modelDrivers: testProviders },
+    } satisfies LoadedExtension,
+  ]),
+)
 
-const testResolved = resolveExtensions([
-  {
-    manifest: { id: ExtensionId.make("test-providers") },
-    scope: "builtin",
-    sourcePath: "test",
-    contributions: {
-      modelDrivers: testProviders,
-      agents: testAgents,
-    },
-  } satisfies LoadedExtension,
-])
-const testRegistryLayer = ExtensionRegistry.fromResolved(testResolved)
-
-const helperResolved = resolveExtensions([
-  {
-    manifest: { id: ExtensionId.make("test-providers") },
-    scope: "builtin",
-    sourcePath: "test",
-    contributions: {
-      modelDrivers: testProviders,
-      agents: [
-        ...testAgents,
-        AgentDefinition.make({
-          name: AgentName.make("helper:google"),
-          model: ModelId.make("google/gemini-2.5-flash"),
-        }),
-      ],
-    },
-  } satisfies LoadedExtension,
-])
-const helperAgentRegistryLayer = ExtensionRegistry.fromResolved(helperResolved)
-
-describe("AuthGuard", () => {
+describe("listAuthProviders", () => {
   const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
+  const list = (seed: Record<string, AuthInfo>, modelIds: ReadonlyArray<ModelId>) =>
+    listAuthProviders(modelIds).pipe(
+      Effect.provide(Layer.merge(Auth.Test(seed), testRegistryLayer)),
+    )
+  const opus = ModelId.make("anthropic/claude-opus-4-6")
 
-  const guardLayerWithSeed = (
-    seed: Record<string, AuthInfo>,
-    registryLayer: Layer.Layer<ExtensionRegistry>,
-  ) => AuthGuard.Live.pipe(Layer.provide(Auth.Test(seed)), Layer.provide(registryLayer))
-
-  it.live("only the main agent's model provider is marked required", () => {
-    const layer = guardLayerWithSeed({}, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
+  it.live("only the providers of the given models are marked required", () =>
+    Effect.gen(function* () {
+      const result = yield* list({}, [opus, ModelId.make("google/gemini-2.5-flash")])
       expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
         ProviderId.make("anthropic"),
+        ProviderId.make("google"),
       ])
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("a required provider without a stored key reports hasKey false", () => {
-    const layer = guardLayerWithSeed({}, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
+  it.live("a required provider without a stored key reports hasKey false", () =>
+    Effect.gen(function* () {
+      const result = yield* list({}, [opus])
       expect(result.filter((p) => p.required && !p.hasKey).map((p) => p.provider)).toEqual([
         ProviderId.make("anthropic"),
       ])
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("a required provider with a stored key reports hasKey true", () => {
-    const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-anthropic") }, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
+  it.live("a required provider with a stored key reports hasKey true", () =>
+    Effect.gen(function* () {
+      const result = yield* list({ anthropic: apiInfo("sk-anthropic") }, [opus])
       expect(result.filter((p) => p.required && !p.hasKey)).toEqual([])
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("listProviders reports per-provider hasKey via Auth.get", () => {
-    const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-test") }, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
-      const anthropic = result.find((p) => p.provider === "anthropic")
-      const openai = result.find((p) => p.provider === "openai")
-      expect(anthropic?.hasKey).toBe(true)
-      expect(openai?.hasKey).toBe(false)
-    }).pipe(Effect.provide(layer))
-  })
-
-  it.live("unselected helper agents do not widen required providers beyond main", () => {
-    const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
-      expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
-        ProviderId.make("anthropic"),
-      ])
-    }).pipe(Effect.provide(layer))
-  })
-
-  it.live("selected agent with a different provider widens required providers", () => {
-    const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders({ agentName: AgentName.make("helper:google") })
-      const required = result.filter((p) => p.required).map((p) => p.provider)
-      expect(required).toContain(ProviderId.make("anthropic"))
-      expect(required).toContain(ProviderId.make("google"))
-      expect(required).not.toContain(ProviderId.make("openai"))
-    }).pipe(Effect.provide(layer))
-  })
+  it.live("every registered provider reports its own hasKey", () =>
+    Effect.gen(function* () {
+      const result = yield* list({ anthropic: apiInfo("sk-test") }, [opus])
+      expect(result.find((p) => p.provider === "anthropic")?.hasKey).toBe(true)
+      expect(result.find((p) => p.provider === "openai")?.hasKey).toBe(false)
+    }),
+  )
 })
 
 describe("ListAuthProvidersPayload schema", () => {

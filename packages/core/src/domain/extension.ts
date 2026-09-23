@@ -454,9 +454,7 @@ export interface TurnProjection {
 
 interface ExtensionHostFacts {
   readonly osInfo: GentPlatformOsInfo
-  readonly execPath: string
   readonly homeDirectory: string
-  readonly pathListSeparator: string
 }
 
 /** Host facts plus the id source core's own facet verbs mint request ids from. */
@@ -591,9 +589,7 @@ export const makeCollectingExtensionHost = (
     home: facts.home,
     host: {
       osInfo: facts.host.osInfo,
-      execPath: facts.host.execPath,
       homeDirectory: facts.host.homeDirectory,
-      pathListSeparator: facts.host.pathListSeparator,
     },
     register: (domain, ...values) =>
       Effect.sync(() => {

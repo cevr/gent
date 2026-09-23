@@ -206,14 +206,6 @@ export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-/** Model of the default agent, when it is registered. */
-export const resolveDefaultAgentModel = (
-  agents: ReadonlyArray<AgentDefinition>,
-): Option.Option<ModelId> =>
-  Option.fromUndefinedOr(agents.find((agent) => agent.name === DEFAULT_AGENT_NAME)).pipe(
-    Option.map(resolveAgentModel),
-  )
-
 // ── Runtime driver routing ──
 
 /** Where the resolved driver came from; a config-routed driver is checked against the registry. */
@@ -319,11 +311,12 @@ export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input
 // Agent run depth
 
 /**
- * Maximum session nesting depth. Derived from the persisted parent chain; root
- * depth is 0, and a parent at depth 3 cannot get another child. Enforced in one
- * place, `admitChildSessionDepth` (`runtime/session.ts`), which the one child
- * writer calls: `SessionMutations.createSession` (a create with a
- * `parentSessionId`).
+ * Maximum session spawn depth. Derived from the persisted parent chain, where
+ * only spawn edges count (a handoff keeps its parent's thread and depth); root
+ * depth is 0, and a parent at depth 3 cannot spawn another child. Enforced in
+ * one place, `admitChildSessionDepth` (`runtime/session.ts`), which the one
+ * child writer calls: `SessionMutations.createSession` (a create with a
+ * `parentSessionId` and no `continueThread`).
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
 
