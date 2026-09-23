@@ -379,8 +379,8 @@ export const findCoreFeatureIndependenceFindings = (
  * encode of the object.
  *
  * What is reported: a value encoded by `Schema.encodeSync(Schema.fromJsonString(...))`
- * whose result is then compared with `===`, `!==`, `.has(`, or `.get(` on the
- * same line, or stored under a name that says it is an identity. Encoding for
+ * whose result is then compared with `===`, `!==`, `.has(`, `.get(`, or `.add(`
+ * on the same line, or stored under a name that says it is an identity. Encoding for
  * a log line, a file, or a display string is untouched — those do not compare.
  *
  * @module
@@ -392,15 +392,41 @@ export interface IdentityEncodeFinding {
   readonly message: string
 }
 
-/** Names that say the encoded value answers "is this the same thing?". */
-const IDENTITY_NAMES = /\b(?:fingerprint|identity|signature|dedupe|dedup|cacheKey|key)\b/i
+/**
+ * Name segments that say the encoded value answers "is this the same thing?".
+ * A name is split at camelCase and `_` boundaries, so `messageIdentity`,
+ * `dedupeKey` and `cache_key` all count.
+ */
+const IDENTITY_WORDS: ReadonlySet<string> = new Set([
+  "fingerprint",
+  "identity",
+  "signature",
+  "dedupe",
+  "dedup",
+  "key",
+])
+
+/** Whether a name on the line, other than the encoder's own, says identity. */
+const namesIdentity = (line: string, encoder: string): boolean =>
+  Option.getOrElse(Option.fromNullishOr(line.match(/[A-Za-z_$][\w$]*/g)), () => []).some(
+    (name) =>
+      name !== encoder &&
+      name.split(/(?=[A-Z])|_/).some((segment) => IDENTITY_WORDS.has(segment.toLowerCase())),
+  )
+
+/**
+ * An argument that already names its fields in a fixed order: an array literal,
+ * or a `…Fingerprint(...)` projection that returns one. That is the fix this
+ * guard asks for, so it is not reported.
+ */
+const FIXED_ORDER_ARGUMENT = /^\s*(?:\[|[a-z][\w$]*Fingerprint\()/
 
 /** A binding whose initializer is a whole-object JSON encoder. */
 const ENCODER_BINDING =
   /^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*Schema\.encodeSync\(\s*Schema\.fromJsonString\(/
 
 /** The encoded value being compared, right where it is produced. */
-const COMPARED = /(?:===|!==|\.has\(|\.get\()/
+const COMPARED = /(?:===|!==|\.has\(|\.get\(|\.add\()/
 
 export const findIdentityEncodes = (
   file: string,
@@ -427,7 +453,8 @@ export const findIdentityEncodes = (
     const name = Option.getOrElse(Option.fromNullishOr(call.value[1]), () => "")
     // The binding itself is a declaration, not a use.
     if (ENCODER_BINDING.test(line)) continue
-    if (!COMPARED.test(line) && !IDENTITY_NAMES.test(line)) continue
+    if (FIXED_ORDER_ARGUMENT.test(line.slice(call.value.index + call.value[0].length))) continue
+    if (!COMPARED.test(line) && !namesIdentity(line, name)) continue
     findings.push({
       file,
       line: index + 1,

@@ -8,9 +8,11 @@ import {
   findBannedEslintDisableBlocks,
   findBlanketEslintDisables,
   findCoreFeatureIndependenceFindings,
+  findCoreVendorModelPins,
   findDiagnosticSuppressionAnchors,
   findE2eFixtureImportFindings,
   findHookGuardOrder,
+  findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
   findReadersWithoutWriters,
@@ -378,6 +380,79 @@ describe("core feature independence guard", () => {
       'const MODELS_URL = "https://models.dev"',
     )
     expect(findings).toEqual([])
+  })
+})
+
+// ── core-identity-encode.test ───────────────────────────────────────────────
+
+const ENCODER = "const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))"
+
+const identityLines = (file: string, ...lines: ReadonlyArray<string>) =>
+  findIdentityEncodes(file, [ENCODER, ...lines].join("\n")).map((finding) => finding.line)
+
+describe("identity encode guard", () => {
+  test("reports an encode stored under a camelCase identity name", () => {
+    const file = "apps/tui/src/message-list.tsx"
+    expect(identityLines(file, "const identity = encodeJson(m)")).toEqual([2])
+    expect(identityLines(file, "const messageIdentity = encodeJson(m)")).toEqual([2])
+    expect(identityLines(file, "const dedupeKey = encodeJson(m)")).toEqual([2])
+    expect(identityLines(file, "const cache_key = encodeJson(m)")).toEqual([2])
+  })
+
+  test("reports an encode compared or collected on the same line", () => {
+    const file = "packages/core/src/runtime/turn.ts"
+    expect(identityLines(file, "if (encodeJson(a) === encodeJson(b)) return")).toEqual([2])
+    expect(identityLines(file, "if (seen.has(encodeJson(m))) continue")).toEqual([2])
+    expect(identityLines(file, "seen.add(encodeJson(m))")).toEqual([2])
+  })
+
+  test("leaves display encodes and fixed-order projections alone", () => {
+    const file = "apps/tui/src/message-list.tsx"
+    expect(identityLines(file, "yield* Effect.log(encodeJson(entry))")).toEqual([])
+    expect(identityLines(file, "const text = encodeJson(result)")).toEqual([])
+    expect(identityLines(file, "const keyboardHint = 1")).toEqual([])
+    expect(
+      identityLines(file, "const toolIdentity = (c: ToolCall) => encodeJson(toolFingerprint(c))"),
+    ).toEqual([])
+    expect(identityLines(file, "const identity = encodeJson([call.id, call.status])")).toEqual([])
+  })
+
+  test("scans shipped source only", () => {
+    expect(
+      identityLines("packages/core/tests/x.test.ts", "const identity = encodeJson(m)"),
+    ).toEqual([])
+    expect(identityLines("ARCHITECTURE.md", "const identity = encodeJson(m)")).toEqual([])
+  })
+})
+
+// ── core-vendor-model-pins.test ─────────────────────────────────────────────
+
+describe("vendor model pin guard", () => {
+  test("reports a provider-qualified model id in core source", () => {
+    const findings = findCoreVendorModelPins(
+      "packages/core/src/runtime/turn.ts",
+      ["const a = 1", 'const model = "anthropic/claude-haiku-4-5-20251001"'].join("\n"),
+    )
+    expect(findings.map((finding) => finding.line)).toEqual([2])
+    expect(findings[0]?.message).toContain("anthropic/claude-haiku-4-5-20251001")
+    expect(
+      findCoreVendorModelPins(
+        "packages/core/src/server/server.ts",
+        "ModelId.make('openai/gpt-5.1')",
+      ).length,
+    ).toBe(1)
+  })
+
+  test("the declaration site, other packages and non-vendor paths are not reported", () => {
+    const pin = 'const model = "anthropic/claude-haiku-4-5"'
+    expect(findCoreVendorModelPins("packages/core/src/domain/agent.ts", pin)).toEqual([])
+    expect(findCoreVendorModelPins("packages/extensions/src/anthropic.ts", pin)).toEqual([])
+    expect(
+      findCoreVendorModelPins("packages/core/src/runtime/turn.ts", 'const path = "src/index.ts"'),
+    ).toEqual([])
+    expect(
+      findCoreVendorModelPins("packages/core/src/runtime/turn.ts", "const id = `openai/${model}`"),
+    ).toEqual([])
   })
 })
 
