@@ -55,6 +55,7 @@ import {
   cellInteractionOwner,
   CellOperationHost,
   CellTool,
+  cellWorkerLaunch,
   CellToolCallSuspended,
   cellToolResultValue,
   dispatchCell,
@@ -155,7 +156,7 @@ import {
   runAgentLoopTurnProfile,
   toolResultMessageIdForTurn,
 } from "@gent/core-internal/runtime/turn.js"
-import { buildCellExecutable, shippedPreset } from "./helpers/test-preset.js"
+import { shippedPreset } from "./helpers/test-preset.js"
 import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver.js"
 import {
   ChildAgentHandle,
@@ -194,6 +195,33 @@ export const buildCellWorker = Effect.gen(function* () {
   )
   expect(Number(yield* build.exitCode)).toBe(0)
   return { binaryPath, workerPath }
+})
+
+export const buildCellExecutable = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const platform = yield* GentPlatform
+  const bunPath = yield* platform.execPath
+  const directory = yield* fs.makeTempDirectoryScoped()
+  const binaryPath = path.join(directory, "gent-cell")
+  const sourcePath = new URL("../src/cell-worker-boundary.ts", import.meta.url).pathname
+  const build = yield* ChildProcess.make(
+    bunPath,
+    [
+      "build",
+      sourcePath,
+      "--compile",
+      "--no-compile-autoload-bunfig",
+      "--no-compile-autoload-dotenv",
+      "--no-compile-autoload-tsconfig",
+      "--no-compile-autoload-package-json",
+      "--outfile",
+      binaryPath,
+    ],
+    { stdout: "ignore", stderr: "inherit" },
+  )
+  expect(Number(yield* build.exitCode)).toBe(0)
+  return { binaryPath, workerPath: binaryPath }
 })
 
 // ── cell/cell-execution.test ────────────────────────────────────────────────
@@ -757,6 +785,32 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
+    "a source run launches the worker source of this checkout under the running Bun",
+    () =>
+      Effect.gen(function* () {
+        const launch = yield* cellWorkerLaunch
+        const platform = yield* GentPlatform
+        const fs = yield* FileSystem.FileSystem
+        expect(launch.binaryPath).toBe(yield* platform.execPath)
+        expect(yield* fs.realPath(launch.workerPath)).toBe(
+          yield* fs.realPath(new URL("../src/cell-worker-boundary.ts", import.meta.url).pathname),
+        )
+        // The launch runs: the namespace in this checkout answers a host call.
+        const kernel = yield* openCellKernel(launch)
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("read.file"),
+          call: (request) => Effect.succeed(request.name),
+        })
+        const evaluation = yield* kernel
+          .evaluate("await tools.read.file({})")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(evaluation.display).toBe("read.file")
+        yield* kernel.close
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
+    12000,
+  )
+
+  it.scopedLive(
     "process output past the display limit keeps its tail, so a trailing error survives",
     () =>
       Effect.gen(function* () {
@@ -1271,8 +1325,6 @@ describe("cell approvals", () => {
     "resumes fresh cell approvals without replaying source for allow and deny",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const artifact = yield* buildCellExecutable
         for (const approved of [true, false]) {
           yield* Effect.scoped(
             Effect.gen(function* () {
@@ -1328,15 +1380,6 @@ describe("cell approvals", () => {
                 branchTools: CellBranchTools,
                 durableApproval: true,
                 agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
-                extraLayers: [
-                  Layer.succeed(
-                    GentPlatform,
-                    GentPlatform.of({
-                      ...platform,
-                      siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-                    }),
-                  ),
-                ],
               })
               yield* client.message.send({
                 sessionId,
@@ -2170,10 +2213,8 @@ describe("shipped model surface", () => {
     "advertises only cell and serves builtin host tools inside it",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const artifact = yield* buildCellExecutable
         const directory = yield* fs.makeTempDirectoryScoped()
         const file = path.join(directory, "note.txt")
         yield* fs.writeFileString(file, "shipped surface")
@@ -2187,15 +2228,6 @@ describe("shipped model surface", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           providerLayer,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         const runTurn = Effect.fn("Test.runTurn")(function* (content: string, reply: string) {
           yield* client.message.send({ sessionId, branchId, content })
@@ -2267,10 +2299,8 @@ describe("shipped model surface", () => {
     "composes concurrent host calls inside one cell",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const artifact = yield* buildCellExecutable
         const directory = yield* fs.makeTempDirectoryScoped()
         const left = path.join(directory, "left.txt")
         const right = path.join(directory, "right.txt")
@@ -2290,15 +2320,6 @@ describe("shipped model surface", () => {
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
           providerLayer,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         yield* client.message.send({ sessionId, branchId, content: "read both" })
         const messages = yield* waitFor(
@@ -2334,10 +2355,8 @@ describe("shipped model surface", () => {
     "allowedTools scopes host tools inside the cell instead of replacing the surface",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const artifact = yield* buildCellExecutable
         const directory = yield* fs.makeTempDirectoryScoped()
         const file = path.join(directory, "note.txt")
         yield* fs.writeFileString(file, "scoped surface")
@@ -2371,15 +2390,6 @@ describe("shipped model surface", () => {
           extensionInputs: [...shippedPreset.extensionInputs, scopedAgent],
           branchTools: CellBranchTools,
           providerLayer,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         yield* client.message.send({
           sessionId,
@@ -2423,8 +2433,6 @@ describe("external driver cell dispatch", () => {
     "an external executor runs code through the branch's persistent cell",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const artifact = yield* buildCellExecutable
         // The executor is the second interpreter's replacement: it asks the host for
         // the `cell` tool instead of evaluating code itself.
         const executor: TurnExecutor = {
@@ -2470,15 +2478,6 @@ describe("external driver cell dispatch", () => {
           providerLayer,
           extensionInputs: [...shippedPreset.extensionInputs, ext],
           branchTools: CellBranchTools,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         // The runtime driver override points the default agent at the external driver.
         yield* client.driver.set({
@@ -2517,8 +2516,6 @@ describe("child cell", () => {
     "a child delegated from a cell runs its own cell instead of refusing as a nested outer cell",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const artifact = yield* buildCellExecutable
         // The parent starts the child from a cell and ends its turn; the
         // child runs its own cell. Each branch is told apart by its first
         // user text, so the two turns never race for one script.
@@ -2583,15 +2580,6 @@ describe("child cell", () => {
             },
           ],
           branchTools: CellBranchTools,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         const content = "delegate from a cell"
         yield* client.message.send({ sessionId, branchId, content })
@@ -2659,8 +2647,6 @@ describe("branch cell lifetime", () => {
     "controls children across kernel reset and reads a completed child reply",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const artifact = yield* buildCellExecutable
         const handle = yield* Ref.make(Option.none<typeof ChildAgentHandle.Type>())
         // A turn is either sent by the test or started by a child-completion message.
         const turns: ReadonlyArray<{
@@ -2776,15 +2762,6 @@ describe("branch cell lifetime", () => {
             },
           ],
           branchTools: CellBranchTools,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         let completions = 0
         for (const [index, turn] of turns.entries()) {
@@ -2839,7 +2816,6 @@ describe("branch cell lifetime", () => {
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const artifact = yield* buildCellExecutable
         const pids = yield* Ref.make<ReadonlyArray<number>>([])
         const hiddenCalls = yield* Ref.make(0)
         yield* Effect.scoped(
@@ -2900,15 +2876,6 @@ describe("branch cell lifetime", () => {
               extensionInputs: [],
               branchTools: CellBranchTools,
               agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools: ["hidden"] })],
-              extraLayers: [
-                Layer.succeed(
-                  GentPlatform,
-                  GentPlatform.of({
-                    ...platform,
-                    siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-                  }),
-                ),
-              ],
             })
             expect(yield* Ref.get(pids)).toEqual([])
             const second = yield* client.branch.create({ sessionId })
@@ -4134,8 +4101,6 @@ describe("model context directives from a cell", () => {
     "a handoff leads the window until a bare context window replaces it",
     () =>
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const artifact = yield* buildCellExecutable
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("history reply"),
           toolCallStep("cell", { code: "await context.compact()" }),
@@ -4165,15 +4130,6 @@ describe("model context directives from a cell", () => {
             },
           ],
           branchTools: CellBranchTools,
-          extraLayers: [
-            Layer.succeed(
-              GentPlatform,
-              GentPlatform.of({
-                ...platform,
-                siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-              }),
-            ),
-          ],
         })
         yield* client.message.send({ sessionId, branchId, content: "older history" })
         yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))
@@ -4235,8 +4191,6 @@ describe("model context directives from a cell", () => {
       `an interrupted cell does not apply context.${directive}() to the next turn`,
       () =>
         Effect.gen(function* () {
-          const platform = yield* GentPlatform
-          const artifact = yield* buildCellExecutable
           const scheduled = yield* Deferred.make<void>()
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             textStep("history reply"),
@@ -4286,15 +4240,6 @@ describe("model context directives from a cell", () => {
               },
             ],
             branchTools: CellBranchTools,
-            extraLayers: [
-              Layer.succeed(
-                GentPlatform,
-                GentPlatform.of({
-                  ...platform,
-                  siblingBinaryPath: () => Effect.succeed(artifact.binaryPath),
-                }),
-              ),
-            ],
           })
           yield* client.message.send({ sessionId, branchId, content: "keep older context" })
           yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))

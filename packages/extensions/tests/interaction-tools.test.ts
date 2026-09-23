@@ -18,7 +18,7 @@ import { BunFileSystem } from "@effect/platform-bun"
 import type { ApprovalDecision } from "@gent/core-internal/domain/interaction.js"
 import type { ExtensionContextService } from "@gent/core/extensions/api"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
-import { currentCellPlatform, e2ePreset, shippedPreset } from "./helpers/test-preset"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 
 // ── interaction-tools/ask-user.test ─────────────────────────────────────────
@@ -249,10 +249,8 @@ describe("InteractionToolsExtension via model turn", () => {
           }),
           textStep("done"),
         ])
-        const cellPlatform = yield* currentCellPlatform
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
-          extraLayers: [cellPlatform],
           providerLayer,
           durableApproval: true,
         })

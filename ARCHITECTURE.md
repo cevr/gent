@@ -613,10 +613,11 @@ loading. The process launcher uses this artifact as both its runtime
 and worker path. Turbo caches core's `dist` output and both TUI binaries. The
 TUI task hashes its build script. Run the root build for dependency ordering.
 This is a packaged worker, not a daemon or a new session owner.
-`GentPlatform.cellWorkerPath` selects the worker without opening it. The compiled
-host uses its sibling `gent-cell`. Source runs use core's `dist/gent-cell`, resolved
-from the platform module, not cwd or the Bun executable. Source runs need the core
-build first. The TUI build sets the compiled-host marker explicitly.
+The cell owns where its worker lives: `cellWorkerLaunch` in `cell.ts` selects it
+without opening it. The compiled host runs its sibling `gent-cell`. A source run
+executes this checkout's `src/cell-worker-boundary.ts` with the running Bun, so it
+never launches a stale built worker and needs no build first. The TUI build sets
+the compiled-host marker `__GENT_COMPILED__` explicitly.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately.

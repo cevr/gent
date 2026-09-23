@@ -1927,8 +1927,33 @@ const makeCellToolHostWith = (
 
 // ── execution ───────────────────────────────────────────────────────────────
 
-/** The worker binary this build ships next to the executable. */
+/** The worker binary a compiled build ships next to its executable. */
 const CELL_WORKER_BINARY = "gent-cell"
+
+/** The compiled build defines this symbol; a source run leaves it undeclared. */
+declare const __GENT_COMPILED__: unknown
+
+const isCompiledBuild = Effect.try({
+  try: () => __GENT_COMPILED__ === true,
+  catch: () => false,
+}).pipe(Effect.orElseSucceed(() => false))
+
+/**
+ * Where the worker lives. A compiled build runs the `gent-cell` binary beside
+ * its executable. A source run executes this checkout's worker source with the
+ * running Bun, so it never launches a stale built worker.
+ */
+export const cellWorkerLaunch = Effect.gen(function* () {
+  const platform = yield* GentPlatform
+  const path = yield* Path.Path
+  const execPath = yield* platform.execPath
+  if (yield* isCompiledBuild) {
+    const binaryPath = path.join(path.dirname(execPath), CELL_WORKER_BINARY)
+    return { binaryPath, workerPath: binaryPath }
+  }
+  const workerPath = yield* path.fromFileUrl(new URL("./cell-worker-boundary.ts", import.meta.url))
+  return { binaryPath: execPath, workerPath }
+})
 
 export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
   "CellExecutionIncomplete",
@@ -1965,7 +1990,7 @@ interface CellExecutionService {
 export class CellExecution extends Context.Service<CellExecution, CellExecutionService>()(
   "@gent/extensions/src/cell/CellExecution",
 ) {
-  /** The cell names its own worker; the platform resolves where it lives. */
+  /** The cell owns its worker: `cellWorkerLaunch` says where it lives. */
   static Branch = (address: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -1973,9 +1998,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
   }) =>
     Layer.unwrap(
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const binaryPath = yield* platform.siblingBinaryPath(CELL_WORKER_BINARY)
-        const live = CellExecution.Live({ ...address, binaryPath, workerPath: binaryPath })
+        const worker = yield* cellWorkerLaunch
+        const live = CellExecution.Live({ ...address, ...worker })
         // The loop cancels branch work through `BranchToolWork`; the cell's
         // own cancel is what that means here. The context ledger ships with the
         // cell too: the cell is what schedules directives into it.
