@@ -1088,6 +1088,38 @@ describe("session.delete", () => {
     ),
   )
 
+  it.live("public delete keeps a handoff that continues the session and its runtime", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const parent = yield* client.session.create({ cwd: process.cwd() })
+        const handoff = yield* client.session.create({
+          cwd: process.cwd(),
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+          continueThread: true,
+        })
+        const spawn = yield* client.session.create({
+          cwd: process.cwd(),
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+        })
+
+        yield* client.session.delete({ sessionId: parent.sessionId })
+
+        expect(yield* client.session.get({ sessionId: spawn.sessionId })).toBeNull()
+        const kept = yield* client.session.get({ sessionId: handoff.sessionId })
+        expect(kept?.parentSessionId).toBeUndefined()
+        // The handoff's runtime was never stopped: it still takes a turn.
+        yield* client.message.send({
+          sessionId: handoff.sessionId,
+          branchId: handoff.branchId,
+          content: "still here",
+        })
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("closes runtime streams and interrupts active loops on public delete", () =>
     Effect.scoped(
       Effect.gen(function* () {

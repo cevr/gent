@@ -476,6 +476,9 @@ const makeSessionMutationsService: Effect.Effect<
     const queue: SessionId[] = [rootSessionId]
     const seen = new Set<SessionId>()
     let index = 0
+    // Same rule as the durable delete: a handoff that continues the deleted
+    // session's thread survives, so its runtime is not stopped.
+    const rootThread = (yield* sessionStorage.getSession(rootSessionId))?.threadId
 
     while (index < queue.length) {
       const sessionId = queue[index]
@@ -485,6 +488,7 @@ const makeSessionMutationsService: Effect.Effect<
       sessionIds.push(sessionId)
       const children = yield* relationshipStorage.getChildSessions(sessionId)
       for (const child of children) {
+        if (Predicate.isNotUndefined(rootThread) && child.threadId === rootThread) continue
         queue.push(child.id)
       }
     }

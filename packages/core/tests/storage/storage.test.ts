@@ -2158,6 +2158,34 @@ describe("thread sessions", () => {
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
 
+  it.live("deleting a session keeps the handoffs that continue it and drops its spawns", () =>
+    Effect.gen(function* () {
+      const root = yield* makeSession("root", { at: 1_000 })
+      yield* makeSession("handoff", { parent: "root", thread: String(root.threadId), at: 2_000 })
+      // The handoff's own spawn belongs to the kept conversation.
+      yield* makeSession("handoff-spawn", { parent: "handoff", at: 3_000 })
+      const delegate = yield* makeSession("delegate", { parent: "root", at: 4_000 })
+      // A spawn's handoff is the spawn's work, so it goes with the spawn.
+      yield* makeSession("delegate-handoff", {
+        parent: "delegate",
+        thread: String(delegate.threadId),
+        at: 5_000,
+      })
+      const sessions = yield* SessionStorage
+      const relationships = yield* RelationshipStorage
+
+      const deleted = yield* sessions.deleteSession(SessionId.make("root"))
+
+      expect(deleted.map(String).toSorted()).toEqual(["delegate", "delegate-handoff", "root"])
+      const handoff = yield* sessions.getSession(SessionId.make("handoff"))
+      expect(handoff?.parentSessionId).toBeUndefined()
+      const thread = yield* relationships.getThreadSessions(SessionId.make("handoff"))
+      expect(ids(thread)).toEqual(["handoff"])
+      const children = yield* relationships.getChildSessions(SessionId.make("handoff"))
+      expect(ids(children)).toEqual(["handoff-spawn"])
+    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
+  )
+
   it.live("roots a thread at a session created without one", () =>
     Effect.gen(function* () {
       const root = yield* makeSession("root", { at: 1_000 })
