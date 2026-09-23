@@ -32,7 +32,11 @@ export interface ToolCall {
   summary: string | undefined
   // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   output: string | undefined
-  /** Inner calls a cell admitted. Live feed only; saved results carry receipts. */
+  /**
+   * Inner calls a cell admitted, from the live feed or, after a reload, from
+   * the branch's stored tool receipts. Absent on a fork, whose saved result's
+   * receipts are the fallback.
+   */
   operations?: ToolCall[]
   /** Envelope time of the started receipt. Live feed only. */
   startedAt?: number
@@ -378,8 +382,9 @@ function CellToolRenderer(props: ToolRendererProps) {
     return first
   })
 
-  // Live operations are the calls the cell admitted, with their input and output;
-  // a saved result carries only receipts.
+  // Operations are the calls the cell admitted, with their input and output,
+  // from the live feed or the snapshot. The saved result's receipts are the
+  // fallback where the branch has no events for them (a fork).
   const liveOperations = createMemo((): ReadonlyArray<ToolCall> =>
     Option.getOrElse(Option.fromNullishOr(props.toolCall.operations), () => []),
   )

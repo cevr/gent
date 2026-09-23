@@ -22,7 +22,7 @@ import {
   Message,
   projectMessagesWithToolInteractions,
   Session,
-  toolCallDurations,
+  toolCallReceipts,
 } from "../domain/message.js"
 import {
   BranchStorage,
@@ -937,7 +937,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
         branchId: input.branchId,
       })
       return {
-        projectedMessages: projectMessagesWithToolInteractions(messages, toolCallDurations(events)),
+        projectedMessages: projectMessagesWithToolInteractions(messages, toolCallReceipts(events)),
         lastEventId,
         // The same read answers the HUD totals: one branch log, folded once.
         metrics: foldSessionMetrics(events),

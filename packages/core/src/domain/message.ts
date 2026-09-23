@@ -96,7 +96,7 @@ const DateFromNumber = Schema.Union([Schema.DateFromMillis, Schema.Date])
 
 export const decodeDateFromMillis = Schema.decodeUnknownEffect(DateFromNumber)
 
-export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
+const ToolInteractionFields = {
   id: ToolCallId,
   toolName: Schema.String,
   status: Schema.Literals(["running", "completed", "error"]),
@@ -105,6 +105,20 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
   output: Schema.UndefinedOr(Schema.String),
   /** Wall time between the started and terminal receipts; absent while running or without receipts. */
   durationMs: Schema.UndefinedOr(Schema.Finite),
+}
+
+/** One call a cell admitted, read from its stored tool receipts. */
+const ToolOperation = Schema.Struct(ToolInteractionFields)
+type ToolOperation = typeof ToolOperation.Type
+
+export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
+  ...ToolInteractionFields,
+  /**
+   * The calls a cell admitted, from the branch's tool receipts. Wire only,
+   * never stored. Absent when the branch has no receipts for them, as on a
+   * fork, which copies messages but not events.
+   */
+  operations: Schema.optional(Schema.Array(ToolOperation)),
 }) {}
 
 export const MessagePart = Schema.Union([
@@ -717,30 +731,86 @@ const findResultForToolCall = (
 ): Option.Option<ToolResultState> =>
   Option.fromUndefinedOr(pairings.get(`${callMessageIndex}:${callPartIndex}`))
 
-/** Wall time per tool call, from its started receipt to its terminal receipt. */
-export const toolCallDurations = (
-  events: ReadonlyArray<EventEnvelope>,
-): ReadonlyMap<ToolCallId, number> => {
+/** What a branch's tool receipts add to its messages: durations, and the calls each cell admitted. */
+interface ToolCallReceipts {
+  readonly durations: ReadonlyMap<ToolCallId, number>
+  /** Keyed by the admitting cell's call id, in start order. */
+  readonly operations: ReadonlyMap<ToolCallId, ReadonlyArray<ToolOperation>>
+}
+
+const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map() }
+
+/**
+ * One fold over a branch's tool receipts. A duration is the gap from a call's
+ * started receipt to its terminal one. A receipt with a `parentToolCallId` is
+ * a call a cell admitted; it lands under that cell with its own input and
+ * result, as the live feed draws it.
+ */
+export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCallReceipts => {
   const started = new Map<ToolCallId, number>()
   const durations = new Map<ToolCallId, number>()
+  const operations = new Map<ToolCallId, Array<ToolOperation>>()
+  const operationIndex = new Map<ToolCallId, { parent: ToolCallId; index: number }>()
   for (const envelope of events) {
     const event = envelope.event
     if (event._tag === "ToolCallStarted") {
       started.set(event.toolCallId, envelope.createdAt)
+      const parent = event.parentToolCallId
+      if (Predicate.isUndefined(parent) || operationIndex.has(event.toolCallId)) continue
+      const siblings = operations.get(parent) ?? []
+      operationIndex.set(event.toolCallId, { parent, index: siblings.length })
+      siblings.push({
+        id: event.toolCallId,
+        toolName: event.toolName,
+        status: "running",
+        input: event.input,
+        summary: Option.getOrUndefined(Option.none<string>()),
+        output: Option.getOrUndefined(Option.none<string>()),
+        durationMs: Option.getOrUndefined(Option.none<number>()),
+      })
+      operations.set(parent, siblings)
       continue
     }
     if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
     const startedAt = started.get(event.toolCallId)
-    if (Predicate.isUndefined(startedAt)) continue
-    durations.set(event.toolCallId, Math.max(0, envelope.createdAt - startedAt))
+    const durationMs = Option.getOrUndefined(
+      Option.map(Option.fromUndefinedOr(startedAt), (at) => Math.max(0, envelope.createdAt - at)),
+    )
+    if (Predicate.isNotUndefined(durationMs)) durations.set(event.toolCallId, durationMs)
+    const position = operationIndex.get(event.toolCallId)
+    if (Predicate.isUndefined(position)) continue
+    const siblings = operations.get(position.parent)
+    const current = siblings?.[position.index]
+    if (Predicate.isUndefined(siblings) || Predicate.isUndefined(current)) continue
+    let status: ToolOperation["status"] = "completed"
+    if (event._tag === "ToolCallFailed") status = "error"
+    siblings[position.index] = {
+      ...current,
+      status,
+      summary: event.summary,
+      output: event.output,
+      durationMs,
+    }
   }
-  return durations
+  return { durations, operations }
+}
+
+/** A settled cell's operation with no terminal receipt ended with the cell: it failed, it is not running. */
+const settledOperations = (
+  operations: ReadonlyArray<ToolOperation>,
+  parentStatus: ToolInteraction["status"],
+): ReadonlyArray<ToolOperation> => {
+  if (parentStatus === "running") return operations
+  return operations.map((operation) => {
+    if (operation.status !== "running") return operation
+    return { ...operation, status: "error" }
+  })
 }
 
 const messagePartsToolInteractions = (
   parts: ReadonlyArray<MessagePart>,
   resultForToolCall: (partIndex: number) => Option.Option<ToolResultState>,
-  durations: ReadonlyMap<ToolCallId, number>,
+  receipts: ToolCallReceipts,
 ): ReadonlyArray<ToolInteraction> => {
   const interactions: ToolInteraction[] = []
   for (const [partIndex, part] of parts.entries()) {
@@ -753,6 +823,9 @@ const messagePartsToolInteractions = (
       status = "completed"
       if (result.value.isError) status = "error"
     }
+    const operations = Option.map(Option.fromUndefinedOr(receipts.operations.get(id)), (found) =>
+      settledOperations(found, status),
+    )
     interactions.push({
       id,
       toolName: toolCall.toolName,
@@ -760,7 +833,11 @@ const messagePartsToolInteractions = (
       input: toolCall.input,
       summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
       output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
-      durationMs: durations.get(id),
+      durationMs: receipts.durations.get(id),
+      ...Option.match(operations, {
+        onNone: () => ({}),
+        onSome: (value) => ({ operations: value }),
+      }),
     })
   }
   return interactions
@@ -768,7 +845,7 @@ const messagePartsToolInteractions = (
 
 export const projectMessagesWithToolInteractions = (
   messages: ReadonlyArray<Message>,
-  durations: ReadonlyMap<ToolCallId, number> = new Map(),
+  receipts: ToolCallReceipts = noReceipts,
 ): ReadonlyArray<ProjectedMessage> => {
   const resultMap = buildToolResultMapFromMessages(messages)
   const pairings = buildToolResultPairings(messages, resultMap)
@@ -778,7 +855,7 @@ export const projectMessagesWithToolInteractions = (
       messagePartsToolInteractions(
         message.parts,
         (partIndex) => findResultForToolCall(index, partIndex, pairings),
-        durations,
+        receipts,
       ),
     ),
   )

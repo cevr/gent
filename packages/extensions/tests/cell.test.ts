@@ -2525,6 +2525,19 @@ describe("shipped model surface", () => {
             assistantMessageId: cellAssistant?.id,
           },
         ])
+        // A reload reads the inner call back from those events, with its input and output.
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        const cellInteraction = snapshot.messages
+          .flatMap((message) => message.toolInteractions)
+          .find((interaction) => interaction.id === cellToolCallId)
+        expect(cellInteraction?.operations).toMatchObject([
+          {
+            toolName: "read",
+            status: "completed",
+            input: { path: file },
+            output: expect.stringContaining("shipped surface"),
+          },
+        ])
 
         // Working data from the first cell is still bound in the next turn.
         const second = yield* runTurn("use the note", "second")
