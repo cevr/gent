@@ -163,7 +163,6 @@ describe("agent turn response collectors", () => {
         modelId: "test/model",
         activeStream,
         formatStreamError: (error) => error.message,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.flip, Effect.provide(layer))
 
       expect(error._tag).toBe("ProviderError")
@@ -182,7 +181,6 @@ describe("agent turn response collectors", () => {
         branchId,
         activeStream,
         formatStreamError: (error) => error.message,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(collected.interrupted).toBe(true)
@@ -207,7 +205,6 @@ describe("agent turn response collectors", () => {
         modelId: "test/model",
         activeStream,
         formatStreamError: (error) => error.message,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(collected.streamFailed).toBe(true)
@@ -526,7 +523,6 @@ describe("durable message persistence", () => {
         )
         expect(received).toHaveLength(1)
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer for this operation.
         Effect.provide(
           Layer.mergeAll(
             SqliteStorage.TestWithSql(() => Layer.empty, {}),

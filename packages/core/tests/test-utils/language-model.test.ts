@@ -52,7 +52,6 @@ describe("LanguageModelLayers.sequence", () => {
   it.scoped("single text step emits correctly", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* LanguageModelLayers.sequence([textStep("hello")])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(2)
@@ -79,21 +78,18 @@ describe("LanguageModelLayers.sequence", () => {
         toolCallStep("my_tool", { key: "value" }),
       ])
 
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const c1 = yield* Effect.provide(callProvider, layer)
       const first = Option.fromUndefinedOr(c1[0])
       expect(Option.isSome(first)).toBe(true)
       if (Option.isNone(first) || first.value.type !== "text-delta") return
       expect(first.value.delta).toBe("first")
 
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const c2 = yield* Effect.provide(callProvider, layer)
       const second = Option.fromUndefinedOr(c2[0])
       expect(Option.isSome(second)).toBe(true)
       if (Option.isNone(second) || second.value.type !== "text-delta") return
       expect(second.value.delta).toBe("second")
 
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const c3 = yield* Effect.provide(callProvider, layer)
       expect(c3[0]?.type).toBe("tool-call")
 
@@ -112,11 +108,9 @@ describe("LanguageModelLayers.sequence", () => {
       const fiber = yield* Effect.forkScoped(controls.waitForCall(1))
 
       // Call 0
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
 
       // Call 1 — should resolve waitForCall(1)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const streamFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
       yield* Fiber.join(fiber)
 
@@ -130,7 +124,6 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer, controls } = yield* LanguageModelLayers.sequence([gatedStep])
 
       // Start stream — will block on gate
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const collectFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
 
       // Confirm call started
@@ -153,11 +146,9 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer } = yield* LanguageModelLayers.sequence([textStep("only")])
 
       // Consume the one step
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
 
       // Second call should fail
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(Effect.provide(callProvider, layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -180,7 +171,6 @@ describe("LanguageModelLayers.sequence", () => {
       }
       const { layer } = yield* LanguageModelLayers.sequence([step])
 
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(Effect.provide(callProvider, layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -207,10 +197,8 @@ describe("LanguageModelLayers.sequence", () => {
       ])
 
       expect(yield* controls.callCount).toBe(0)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
       expect(yield* controls.callCount).toBe(1)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.provide(callProvider, layer)
       expect(yield* controls.callCount).toBe(2)
     }),
@@ -221,7 +209,6 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer } = yield* LanguageModelLayers.sequence([
         toolCallStep("my_tool", { status: "continue" }),
       ])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(2)
@@ -239,7 +226,6 @@ describe("LanguageModelLayers.sequence", () => {
       const { layer } = yield* LanguageModelLayers.sequence([
         textThenToolCallStep("thinking...", "my_tool", { ok: true }),
       ])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(3)
@@ -257,7 +243,6 @@ describe("LanguageModelLayers.sequence", () => {
           { toolName: "tool_b", input: { x: 1 } },
         ),
       ])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const parts = yield* Effect.provide(callProvider, layer)
 
       expect(parts.length).toBe(3)
@@ -277,7 +262,6 @@ describe("LanguageModelLayers.signal", () => {
     Effect.gen(function* () {
       const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
       // Drain in the background — gate stays closed but the model stream is called.
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* Effect.forkScoped(Effect.provide(callSignalProvider, layer))
       yield* controls.waitForStreamStart
     }),
@@ -286,7 +270,6 @@ describe("LanguageModelLayers.signal", () => {
   it.scoped("emitAll releases every gated chunk in order", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* LanguageModelLayers.signal("hi.")
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const collectFiber = yield* Effect.forkScoped(Effect.provide(callSignalProvider, layer))
       yield* controls.waitForStreamStart
       yield* controls.emitAll
