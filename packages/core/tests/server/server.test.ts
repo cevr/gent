@@ -2956,6 +2956,29 @@ describe("message.send", () => {
     ),
   )
 
+  it.live("a create that names an unknown agent fails and stores nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const before = yield* client.session.list()
+        const error = yield* client.session
+          .create({ cwd: process.cwd(), admission: { agent: AgentName.make("revieww") } })
+          .pipe(Effect.flip)
+        expect(error._tag).toBe("NotFoundError")
+        expect(error.message).toBe("Unknown agent: revieww")
+        expect(yield* client.session.list()).toHaveLength(before.length)
+        // A known agent still admits.
+        const created = yield* client.session.create({
+          cwd: process.cwd(),
+          admission: { agent: AgentName.make("main") },
+        })
+        const stored = yield* client.session.get({ sessionId: created.sessionId })
+        expect(stored?.admission?.agent).toBe(AgentName.make("main"))
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("config agent overrides set the model and effort, and a runSpec still wins", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -367,6 +367,7 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionRuntime
   | AgentLoopSessionGovernance
   | GentPlatform
+  | ExtensionRegistry
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
   const sessionStorage = yield* SessionStorage
@@ -579,9 +580,37 @@ const makeSessionMutationsService: Effect.Effect<
     }
   })
 
+  const launchRegistry = yield* ExtensionRegistry
+  const profileCache = yield* Effect.serviceOption(SessionProfileCache)
+
+  /**
+   * A session's agent names every turn it runs, and no verb changes it, so
+   * a name the session's profile does not know fails the create before
+   * anything is stored. A handoff's inherited agent passed this check when
+   * its first session was made.
+   */
+  const admitAgent = Effect.fn("SessionMutations.admitAgent")(function* (
+    input: CreateSessionInput,
+  ) {
+    const agent = input.admission?.agent
+    if (Predicate.isUndefined(agent)) return
+    const registry = yield* Option.match(profileCache, {
+      onNone: () => resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)),
+      onSome: (cache) =>
+        Effect.provideService(
+          resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)),
+          SessionProfileCache,
+          cache,
+        ),
+    }).pipe(Effect.provideService(ExtensionRegistry, launchRegistry))
+    if (registry.getResolved().agents.has(agent)) return
+    return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
+  })
+
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
     input: CreateSessionInput,
   ) {
+    yield* admitAgent(input)
     const committed = yield* once(
       DurableOperations.createSession,
       input,
