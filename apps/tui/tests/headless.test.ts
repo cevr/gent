@@ -75,7 +75,12 @@ const opening = (id: MessageId, text: string) =>
 const chunk = (text: string) =>
   AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
 const completed = (
-  fields: { readonly unanswered?: boolean; readonly messageId?: MessageId } = {},
+  fields: {
+    readonly unanswered?: boolean
+    readonly interrupted?: boolean
+    readonly streamFailed?: boolean
+    readonly messageId?: MessageId
+  } = {},
 ) => TurnCompleted.make({ sessionId, branchId, durationMs: 1, messageId: OWN_TURN, ...fields })
 const errorOccurred = (error: string) => ErrorOccurred.make({ sessionId, branchId, error })
 /** An error the turn continues past, such as a compaction fallback. */
@@ -238,13 +243,45 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest("a failed stream after an answer still exits cleanly", () =>
+  // The receipt says the stream failed, so the text before the failure is a
+  // truncated answer: it prints, and the run still exits non-zero.
+  headlessTest("a failed stream after partial text prints it and fails the run", () =>
     Effect.gen(function* () {
       const client = branchClient({
-        ownTurn: [chunk("partial answer"), errorOccurred("provider unavailable"), completed()],
+        ownTurn: [
+          chunk("partial answer"),
+          errorOccurred("provider unavailable"),
+          completed({ streamFailed: true }),
+        ],
       })
+      const { result: exit, stdout } = yield* captureStdout(Effect.exit(run(client)))
+      expect(stdout).toContain("partial answer")
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(String(Cause.squash(exit.cause))).toContain(
+        "the turn ended without an answer: provider unavailable",
+      )
+    }),
+  )
+
+  headlessTest("an interrupted turn fails the run", () =>
+    Effect.gen(function* () {
+      const client = branchClient({ ownTurn: [completed({ interrupted: true })] })
       const exit = yield* Effect.exit(run(client))
-      expect(exit._tag).toBe("Success")
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(String(Cause.squash(exit.cause))).toContain("the turn was interrupted")
+    }),
+  )
+
+  headlessTest("an interrupted turn fails the run even after partial text", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [chunk("half an answer"), completed({ interrupted: true })],
+      })
+      const { result: exit, stdout } = yield* captureStdout(Effect.exit(run(client)))
+      expect(stdout).toContain("half an answer")
+      expect(exit._tag).toBe("Failure")
     }),
   )
 
