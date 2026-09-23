@@ -1,3 +1,5 @@
+// childTaskText has no product reader here: it writes the text childTaskBody
+// reads, so a client test builds a real child task with it, not a copy.
 export {
   CHILD_COMPLETION_TYPE,
   ChildCompletionDetails,

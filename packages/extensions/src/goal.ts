@@ -13,6 +13,11 @@ import {
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 
+// Test seam: only tests read these exports. GoalState, goalContinuationSource,
+// continuationPrompt, formatGoalUsage and the GOAL_PAUSED_* texts are pure
+// values with unit tests; readGoal reads the stored goal in assertions; GoalTool
+// is the capability the cell signature tests render.
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 export const GOAL_EXTENSION_ID = ExtensionId.make("@gent/goal")

@@ -8,6 +8,9 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 
+// Test seam: only tests read these exports. AskUserTool, PromptTool and
+// HandoffTool are the capabilities the tool and cell signature tests drive.
+
 // ── ask-user ────────────────────────────────────────────────────────────────
 
 const AnswersSchema = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))

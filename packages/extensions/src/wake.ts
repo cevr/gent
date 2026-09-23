@@ -32,6 +32,12 @@ import {
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { classifyBashCommand, runBashCommand } from "./exec-tools.js"
 
+// Test seam: only tests read these exports. WakeAlarms, WakeAlarmsService and
+// WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
+// restart path directly. wakeMessage, monitorMessage, nextDueAt and dueAtOf are
+// pure functions with unit tests. WakeTool, MonitorTool and CancelTool are the
+// capabilities the cell signature tests render.
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 /**

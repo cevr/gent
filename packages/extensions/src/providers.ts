@@ -44,6 +44,9 @@ import { EncodeError, HttpClientError, TransportError } from "effect/unstable/ht
 import { AiError, Model as AiModel } from "effect/unstable/ai"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 
+// Test seam: only a test reads modelsDevCatalog, the catalog loader, which it
+// runs against a scratch home.
+
 // ── credentials ─────────────────────────────────────────────────────────────
 
 /**

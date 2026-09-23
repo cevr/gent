@@ -73,6 +73,12 @@ import {
 } from "@effect/ai-openai"
 import { Model as AiModel } from "effect/unstable/ai"
 
+// Test seam: only tests read these exports. OAuthError, authorizeOpenAIDevice,
+// OpenAICredentials, OpenAICredentialIO and makeOpenAICredentialCache let a test
+// run the device login and the credential cache against fake I/O;
+// buildCodexTransformClient and buildOpenAIModelDriver let it run the wire
+// against a fake HTTP client.
+
 // ── oauth ───────────────────────────────────────────────────────────────────
 
 const JwtClaimsSchema = Schema.Struct({

@@ -69,6 +69,18 @@ import type { HttpClientError } from "effect/unstable/http/HttpClientError"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type AiError, Model as AiModel } from "effect/unstable/ai"
 
+// Test seam: only tests read these exports. The model table and its lookups
+// (MODEL_CONFIG, getModelOverride, supports1mContext, getModelBetas,
+// BetaExclusions), the billing header (SYSTEM_IDENTITY_PREFIX,
+// extractFirstUserMessageText, computeCch, computeVersionSuffix,
+// buildBillingHeaderValue), the wire transforms (repairToolPairs,
+// transformPayload, transformResponseContent, transformStreamEvent,
+// isLongContextError) and the credential parsers (ClaudeCredentials,
+// updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
+// AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
+// makeAnthropicCredentialCache and buildAnthropicModelDriver let a test run the
+// keychain, the credential cache and the driver against fake I/O.
+
 // ── model config ────────────────────────────────────────────────────────────
 
 /**

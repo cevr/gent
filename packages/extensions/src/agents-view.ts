@@ -12,6 +12,12 @@ import {
   SessionId,
 } from "@gent/core/extensions/api"
 
+// Test seam: only tests read these exports. The row shapes (LiveAgentRow,
+// DurableAgentRow, AgentRow) and the row functions (rowKey, sectionOf,
+// reconcileAgentRows, buildRowTree, projectAgentRows) and the activity fold
+// (emptyActivity, foldActivity, activityText) are pure with unit tests.
+// AgentActivity and AgentActivityLive let a test run the activity service.
+
 // ── projection ──────────────────────────────────────────────────────────────
 
 /**

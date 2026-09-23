@@ -40,6 +40,11 @@ import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 
+// Test seam: only tests read these exports. MODEL_COMPACTION_OUTPUT_TOKENS,
+// referencedBindings and selectSummarySource are pure with unit tests;
+// compactModelContext and ModelContextCompactorLive let a test run the
+// compactor against a scripted model.
+
 // ── tool contracts ──────────────────────────────────────────────────────────
 
 /**

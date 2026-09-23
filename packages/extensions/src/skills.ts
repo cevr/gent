@@ -22,6 +22,10 @@ import {
   request,
 } from "@gent/core/extensions/api"
 
+// Test seam: only tests read these exports. SkillEntry, parseSkillFile and
+// formatSkillsForPrompt are pure with unit tests; bundledSkillFiles and
+// installBundledSkills let a test install the bundled skills into a scratch home.
+
 // ── bundled sources ─────────────────────────────────────────────────────────
 
 import acknowledgeBeforeProcessing from "./skills/bundled/principles/references/acknowledge-before-processing.md" with { type: "text" }

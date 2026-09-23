@@ -52,6 +52,11 @@ import {
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 
+// Test seam: only tests read these exports. DELEGATE_AGENT_NAME, DelegateError
+// and DelegateEntry name the registry's shapes in assertions. StartChild,
+// CancelChild, ListChildren and ChildAgentHandle are the capabilities and the
+// handle the cell tests drive.
+
 // ── the subagent ────────────────────────────────────────────────────────────
 
 /**
