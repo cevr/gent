@@ -2132,6 +2132,11 @@ interface MakeExtensionHostContextRunInfo {
   readonly branchId: BranchId
   /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
   readonly sessionCwd?: string
+  /**
+   * False: no user sees this session's turns (a delegate child), so no one
+   * can answer an approval. Absent: an interactive session.
+   */
+  readonly interactive?: boolean
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2154,6 +2159,13 @@ const facet = <I, S>(tag: Context.Key<I, S>, name: string): Effect.Effect<Facet<
   Effect.serviceOption(tag).pipe(Effect.map((service) => via(service, name)))
 
 const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
+
+/** The answer to an approval asked in a session no user sees. */
+const unanswerableApproval: ApprovalDecision = {
+  approved: false,
+  notes:
+    'Declined: no user sees this session, so no one can approve it here. Ask your parent with session.send to "parent", then end your turn.',
+}
 
 /** A pending interaction is the caller's to handle; anything else is a service failure. */
 const mapInteraction = <A, E>(
@@ -2467,13 +2479,17 @@ export const makeExtensionHostContextProvider = (
       },
 
       Interaction: {
-        approve: (params) =>
-          mapInteraction(
+        // An approval no one is shown would park the turn for good, so a
+        // session without a user declines at once and says who can answer.
+        approve: (params) => {
+          if (runInfo.interactive === false) return Effect.succeed(unanswerableApproval)
+          return mapInteraction(
             "approve",
             approval((service) =>
               service.present(params, { sessionId: runInfo.sessionId, branchId: runInfo.branchId }),
             ),
-          ),
+          )
+        },
         // A presented note is a hidden assistant message: stored, then delivered.
         present: (params) =>
           mapInteraction(
@@ -2522,15 +2538,15 @@ interface ExistingSessionBranch {
   readonly branchId: BranchId
 }
 
-/** The session's stored cwd. A missing session or a storage failure reads as none. */
-const storedSessionCwd = (
+/** The stored session. A missing session or a storage failure reads as none. */
+const storedSession = (
   sessionId: SessionId,
-): Effect.Effect<Option.Option<string>, never, SessionStorage> =>
+): Effect.Effect<Option.Option<Session>, never, SessionStorage> =>
   Effect.gen(function* () {
     const sessions = yield* SessionStorage
     return yield* sessions.getSession(sessionId).pipe(
-      Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
-      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.map(Option.fromUndefinedOr),
+      Effect.orElseSucceed(() => Option.none<Session>()),
     )
   })
 
@@ -2543,8 +2559,11 @@ export const sessionWorkingDirectory = (
 ): Effect.Effect<string, never, SessionStorage | RuntimeEnvironment> =>
   Effect.gen(function* () {
     const environment = yield* RuntimeEnvironment
-    const stored = yield* storedSessionCwd(sessionId)
-    return Option.getOrElse(stored, () => environment.cwd)
+    const stored = yield* storedSession(sessionId)
+    return Option.getOrElse(
+      Option.flatMap(stored, (session) => Option.fromUndefinedOr(session.cwd)),
+      () => environment.cwd,
+    )
   })
 
 /**
@@ -2562,11 +2581,15 @@ export const resolveTurnProfile = (params: {
   Effect.gen(function* () {
     const launchRegistry = yield* ExtensionRegistry
     const hostProvider = params.hostProvider
-    const sessionCwd = yield* storedSessionCwd(params.sessionId)
+    const session = yield* storedSession(params.sessionId)
+    const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
+      interactive: Option.getOrUndefined(
+        Option.flatMap(session, (value) => Option.fromUndefinedOr(value.admission?.interactive)),
+      ),
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
