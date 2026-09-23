@@ -69,7 +69,11 @@ const marker = (anchor: string, summary: string, count: number, at: number): Mes
     ],
     metadata: {
       customType: "context-window",
-      details: { keepFromMessageId: anchor, summarized: { count } },
+      details: {
+        _tag: "context-window",
+        keepFromMessageId: anchor,
+        summarized: { firstMessageId: `${anchor}-first`, lastMessageId: `${anchor}-last`, count },
+      },
     },
     createdAt: dateFromMillis(at),
   })

@@ -43,6 +43,7 @@ import {
   windowDetails,
   settledMessages,
   windowMarkerMessage,
+  estimateTextTokens,
 } from "../../src/runtime/model-context"
 import { describe, expect, it } from "effect-bun-test"
 import { narrowR } from "../helpers/effect"
@@ -747,6 +748,25 @@ describe("estimateTokens", () => {
     expect(estimateTokens(messages)).toBe(25) // 100/4
   })
 
+  test("a one-text message costs what its text costs, so text bounds match the projection", () => {
+    // Compaction bounds a summary with estimateTextTokens; the projection
+    // budgets the same summary as a message. The two must agree at the edge.
+    const project = (text: string) =>
+      estimateTokens([
+        Message.cases.regular.make({
+          id: MessageId.make("summary"),
+          sessionId: SessionId.make("s"),
+          branchId: BranchId.make("b"),
+          role: "assistant",
+          parts: [Prompt.textPart({ text })],
+          createdAt: dateFromMillis(1_767_225_600_000),
+        }),
+      ])
+    for (const text of ["x".repeat(4_000), "x".repeat(4_001)]) {
+      expect(estimateTextTokens(text)).toBe(project(text))
+    }
+  })
+
   test("tool-call parts use JSON.stringify of input", () => {
     const messages = [
       Message.cases.regular.make({
@@ -1160,6 +1180,26 @@ describe("AI transcript projection", () => {
     expect(message.parts[0]).toEqual(part)
     const small = Prompt.toolResultPart({ ...part, result: { output: "short" } })
     expect(boundToolResultForModel(small)).toEqual(small)
+  })
+
+  test("a bounded command result keeps its head and its tail", () => {
+    const lineCount = 4000
+    const stdout = Array.from({ length: lineCount }, (_, index) => `line ${index + 1}`).join("\n")
+    const bounded = boundToolResultForModel(
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc-bash"),
+        name: "bash",
+        isFailure: false,
+        providerExecuted: false,
+        result: { stdout, stderr: "", exitCode: 0 },
+      }),
+    )
+    const boundedResult = Schema.decodeUnknownSync(BoundedToolResult)(bounded.result)
+    expect(boundedResult.truncated).toBe(true)
+    expect(boundedResult.read).toBe('context.read("tc-bash", { offset, limit })')
+    expect(boundedResult.text.length).toBeLessThan(stdout.length)
+    expect(boundedResult.text).toContain('{"stdout":"line 1\\nline 2')
+    expect(boundedResult.text).toContain(`line ${lineCount}`)
   })
 
   test("converts visible Gent messages to Effect Prompt messages without Gent metadata", () => {

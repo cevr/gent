@@ -417,6 +417,10 @@ export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded>
 export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:assistant:${step}`)
 
+/** The tool-result message one step of a turn writes. */
+export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
+  MessageId.make(`${messageId}:tool-result:${step}`)
+
 /** A user-role message the runtime wrote for the model, not a turn to answer. */
 export const isRuntimeUserMessage = (message: {
   readonly role: MessageRole

@@ -11,10 +11,9 @@ import {
   makeTempDirectoryScoped,
   textStep,
   toolCallStep,
-  type ApprovalDecision,
 } from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { ExtensionContextService } from "@gent/core/extensions/api"
+import type { ApprovalDecision, ExtensionContextService } from "@gent/core/extensions/api"
 import { RuntimeEnvironment } from "@gent/core/host"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"

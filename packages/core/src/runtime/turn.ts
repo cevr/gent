@@ -23,6 +23,7 @@ import {
 } from "../domain/capability.js"
 import {
   assistantMessageIdForTurn,
+  toolResultMessageIdForTurn,
   decodeToolOutput,
   encodeToolOutput,
   Message,
@@ -222,9 +223,6 @@ export const buildTurnPromptSections = (
 
   return sections
 }
-
-export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
-  MessageId.make(`${messageId}:tool-result:${step}`)
 
 /**
  * The two message ids one step of a turn owns.

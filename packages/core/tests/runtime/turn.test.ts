@@ -5,6 +5,7 @@ import {
   dateFromMillis,
   Message,
   responseUsage,
+  toolResultMessageIdForTurn,
 } from "../../src/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 import {
@@ -19,7 +20,6 @@ import {
   persistMessageReceived,
   recordToolOutcome,
   signalActiveStreamInterrupt,
-  toolResultMessageIdForTurn,
 } from "../../src/runtime/turn"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import type { TurnError } from "../../src/domain/driver"

@@ -33,28 +33,13 @@ export {
   waitFor,
 } from "./language-model.js"
 export { finishPart, textDeltaPart, toolCallPart } from "../runtime/provider.js"
-export {
-  compileSystemPrompt,
-  ToolBindingSource,
-  ToolSchemaRevision,
-  ToolSourceRevision,
-} from "../domain/capability.js"
+export { ToolBindingSource, ToolSchemaRevision, ToolSourceRevision } from "../domain/capability.js"
 export { type LoadedExtension } from "../domain/extension.js"
-export { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
-export { messageSingleText } from "../domain/message.js"
+export { encodeInteractionDecision } from "../domain/interaction.js"
 export {
   ApprovalService,
   makeExtensionHostContextProvider,
   SessionProfileCache,
-  setupExtension,
-  setupExtensions,
 } from "../runtime/extension-host.js"
-export {
-  boundToolResultForModel,
-  CONTEXT_WINDOW_MESSAGE_TYPE,
-  estimateTokens,
-  windowDetails,
-} from "../runtime/model-context.js"
 export { SessionRuntime } from "../runtime/session.js"
 export { captureCurrentToolBinding } from "../runtime/tools.js"
-export { toolResultMessageIdForTurn } from "../runtime/turn.js"

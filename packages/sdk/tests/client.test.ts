@@ -3,7 +3,7 @@ import { Effect, Exit, Layer, Option, Predicate, Random, Schema, Scope, Stream }
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getToolId } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
-import { setupExtension, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
+import { collectTestContributions, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
   GentPlatform,
   WORKSPACE_ID_HEADER,
@@ -301,12 +301,8 @@ const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
     Effect.gen(function* () {
       const tools = new Map<string, Schema.Constraint>()
       for (const extension of BuiltinExtensions) {
-        const loaded = yield* setupExtension(
-          { extension, scope: "builtin", sourcePath: "builtin" },
-          "/tmp",
-          "/tmp",
-        )
-        for (const tool of loaded.contributions.tools ?? []) {
+        const contributions = yield* collectTestContributions(extension.setup)
+        for (const tool of contributions.tools ?? []) {
           tools.set(getToolId(tool), tool.parametersSchema)
         }
       }

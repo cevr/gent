@@ -17,7 +17,6 @@ import {
   LanguageModelLayers,
   textDeltaPart,
   waitFor,
-  estimateTokens,
   createRpcHarness,
 } from "@gent/core/test-utils"
 import {
@@ -303,20 +302,16 @@ describe("context handoff", () => {
   )
 
   it.scopedLive("the summary bound uses the projection's token estimate", () => {
-    // The projection budgets the kept window with `estimateTokens`; the
-    // compaction bound must land on the same boundary, or a summary the
-    // projection counts as in-budget is refused as oversize.
+    // The bound is `estimateTextTokens`, which core holds equal to the
+    // projection's estimate of a one-text message; the summary at that bound
+    // is accepted and one character more is refused.
     const attempt = (layer: Layer.Layer<LanguageModel.LanguageModel>) =>
       Effect.exit(compact()).pipe(Effect.provide(layer), Effect.map(failureOf))
     return Effect.gen(function* () {
       const atBound = "x".repeat(MODEL_COMPACTION_OUTPUT_TOKENS * 4)
       const overBound = `${atBound}x`
-      const projected = (text: string) =>
-        estimateTokens([textMessage("summary", "assistant", text, 1)])
-      expect(projected(atBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS)
-      expect(estimateTextTokens(atBound)).toBe(projected(atBound))
-      expect(projected(overBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS + 1)
-      expect(estimateTextTokens(overBound)).toBe(projected(overBound))
+      expect(estimateTextTokens(atBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS)
+      expect(estimateTextTokens(overBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS + 1)
 
       const accepted = yield* attempt(summaryProvider(atBound))
       expect(Option.isNone(accepted)).toBe(true)

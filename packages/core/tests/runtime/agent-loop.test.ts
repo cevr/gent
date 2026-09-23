@@ -98,6 +98,7 @@ import {
   type QueuedTurnItem,
   Session,
   type SteerCommand,
+  toolResultMessageIdForTurn,
 } from "../../src/domain/message"
 import {
   defineExtension,
@@ -160,7 +161,6 @@ import {
   type ActiveStreamHandle,
   findPersistedToolResults,
   persistAssistantPartsWithBindings,
-  toolResultMessageIdForTurn,
   ToolResultReplayError,
   TurnOutcome,
 } from "../../src/runtime/turn"

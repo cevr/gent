@@ -1,7 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
 import {
-  compileSystemPrompt,
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -62,7 +61,7 @@ describe("agents extension", () => {
         "boundaries",
       ])
       expect(basePromptSections.every((section) => section.priority < 60)).toBe(true)
-      const compiled = compileSystemPrompt(basePromptSections)
+      const compiled = basePromptSections.map((section) => section.content).join("\n\n")
       expect(compiled).toContain("You are Gent, a general purpose agent.")
       expect(compiled).toContain("Sessions talk with session.send")
       expect(compiled).toContain("Never revert changes you did not make.")

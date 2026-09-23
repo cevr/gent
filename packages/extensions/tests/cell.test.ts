@@ -36,7 +36,6 @@ import {
 import {
   SessionRuntime,
   encodeInteractionDecision,
-  messageSingleText,
   type LoadedExtension,
   createE2ELayer,
   createRpcHarness,
@@ -57,9 +56,6 @@ import {
   ApprovalService,
   makeExtensionHostContextProvider,
   SessionProfileCache,
-  CONTEXT_WINDOW_MESSAGE_TYPE,
-  windowDetails,
-  toolResultMessageIdForTurn,
   ToolBindingSource,
   ToolSchemaRevision,
   ToolSourceRevision,
@@ -81,6 +77,10 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
+  CONTEXT_WINDOW_MESSAGE_TYPE,
+  messagePartsText,
+  toolResultMessageIdForTurn,
+  windowDetails,
 } from "@gent/core/protocol"
 import {
   ExtensionId,
@@ -1479,7 +1479,7 @@ describe("cell approvals", () => {
                 messages.some(
                   (message) =>
                     message.role === "assistant" &&
-                    messageSingleText(message.parts) === "Cell recovery reported",
+                    messagePartsText(message.parts) === "Cell recovery reported",
                 ),
               ).toBe(true)
               const results = messages
@@ -2297,7 +2297,7 @@ describe("shipped model surface", () => {
           (all) =>
             all.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "done",
+                message.role === "assistant" && messagePartsText(message.parts) === "done",
             ),
           10_000,
           "assistant reply done",
@@ -2339,7 +2339,7 @@ describe("shipped model surface", () => {
             (messages) =>
               messages.some(
                 (message) =>
-                  message.role === "assistant" && messageSingleText(message.parts) === reply,
+                  message.role === "assistant" && messagePartsText(message.parts) === reply,
               ),
             10_000,
             `assistant reply ${reply}`,
@@ -2430,7 +2430,7 @@ describe("shipped model surface", () => {
           (list) =>
             list.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "joined",
+                message.role === "assistant" && messagePartsText(message.parts) === "joined",
             ),
           10_000,
           "assistant reply joined",
@@ -2505,7 +2505,7 @@ describe("shipped model surface", () => {
           (list) =>
             list.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "scoped",
+                message.role === "assistant" && messagePartsText(message.parts) === "scoped",
             ),
           10_000,
           "assistant reply scoped",
@@ -2597,7 +2597,7 @@ describe("external driver cell dispatch", () => {
           (list) =>
             list.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "21,22",
+                message.role === "assistant" && messagePartsText(message.parts) === "21,22",
             ),
           6_000,
           "external reply from cell results",
@@ -2692,7 +2692,7 @@ describe("child cell", () => {
           client.message.list({ branchId }),
           (items) =>
             items.some(
-              (item) => item.role === "assistant" && messageSingleText(item.parts) === "done",
+              (item) => item.role === "assistant" && messagePartsText(item.parts) === "done",
             ),
           12_000,
           "the parent read the child's completion",
@@ -2706,7 +2706,7 @@ describe("child cell", () => {
           (item) => item.metadata?.customType === "child-completion",
         )
         expect(completion).toBeDefined()
-        expect(messageSingleText(completion?.parts ?? [])).toContain("child says 2")
+        expect(messagePartsText(completion?.parts ?? [])).toContain("child says 2")
 
         const sessions = yield* client.session.list()
         const child = sessions.find((session) => session.parentSessionId === sessionId)
@@ -2876,12 +2876,12 @@ describe("branch cell lifetime", () => {
           const messages = yield* waitFor(client.message.list({ branchId }), (items) => {
             if (turn.send)
               return items.some(
-                (item) => item.role === "user" && messageSingleText(item.parts) === content,
+                (item) => item.role === "user" && messagePartsText(item.parts) === content,
               )
             return items.filter(isCompletion).length >= completions
           })
           let user = messages.find(
-            (item) => item.role === "user" && messageSingleText(item.parts) === content,
+            (item) => item.role === "user" && messagePartsText(item.parts) === content,
           )
           if (!turn.send) user = messages.filter(isCompletion).at(completions - 1)
           if (Predicate.isUndefined(user)) return yield* Effect.die("Missing parent message")
@@ -2904,8 +2904,8 @@ describe("branch cell lifetime", () => {
           (item) => item.metadata?.customType === "child-completion",
         )
         expect(notices).toHaveLength(2)
-        expect(messageSingleText(notices[0]?.parts ?? [])).toContain("interrupted")
-        expect(messageSingleText(notices[1]?.parts ?? [])).toContain("verified child result")
+        expect(messagePartsText(notices[0]?.parts ?? [])).toContain("interrupted")
+        expect(messagePartsText(notices[1]?.parts ?? [])).toContain("verified child result")
         const saved = yield* Effect.fromOption(yield* Ref.get(handle))
         const childMessages = yield* client.message.list({ branchId: saved.branchId })
         expect(childMessages.filter((message) => message.role === "user")).toHaveLength(1)
@@ -2992,12 +2992,11 @@ describe("branch cell lifetime", () => {
                 (messages) =>
                   messages.some(
                     (message) =>
-                      message.role === "user" && messageSingleText(message.parts) === content,
+                      message.role === "user" && messagePartsText(message.parts) === content,
                   ),
               )
               const user = messages.find(
-                (message) =>
-                  message.role === "user" && messageSingleText(message.parts) === content,
+                (message) => message.role === "user" && messagePartsText(message.parts) === content,
               )
               if (Predicate.isUndefined(user)) return yield* Effect.die("Missing submitted message")
               if (index === 5) {
@@ -3418,7 +3417,7 @@ it.scopedLive(
         expect(
           messages.some(
             (message) =>
-              message.role === "assistant" && messageSingleText(message.parts) === "Recovered",
+              message.role === "assistant" && messagePartsText(message.parts) === "Recovered",
           ),
         ).toBe(true)
         const results = messages.find(
