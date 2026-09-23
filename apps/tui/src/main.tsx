@@ -148,7 +148,7 @@ const gentFlags = {
     Flag.withDefault(false),
   ),
   isolate: Flag.boolean("isolate").pipe(
-    Flag.withDescription("Run with an in-process server (no data-directory server, no registry)"),
+    Flag.withDescription("Keep state in memory: no data-directory database or lock"),
     Flag.withDefault(false),
   ),
   debug: Flag.boolean("debug").pipe(
