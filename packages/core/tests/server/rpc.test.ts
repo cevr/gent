@@ -1858,6 +1858,176 @@ describe("interaction.respondInteraction", () => {
       }),
     20_000,
   )
+
+  it.live(
+    "a call that asks two questions gets both answers",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const extension = orderedApprovalExtension((params) =>
+            Effect.gen(function* () {
+              const first = yield* approveAs({ label: "Q1", text: `${params.text} one?` })
+              const second = yield* approveAs({ label: "Q2", text: `${params.text} two?` })
+              return `${first},${second}`
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ordered_approval", { label: "X", text: "Proceed" }),
+            textStep("asked twice"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const answering = yield* answerInOrder({
+            client,
+            sessionId,
+            branchId,
+            answers: ["one", "two"],
+            presented: yield* Deferred.make<void>(),
+          }).pipe(Effect.forkScoped)
+          yield* client.message.send({ sessionId, branchId, content: "ask two questions" })
+          const seen = Array.from(yield* Fiber.join(answering))
+          expect(seen).toEqual(["Proceed one?", "Proceed two?"])
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "asked twice",
+          }).pipe(Effect.timeout("5 seconds"))
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("Q1=one,Q2=two"))).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a cancelled turn dismisses its open question, and the next turn asks its own",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "OLD" }),
+            toolCallStep("approval_probe", { text: "NEW" }),
+            textStep("new answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const seen = MutableRef.make<
+            ReadonlyArray<{ kind: string; text: string; id: InteractionRequestId }>
+          >([])
+          yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.runForEach((envelope) =>
+              Effect.sync(() => {
+                const event = envelope.event
+                if (event._tag === "InteractionPresented")
+                  MutableRef.update(seen, (all) => [
+                    ...all,
+                    { kind: "presented", text: event.text, id: event.requestId },
+                  ])
+                if (event._tag === "InteractionResolved")
+                  MutableRef.update(seen, (all) => [
+                    ...all,
+                    { kind: "resolved", text: String(event.approved), id: event.requestId },
+                  ])
+              }),
+            ),
+            Effect.forkScoped,
+          )
+          const presented = (text: string) =>
+            waitFor(
+              Effect.sync(() => MutableRef.get(seen)),
+              (all) => all.some((entry) => entry.kind === "presented" && entry.text === text),
+              5_000,
+              `presented ${text}`,
+            ).pipe(
+              Effect.map(
+                (all) => all.find((entry) => entry.kind === "presented" && entry.text === text)!.id,
+              ),
+            )
+          yield* client.message.send({ sessionId, branchId, content: "one" })
+          const oldId = yield* presented("OLD")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            "parked on OLD",
+          )
+          yield* client.steer.command({
+            command: { _tag: "Cancel", sessionId, branchId, requestId: "req-cancel-old" },
+          })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "idle after cancel",
+          )
+          // The dialog of the cancelled turn closes.
+          yield* waitFor(
+            Effect.sync(() => MutableRef.get(seen)),
+            (all) => all.some((entry) => entry.kind === "resolved" && entry.id === oldId),
+            5_000,
+            "OLD dismissed",
+          )
+          yield* client.message.send({ sessionId, branchId, content: "two" })
+          // NEW shows without anyone answering OLD first.
+          const newId = yield* presented("NEW")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            "parked on NEW",
+          )
+          yield* client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: newId,
+            approved: true,
+            notes: "new-answer",
+          })
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "new answered",
+          })
+          expect(
+            toolResultTexts(snapshot.messages).some((result) => result.includes("new-answer")),
+          ).toBe(true)
+          expect(MutableRef.get(seen).map((entry) => `${entry.kind}:${entry.text}`)).toEqual([
+            "presented:OLD",
+            "resolved:false",
+            "presented:NEW",
+            "resolved:true",
+          ])
+          // The old question can no longer be answered.
+          const stale = yield* client.interaction
+            .respondInteraction({
+              sessionId,
+              branchId,
+              requestId: oldId,
+              approved: true,
+              notes: "too late",
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(stale)).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
 // ── extension-commands-rpc.test ─────────────────────────────────────────────

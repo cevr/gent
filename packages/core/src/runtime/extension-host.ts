@@ -107,6 +107,7 @@ import {
   EventStoreError,
   ExtensionStatePublisher,
   InteractionPresented,
+  InteractionResolved,
   MessageReceived,
 } from "../domain/event.js"
 import {
@@ -1945,6 +1946,24 @@ const makeApprovalInteractionService: Effect.Effect<
           metadata: params.metadata,
         }),
       ),
+    // A dialog closed without an answer reads as declined.
+    onDismiss: (requestId, ctx) =>
+      eventPublisher
+        .publish(
+          InteractionResolved.make({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            requestId,
+            approved: false,
+          }),
+        )
+        .pipe(
+          Effect.catchEager((error) =>
+            Effect.logWarning("interaction.dismiss-publish-failed").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+            ),
+          ),
+        ),
     storage,
   })
   return {
@@ -1993,6 +2012,8 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
           Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
         storeResolution: () => Effect.void,
         rehydrate: () => Effect.succeed(false),
+        answered: () => Effect.succeed(false),
+        endTurn: () => Effect.void,
         beginStep: () => Effect.void,
         ownCall: () => (self) => self,
       }),
