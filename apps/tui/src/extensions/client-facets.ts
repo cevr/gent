@@ -23,7 +23,7 @@ import {
   SessionId,
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
+import { omitUndefined, type CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -206,7 +206,7 @@ export interface ClientTransport {
   /** Route one agent to a driver; the server rejects unknown driver ids. */
   readonly driverSet: (input: {
     readonly agentName: AgentName
-    readonly driver: DriverRef
+    readonly driverId: string
   }) => Effect.Effect<void, ClientTransportRequestError>
   /** Remove one agent's driver override. */
   readonly driverClear: (input: {
@@ -251,9 +251,9 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
       client.driver.list(activeSessionPayload(payload)),
     ),
   ),
-  driverSet: (input) =>
+  driverSet: ({ agentName, driverId }) =>
     shellRead(payload, "driver.set", (client) =>
-      client.driver.set({ ...input, ...activeSessionPayload(payload) }),
+      client.driver.set({ agentName, driver: { id: driverId }, ...activeSessionPayload(payload) }),
     ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),

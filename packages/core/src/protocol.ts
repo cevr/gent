@@ -4,7 +4,6 @@ export {
   AgentName,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
-  DriverRef,
   ReasoningEffort,
   resolveAgentModel,
 } from "./domain/agent.js"

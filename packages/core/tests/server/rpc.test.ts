@@ -59,7 +59,6 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
-  DriverRef,
   Model,
   ModelId,
   ProviderId,
@@ -78,7 +77,7 @@ import {
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
-import type { ExtensionHealthSnapshot } from "../../src/server/rpc.js"
+import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
 import {
   defineResource,
   ExtensionLoadError,
@@ -214,12 +213,20 @@ describe("ExtensionRpcs", () => {
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
-          driver: DriverRef.make({ id: someModel.id }),
+          driver: { id: someModel.id },
         })
         expect((yield* driverOverrides)[DEFAULT_AGENT_NAME]?.id).toBe(someModel.id)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+
+  test("driver.set names a driver; a ref with no id is not a second way to clear", () => {
+    const decode = Schema.decodeUnknownExit(SetDriverOverrideInput)
+    expect(Exit.isFailure(decode({ agentName: "main", driver: { _tag: "Model" } }))).toBe(true)
+    expect(
+      Exit.isSuccess(decode({ agentName: "main", driver: { _tag: "Model", id: "anthropic" } })),
+    ).toBe(true)
+  })
 
   it.live("driver.set rejects unknown driver id with NotFoundError", () =>
     Effect.scoped(
@@ -228,7 +235,7 @@ describe("ExtensionRpcs", () => {
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
-            driver: DriverRef.make({ id: "definitely-not-registered" }),
+            driver: { id: "definitely-not-registered" },
           })
           .pipe(Effect.flip)
         expect(result._tag).toBe("NotFoundError")
@@ -246,7 +253,7 @@ describe("ExtensionRpcs", () => {
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
-          driver: DriverRef.make({ id: someModel.id }),
+          driver: { id: someModel.id },
         })
         yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
         expect(yield* driverOverrides).toEqual({})

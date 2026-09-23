@@ -43,7 +43,7 @@ import {
 } from "@gent/tui/extensions"
 import { BunSocket } from "@effect/platform-bun"
 import { createEffect, createRoot, Show } from "solid-js"
-import { AgentName, DriverRef } from "@gent/core/protocol"
+import { AgentName } from "@gent/core/protocol"
 import { ref } from "@gent/core/extensions/api"
 import {
   GOAL_CONTEXT_MESSAGE_TYPE,
@@ -587,7 +587,7 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
         if (!drivers.some((driver) => driver.id === driverId)) {
           return yield* notify(`Unknown driver "${driverId}".`)
         }
-        yield* transport.driverSet({ agentName, driver: DriverRef.make({ id: driverId }) })
+        yield* transport.driverSet({ agentName, driverId })
       }).pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
 
     const route = (args: string): Effect.Effect<void> => {

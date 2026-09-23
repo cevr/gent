@@ -3,7 +3,6 @@ import { Headers } from "effect/unstable/http"
 import {
   AgentDefinition,
   AgentName,
-  DriverRef,
   Model,
   ModelId,
   ReasoningEffort,
@@ -351,7 +350,9 @@ export class DriverListResult extends Schema.Class<DriverListResult>("DriverList
 
 export const SetDriverOverrideInput = Schema.Struct({
   agentName: AgentName,
-  driver: DriverRef,
+  /** A registered driver. An override that names none routes as no override
+   *  does, so `driver.clear` is the one way back to the default. */
+  driver: Schema.TaggedStruct("Model", { id: Schema.String }),
   /** Validate the driver against this session's profile; the launch profile without one. */
   sessionId: Schema.optional(SessionId),
 })

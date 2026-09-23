@@ -56,7 +56,6 @@ export {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
-  DriverRef,
   makeRunSpec,
   type RunSpec,
   RunSpecSchema,

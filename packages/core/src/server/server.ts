@@ -1365,13 +1365,10 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           const resolved = registry.getResolved()
-          if (!Predicate.isUndefined(driver.id)) {
-            const found = resolved.modelDrivers.get(driver.id)
-            if (Predicate.isUndefined(found)) {
-              return yield* new NotFoundError({
-                message: `Unknown model driver "${driver.id}"`,
-              })
-            }
+          if (!resolved.modelDrivers.has(driver.id)) {
+            return yield* new NotFoundError({
+              message: `Unknown model driver "${driver.id}"`,
+            })
           }
           yield* configService.setDriverOverride(agentName, driver)
         }).pipe(Effect.scoped),
