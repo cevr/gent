@@ -116,7 +116,7 @@ interaction, file lock, and state-pulse accessors
 (`Session`, `Interaction`, `FileLock`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. The `FileLock` / `State` facets wrap the host-internal
-`FileLockService` and `ExtensionStatePublisher` so authors
+`FileLockService` and `EventStore` so authors
 never reach into runtime Tags. No facet duplicates an Effect platform
 service: files, paths, processes, and ids come from `FileSystem`, `Path`,
 `ChildProcessSpawner`, and `Crypto`, and a relative path resolves against

@@ -1,6 +1,6 @@
 /**
  * What a host needs to compose and run gent: the platform, the config
- * loader, storage, auth, workspace headers, the server root, and the scripted
+ * loader, storage, workspace headers, the server root, and the scripted
  * language model `Gent.provider.mock()` ships. Clients read `protocol`;
  * extensions read `extensions/api`; tests read `test-utils`.
  */

@@ -996,14 +996,22 @@ export const WakeExtension = defineExtension({
     yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
     yield* host.register("request", WakeRpc.Pending)
     // The branch resource starts without a session facade, so the first turn
-    // after a restart is where stored entries get their timers back.
+    // after a restart is where stored entries get their timers back. A failed
+    // re-arm still shows the notices: the answered turn clears what fired
+    // before it, so a turn that hid them would clear them unread.
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
-        yield* rearmPendingAlarms()
+        yield* rearmPendingAlarms().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("wake.rearm.failed").pipe(
+              Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+            ),
+          ),
+        )
         return { promptSections: yield* noticeSections() }
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("wake.rearm.failed").pipe(
+          Effect.logWarning("wake.notices.read.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
             Effect.as({}),
           ),

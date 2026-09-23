@@ -521,11 +521,12 @@ const phaseHolds = (phase: LoopState, messageId: MessageId): boolean => {
  * Whether a caller may take a turn for this branch right now.
  *
  * Idle is not enough on its own. `startingState` holds an item another caller
- * already reserved but has not started yet: it has left the queue and has not
- * reached `state`, so a plain idle test cannot see it. A caller that takes a
- * turn past that reservation leaves the reserving caller to find the loop
- * `Running` when it finally starts, with its item in neither the queue nor the
- * transcript. Both admission paths ask this one question.
+ * already reserved but whose start has not run yet: it has left the queue and
+ * has not reached `state`, so a plain idle test cannot see it. A caller that
+ * takes a turn past that reservation leaves the reserved start, which the loop
+ * already forked (`startInLoop`), to move a phase another turn holds, with its
+ * item in neither the queue nor the transcript. Both admission paths ask this
+ * one question.
  */
 
 export const canStartTurnNow = (s: AgentLoopState): boolean =>
@@ -2155,13 +2156,6 @@ const buildAgentLoopActorHandlers = (config: {
           ),
         )
 
-    /** Reserve the start for one item and run it when the reservation grants it. */
-    const reserveAndStart = (
-      handle: AgentLoopBehavior,
-      item: QueuedTurnItem,
-      options: { readonly queueOnly: boolean },
-    ) => handle.admitAndStart(item, options).pipe(orCleanup(handle))
-
     // Typed reentrant-only handle lookup. The only legitimate caller is the
     // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
     // fires from inside the behavior itself (during turn execution), so
@@ -2572,7 +2566,7 @@ const buildAgentLoopActorHandlers = (config: {
         yield* ensureTarget(operation.message)
         yield* markWrite
         const item: QueuedTurnItem = { message: operation.message }
-        yield* reserveAndStart(handle, item, { queueOnly: false })
+        yield* handle.admitAndStart(item, { queueOnly: false }).pipe(orCleanup(handle))
       })
 
     const submitTurn = Effect.fn("AgentLoopActor.submitTurn")(function* (
