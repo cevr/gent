@@ -12,7 +12,12 @@ import {
   type GentRpcClient,
   makeNamespacedClient,
 } from "@gent/core/protocol"
-import { makeInProcessClient, RpcHandlersLive, workspaceHeadersForCwd } from "@gent/core/host"
+import {
+  makeInProcessClient,
+  RpcHandlersLive,
+  WORKSPACE_ID_HEADER,
+  workspaceHeadersForCwd,
+} from "@gent/core/host"
 import {
   awaitServerShutdown,
   resolveServer,
@@ -251,7 +256,7 @@ export const Gent = {
             }),
           Attached: (attachedServer) =>
             connectWs(attachedServer.url, {
-              "x-gent-workspace-id": attachedServer.workspaceId,
+              [WORKSPACE_ID_HEADER]: attachedServer.workspaceId,
             }),
         }),
       )

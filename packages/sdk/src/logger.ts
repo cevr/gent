@@ -280,7 +280,10 @@ const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSyste
     }).pipe(Effect.orElseSucceed(() => Layer.empty)),
   )
 
-/** Minimum log level — filters out Trace/Debug in non-dev. */
+/**
+ * Minimum log level from `GENT_LOG_LEVEL`: `trace`, `info`, `warning`, or
+ * `error`. Unset, or any other value, keeps the Debug floor.
+ */
 const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
   Effect.gen(function* () {
     const envOpt = yield* Config.option(Config.string("GENT_LOG_LEVEL"))
