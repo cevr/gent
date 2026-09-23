@@ -135,7 +135,7 @@ import type { AgentName } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
-import { InteractionRequestMismatchError } from "../domain/interaction.js"
+
 import { omitUndefined } from "../domain/guards.js"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
@@ -1068,21 +1068,6 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     branchId: input.branchId,
   })
 
-  const pendingRequestId = yield* approvalService.pendingRequestId(input)
-  if (pendingRequestId !== input.requestId) {
-    let message = "Interaction response requestId does not match the pending request"
-    if (Predicate.isUndefined(pendingRequestId)) {
-      message = "No pending interaction request exists for this session branch"
-    }
-    return yield* new InteractionRequestMismatchError({
-      message,
-      expectedRequestId: pendingRequestId,
-      actualRequestId: input.requestId,
-      sessionId: input.sessionId,
-      branchId: input.branchId,
-    })
-  }
-
   const decision = {
     approved: input.approved,
     notes: input.notes,
@@ -1090,8 +1075,9 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
   }
   // 1. Store resolution durably so re-entering present() finds it. The first
   //    answer wins: the same answer again is a retried reply and changes
-  //    nothing; a different one fails with a conflict.
-  const first = yield* approvalService.storeResolution(input.requestId, decision)
+  //    nothing; a different one fails with a conflict. A request the branch
+  //    does not show and that keeps no answer is a mismatch.
+  const first = yield* approvalService.storeResolution(input, input.requestId, decision)
   if (!first) return
   // 2. Wake the machine. present() marks the row resolved only when the
   //    tool consumes the durable decision.
