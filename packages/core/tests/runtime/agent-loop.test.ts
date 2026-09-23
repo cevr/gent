@@ -198,6 +198,7 @@ import {
   entityIdOf,
   type LoopState,
   type RunningState,
+  toWaitingForInteractionState,
 } from "../../src/domain/agent-loop"
 import * as AiError from "effect/unstable/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
@@ -2100,7 +2101,10 @@ const memoryQueueStorage = Layer.effect(
   }),
 )
 
-const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
+const makeHarness = (
+  initial: { state: LoopState; queue: LoopQueueState },
+  options: { readonly answered?: ReadonlySet<InteractionRequestId> } = {},
+) =>
   Effect.gen(function* () {
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initial.state, queue: initial.queue }),
@@ -2117,30 +2121,48 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       startedRef: yield* Ref.make(true),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
+    const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const gateRef = yield* Ref.make(emptyAdmissionGate)
+    const sideMutationSemaphore = yield* Semaphore.make(1)
+    const turnInterruption = yield* makeTurnInterruption
+    const answered = options.answered ?? new Set<InteractionRequestId>()
     const worker = makeAgentLoopWorker<never, never>({
       sessionId,
       branchId,
-      sideMutationSemaphore: yield* Semaphore.make(1),
+      sideMutationSemaphore,
       interruptSemaphore: yield* Semaphore.make(1),
       turnWorkerQueue,
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
-      turnInterruption: yield* makeTurnInterruption,
+      turnInterruption,
       interruptToolWork: Effect.void,
       inbox,
       admissionGateRef: gateRef,
       recordTurnFailure: () => Effect.void,
       publishEvent: () => Effect.void,
+      interactionAnswered: (requestId) => Effect.succeed(answered.has(requestId)),
       runTurn: (state) =>
-        Ref.update(ranTurns, (ids) => [...ids, String(state.message.id)]).pipe(
-          Effect.as(TurnOutcome.cases.Done.make({})),
-        ),
+        Effect.gen(function* () {
+          yield* Ref.update(ranTurns, (ids) => [...ids, String(state.message.id)])
+          const interrupted = yield* turnInterruption.interrupted
+          yield* Ref.update(interruptedTurns, (all) => [...all, interrupted])
+          return TurnOutcome.cases.Done.make({})
+        }),
     })
     const phase = inbox.phase
     const queue = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue))
     const setPhase = (next: LoopState) => inbox.moveToPhase(next)
-    return { worker, phase, queue, setPhase, ranTurns, turnWorkerQueue, gateRef }
+    return {
+      worker,
+      phase,
+      queue,
+      setPhase,
+      ranTurns,
+      interruptedTurns,
+      turnWorkerQueue,
+      gateRef,
+      sideMutationSemaphore,
+    }
   }).pipe(Effect.provide(memoryQueueStorage))
 
 const waitForEmptyWorkerQueue = (queue: TxQueue.TxQueue<RunningState>): Effect.Effect<void> =>
@@ -2150,6 +2172,58 @@ const waitForEmptyWorkerQueue = (queue: TxQueue.TxQueue<RunningState>): Effect.E
       return Effect.yieldNow.pipe(Effect.andThen(waitForEmptyWorkerQueue(queue)))
     }),
   )
+
+describe("a turn parked on an interaction", () => {
+  const requestId = InteractionRequestId.make("req-parked")
+  const parked = (item: QueuedTurnItem) => ({
+    state: toWaitingForInteractionState({
+      state: buildRunningState(item, { startedAtMs: 1 }),
+      pendingRequestId: requestId,
+    }),
+    queue: emptyLoopQueueState(),
+  })
+
+  it.effect("a cancel that loses the resume to an answer still stops the turn", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const harness = yield* makeHarness(parked(first))
+      // Something holds the loop, so the answer and the cancel both wait for it.
+      yield* harness.sideMutationSemaphore.take(1)
+      const answer = yield* Effect.forkChild(harness.worker.respondInteraction(requestId), {
+        startImmediately: true,
+      })
+      const cancel = yield* Effect.forkChild(harness.worker.interrupt(), {
+        startImmediately: true,
+      })
+      yield* harness.sideMutationSemaphore.release(1)
+      yield* Fiber.join(answer)
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      yield* Fiber.join(cancel)
+      yield* waitForEmptyWorkerQueue(harness.turnWorkerQueue)
+      yield* Effect.yieldNow
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["first"])
+      expect(yield* Ref.get(harness.interruptedTurns)).toEqual([true])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.live("a cancel returns while the resumed turn holds the loop", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const harness = yield* makeHarness(parked(first))
+      // The loop is held, as the worker holds it for a resumed turn.
+      yield* harness.sideMutationSemaphore.take(1)
+      const cancel = yield* Effect.forkChild(harness.worker.interrupt(), {
+        startImmediately: true,
+      })
+      // An answer resumed the turn; the cancel's latch already stops it.
+      yield* harness.setPhase(buildRunningState(first, { startedAtMs: 1 }))
+      const exit = yield* Fiber.await(cancel).pipe(Effect.timeoutOption("2 seconds"))
+      expect(Option.isSome(exit)).toBe(true)
+      yield* harness.sideMutationSemaphore.release(1)
+    }),
+  )
+})
 
 describe("admitted turn withdrawal", () => {
   it.effect("withdrawing the admitted turn returns the branch to idle", () =>

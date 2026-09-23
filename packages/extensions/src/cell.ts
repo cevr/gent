@@ -2360,7 +2360,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
   // A cell stored as completed may have died before its receipts were attached.
   if (outer._tag === "Completed") return yield* withCellOperationReceipts(params.cell, outer.result)
   const records = yield* operations.listForToolCall(params.cell)
-  const pending = yield* interactions.listPending(params.cell)
+  const pending = yield* interactions.listOpen(params.cell)
   for (const { key, operation } of records) {
     if (operation.state._tag !== "Waiting") continue
     const requestId = operation.state.requestId
