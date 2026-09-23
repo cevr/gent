@@ -40,7 +40,7 @@ interface IndexedFile {
   readonly relativePath: string
 }
 
-export class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexError", {
+class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexError", {
   message: Schema.String,
   cwd: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -58,7 +58,7 @@ interface FileIndexService {
   }) => Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError>
 }
 
-export class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
+class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
   "@gent/extensions/src/fs-tools/FileIndex",
 ) {}
 
@@ -401,18 +401,6 @@ const listIgnoredTargets = (
       },
     }
   })
-
-export const FallbackFileIndexLive: Layer.Layer<
-  FileIndex,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> = Layer.effect(
-  FileIndex,
-  Effect.gen(function* () {
-    const matcherWalk = yield* makeMatcherWalk
-    return yield* listIgnoredTargets(yield* makeWalkService(matcherWalk), matcherWalk)
-  }),
-)
 
 // ── Native: fff-bun finders, one per search root ──
 
@@ -883,7 +871,7 @@ const REDACTION_PATTERNS = [
   /# \.\.\. existing (code|content|implementation)/i,
 ]
 
-export function detectRedaction(oldString: string, newString: string): Option.Option<string> {
+function detectRedaction(oldString: string, newString: string): Option.Option<string> {
   for (const pattern of REDACTION_PATTERNS) {
     if (pattern.test(newString) && !pattern.test(oldString)) {
       const match = Option.fromNullishOr(newString.match(pattern))
@@ -901,7 +889,7 @@ export function detectRedaction(oldString: string, newString: string): Option.Op
 
 // 3-tier fuzzy matching
 
-export function unescapeStr(s: string): string {
+function unescapeStr(s: string): string {
   return s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\\\/g, "\\")
 }
 
@@ -1016,7 +1004,7 @@ const literalMatch = (
   return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
 }
 
-export function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
+function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
   // Tier 1: exact
   const exact = literalMatch("exact", content, oldString)
   if (Option.isSome(exact)) return exact

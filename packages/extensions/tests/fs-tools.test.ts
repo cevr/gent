@@ -1,21 +1,20 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { spyOn } from "bun:test"
 import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Path, Predicate } from "effect"
-import { BunServices } from "@effect/platform-bun"
 import {
-  detectRedaction,
-  EditTool,
-  FallbackFileIndexLive,
-  FileIndex,
-  FileIndexError,
-  FileIndexLive,
-  findMatch,
-  GrepTool,
-  ReadTool,
-  unescapeStr,
-  WriteTool,
-} from "../src/fs-tools.js"
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+} from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { EditTool, FileIndexLive, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
@@ -284,108 +283,138 @@ describe("WriteTool", () => {
 
 // ── fs-tools/edit.test ──────────────────────────────────────────────────────
 
-describe("detectRedaction", () => {
-  test("clean replacement has no redaction", () => {
-    expect(Option.isNone(detectRedaction("old code", "new code"))).toBe(true)
-  })
-  test("catches [REDACTED]", () => {
-    const result = detectRedaction("old", "before [REDACTED] after")
-    expect(Option.getOrThrow(result)).toContain("[REDACTED]")
-  })
-  test("catches [...omitted code]", () => {
-    const result = detectRedaction("old", "before [...omitted code] after")
-    expect(Option.getOrThrow(result)).toContain("[...omitted code]")
-  })
-  test("catches [rest of file unchanged]", () => {
-    const result = detectRedaction("old", "before [rest of file unchanged] after")
-    expect(Option.getOrThrow(result)).toContain("[rest of file unchanged]")
-  })
-  test("catches // ... existing code", () => {
-    const result = detectRedaction("old", "line1\n// ... existing code\nline3")
-    expect(Option.getOrThrow(result)).toContain("// ... existing code")
-  })
-  test("catches # ... existing code", () => {
-    const result = detectRedaction("old", "line1\n# ... existing code\nline3")
-    expect(Option.getOrThrow(result)).toContain("# ... existing code")
-  })
-  test("allows pattern when also in oldString (legitimate content)", () => {
-    const content = "// ... existing code"
-    expect(Option.isNone(detectRedaction(content, content))).toBe(true)
-  })
-})
-describe("unescapeStr", () => {
-  test("converts literal \\n → newline", () => {
-    expect(unescapeStr("line1\\nline2")).toBe("line1\nline2")
-  })
-  test("converts \\t → tab", () => {
-    expect(unescapeStr("col1\\tcol2")).toBe("col1\tcol2")
-  })
-  test("converts \\r → CR", () => {
-    expect(unescapeStr("before\\rafter")).toBe("before\rafter")
-  })
-  test("converts \\\\\\\\ → single backslash", () => {
-    // "a\\\\b" → JS string "a\\b" → after \\\\→\ replacement → "a\b"
-    expect(unescapeStr("a\\\\b")).toBe("a\\b")
-  })
-  test("no-op on clean strings", () => {
-    expect(unescapeStr("hello world")).toBe("hello world")
-  })
-})
-describe("findMatch", () => {
-  test("exact match → strategy 'exact', correct index", () => {
-    const content = "hello world foo bar"
-    const result = findMatch(content, "world foo")
-    const match = Option.getOrThrow(result)
-    expect(match.strategy).toBe("exact")
-    expect(match.index).toBe(6)
-  })
-  test("literal \\n in oldString → falls through to 'unescaped'", () => {
-    const content = "line1\nline2"
-    const result = findMatch(content, "line1\\nline2")
-    expect(Option.getOrThrow(result).strategy).toBe("unescaped")
-  })
-  test("trailing whitespace diff → falls through to 'normalized'", () => {
-    const content = "hello\nworld"
-    const result = findMatch(content, "hello   \nworld")
-    expect(Option.getOrThrow(result).strategy).toBe("normalized")
-  })
-  test("no match returns none", () => {
-    expect(Option.isNone(findMatch("hello world", "xyz"))).toBe(true)
-  })
-  test("a whitespace-only oldString does not match blank lines", () => {
-    expect(Option.isNone(findMatch("a\n\nb", "   "))).toBe(true)
-    expect(Option.isNone(findMatch("a\n\n\nb", " \n "))).toBe(true)
-  })
-  test("a normalized search matches inside a line", () => {
-    const match = Option.getOrThrow(findMatch('const s = "hello"', "\u201Chello\u201D"))
-    expect(match.strategy).toBe("normalized")
-    expect(match.ranges).toEqual([{ start: 10, end: 17 }])
-  })
-  test("a normalized match across lines keeps the trailing whitespace it spans", () => {
-    const content = "x = \u201Chi\u201D  \nnext line"
-    const match = Option.getOrThrow(findMatch(content, 'x = "hi"\nnext'))
-    expect(match.ranges).toEqual([{ start: 0, end: 15 }])
-  })
-  test("a normalized search that ends a line takes the line's trailing whitespace", () => {
-    const match = Option.getOrThrow(findMatch("a \u201Cq\u201D   \nb", '"q"'))
-    expect(match.ranges).toEqual([{ start: 2, end: 8 }])
-  })
-  test("a normalized match keeps the searched spaces when the line goes on", () => {
-    const match = Option.getOrThrow(findMatch("\u201Chi\u201D  x", '"hi"  '))
-    expect(match.ranges).toEqual([{ start: 0, end: 6 }])
-    const atLineEnd = Option.getOrThrow(findMatch("\u201Chi\u201D\nx", '"hi"  '))
-    expect(atLineEnd.ranges).toEqual([{ start: 0, end: 4 }])
-  })
-  test("a whitespace run that exists in the file still matches exactly", () => {
-    expect(Option.getOrThrow(findMatch("a\tb", "\t")).strategy).toBe("exact")
-  })
-})
-// ============================================================================
-// Integration — real file editing
-// ============================================================================
 const editLayer = BunServices.layer
 const editTest = it.scopedLive.layer(editLayer)
 const stubCtx = testToolContext()
+
+/** Edit a fresh file that holds `content`: the tool's exit and the file afterward. */
+const editFile = Effect.fn("test.editFile")(function* (
+  content: string,
+  params: { readonly oldString: string; readonly newString: string; readonly replaceAll?: boolean },
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const dir = yield* fs.makeTempDirectoryScoped()
+  const filePath = path.join(dir, "test.txt")
+  yield* fs.writeFileString(filePath, content)
+  const exit = yield* Effect.exit(
+    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      .pipe(Effect.provide(editLayer)),
+  )
+  let failure = ""
+  if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause)
+  return { exit, failure, after: yield* fs.readFileString(filePath) }
+})
+
+describe("EditTool redaction check", () => {
+  for (const placeholder of [
+    "[REDACTED]",
+    "[...omitted code]",
+    "[rest of file unchanged]",
+    "// ... existing code",
+    "# ... existing code",
+  ]) {
+    editTest(`a newString with ${placeholder} is refused and the file stays`, () =>
+      Effect.gen(function* () {
+        const { exit, failure, after } = yield* editFile("old\n", {
+          oldString: "old",
+          newString: `line1\n${placeholder}\nline3`,
+        })
+        expect(exit._tag).toBe("Failure")
+        expect(failure).toContain(`redaction placeholder "${placeholder}"`)
+        expect(after).toBe("old\n")
+      }),
+    )
+  }
+  editTest("a placeholder that the old text holds too is legitimate content", () =>
+    Effect.gen(function* () {
+      const { after } = yield* editFile("a\n// ... existing code\n", {
+        oldString: "a\n// ... existing code",
+        newString: "b\n// ... existing code",
+      })
+      expect(after).toBe("b\n// ... existing code\n")
+    }),
+  )
+})
+
+describe("EditTool matching", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly file: string
+    readonly oldString: string
+    readonly after: string
+  }> = [
+    {
+      name: "an exact match",
+      file: "hello world foo bar",
+      oldString: "world foo",
+      after: "hello X bar",
+    },
+    { name: "a literal \\n", file: "line1\nline2", oldString: "line1\\nline2", after: "X" },
+    { name: "a literal \\t", file: "col1\tcol2", oldString: "col1\\tcol2", after: "X" },
+    { name: "a literal \\r", file: "before\rafter", oldString: "before\\rafter", after: "X" },
+    { name: "an escaped backslash", file: "a\\b", oldString: "a\\\\b", after: "X" },
+    {
+      name: "a trailing whitespace diff",
+      file: "hello\nworld",
+      oldString: "hello   \nworld",
+      after: "X",
+    },
+    {
+      name: "curly quotes inside a line",
+      file: 'const s = "hello"',
+      oldString: "“hello”",
+      after: "const s = X",
+    },
+    {
+      name: "a match across lines, with the trailing whitespace it spans",
+      file: "x = “hi”  \nnext line",
+      oldString: 'x = "hi"\nnext',
+      after: "X line",
+    },
+    {
+      name: "a match that ends a line, with the line's trailing whitespace",
+      file: "a “q”   \nb",
+      oldString: '"q"',
+      after: "a X\nb",
+    },
+    {
+      name: "searched spaces when the line goes on",
+      file: "“hi”  x",
+      oldString: '"hi"  ',
+      after: "Xx",
+    },
+    { name: "searched spaces at a line end", file: "“hi”\nx", oldString: '"hi"  ', after: "X\nx" },
+    { name: "a whitespace run the file holds", file: "a\tb", oldString: "\t", after: "aXb" },
+  ]
+  for (const { name, file, oldString, after } of cases) {
+    editTest(`${name} is replaced`, () =>
+      Effect.gen(function* () {
+        const edited = yield* editFile(file, { oldString, newString: "X" })
+        expect(edited.exit._tag).toBe("Success")
+        expect(edited.after).toBe(after)
+      }),
+    )
+  }
+  for (const { name, file, oldString } of [
+    { name: "text the file does not hold", file: "hello world", oldString: "xyz" },
+    { name: "a whitespace-only search", file: "a\n\nb", oldString: "   " },
+    { name: "a whitespace-only search across lines", file: "a\n\n\nb", oldString: " \n " },
+  ]) {
+    editTest(`${name} matches nothing`, () =>
+      Effect.gen(function* () {
+        const edited = yield* editFile(file, { oldString, newString: "X" })
+        expect(edited.exit._tag).toBe("Failure")
+        expect(edited.after).toBe(file)
+      }),
+    )
+  }
+})
+
+// ============================================================================
+// Integration — real file editing
+// ============================================================================
 describe("EditTool execution", () => {
   // The file keeps its own spelling; the model's ASCII search still finds it.
   const normalizedCases = [
@@ -586,11 +615,34 @@ describe("EditTool execution", () => {
 
 // ── fs-tools/grep.test ──────────────────────────────────────────────────────
 
-const ToolLayerGrep = Layer.merge(
+/** Turn the native finder off for one layer build: the index lists with git or the walk. */
+const nativeOff = Layer.effectDiscard(
+  Effect.acquireRelease(
+    Effect.sync(() => spyOn(NativeFileFinder, "isAvailable").mockReturnValue(false)),
+    (spy) => Effect.sync(() => spy.mockRestore()),
+  ),
+)
+const FallbackLayer = Layer.merge(
   BunServices.layer,
-  Layer.provide(FallbackFileIndexLive, BunServices.layer),
+  Layer.provide(FileIndexLive({ home: "/tmp" }), Layer.merge(BunServices.layer, nativeOff)),
+)
+const LiveLayer = Layer.merge(
+  BunServices.layer,
+  Layer.provide(FileIndexLive({ home: "/tmp" }), BunServices.layer),
 )
 const ctxGrep = testToolContext()
+
+/**
+ * The files grep reads for a search of `path` from a session in `cwd`,
+ * relative to `path` and sorted. `^` matches every line, so a file is listed
+ * once per line; the set keeps one.
+ */
+const listed = (cwd: string, path = cwd) =>
+  runToolWithCtx(GrepTool, { pattern: "^", path, limit: 100_000 }, testToolContext({ cwd })).pipe(
+    Effect.map((result) =>
+      [...new Set(result.matches.map((match) => match.file.slice(path.length + 1)))].toSorted(),
+    ),
+  )
 
 describe("GrepTool", () => {
   it.scopedLive("finds pattern in files", () =>
@@ -603,7 +655,7 @@ describe("GrepTool", () => {
 
       const result = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctxGrep)
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("respects glob filter", () =>
@@ -620,7 +672,7 @@ describe("GrepTool", () => {
       )
       expect(result.matches.length).toBe(1)
       expect(result.matches[0]!.file).toContain("file1.ts")
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("a glob without a slash matches files in nested directories", () =>
@@ -649,7 +701,7 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(scoped.matches).toEqual([])
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("a glob with a slash matches paths relative to the search root", () =>
@@ -676,7 +728,7 @@ describe("GrepTool", () => {
         "src/deep/b.ts",
         "test/c.ts",
       ])
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("truncated is set only when more matches exist than the limit", () =>
@@ -699,7 +751,7 @@ describe("GrepTool", () => {
       )
       expect(over.matches.length).toBe(2)
       expect(over.truncated).toBe(true)
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("finds matches in a gitignored directory under the session cwd", () =>
@@ -736,55 +788,30 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 })
 
 // ── fs-tools/file-index.test ────────────────────────────────────────────────
 
-const PlatformLayerFileIndex = BunServices.layer
-const FallbackLayer = Layer.merge(
-  PlatformLayerFileIndex,
-  Layer.provide(FallbackFileIndexLive, PlatformLayerFileIndex),
-)
-const LiveLayer = Layer.merge(
-  PlatformLayerFileIndex,
-  Layer.provide(FileIndexLive({ home: "/tmp" }), PlatformLayerFileIndex),
-)
-
-describe("FileIndex fallback walk", () => {
-  it.scopedLive("listFiles returns files in a directory", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/a.ts`, "hello")
-      yield* fs.writeFileString(`${tmpDir}/b.js`, "world")
-
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-
-      expect(files.length).toBe(2)
-      expect(files.every((f) => f.path.startsWith(tmpDir))).toBe(true)
-    }).pipe(Effect.provide(FallbackLayer)),
-  )
-
-  it.scopedLive("listFiles includes dotfiles", () =>
+describe("grep's file listing outside a git work tree", () => {
+  it.scopedLive("lists every file, dotfiles too", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "node_modules")
-      yield* fs.writeFileString(`${tmpDir}/readme.md`, "hi")
+      yield* fs.writeFileString(`${tmpDir}/a.ts`, "hello")
+      yield* fs.writeFileString(`${tmpDir}/b.js`, "world")
+      const create = spyOn(NativeFileFinder, "create")
+      yield* Effect.addFinalizer(() => Effect.sync(() => create.mockRestore()))
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      const names = files.map((f) => f.relativePath)
-
-      expect(names).toContain(".gitignore")
-      expect(names).toContain("readme.md")
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "a.ts", "b.js"])
+      // The fallback layer never builds a native finder.
+      expect(create).not.toHaveBeenCalled()
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
-  it.scopedLive("listFiles respects gitignore", () =>
+  it.scopedLive("a .gitignore line drops the file it names", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -792,13 +819,7 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/kept.txt`, "keep")
       yield* fs.writeFileString(`${tmpDir}/ignored.txt`, "skip")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      const names = files.map((f) => f.relativePath)
-
-      expect(names).toContain("kept.txt")
-      expect(names).toContain(".gitignore")
-      expect(names).not.toContain("ignored.txt")
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "kept.txt"])
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
@@ -810,15 +831,9 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/first.txt`, "a")
       yield* fs.writeFileString(`${tmpDir}/second.txt`, "b")
 
-      const fileIndex = yield* FileIndex
-      const names = fileIndex
-        .listFiles({ root: tmpDir, cwd: tmpDir })
-        .pipe(Effect.map((files) => files.map((f) => f.relativePath)))
-      expect(yield* names).not.toContain("first.txt")
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "second.txt"])
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "second.txt")
-      const after = yield* names
-      expect(after).toContain("first.txt")
-      expect(after).not.toContain("second.txt")
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "first.txt"])
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
@@ -844,9 +859,7 @@ describe("FileIndex fallback walk", () => {
         yield* fs.writeFileString(`${tmpDir}/${file}`, "x")
       }
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/pkg` })
-      expect(files.map((f) => f.relativePath).toSorted()).toEqual([
+      expect(yield* listed(tmpDir, `${tmpDir}/pkg`)).toEqual([
         ".gitignore",
         "a.ts",
         "build/out.js",
@@ -864,9 +877,7 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/src/logs/a.txt`, "x")
       yield* fs.writeFileString(`${tmpDir}/logs`, "a file")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      expect(files.map((f) => f.relativePath).toSorted()).toEqual([".gitignore", "logs"])
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "logs"])
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
@@ -878,13 +889,11 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "dist/\n")
       yield* fs.writeFileString(`${tmpDir}/dist/b.js`, "x")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/dist` })
-      expect(files.map((f) => f.relativePath)).toEqual(["b.js"])
+      expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["b.js"])
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
-  it.scopedLive("listFiles returns full file list (no early break)", () =>
+  it.scopedLive("the listing has no early break", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -892,10 +901,7 @@ describe("FileIndex fallback walk", () => {
         yield* fs.writeFileString(`${tmpDir}/file-${i}.txt`, `content-${i}`)
       }
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-
-      expect(files.length).toBe(50)
+      expect((yield* listed(tmpDir)).length).toBe(50)
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
@@ -909,11 +915,7 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/src/a.ts`, "a")
       yield* fs.symlink(tmpDir, `${tmpDir}/src/loop`)
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex
-        .listFiles({ root: tmpDir, cwd: tmpDir })
-        .pipe(Effect.timeout("5 seconds"))
-      expect(files.map((f) => f.relativePath)).toEqual(["src/a.ts"])
+      expect(yield* listed(tmpDir).pipe(Effect.timeout("5 seconds"))).toEqual(["src/a.ts"])
     }).pipe(Effect.provide(FallbackLayer)),
   )
 })
@@ -1007,7 +1009,7 @@ const writeTree = Effect.fn("test.writeTree")(function* (
   }
 })
 
-describe("FileIndex outside a git work tree", () => {
+describe("the matcher walk against git", () => {
   it.scopedLive("the walk ignores exactly what git ignores", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1028,18 +1030,13 @@ describe("FileIndex outside a git work tree", () => {
           "--others",
           "--exclude-standard",
         ])
-        const fileIndex = yield* FileIndex
-        const walked = yield* fileIndex.listFiles({ root: plain, cwd: plain })
         results[name] = {
           git: git.stdout
             .split("\0")
             .filter((entry) => entry.length > 0)
             .toSorted()
             .join(" | "),
-          walk: walked
-            .map((file) => file.relativePath)
-            .toSorted()
-            .join(" | "),
+          walk: (yield* listed(plain)).join(" | "),
         }
       }
       for (const [name, result] of Object.entries(results)) {
@@ -1049,7 +1046,7 @@ describe("FileIndex outside a git work tree", () => {
   )
 })
 
-describe("FileIndex inside a git work tree", () => {
+describe("grep's file listing inside a git work tree", () => {
   it.scopedLive("a subdirectory listing applies the repo's ignore rules above it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1060,10 +1057,7 @@ describe("FileIndex inside a git work tree", () => {
       })
       yield* fs.writeFileString(`${repo}/.git/info/exclude`, "*.env\n")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: `${repo}/pkg`, cwd: `${repo}/pkg` })
-      expect(files.map((file) => file.relativePath)).toEqual(["src/a.ts"])
-      expect(files.map((file) => file.path)).toEqual([`${repo}/pkg/src/a.ts`])
+      expect(yield* listed(`${repo}/pkg`)).toEqual(["src/a.ts"])
     }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
   )
 
@@ -1080,13 +1074,7 @@ describe("FileIndex inside a git work tree", () => {
         yield* fs.writeFileString(`${repo}/build/fresh.js`, "x")
         yield* fs.remove(`${repo}/build/gone.js`)
 
-        const fileIndex = yield* FileIndex
-        const files = yield* fileIndex.listFiles({ root: repo, cwd: repo })
-        expect(files.map((file) => file.relativePath).toSorted()).toEqual([
-          ".gitignore",
-          "build/pinned.js",
-          "src/a.ts",
-        ])
+        expect(yield* listed(repo)).toEqual([".gitignore", "build/pinned.js", "src/a.ts"])
       }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
   )
 
@@ -1097,9 +1085,7 @@ describe("FileIndex inside a git work tree", () => {
       yield* runProcess("git", ["init", "-q", repo])
       yield* writeTree(repo, ["dist/b.js", "src/a.ts"], { ".gitignore": "dist/\n" })
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: repo, cwd: `${repo}/dist` })
-      expect(files.map((file) => file.relativePath)).toEqual(["b.js"])
+      expect(yield* listed(repo, `${repo}/dist`)).toEqual(["b.js"])
     }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
   )
 })
@@ -1119,35 +1105,20 @@ describe("an ignored directory with tracked files", () => {
         yield* fs.writeFileString(`${repo}/.gitignore`, "dist/\n")
         yield* fs.writeFileString(`${repo}/dist/new.js`, "x")
 
-        const fileIndex = yield* FileIndex
-        const files = yield* fileIndex.listFiles({ root: repo, cwd: `${repo}/dist` })
-        expect(files.map((file) => file.relativePath).toSorted()).toEqual(["new.js", "pinned.js"])
+        expect(yield* listed(repo, `${repo}/dist`)).toEqual(["new.js", "pinned.js"])
       }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
     )
   }
 })
 
-describe("FileIndex native-first layer", () => {
-  it.scopedLive("constructs without error (always succeeds)", () =>
-    Effect.gen(function* () {
-      const fileIndex = yield* FileIndex
-      expect(fileIndex).toBeDefined()
-      expect(Predicate.isFunction(fileIndex.listFiles)).toBe(true)
-    }).pipe(Effect.provide(LiveLayer)),
-  )
-
-  it.scopedLive("listFiles returns results for cwd", () =>
+describe("grep's native file index", () => {
+  it.scopedLive("lists the files under the search path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/indexed.txt`, "hello")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-
-      expect(files.length).toBe(1)
-      expect(files[0]!.path.length).toBeGreaterThan(0)
-      expect(files[0]!.relativePath).toBe("indexed.txt")
+      expect(yield* listed(tmpDir)).toEqual(["indexed.txt"])
     }).pipe(Effect.provide(LiveLayer)),
   )
 
@@ -1163,13 +1134,8 @@ describe("FileIndex native-first layer", () => {
       const create = spyOn(NativeFileFinder, "create")
       yield* Effect.addFinalizer(() => Effect.sync(() => create.mockRestore()))
 
-      const fileIndex = yield* FileIndex
-      const src = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/src` })
-      const docs = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/docs` })
-
-      expect(src.map((f) => f.relativePath)).toEqual(["deep/a.txt"])
-      expect(src.map((f) => f.path)).toEqual([`${tmpDir}/src/deep/a.txt`])
-      expect(docs.map((f) => f.relativePath)).toEqual(["b.txt"])
+      expect(yield* listed(tmpDir, `${tmpDir}/src`)).toEqual(["deep/a.txt"])
+      expect(yield* listed(tmpDir, `${tmpDir}/docs`)).toEqual(["b.txt"])
       expect(create).toHaveBeenCalledTimes(1)
     }).pipe(Effect.provide(LiveLayer)),
   )
@@ -1188,19 +1154,11 @@ describe("FileIndex native-first layer", () => {
       const create = spyOn(NativeFileFinder, "create")
       yield* Effect.addFinalizer(() => Effect.sync(() => create.mockRestore()))
 
-      const fileIndex = yield* FileIndex
-      const root = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "src.ts"])
       for (let index = 0; index < 6; index++) {
-        const vendored = yield* fileIndex.listFiles({
-          root: tmpDir,
-          cwd: `${tmpDir}/vendor/p${index}`,
-        })
-        expect(vendored.map((f) => f.relativePath)).toEqual(["i.js"])
+        expect(yield* listed(tmpDir, `${tmpDir}/vendor/p${index}`)).toEqual(["i.js"])
       }
-      const again = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      expect(again.map((f) => f.relativePath).toSorted()).toEqual(
-        root.map((f) => f.relativePath).toSorted(),
-      )
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "src.ts"])
       expect(create).toHaveBeenCalledTimes(1)
     }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
@@ -1259,58 +1217,32 @@ describe("FileIndex native-first layer", () => {
             Predicate.isObject(context) && context instanceof NativeFileFinder && isHeld(context),
         )
 
-      const fileIndex = yield* FileIndex
-      const inFlight = yield* Effect.forkChild(
-        fileIndex.listFiles({ root: firstRoot, cwd: firstRoot }),
-      )
+      const inFlight = yield* Effect.forkChild(listed(firstRoot))
       yield* Deferred.await(scanStarted)
-      for (const root of others) yield* fileIndex.listFiles({ root, cwd: root })
+      for (const root of others) yield* listed(root)
       // The first finder is evicted, but its listing still holds it.
       expect(heldWas(destroy.mock.contexts)).toBe(false)
 
       yield* Deferred.succeed(releaseScan, true)
-      const files = yield* Fiber.join(inFlight)
-      expect(files.map((file) => file.relativePath)).toEqual(["file-0.txt"])
+      expect(yield* Fiber.join(inFlight)).toEqual(["file-0.txt"])
       expect(heldWas(search.mock.contexts)).toBe(true)
       expect(heldWas(destroy.mock.contexts)).toBe(true)
     }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 
-  it.scopedLive("per-method fallback: invalid cwd yields FileIndexError or an empty list", () =>
-    Effect.gen(function* () {
-      const fileIndex = yield* FileIndex
-      const result = yield* fileIndex
-        .listFiles({
-          root: "/nonexistent-path-that-does-not-exist",
-          cwd: "/nonexistent-path-that-does-not-exist",
-        })
-        .pipe(Effect.catchTag("FileIndexError", (e) => Effect.succeed({ caught: e.message })))
-
-      if ("caught" in result) {
-        expect(result.caught).toBeDefined()
-      } else {
-        expect(result.length).toBe(0)
-      }
-    }).pipe(Effect.provide(LiveLayer)),
-  )
-
-  it.scopedLive("a failing primary falls back to the walk", () =>
+  it.scopedLive("a failing native search falls back to the walk", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/hello.txt`, "hi")
+      const search = spyOn(NativeFileFinder.prototype, "fileSearch").mockReturnValue({
+        ok: false,
+        error: "native boom",
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(() => search.mockRestore()))
 
-      const fallbackIndex = yield* FileIndex
-      const files = yield* Effect.fail(
-        new FileIndexError({ message: "native boom", cwd: tmpDir }),
-      ).pipe(
-        Effect.catchTag("FileIndexError", () =>
-          fallbackIndex.listFiles({ root: tmpDir, cwd: tmpDir }),
-        ),
-      )
-
-      expect(files.length).toBe(1)
-      expect(files[0]!.relativePath).toBe("hello.txt")
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir)).toEqual(["hello.txt"])
+      expect(search).toHaveBeenCalled()
+    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 })
