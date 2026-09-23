@@ -880,11 +880,10 @@ const CHILDREN_SECTION = {
 - A fresh child has no conversation history, so give it a complete task; a forked child starts from your context. Do a single lookup, edit, or command inline.`,
 }
 
-const childrenSection = Effect.gen(function* () {
-  const ctx = yield* ExtensionContext
-  if (ctx.turn?.agent.deniedTools?.includes("delegate.start") === true) return []
+const childrenSection = (agent: AgentDefinition) => {
+  if (agent.deniedTools?.includes("delegate.start") === true) return []
   return [CHILDREN_SECTION]
-})
+}
 
 /** Child admission and control: start, send, cancel, and list. */
 export const DelegateExtension = defineExtension({
@@ -913,14 +912,14 @@ export const DelegateExtension = defineExtension({
     )
     // A crash between a child's receipt and its hook leaves an undelivered
     // entry; the parent's first turn in the new process picks it up.
-    yield* host.on("turnProjection", () =>
+    yield* host.on("turnProjection", ({ agent }) =>
       reconcileOnce.pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.reconcile.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
           ),
         ),
-        Effect.andThen(childrenSection),
+        Effect.as(childrenSection(agent)),
         Effect.map((promptSections) => ({ promptSections })),
       ),
     )

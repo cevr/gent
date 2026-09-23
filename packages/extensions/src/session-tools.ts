@@ -352,13 +352,10 @@ export const SessionToolsExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadSessionTool, RenameSessionTool, SendSessionTool)
-    yield* host.on("turnProjection", () =>
-      Effect.gen(function* () {
-        const ctx = yield* ExtensionContext
-        if (ctx.turn?.agent.deniedTools?.includes(SendSessionTool.id) === true) return {}
-        return { promptSections: [SESSIONS_SECTION] }
-      }),
-    )
+    yield* host.on("turnProjection", ({ agent }) => {
+      if (agent.deniedTools?.includes(SendSessionTool.id) === true) return Effect.succeed({})
+      return Effect.succeed({ promptSections: [SESSIONS_SECTION] })
+    })
     yield* host.on("systemPrompt", (input) => {
       if (input.interactive === false) {
         return Effect.succeed(input.basePrompt)
