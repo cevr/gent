@@ -2345,6 +2345,25 @@ it.effect(
     }),
 )
 
+it.effect("a failed tool throws its error text, and any other failure value as JSON", () =>
+  Effect.gen(function* () {
+    const failure = (result: Schema.Json) =>
+      cellToolResultValue(
+        Prompt.toolResultPart({
+          id: toolCallId,
+          name: "delegate.start",
+          isFailure: true,
+          providerExecuted: false,
+          result,
+        }),
+      ).pipe(Effect.flip)
+    const plain = yield* failure({ error: "Tool 'delegate.start' failed: no such agent" })
+    expect(plain.message).toBe("Tool 'delegate.start' failed: no such agent")
+    const detailed = yield* failure({ error: "boom", code: 3 })
+    expect(detailed.message).toBe('{"error":"boom","code":3}')
+  }),
+)
+
 // ── cell tool host ──────────────────────────────────────────────────────────
 
 const cellToolHost = {
@@ -5261,6 +5280,69 @@ const collidingId = tool({
   execute: () => Effect.succeed(true),
 })
 
+class ClassResult extends Schema.Class<ClassResult>("ClassResult")({
+  ok: Schema.Boolean,
+  items: Schema.Array(Schema.String),
+}) {}
+
+interface TreeNode {
+  readonly name: string
+  readonly children: ReadonlyArray<TreeNode>
+}
+const TreeNode: Schema.Codec<TreeNode> = Schema.Struct({
+  name: Schema.String,
+  children: Schema.Array(Schema.suspend(() => TreeNode)),
+}).annotate({ identifier: "TreeNode" })
+
+const classResult = tool({
+  id: "class-result",
+  description: "Returns a class.",
+  params: Schema.Struct({ nested: Schema.optional(ClassResult) }),
+  output: ClassResult,
+  execute: () => Effect.succeed(new ClassResult({ ok: true, items: [] })),
+})
+
+const treeResult = tool({
+  id: "tree",
+  description: "Returns a tree.",
+  params: Schema.Struct({}),
+  output: TreeNode,
+  execute: () => Effect.succeed({ name: "root", children: [] }),
+})
+
+const longLiterals = Array.from({ length: 8 }, (_, index) => `${"long-literal-".repeat(4)}${index}`)
+
+const longLiteralResult = tool({
+  id: "long-literal",
+  description: "Returns one of a few long names.",
+  params: Schema.Struct({}),
+  output: Schema.Literals(longLiterals),
+  execute: () => Effect.succeed(longLiterals[0] ?? ""),
+})
+
+const wideOrList = tool({
+  id: "wide-or-list",
+  description: "Returns a wide object or a list.",
+  params: Schema.Struct({}),
+  output: Schema.Union([
+    Schema.Struct(
+      Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [`field${index}`, Schema.String]),
+      ),
+    ),
+    Schema.Array(Schema.String),
+  ]),
+  execute: () => Effect.succeed([]),
+})
+
+const recordResult = tool({
+  id: "record",
+  description: "Returns a map.",
+  params: Schema.Struct({}),
+  output: Schema.Record(Schema.String, Schema.Boolean),
+  execute: () => Effect.succeed({}),
+})
+
 const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     numberInput,
@@ -5276,6 +5358,26 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     collidingId,
     '- tools("read.then")(input: { path: string }): Promise<boolean> // A segment JavaScript probes.',
+  ],
+  [
+    classResult,
+    '- tools["class-result"](input?: { nested?: { ok: boolean; items: string[] } }): Promise<{ ok: boolean; items: string[] }> // Returns a class.',
+  ],
+  [
+    treeResult,
+    "- tools.tree(input?: {} | unknown[]): Promise<{ name: string; children: object[] }> // Returns a tree.",
+  ],
+  [
+    longLiteralResult,
+    '- tools["long-literal"](input?: {} | unknown[]): Promise<string> // Returns one of a few long names.',
+  ],
+  [
+    wideOrList,
+    '- tools["wide-or-list"](input?: {} | unknown[]): Promise<object | string[]> // Returns a wide object or a list.',
+  ],
+  [
+    recordResult,
+    "- tools.record(input?: {} | unknown[]): Promise<Record<string, boolean>> // Returns a map.",
   ],
 ]
 
