@@ -165,14 +165,14 @@ describe("executeSlashCommand", () => {
         commands: [cmd({ id: "session.model", slash: "model" })],
       },
       {
-        id: "@gent/acp-agents",
+        id: "@gent/example-models",
         scope: "builtin",
-        source: "server:@gent/acp-agents",
+        source: "server:@gent/example-models",
         commands: [cmd({ id: "server:model", slash: "model" })],
       },
     ])
     expect(commands.map((command) => command.id)).toEqual(["session.model"])
-    expect(failures.map((failure) => failure.id)).toEqual(["@gent/acp-agents"])
+    expect(failures.map((failure) => failure.id)).toEqual(["@gent/example-models"])
   })
 
   test("a slash beats another command's alias", () => {
