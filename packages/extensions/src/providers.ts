@@ -325,11 +325,8 @@ export const makeCredentialCache = <C>(
       return store
         .update((stored) =>
           Effect.gen(function* () {
-            if (Option.isNone(stored)) {
-              // Nothing to adopt: a removed sign-in is not written back.
-              if (Option.isSome(held)) return yield* signedOut
-              return result(yield* config.refresh(held), Option.none())
-            }
+            // Nothing to adopt: a removed sign-in is not written back.
+            if (Option.isNone(stored)) return yield* signedOut
             const adopted = Option.isNone(held) || !store.same(stored.value, held.value)
             let base = stored.value
             if (!adopted && Option.isSome(held)) base = held.value
