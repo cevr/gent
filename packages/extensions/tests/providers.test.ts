@@ -326,7 +326,7 @@ describe("models.dev catalog", () => {
   )
 
   it.scopedLive(
-    "the Anthropic driver lists a documented 200k model at 200k, whatever the catalog says",
+    "the Anthropic driver lists a documented 200k model, and a model outside the 1M families, at 200k, whatever the catalog says",
     () =>
       Effect.gen(function* () {
         const home = yield* freshHome("anthropic-window")
@@ -345,6 +345,9 @@ describe("models.dev catalog", () => {
             claude("claude-sonnet-4-6", 1_000_000),
             claude("claude-opus-5", 1_000_000),
             claude("claude-haiku-4-5", 200_000),
+            // A model the family table does not name yet stays at 200k until a row
+            // records its window: an understated window compacts early, an overstated one fails.
+            claude("claude-sonnet-6", 1_000_000),
           ]),
         )
         const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
@@ -366,6 +369,7 @@ describe("models.dev catalog", () => {
           "anthropic/claude-sonnet-4-6 1000000",
           "anthropic/claude-opus-5 1000000",
           "anthropic/claude-haiku-4-5 200000",
+          "anthropic/claude-sonnet-6 200000",
         ])
       }).pipe(Effect.provide(platformLayer)),
   )
