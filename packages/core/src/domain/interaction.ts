@@ -164,17 +164,6 @@ export const { encode: encodeInteractionDecision, decode: decodeInteractionDecis
 // Interaction service
 // ============================================================================
 
-/**
- * An ask by an inner call of a dispatching tool, which waits for its answer
- * in place. `resumeRequestId` is the request to resume after a crash; `None`
- * asks fresh. `take` records on the owner's receipt that its call took the
- * answer, before the request settles.
- */
-interface OwnedAsk {
-  readonly resumeRequestId: Option.Option<InteractionRequestId>
-  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
-}
-
 /** A session branch: the scope that shows one request at a time. */
 interface BranchRef {
   readonly sessionId: SessionId
@@ -182,14 +171,14 @@ interface BranchRef {
 }
 
 export interface InteractionService {
+  /**
+   * Ask for an approval. A native ask parks the turn; an ask made under a
+   * `CurrentInteractionOwner` (an inner call of a dispatching tool) waits for
+   * its answer in place and is stored on the owner's receipt.
+   */
   readonly present: (
     params: ApprovalRequest,
-    ctx: {
-      sessionId: SessionId
-      branchId: BranchId
-      /** Absent: a native ask, which parks the turn. */
-      owned?: OwnedAsk
-    },
+    ctx: BranchRef,
   ) => Effect.Effect<
     ApprovalDecision,
     EventStoreError | InteractionPendingError | InteractionOwnerMissingError
@@ -475,6 +464,8 @@ export const makeInteractionService = (
       readonly requestId: InteractionRequestId
       readonly owner: Option.Option<InteractionOwner>
       readonly branch: BranchRef
+      /** Where the row is stored: the branch store, or a dispatching owner's receipt. */
+      readonly persist: InteractionStorageConfig["persist"]
     }) {
       const key = contextKey(request.branch)
       const isClaim = (open: OpenRequest) => open.requestId === request.requestId
@@ -494,7 +485,7 @@ export const makeInteractionService = (
         createdAt: yield* Clock.currentTimeMillis,
         ...Option.match(request.owner, { onNone: () => ({}), onSome: (owner) => ({ owner }) }),
       }
-      yield* config.storage.persist(record).pipe(Effect.onError(() => release))
+      yield* request.persist(record).pipe(Effect.onError(() => release))
       yield* Ref.update(state, (current) => {
         const branch = branchOf(current, key)
         const open = Option.filter(branch.open, isClaim)
@@ -662,7 +653,8 @@ export const makeInteractionService = (
           open: Option.some({ requestId, owner: asker, paramsJson, admitted: false }),
           queue: withoutOwner(rest, asker),
         })
-        return [ask({ params, paramsJson, requestId, owner: asker, branch: branchRef }), claimed]
+        const request = { params, paramsJson, requestId, owner: asker, branch: branchRef }
+        return [ask({ ...request, persist: config.storage.persist }), claimed]
       }
       // A claim, once made, runs to admission or release: an interrupt in
       // between would leave the slot claimed by nobody. Only a wait for a
@@ -702,14 +694,17 @@ export const makeInteractionService = (
       params: ApprovalRequest,
       branchRef: BranchRef,
       owner: Option.Option<InteractionOwner>,
-      owned: OwnedAsk,
+      ownership: InteractionOwnership,
     ) {
+      if (ownership.sessionId !== branchRef.sessionId || ownership.branchId !== branchRef.branchId)
+        return yield* new EventStoreError({ message: "The owning call belongs to another branch" })
       const key = contextKey(branchRef)
       const paramsJson = yield* encodeInteractionParams(params)
+      const resumeRequestId = yield* ownership.resumeRequestId
       /** The owner takes its answer: its receipt first, then the request settles. */
       const takeAnswer = (selected: InteractionRequestId, decision: ApprovalDecision) =>
         Effect.gen(function* () {
-          yield* owned.take(selected)
+          yield* ownership.take(selected)
           yield* Ref.update(state, (current) => {
             const branch = branchOf(current, key)
             const taken = dropDecision(current, selected)
@@ -719,8 +714,8 @@ export const makeInteractionService = (
           yield* settle(selected)
           return decision
         })
-      if (Option.isSome(owned.resumeRequestId)) {
-        const selected = owned.resumeRequestId.value
+      if (Option.isSome(resumeRequestId)) {
+        const selected = resumeRequestId.value
         const current = yield* Ref.get(state)
         const decision = current.decisions.get(selected)
         if (Predicate.isUndefined(decision))
@@ -753,7 +748,14 @@ export const makeInteractionService = (
                 ...branch,
                 open: Option.some({ requestId, owner, paramsJson, admitted: false }),
               })
-              const admitted = admit({ params, paramsJson, requestId, owner, branch: branchRef })
+              const admitted = admit({
+                params,
+                paramsJson,
+                requestId,
+                owner,
+                branch: branchRef,
+                persist: ownership.persist,
+              })
               return [Effect.as(admitted, true), claimed]
             }
             const open = branch.open.value
@@ -835,13 +837,16 @@ export const makeInteractionService = (
 
       present: Effect.fn("InteractionService.present")(function* (
         params: ApprovalRequest,
-        ctx: Parameters<InteractionService["present"]>[1],
+        ctx: BranchRef,
       ) {
         const branchRef = { sessionId: ctx.sessionId, branchId: ctx.branchId }
         const owner = yield* currentOwner
-        // An inner call of a dispatching tool waits for its answer in place.
-        if (!Predicate.isUndefined(ctx.owned))
-          return yield* presentOwned(params, branchRef, owner, ctx.owned)
+        // An inner call of a dispatching tool waits for its answer in place,
+        // and its request belongs to the dispatcher's receipt, not to the
+        // branch's native replay.
+        const ownership = yield* Effect.serviceOption(CurrentInteractionOwner)
+        if (Option.isSome(ownership))
+          return yield* presentOwned(params, branchRef, owner, ownership.value)
         // A native ask outside a dispatched call has no turn to park and no
         // run to take its answer, so it is refused.
         if (Option.isNone(owner))

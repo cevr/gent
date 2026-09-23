@@ -8,6 +8,7 @@ import {
 import { ensureStorageParents } from "../../src/test-utils/harness"
 import { EventStoreError } from "../../src/domain/event"
 import {
+  CurrentInteractionOwner,
   InteractionPendingError,
   type InteractionRequestRecord,
   type InteractionService,
@@ -726,14 +727,27 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
-  /** An inner call of a dispatching tool; `taken` records what its receipt took. */
-  const ownedAsk = (
-    taken: Array<InteractionRequestId>,
-    resumeRequestId: Option.Option<InteractionRequestId> = Option.none(),
-  ) => ({
-    resumeRequestId,
-    take: (requestId: InteractionRequestId) => Effect.sync(() => void taken.push(requestId)),
-  })
+  /**
+   * An ask by an inner call of a dispatching tool on `branch`, stored in
+   * `is`; `taken` records what its receipt took.
+   */
+  const askOwned =
+    (
+      interaction: InteractionService,
+      is: InteractionStorage["Service"],
+      branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
+      taken: Array<InteractionRequestId>,
+      resumeRequestId: Option.Option<InteractionRequestId> = Option.none(),
+    ) =>
+    (text: string) =>
+      interaction.present({ text }, branch).pipe(
+        Effect.provideService(CurrentInteractionOwner, {
+          ...branch,
+          persist: (record) => persistInteraction(is, record),
+          resumeRequestId: Effect.succeed(resumeRequestId),
+          take: (requestId) => Effect.sync(() => void taken.push(requestId)),
+        }),
+      )
 
   it.live("a dispatching owner's inner calls wait for their answers in place, one at a time", () =>
     Effect.gen(function* () {
@@ -747,8 +761,7 @@ describe("Interaction Request", () => {
       const branch = { sessionId: SessionId.make("s-inner"), branchId: BranchId.make("b-inner") }
       yield* ensureStorageParents(branch)
       const taken: Array<InteractionRequestId> = []
-      const inner = (text: string) =>
-        interaction.present({ text }, { ...branch, owned: ownedAsk(taken) })
+      const inner = askOwned(interaction, is, branch, taken)
       const both = yield* asCall(
         interaction,
         branch,
@@ -771,11 +784,12 @@ describe("Interaction Request", () => {
     "an inner call waiting in place gets the first answer; a different later one is refused",
     () =>
       Effect.gen(function* () {
+        const is = yield* InteractionStorage
         const presented = yield* Queue.unbounded<InteractionRequestId>()
         const interaction = yield* makeInteractionService({
           onPresent: (requestId) => Queue.offer(presented, requestId),
           onDismiss: () => Effect.void,
-          storage: callbacksFor(yield* InteractionStorage),
+          storage: callbacksFor(is),
         })
         const branch = {
           sessionId: SessionId.make("s-in-place"),
@@ -786,9 +800,7 @@ describe("Interaction Request", () => {
         const waiting = yield* asCall(
           interaction,
           branch,
-        )(interaction.present({ text: "Delete it?" }, { ...branch, owned: ownedAsk(taken) })).pipe(
-          Effect.forkChild,
-        )
+        )(askOwned(interaction, is, branch, taken)("Delete it?")).pipe(Effect.forkChild)
         const requestId = yield* Queue.take(presented)
         yield* interaction.storeResolution(requestId, { approved: false })
         // Whether or not the waiting call took the first answer yet, the second
@@ -805,11 +817,12 @@ describe("Interaction Request", () => {
 
   it.live("a dispatching owner does not take an answer to a changed question", () =>
     Effect.gen(function* () {
+      const is = yield* InteractionStorage
       const presented = yield* Queue.unbounded<InteractionRequestId>()
       const interaction = yield* makeInteractionService({
         onPresent: (requestId) => Queue.offer(presented, requestId),
         onDismiss: () => Effect.void,
-        storage: callbacksFor(yield* InteractionStorage),
+        storage: callbacksFor(is),
       })
       const branch = { sessionId: SessionId.make("s-owned"), branchId: BranchId.make("b-owned") }
       yield* ensureStorageParents(branch)
@@ -818,9 +831,7 @@ describe("Interaction Request", () => {
         asCall(
           interaction,
           branch,
-        )(interaction.present({ text }, { ...branch, owned: ownedAsk(taken, resume) })).pipe(
-          Effect.forkChild,
-        )
+        )(askOwned(interaction, is, branch, taken, resume)(text)).pipe(Effect.forkChild)
       // The owner stops while its call waits, as a crash would stop it.
       const stopped = yield* ask("Delete a.txt?", Option.none())
       const first = yield* Queue.take(presented)

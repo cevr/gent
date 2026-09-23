@@ -113,7 +113,6 @@ import {
 } from "../domain/event.js"
 import {
   type ApprovalDecision,
-  CurrentInteractionOwner,
   InteractionPendingError,
   type InteractionService,
   type InteractionStorageConfig,
@@ -1971,17 +1970,7 @@ const makeApprovalInteractionService: Effect.Effect<
   const store = yield* InteractionStorage
   const storage: InteractionStorageConfig = {
     persist: (record) =>
-      Effect.gen(function* () {
-        // A dispatching tool owns the interactions its inner calls raise, so
-        // they are written to its receipt. Core does not know which tools
-        // those are; an absent owner is a direct call.
-        const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
-        if (Option.isSome(owner)) {
-          yield* owner.value.persist(record)
-        } else {
-          yield* store.persist(record)
-        }
-      }).pipe(
+      store.persist(record).pipe(
         Effect.asVoid,
         Effect.mapError(
           (cause) =>
@@ -2001,7 +1990,7 @@ const makeApprovalInteractionService: Effect.Effect<
         ),
   }
   const eventPublisher = yield* EventPublisher
-  const service = yield* makeInteractionService({
+  return yield* makeInteractionService({
     onPresent: (requestId, params, ctx) =>
       eventPublisher.publish(
         InteractionPresented.make({
@@ -2033,29 +2022,9 @@ const makeApprovalInteractionService: Effect.Effect<
         ),
     storage,
   })
-  return {
-    ...service,
-    present: Effect.fn("ApprovalService.present")(function* (params, ctx) {
-      // An interaction raised inside a dispatching tool belongs to that
-      // tool's receipt, not to the branch's native replay. Absent owner is
-      // the common case: a direct tool call takes the native path.
-      const owner = yield* Effect.serviceOption(CurrentInteractionOwner)
-      if (Option.isNone(owner)) return yield* service.present(params, ctx)
-      if (owner.value.sessionId !== ctx.sessionId || owner.value.branchId !== ctx.branchId)
-        return yield* new EventStoreError({
-          message: "The owning call belongs to another branch",
-        })
-      return yield* service.present(params, {
-        ...ctx,
-        owned: { resumeRequestId: yield* owner.value.resumeRequestId, take: owner.value.take },
-      })
-    }),
-  }
 })
 
-interface ApprovalServiceApi extends InteractionService {}
-
-export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceApi>()(
+export class ApprovalService extends Context.Service<ApprovalService, InteractionService>()(
   "@gent/core/src/runtime/extension-host/ApprovalService",
 ) {
   static Live: Layer.Layer<
