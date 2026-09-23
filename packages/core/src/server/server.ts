@@ -634,6 +634,8 @@ const makeSessionMutationsService: Effect.Effect<
           parentBranchId: input.parentBranchId,
           threadId: Option.getOrUndefined(threadId),
           admission,
+          modelId: input.modelId,
+          reasoningLevel: input.reasoningLevel,
           createdAt: now,
           updatedAt: now,
         })
