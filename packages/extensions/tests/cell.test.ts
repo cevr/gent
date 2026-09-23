@@ -1372,6 +1372,7 @@ describe("cell worker process", () => {
 const approvalCell = Effect.gen(function* () {
   const marks = yield* Ref.make<ReadonlyArray<string>>([])
   const asked = yield* Ref.make(0)
+  const allowed = yield* Ref.make(0)
   const slowStarted = yield* Deferred.make<void>()
   const slowRelease = yield* Deferred.make<void>()
   const slowDone = yield* Deferred.make<void>()
@@ -1438,6 +1439,7 @@ const approvalCell = Effect.gen(function* () {
                     message: "declined by the user",
                     result: "declined",
                   })
+                yield* Ref.update(allowed, (count) => count + 1)
                 return "allowed"
               }),
           }),
@@ -1449,6 +1451,7 @@ const approvalCell = Effect.gen(function* () {
     extensions,
     marks,
     asked,
+    allowed,
     slowStarted,
     slowRelease,
     slowDone,
@@ -1457,16 +1460,12 @@ const approvalCell = Effect.gen(function* () {
   }
 })
 
-/** Run one cell turn, answer its one dialog with `answer`, and return the cell result. */
-const runApprovalCell = (params: {
-  readonly code: string
-  readonly approved: boolean
-  readonly beforeAnswer?: (cell: Effect.Success<typeof approvalCell>) => Effect.Effect<void>
-}) =>
+/** Start one cell turn and return once its one dialog shows. */
+const startApprovalCell = (code: string) =>
   Effect.gen(function* () {
     const cell = yield* approvalCell
     const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-      toolCallStep("cell", { code: params.code }),
+      toolCallStep("cell", { code }),
       textStep("Cell finished"),
     ])
     const { client, sessionId, branchId } = yield* createRpcHarness({
@@ -1486,6 +1485,33 @@ const runApprovalCell = (params: {
     )
     const request = Array.from(presented)[0]
     if (Predicate.isUndefined(request)) return yield* Effect.die("Missing approval")
+    return { cell, client, sessionId, branchId, request }
+  })
+
+/** The `cell` tool results on a branch once its turn completed. */
+const cellResultsAfterTurn = (started: Effect.Success<ReturnType<typeof startApprovalCell>>) =>
+  Effect.gen(function* () {
+    const { client, sessionId, branchId } = started
+    yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+      Stream.take(1),
+      Stream.runDrain,
+    )
+    return (yield* client.message.list({ branchId }))
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-result")
+      .filter((part) => part.name === "cell")
+  })
+
+/** Run one cell turn, answer its one dialog with `approved`, and return the cell result. */
+const runApprovalCell = (params: {
+  readonly code: string
+  readonly approved: boolean
+  readonly beforeAnswer?: (cell: Effect.Success<typeof approvalCell>) => Effect.Effect<void>
+}) =>
+  Effect.gen(function* () {
+    const started = yield* startApprovalCell(params.code)
+    const { cell, client, sessionId, branchId, request } = started
     if (Predicate.isNotUndefined(params.beforeAnswer)) yield* params.beforeAnswer(cell)
     yield* client.interaction.respondInteraction({
       sessionId,
@@ -1493,15 +1519,7 @@ const runApprovalCell = (params: {
       requestId: request.requestId,
       approved: params.approved,
     })
-    yield* client.session.events({ sessionId, branchId }).pipe(
-      Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
-      Stream.take(1),
-      Stream.runDrain,
-    )
-    const results = (yield* client.message.list({ branchId }))
-      .flatMap((message) => message.parts)
-      .filter((part) => part.type === "tool-result")
-      .filter((part) => part.name === "cell")
+    const results = yield* cellResultsAfterTurn(started)
     expect(results).toHaveLength(1)
     return { result: results[0], cell }
   })
@@ -1555,6 +1573,161 @@ describe("cell approvals", () => {
         Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
       ),
     18000,
+  )
+
+  it.scopedLive(
+    "a cancel while a call waits in place closes the dialog, ends the cell, and returns",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* startApprovalCell(
+          [
+            "await tools.mark('before')",
+            "await tools.guarded({})",
+            "await tools.mark('after')",
+          ].join("\n"),
+        )
+        const { cell, client, sessionId, branchId, request } = started
+        yield* client.steer
+          .command({
+            command: {
+              _tag: "Cancel",
+              sessionId,
+              branchId,
+              requestId: RequestId.make("cancel-waiting-cell"),
+            },
+          })
+          .pipe(Effect.timeout("3 seconds"))
+        const dismissed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.map((envelope) => envelope.event),
+          Stream.filter((event) => event._tag === "InteractionResolved"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.timeout("3 seconds"),
+        )
+        expect(Array.from(dismissed)).toMatchObject([
+          { requestId: request.requestId, approved: false, dismissed: true },
+        ])
+        const results = yield* cellResultsAfterTurn(started).pipe(Effect.timeout("5 seconds"))
+        expect(results).toHaveLength(1)
+        // The cell ended at the call; nothing after it ran, and nothing acted.
+        expect(yield* Ref.get(cell.marks)).toEqual(["before"])
+        expect(yield* Ref.get(cell.allowed)).toBe(0)
+        // The dialog is closed: an answer that comes late has nothing to answer.
+        const late = yield* Effect.flip(
+          client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: request.requestId,
+            approved: true,
+          }),
+        )
+        expect(late._tag).toBe("InteractionRequestMismatchError")
+        expect(yield* Ref.get(cell.allowed)).toBe(0)
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    18000,
+  )
+
+  it.scopedLive(
+    "a restart while a call waits in place: the request comes back, and an approval acts once",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+        const storagePath = (yield* Path.Path).join(directory, "gent.db")
+        const cell = yield* approvalCell
+        const server = (steps: Parameters<typeof LanguageModelLayers.sequence>[0]) =>
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence(steps)
+            return yield* createRpcClient(
+              createE2ELayer({
+                extensions: cell.extensions,
+                providerLayer,
+                extensionInputs: [],
+                branchTools: CellBranchTools,
+                durableApproval: true,
+                agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+                storagePath,
+              }),
+            )
+          })
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* server([
+              toolCallStep("cell", {
+                code: [
+                  "await tools.mark('before')",
+                  "await tools.guarded({})",
+                  "await tools.mark('after')",
+                ].join("\n"),
+              }),
+            ])
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "Run a cell" })
+            const presented = Array.from(
+              yield* client.session.events({ sessionId, branchId }).pipe(
+                Stream.map((envelope) => envelope.event),
+                Stream.filter((event) => event._tag === "InteractionPresented"),
+                Stream.take(1),
+                Stream.runCollect,
+              ),
+            )[0]
+            if (Predicate.isUndefined(presented)) return yield* Effect.die("Missing approval")
+            const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+            return {
+              sessionId,
+              branchId,
+              requestId: presented.requestId,
+              lastEventId: snapshot.lastEventId ?? 0,
+            }
+          }),
+        )
+        // The server stops while the call waits in place, as a crash would stop it.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* server([textStep("Recovered")])
+            const { sessionId, branchId } = first
+            const rehydrated = Array.from(
+              yield* client.session.events({ sessionId, branchId, after: first.lastEventId }).pipe(
+                Stream.map((envelope) => envelope.event),
+                Stream.filter((event) => event._tag === "InteractionPresented"),
+                Stream.take(1),
+                Stream.runCollect,
+                Effect.timeout("5 seconds"),
+              ),
+            )
+            expect(rehydrated.map((event) => event.requestId)).toEqual([first.requestId])
+            yield* client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: first.requestId,
+              approved: true,
+            })
+            yield* client.session.events({ sessionId, branchId, after: first.lastEventId }).pipe(
+              Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.timeout("5 seconds"),
+            )
+            const results = (yield* client.message.list({ branchId }))
+              .flatMap((message) => message.parts)
+              .filter((part) => part.type === "tool-result")
+              .filter((part) => part.name === "cell")
+            expect(results).toHaveLength(1)
+            // The approved call acted once. The cell source cannot run again, so
+            // the code after the call did not run and the cell says its state
+            // was lost.
+            expect(yield* Ref.get(cell.allowed)).toBe(1)
+            expect(yield* Ref.get(cell.marks)).toEqual(["before"])
+            expect(results[0]).toMatchObject({ result: { stateLost: true } })
+          }),
+        )
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    25000,
   )
 
   it.scopedLive(

@@ -2069,6 +2069,8 @@ interface CellExecutionService {
   >
   readonly reset: Effect.Effect<void, CellKernelError>
   readonly cancel: Effect.Effect<void>
+  /** The loop closes: end the running cell and record nothing, as a crash would. */
+  readonly stop: Effect.Effect<void>
 }
 
 /** One branch scope owns admission and a lazily acquired kernel. Host authority stays per call. */
@@ -2093,7 +2095,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           Layer.merge(
             Layer.effect(
               BranchToolWork,
-              Effect.map(CellExecution, (cells) => BranchToolWork.of({ cancel: cells.cancel })),
+              Effect.map(CellExecution, (cells) =>
+                BranchToolWork.of({ cancel: cells.cancel, stop: cells.stop }),
+              ),
             ),
             ModelContextLedger.Branch,
           ),
@@ -2120,6 +2124,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         >()
         const permit = yield* Semaphore.make(1)
         let cancellationEpoch = 0
+        // Set once the loop closes: a run that ends records nothing.
+        let stopping = false
         let active = Option.none<Deferred.Deferred<never, CellKernelError>>()
         const cancelled = () =>
           new CellKernelError({
@@ -2282,6 +2288,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               },
             }),
           )
+          // The loop closed under this run. Leave its record as a crash would,
+          // so recovery after a restart resumes a waiting operation.
+          if (stopping) return yield* Effect.interrupt
           yield* storage.complete(address, result)
           return result
         })
@@ -2296,11 +2305,16 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           if (Option.isSome(active)) yield* Deferred.fail(active.value, cancelled())
           yield* Semaphore.withPermit(permit, Effect.void)
         })
+        const stop = Effect.fn("CellExecution.stop")(function* () {
+          stopping = true
+          yield* cancel()
+        })
         return CellExecution.of({
           run: (call) =>
             Effect.suspend(() => Semaphore.withPermit(permit, run(call, cancellationEpoch))),
           reset: Semaphore.withPermit(permit, reset()),
           cancel: cancel().pipe(Effect.uninterruptible),
+          stop: stop().pipe(Effect.uninterruptible),
         })
       }),
     )

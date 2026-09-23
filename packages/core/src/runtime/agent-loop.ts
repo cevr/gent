@@ -6,6 +6,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   HashMap,
   HashSet,
@@ -1437,6 +1438,14 @@ const makeAgentLoopBehavior = (
     // A tool holding branch-scoped work exposes how to cancel it. A branch
     // whose tools are all stateless has nothing to cancel.
     const branchWork = Context.getOption(branchToolContext, BranchToolWork)
+    const interruptToolWork = Option.match(branchWork, {
+      onNone: () => Effect.void,
+      onSome: (work) => work.cancel,
+    })
+    const stopToolWork = Option.match(branchWork, {
+      onNone: () => Effect.void,
+      onSome: (work) => work.stop,
+    })
     const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
@@ -1486,10 +1495,7 @@ const makeAgentLoopBehavior = (
       turnWorkerQueue,
       activeStreamRef,
       turnInterruption,
-      interruptToolWork: Option.match(branchWork, {
-        onNone: () => Effect.void,
-        onSome: (work) => work.cancel,
-      }),
+      interruptToolWork,
       inbox,
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
@@ -1507,13 +1513,14 @@ const makeAgentLoopBehavior = (
       sessionAgent: sessionAgentName(sessionId),
     })
 
+    const turnWorkerFiber = yield* Ref.make(Option.none<Fiber.Fiber<void>>())
     const startTurnWorker = Effect.forkIn(
       provideAgentLoopRuntimeContext(runtimeContext)(worker.turnWorkerLoop),
       loopScope,
       {
         startImmediately: true,
       },
-    ).pipe(Effect.asVoid)
+    ).pipe(Effect.flatMap((fiber) => Ref.set(turnWorkerFiber, Option.some(fiber))))
 
     const start = Effect.suspend(
       Effect.fn("AgentLoop.start")(function* () {
@@ -1525,6 +1532,15 @@ const makeAgentLoopBehavior = (
     const close = Effect.suspend(
       Effect.fn("AgentLoop.close")(function* () {
         yield* worker.interruptActiveStream
+        // Closing stops the turn as a crash would: nothing it runs records an
+        // outcome. Branch tool work can hold the turn past a fiber interrupt
+        // (a cell runs uninterruptibly so a cancel can report), so the turn is
+        // interrupted first and its tool work is then stopped; without the
+        // stop, closing the scope would wait for that work forever.
+        const turn = yield* Ref.get(turnWorkerFiber)
+        if (Option.isSome(turn))
+          yield* Effect.forkDetach(Fiber.interrupt(turn.value), { startImmediately: true })
+        yield* stopToolWork
         yield* Deferred.succeed(closed, void 0).pipe(Effect.ignore)
         yield* Scope.close(loopScope, Exit.void)
       }),
