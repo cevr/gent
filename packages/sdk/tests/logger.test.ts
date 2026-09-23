@@ -8,13 +8,14 @@ import {
   GentTracerLive,
   LOG_DIR,
 } from "../src/logger"
+import { resolveLogDir } from "../src/server"
 
 // ── logger.test ─────────────────────────────────────────────────────────────
 
 describe("buildLogPaths", () => {
   it.effect("returns a deterministic shape under the central log dir", () =>
     Effect.sync(() => {
-      const paths = buildLogPaths("/Users/example/repo")
+      const paths = buildLogPaths("/Users/example/repo", LOG_DIR)
       expect(paths.dir).toBe(LOG_DIR)
       expect(paths.log.startsWith(`${LOG_DIR}/`)).toBe(true)
       expect(paths.client.endsWith("-client.log")).toBe(true)
@@ -23,9 +24,28 @@ describe("buildLogPaths", () => {
 
   it.effect("produces distinct prefixes for distinct cwds", () =>
     Effect.sync(() => {
-      const a = buildLogPaths("/path/a")
-      const b = buildLogPaths("/path/b")
+      const a = buildLogPaths("/path/a", LOG_DIR)
+      const b = buildLogPaths("/path/b", LOG_DIR)
       expect(a.log).not.toBe(b.log)
+    }),
+  )
+})
+
+const logDirFor = (env: Record<string, string>) =>
+  resolveLogDir.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))))
+
+describe("resolveLogDir", () => {
+  it.effect("a run with its own data directory keeps its logs there", () =>
+    Effect.gen(function* () {
+      expect(yield* logDirFor({ GENT_DATA_DIR: "/tmp/gent-scratch" })).toBe(
+        "/tmp/gent-scratch/logs",
+      )
+    }),
+  )
+
+  it.effect("a run without a data directory uses the shared log directory", () =>
+    Effect.gen(function* () {
+      expect(yield* logDirFor({})).toBe(LOG_DIR)
     }),
   )
 })
@@ -44,11 +64,11 @@ describe("GentObservability", () => {
   it.scopedLive("writes one JSON line per log entry to the cwd's server log", () =>
     Effect.gen(function* () {
       const cwd = `/logger-test/${yield* Random.nextInt}`
-      const logPath = buildLogPaths(cwd).log
+      const logPath = buildLogPaths(cwd, LOG_DIR).log
       const fs = yield* FileSystem.FileSystem
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const context = yield* Layer.build(GentObservability(cwd, "Debug"))
+          const context = yield* Layer.build(GentObservability(cwd, "Debug", LOG_DIR))
           yield* Effect.logInfo("hello-from-test").pipe(
             Effect.annotateLogs({ sessionId: "s-1" }),
             Effect.provideContext(context),

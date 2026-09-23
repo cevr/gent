@@ -8,7 +8,6 @@ describe("SDK public surface", () => {
       "ConnectionState",
       "Gent",
       "GentConnectionError",
-      "LOG_DIR",
       "LaunchConfig",
       "QueueEntryInfo",
       "QueueSnapshot",
@@ -23,6 +22,7 @@ describe("SDK public surface", () => {
       "emptyQueueSnapshot",
       "ensureLogDir",
       "makeJsonFileLogger",
+      "resolveLogDir",
       "serverLock",
     ])
     expect("GentRpcs" in RuntimePublicSdk).toBe(false)

@@ -16,7 +16,7 @@ import {
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
   Gent,
-  LOG_DIR,
+  resolveLogDir,
   serverLock,
   type ServerLockStatus,
 } from "@gent/sdk"
@@ -151,12 +151,11 @@ export const inspectStorage = (
   })
 
 /**
- * Read a log directory. `dir` defaults to the one a live gent writes to; tests
- * pass a directory they own, so they never read or remove real logs.
+ * Read a log directory. The doctor passes the one this environment writes to
+ * (`resolveLogDir`); tests pass a directory they own, so they never read or
+ * remove real logs.
  */
-export const inspectLogs = (
-  dir: string = LOG_DIR,
-): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
+export const inspectLogs = (dir: string): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
@@ -257,7 +256,7 @@ export const makeDoctorReport = (
       home,
       storage,
       server,
-      logs: yield* inspectLogs(),
+      logs: yield* inspectLogs(yield* resolveLogDir),
       extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
     }
   })

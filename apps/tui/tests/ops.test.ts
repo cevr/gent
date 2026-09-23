@@ -297,6 +297,18 @@ describe("local health", () => {
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
+  it.scopedLive("a run with its own data directory reads its own logs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const dataDir = yield* fs.makeTempDirectoryScoped()
+      const report = yield* makeDoctorReport(home, absentServer).pipe(withDataDir(dataDir))
+      // The run writes its logs beside its database, so the doctor names that directory.
+      expect(report.logs.dir).toBe(`${dataDir}/logs`)
+      expect(formatDoctorReport(report)).toContain(`Directory: ${dataDir}/logs`)
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+  )
+
   it.scopedLive("doctor report includes degraded extension resource health", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
