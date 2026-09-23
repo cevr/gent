@@ -19,7 +19,6 @@ import {
   workspaceHeadersForCwd,
 } from "@gent/core/host"
 import {
-  awaitServerShutdown,
   resolveServer,
   getOwnedInternal,
   state as stateFactories,
@@ -216,12 +215,6 @@ export const Gent = {
     options: GentServerOptions,
   ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => resolveServer(options),
 
-  /**
-   * Block until the server stops. A server started with `idleShutdown`
-   * returns after its idle window; every other server blocks forever.
-   */
-  awaitShutdown: (server: GentServer): Effect.Effect<void> => awaitServerShutdown(server),
-
   /** Connect to a server. Owned servers use direct RPC; attached servers or RPC URLs use WS. */
   client: (
     serverOrUrl: GentServer | string,
@@ -242,10 +235,6 @@ export const Gent = {
                   () => new GentConnectionError({ message: "owned server internal state missing" }),
                 ),
               )
-              // Idle shutdown counts clients, and an in-process one opens no
-              // socket for the transport tracker to see. Registering here keeps
-              // the server alive for as long as this client's scope is open.
-              yield* internal.trackInProcessClient
               const headers = Option.fromNullishOr(options?.cwd).pipe(
                 Option.match({
                   onNone: () => internal.headers,

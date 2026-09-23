@@ -70,7 +70,7 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
           return
         }
         chunks.push(decoder.decode(value))
-        const match = chunks.join("").match(/GENT_SERVER_READY (.+)/)
+        const match = chunks.join("").match(/Gent server ready on (.+)/)
         if (match) {
           reader.releaseLock()
           const readyUrl = Option.fromNullishOr(match[1])
@@ -102,30 +102,22 @@ const readReadyUrl = (proc: Bun.Subprocess): Effect.Effect<string, ServerProcess
 }
 
 /**
- * Spawn a shared-mode server subprocess on `port` and wait for its ready line.
- * Pass `idleTimeoutMs` to give the server an idle-shutdown deadline; omit it to
- * let the server run until it is killed.
+ * Spawn a standalone server subprocess on `port` and wait for its ready line.
+ * It runs until a signal stops it.
  */
 export const spawnServer = (opts: {
   dataDir: string
   port: number
-  idleTimeoutMs?: number
 }): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError> =>
   Effect.gen(function* () {
-    const idleTimeoutEnv = Option.match(Option.fromNullishOr(opts.idleTimeoutMs), {
-      onNone: () => ({}),
-      onSome: (ms) => ({ GENT_IDLE_TIMEOUT_MS: String(ms) }),
-    })
     const proc = Bun.spawn(["bun", serverEntry], {
       cwd: repoRoot,
       env: {
         ...Bun.env,
         GENT_PORT: String(opts.port),
-        GENT_SERVER_MODE: "shared",
         GENT_PERSISTENCE_MODE: "memory",
         GENT_PROVIDER_MODE: "debug-scripted",
         GENT_DATA_DIR: opts.dataDir,
-        ...idleTimeoutEnv,
       },
       stdout: "pipe",
       stderr: "pipe",

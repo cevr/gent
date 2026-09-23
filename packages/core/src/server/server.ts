@@ -1,5 +1,4 @@
 import {
-  Clock,
   Context,
   Crypto,
   DateTime,
@@ -9,7 +8,6 @@ import {
   Option,
   Path,
   Predicate,
-  Ref,
   Schema,
   type Scope,
   Stream,
@@ -168,56 +166,18 @@ const clientSteer = (command: TransportSteerCommand): TransportSteerCommand => {
   return { ...command, metadata: clientMetadata(command.metadata) }
 }
 
-// ── connection-tracker ──────────────────────────────────────────────────────
-
-/**
- * ConnectionTracker — tracks active WebSocket connections for idle shutdown.
- */
-
-export interface ConnectionTrackerService {
-  readonly increment: Effect.Effect<void>
-  readonly decrement: Effect.Effect<void>
-  readonly count: Effect.Effect<number>
-}
-
-export class ConnectionTracker extends Context.Service<
-  ConnectionTracker,
-  ConnectionTrackerService
->()("@gent/core/src/server/server/ConnectionTracker") {
-  static Live: Layer.Layer<ConnectionTracker> = Layer.effect(
-    ConnectionTracker,
-    Effect.gen(function* () {
-      const ref = yield* Ref.make(0)
-      return ConnectionTracker.of({
-        increment: Ref.update(ref, (n) => n + 1),
-        decrement: Ref.update(ref, (n) => Math.max(0, n - 1)),
-        count: Ref.get(ref),
-      })
-    }),
-  )
-}
-
 // ── server-identity ─────────────────────────────────────────────────────────
 
 /**
- * ServerIdentity — provides server identity info for status/identity routes.
- * Populated by the server app at startup.
+ * What `/_gent/identity` serves, verbatim. Registry validation compares it
+ * field for field, so it holds nothing that varies across a restart.
  */
-
 export interface ServerIdentityApi {
   readonly serverId: string
   readonly pid: number
   readonly hostname: string
   readonly dbPath: string
   readonly buildFingerprint: string
-  readonly startedAt: number
-}
-
-export class ServerIdentity extends Context.Service<ServerIdentity, ServerIdentityApi>()(
-  "@gent/core/src/server/server/ServerIdentity",
-) {
-  static Live = (config: ServerIdentityApi): Layer.Layer<ServerIdentity> =>
-    Layer.succeed(ServerIdentity, ServerIdentity.of(config))
 }
 
 // ── session-utils ───────────────────────────────────────────────────────────
@@ -1195,8 +1155,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
-    const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
-    const serverIdentity = yield* ServerIdentity
     // Touching these Tags at layer-build keeps their requirements visible on the
     // RpcHandlers layer. RpcGroup.toLayer erases handler-residual R, so Tags only
     // yielded inside returned handler Effects would otherwise become deferred
@@ -1581,26 +1539,6 @@ const RpcHandlers = GentRpcs.toLayer(
               }),
           )
         }).pipe(Effect.scoped),
-
-      // ----------------------------------------------------------------------
-      // Runtime status
-      // ----------------------------------------------------------------------
-      "runtime.status": () =>
-        Effect.gen(function* () {
-          let connectionCount = 0
-          if (Option.isSome(connectionTrackerOpt)) {
-            connectionCount = yield* connectionTrackerOpt.value.count
-          }
-          return {
-            serverId: serverIdentity.serverId,
-            pid: serverIdentity.pid,
-            hostname: serverIdentity.hostname,
-            uptime: (yield* Clock.currentTimeMillis) - serverIdentity.startedAt,
-            connectionCount,
-            dbPath: serverIdentity.dbPath,
-            buildFingerprint: serverIdentity.buildFingerprint,
-          }
-        }),
     }
   }),
 )
@@ -1942,9 +1880,6 @@ export const createDependencies = (config: DependenciesConfig) => {
  *   - `ws.connect` log with url + remoteAddress on open
  *   - `ws.session` span wrapping the connection lifetime
  *   - `ws.disconnect` log on close
- *
- * Also increments/decrements `ConnectionTracker` when present, so the
- * server can shut down on idle.
  */
 const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRouter.use((router) =>
   router.addGlobalMiddleware((handler) =>
@@ -1954,9 +1889,6 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
       const isUpgrade = upgradeHeader?.toLowerCase() === "websocket"
 
       if (!isUpgrade) return yield* handler
-
-      const trackerOpt = yield* Effect.serviceOption(ConnectionTracker)
-      if (Option.isSome(trackerOpt)) yield* trackerOpt.value.increment
 
       yield* Effect.logInfo("ws.connect").pipe(
         Effect.annotateLogs({
@@ -1973,15 +1905,12 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
           },
         }),
         Effect.ensuring(
-          Effect.gen(function* () {
-            if (Option.isSome(trackerOpt)) yield* trackerOpt.value.decrement
-            yield* Effect.logInfo("ws.disconnect").pipe(
-              Effect.annotateLogs({
-                url: request.url,
-                remoteAddress: request.remoteAddress ?? "unknown",
-              }),
-            )
-          }),
+          Effect.logInfo("ws.disconnect").pipe(
+            Effect.annotateLogs({
+              url: request.url,
+              remoteAddress: request.remoteAddress ?? "unknown",
+            }),
+          ),
         ),
       )
     }),
@@ -1991,12 +1920,8 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
 // ── Route Assembly ──
 
 interface ServerRoutesConfig {
-  /**
-   * The identity `/_gent/identity` serves, verbatim. `startedAt` is excluded:
-   * registry validation compares a stable identity, and a restart-varying
-   * field would make every comparison a mismatch.
-   */
-  readonly identity: Omit<ServerIdentityApi, "startedAt">
+  /** The identity `/_gent/identity` serves, verbatim. */
+  readonly identity: ServerIdentityApi
 }
 
 /**

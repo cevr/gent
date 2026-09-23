@@ -1,6 +1,6 @@
 /**
  * Server lifecycle integration tests.
- * Tests identity route, connection tracking, idle shutdown, and reconnects.
+ * Tests the identity route, a signal stop, and reconnects.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
@@ -45,94 +45,22 @@ describe("server lifecycle", () => {
   )
 
   it.live(
-    "runtime.status RPC returns connection count and uptime",
+    "a standalone server stops on SIGTERM",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
           const port = yield* randomLifecyclePort
-          const { url, proc } = yield* Effect.acquireRelease(
+          const { proc } = yield* Effect.acquireRelease(
             spawnServer({ dataDir, port }),
             ({ proc }) => killProcess(proc),
           )
-
-          const bundle = yield* Gent.client(url)
-          yield* bundle.runtime.lifecycle.waitForReady
-          const status = yield* bundle.client.runtime.status()
-
-          expect(status.pid).toBe(proc.pid)
-          expect(status.uptime).toBeGreaterThan(0)
-          expect(status.connectionCount).toBeGreaterThanOrEqual(1)
-          expect(status.buildFingerprint).toBeTruthy()
-          expect(status.serverId).toBeTruthy()
-        }),
-      ),
-    15_000,
-  )
-
-  it.live(
-    "worker shuts down after idle timeout with no connections",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const idleTimeoutMs = 500
-          const port = yield* randomLifecyclePort
-          const { url, proc } = yield* Effect.acquireRelease(
-            spawnServer({ dataDir, port, idleTimeoutMs }),
-            ({ proc }) => killProcess(proc),
-          )
-
-          const baseUrl = url.replace("/rpc", "")
-          const identityResp = yield* Effect.promise(() => Bun.fetch(`${baseUrl}/_gent/identity`))
-          expect(identityResp.ok).toBe(true)
-
-          const exited = yield* waitForProcessExit(proc.pid, idleTimeoutMs + 3_000)
+          yield* killProcess(proc, "SIGTERM")
+          const exited = yield* waitForProcessExit(proc.pid, 5_000)
           expect(exited).toBe(true)
         }),
       ),
     15_000,
-  )
-
-  it.live(
-    "WS connection resets idle timer, shutdown triggers after disconnect",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const dataDir = yield* makeTempDirectoryScoped("gent-lifecycle-")
-          const idleTimeoutMs = 750
-          const port = yield* randomLifecyclePort
-          const { url, proc } = yield* Effect.acquireRelease(
-            spawnServer({ dataDir, port, idleTimeoutMs }),
-            ({ proc }) => killProcess(proc),
-          )
-
-          // gent/no-sleep: allow real-clock idle-timeout exercise — subject under test is wall-clock idle eviction
-          yield* Effect.sleep(`${idleTimeoutMs * 0.6} millis`)
-
-          const clientScope = yield* Scope.make()
-          const bundle = yield* Gent.client(url).pipe(
-            Effect.provideService(Scope.Scope, clientScope),
-          )
-          yield* bundle.runtime.lifecycle.waitForReady
-
-          const status = yield* bundle.client.runtime.status()
-          expect(status.connectionCount).toBeGreaterThanOrEqual(1)
-
-          // gent/no-sleep: allow real-clock idle-timeout exercise — verifies eviction has not fired before deadline
-          yield* Effect.sleep(`${idleTimeoutMs * 0.6} millis`)
-          expect(() => process.kill(proc.pid, 0)).not.toThrow()
-
-          yield* Scope.close(clientScope, Exit.void)
-          // gent/no-sleep: allow real-clock grace window after client scope close, before idle eviction
-          yield* Effect.sleep("100 millis")
-          expect(() => process.kill(proc.pid, 0)).not.toThrow()
-
-          const exited = yield* waitForProcessExit(proc.pid, idleTimeoutMs + 3_000)
-          expect(exited).toBe(true)
-        }),
-      ),
-    20_000,
   )
 
   it.live(
@@ -158,8 +86,7 @@ describe("server lifecycle", () => {
           const states: Array<ReturnType<typeof bundle.runtime.lifecycle.getState>["_tag"]> = []
           bundle.runtime.lifecycle.subscribe((s) => states.push(s._tag))
 
-          const status1 = yield* bundle.client.runtime.status()
-          expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
+          yield* bundle.client.session.list()
           expect(states).toContain("Connected")
 
           serverRef.current.proc.kill("SIGKILL")
@@ -176,8 +103,7 @@ describe("server lifecycle", () => {
           )
           expect(reconnected).toBe(true)
 
-          const status2 = yield* bundle.client.runtime.status()
-          expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
+          yield* bundle.client.session.list()
 
           yield* Scope.close(clientScope, Exit.void)
           yield* killProcess(serverRef.current.proc)

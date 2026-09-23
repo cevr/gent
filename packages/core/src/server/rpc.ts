@@ -502,28 +502,6 @@ export class SessionRpcs extends RpcGroup.make(
 // ── rpcs/index ──────────────────────────────────────────────────────────────
 
 // ============================================================================
-// Runtime status
-// ============================================================================
-
-const RuntimeStatusResult = Schema.Struct({
-  serverId: Schema.String,
-  pid: Schema.Finite,
-  hostname: Schema.String,
-  uptime: Schema.Finite,
-  connectionCount: Schema.Finite,
-  dbPath: Schema.String,
-  buildFingerprint: Schema.String,
-})
-type RuntimeStatusResult = typeof RuntimeStatusResult.Type
-
-class RuntimeRpcs extends RpcGroup.make(
-  Rpc.make("runtime.status", {
-    success: RuntimeStatusResult,
-    error: GentRpcError,
-  }),
-) {}
-
-// ============================================================================
 // Auth
 // ============================================================================
 
@@ -601,7 +579,7 @@ class ExtensionRpcs extends RpcGroup.make(
 // ============================================================================
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, RuntimeRpcs)
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ============================================================================

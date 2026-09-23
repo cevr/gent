@@ -25,7 +25,6 @@ export type {
 // Client constructors
 export { Gent, type GentClientBundle } from "./client.js"
 export type { GentRuntime } from "./runtime-boundary.js"
-export type { IdleShutdownSpec } from "./server.js"
 
 // Launch-value decoders: a launcher reads strings from its environment,
 // and these turn one into a value `Gent.server` accepts, or fail at startup.

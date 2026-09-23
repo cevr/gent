@@ -1100,10 +1100,8 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_PORT", "the operator of a standalone server picks its port"],
   ["GENT_DATA_DIR", "the operator names the directory holding data.db"],
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
-  ["GENT_SERVER_MODE", "the launcher picks standalone or shared"],
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
-  ["GENT_IDLE_TIMEOUT_MS", "the launcher of a shared server sets its idle window"],
   ["GENT_LINK", "a developer sets this by hand to link the built binary onto PATH"],
 ])
 
