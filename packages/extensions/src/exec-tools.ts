@@ -2431,8 +2431,10 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "host machine capsule property unit setenv description slice uid gid nice working-directory service-type on-active on-boot on-startup on-unit-active on-unit-inactive on-calendar timer-property path-property socket-property",
       ),
     ),
-    // `sg group cmd` and `sg group -c cmd` run the one word as a shell script.
-    sg: spec(options("c"), [joined(1, 1), optionScript("c")]),
+    // `sg group cmd` and `sg group -c cmd` run a shell script. Shadow's sg
+    // runs only the first word; the words after it are read too, in case
+    // another sg joins them.
+    sg: spec(options("c"), [joined(1), optionScript("c")]),
     ...each(["nice", "gnice"], runner(options("n", "adjustment"))),
     ionice: runner(options("cnpPu", "class classdata pid pgid uid")),
     ...each(

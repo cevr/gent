@@ -1453,6 +1453,7 @@ describe("classifyBashCommand", () => {
       `systemd-run -p Nice=5 --unit x ${r}`,
       `sg wheel '${r}'`,
       `sg wheel -c '${r}'`,
+      `sg wheel ${r}`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
