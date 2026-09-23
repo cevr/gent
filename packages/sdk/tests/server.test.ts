@@ -668,6 +668,48 @@ describe("Server Lock", () => {
       }),
     ),
   )
+
+  it.scopedLive("a fixed-port server takes the lock and names itself in the entry", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const owner = yield* Gent.server({
+          cwd: home,
+          port: 0,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        })
+        expect(owner._tag).toBe("Owned")
+        expect(Option.getOrThrow(yield* serverLock.read(home)).rpcUrl).toBe(owner.url)
+        // A client without a port finds that server and attaches to it.
+        const client = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        })
+        expect(client._tag).toBe("Attached")
+        expect(client.url).toBe(owner.url)
+      }),
+    ),
+  )
+
+  it.scopedLive("a fixed-port server does not start on a database another server owns", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const options = {
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }
+        const owner = yield* Gent.server(options)
+        expect(owner._tag).toBe("Owned")
+        const pid = Option.getOrThrow(yield* serverLock.read(home)).pid
+        const second = yield* Gent.server({ ...options, port: 0 }).pipe(Effect.flip)
+        expect(second.message).toContain(`PID ${pid}`)
+      }),
+    ),
+  )
 })
 
 /**

@@ -890,9 +890,9 @@ export interface GentServerOptions {
   /** Seed storage with a debug session on startup. */
   readonly debug?: boolean
   /**
-   * Bind this TCP port instead of an ephemeral one. A fixed port also opts
-   * out of the shared-server registry: the caller already named the address
-   * its clients use, so there is nothing to discover.
+   * Bind this TCP port instead of an ephemeral one. A SQLite server still
+   * takes the database lock and writes its entry, so other clients find it;
+   * a fixed port only means it never attaches to another server.
    */
   readonly port?: number
   /** Login shell for extension process launches. */
@@ -1266,13 +1266,15 @@ const resolveServerInternal = (
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()
 
-    // Memory state has nothing to share; a fixed port is already the address
-    // the caller hands its clients. Both are owned outright, no registry.
-    if (stateSpec._tag === "Memory" || Predicate.isNotNullish(options.port)) {
+    // Memory state has nothing to share: owned outright, no registry.
+    if (stateSpec._tag === "Memory") {
       return yield* buildOwnedServer(options, stateSpec, providerSpec)
     }
 
-    // SQLite state: one server per database, decided by the kernel lock.
+    // SQLite state: one server per database, decided by the kernel lock. A
+    // fixed port changes only the attach decision: the caller asked to serve
+    // on that port, so it owns the database or fails; it never attaches.
+    const mayAttach = Predicate.isNullish(options.port)
     const platform = yield* GentPlatform
     const home = resolveHome(stateSpec, yield* platform.homeDirectory)
     const dbPath = yield* resolveDbPath(home)
@@ -1283,6 +1285,13 @@ const resolveServerInternal = (
     // only after it listens, so a second failure on the same entry is final.
     let unanswered = Option.none<string>()
     const attachOrBlock = (holder: ServerLockEntry) => {
+      if (!mayAttach) {
+        return Effect.fail(
+          new GentConnectionError({
+            message: `PID ${holder.pid} holds ${holder.dbPath}; a server on a fixed port does not attach to it. Stop it with \`gent server stop\`, then retry`,
+          }),
+        )
+      }
       if (holder.buildFingerprint === fingerprint && holder.dbPath === dbPath) {
         return Effect.succeed(
           GentServer.cases.Attached.make({
