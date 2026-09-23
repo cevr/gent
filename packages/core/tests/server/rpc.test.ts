@@ -1365,6 +1365,90 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
+    "a retried reply whose first attempt stored the answer but never woke the loop finishes the turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const finalReply = "approval reached the loop on the retry"
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "approve deploy?" }),
+            textStep(finalReply),
+          ])
+          // The first reply stores its answer, then fails before the handler
+          // wakes the loop or publishes the resolution: a dropped socket or a
+          // failed actor send leaves exactly this state.
+          const failAfterFirstStore = Layer.effect(
+            ApprovalService,
+            Effect.gen(function* () {
+              const live = yield* ApprovalService
+              const failed = MutableRef.make(false)
+              return ApprovalService.of({
+                ...live,
+                storeResolution: (branch, requestId, decision) =>
+                  live.storeResolution(branch, requestId, decision).pipe(
+                    Effect.tap(() => {
+                      if (MutableRef.get(failed)) return Effect.void
+                      MutableRef.set(failed, true)
+                      return Effect.fail(new EventStoreError({ message: "reply lost after store" }))
+                    }),
+                  ),
+              })
+            }),
+          ).pipe(Layer.provide(ApprovalService.Live))
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: failAfterFirstStore,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const isDialogEvent = Predicate.or(
+            Predicate.isTagged("InteractionPresented"),
+            Predicate.isTagged("InteractionResolved"),
+          )
+          const dialog = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => isDialogEvent(envelope.event)),
+            Stream.take(2),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "run approval probe" })
+          const event = Array.from(yield* Fiber.join(presented))[0]?.event
+          if (event?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
+          const reply = { sessionId, branchId, requestId: event.requestId, approved: true }
+          const lost = yield* Effect.exit(client.interaction.respondInteraction(reply))
+          expect(lost._tag).toBe("Failure")
+          // The client retries the same reply; it must do the work the first one missed.
+          yield* client.interaction.respondInteraction(reply)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === finalReply),
+              ),
+            5_000,
+            "the retried reply woke the loop and the turn ended",
+          )
+          // The dialog closes for every client.
+          const tags = Array.from(yield* Fiber.join(dialog)).map((envelope) => envelope.event._tag)
+          expect(tags).toEqual(["InteractionPresented", "InteractionResolved"])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
     "two guarded calls in one step ask one at a time and each gets its own answer",
     () =>
       Effect.scoped(
@@ -2105,10 +2189,19 @@ describe("interaction.respondInteraction", () => {
           expect(results.some((result) => result.includes("approved=true"))).toBe(false)
           const resolved = yield* client.session.events({ sessionId, branchId }).pipe(
             Stream.takeUntil((envelope) => envelope.event._tag === "TurnCompleted"),
-            Stream.filter((envelope) => envelope.event._tag === "InteractionResolved"),
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionResolved")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
             Stream.runCollect,
           )
-          expect(Array.from(resolved)).toHaveLength(1)
+          // The retry came while the answer was untaken, so it published the
+          // resolution again; every copy carries the first answer.
+          expect(Array.from(resolved).map((event) => [event.requestId, event.approved])).toEqual([
+            [request.requestId, false],
+            [request.requestId, false],
+          ])
         }).pipe(Effect.timeout("8 seconds")),
       ),
     12_000,

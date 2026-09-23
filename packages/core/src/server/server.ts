@@ -1075,11 +1075,15 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     ...omitUndefined({ editedContent: input.editedContent }),
   }
   // 1. Store resolution durably so re-entering present() finds it. The first
-  //    answer wins: the same answer again is a retried reply and changes
-  //    nothing; a different one fails with a conflict. A request the branch
-  //    does not show and that keeps no answer is a mismatch.
+  //    answer wins: the same answer again is a retried reply; a different one
+  //    fails with a conflict. A request the branch does not show and that
+  //    keeps no answer is a mismatch.
   const first = yield* approvalService.storeResolution(input, input.requestId, decision)
-  if (!first) return
+  // A retried reply whose answer is still stored and not taken may follow a
+  // first attempt that failed after the store, so it wakes the loop and
+  // publishes again: the wake is idempotent by request id. Once the call
+  // took the answer, a retry has nothing left to do.
+  if (!first && !(yield* approvalService.answered(input.requestId))) return
   // 2. Wake the machine. present() marks the row resolved only when the
   //    tool consumes the durable decision.
   yield* sessionRuntime.respondInteraction({
