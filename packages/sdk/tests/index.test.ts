@@ -18,7 +18,6 @@ describe("SDK public surface", () => {
       "buildLogPaths",
       "classifyLogFile",
       "dataPaths",
-      "dataPathsIn",
       "emptyQueueSnapshot",
       "ensureLogDir",
       "makeJsonFileLogger",

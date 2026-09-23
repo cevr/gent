@@ -19,7 +19,6 @@ import { MinimumLogLevel } from "effect/References"
 import {
   classifyLogFile,
   dataPaths,
-  dataPathsIn,
   makeJsonFileLogger,
   serverLock,
   ServerLockEntry,
@@ -499,7 +498,7 @@ describe("local health", () => {
       // `home` holds no database; the server wrote to `dataDir` instead.
       const home = yield* fs.makeTempDirectoryScoped()
       const dataDir = yield* fs.makeTempDirectoryScoped()
-      const { dbPath } = dataPathsIn(dataDir)
+      const { dbPath } = yield* dataPaths(home).pipe(withDataDir(dataDir))
       yield* createDb(
         dbPath,
         "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
@@ -519,7 +518,7 @@ describe("local health", () => {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
       const dataDir = yield* fs.makeTempDirectoryScoped()
-      const { dbPath } = dataPathsIn(dataDir)
+      const { dbPath } = yield* dataPaths(home).pipe(withDataDir(dataDir))
       yield* createDb(
         dbPath,
         "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",

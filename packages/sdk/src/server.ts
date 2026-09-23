@@ -85,12 +85,8 @@ interface DataPaths {
   readonly serverKernelLock: string
 }
 
-/**
- * Build the paths for an already-resolved data directory. Pure — callers that
- * hold an explicit directory (a test fixture) use this;
- * callers reading the environment use {@link dataPaths}.
- */
-export const dataPathsIn = (dataDir: string): DataPaths => {
+/** The paths inside an already-resolved data directory. */
+const dataPathsIn = (dataDir: string): DataPaths => {
   const resolvedDir = pathResolve(dataDir)
   const dbPath = pathJoin(resolvedDir, DB_FILE)
   return {

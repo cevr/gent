@@ -33,8 +33,6 @@ export { LaunchConfig } from "./server.js"
 // Server discovery: the shared lock file clients read to find, and stop, a running server
 export { serverLock, ServerLockEntry, ServerLockStatus } from "./server.js"
 // Where gent keeps its durable state: the server writes it, the doctor reads it
-export { dataPaths, dataPathsIn, resolveLogDir } from "./server.js"
+export { dataPaths, resolveLogDir } from "./server.js"
 // The log paths a client shares with its server, and the JSON line format both write
 export { buildLogPaths, classifyLogFile, ensureLogDir, makeJsonFileLogger } from "./logger.js"
-
-// Utility functions
