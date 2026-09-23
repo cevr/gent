@@ -16,12 +16,7 @@ import {
   Sink,
   Stream,
 } from "effect"
-import {
-  encodeToolOutput,
-  stringifyOutput,
-  summarizeOutput,
-  ToolResultFailure,
-} from "../domain/message.js"
+import { encodeToolOutput, stringifyOutput, ToolResultFailure } from "../domain/message.js"
 import {
   type ExtraRepositories,
   type MessageStorage,
@@ -47,6 +42,7 @@ import {
   ToolBindingIdentity,
   ToolBindingSource,
   type ToolCapability,
+  toolResultSummary,
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "../domain/capability.js"
@@ -734,10 +730,15 @@ const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall
       .pipe(Effect.orDie)
   })
 
-const publishCompleted = (params: { ctx: ToolCapabilityContext; result: Prompt.ToolResultPart }) =>
+const publishCompleted = (params: {
+  ctx: ToolCapabilityContext
+  toolCall: ToolCall
+  tool: Option.Option<ToolCapability>
+  result: Prompt.ToolResultPart
+}) =>
   Effect.gen(function* () {
     const eventPublisher = yield* EventPublisher
-    const outputSummary = summarizeOutput(params.result.result)
+    const outputSummary = toolResultSummary(params.tool, params.toolCall.input, params.result)
     const fields = {
       sessionId: params.ctx.sessionId,
       branchId: params.ctx.branchId,
@@ -877,6 +878,8 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
       Effect.gen(function* () {
         yield* publishCompleted({
           ctx,
+          toolCall,
+          tool: Option.map(toolEntry, (entry) => entry.capability),
           result,
         })
         yield* Effect.logInfo("tool.completed").pipe(
@@ -992,7 +995,7 @@ const runTestTool = (toolCall: ToolCall) =>
       // oxlint-disable-next-line effect/noNullish -- The test runner preserves the provider-neutral empty result shape.
       result: null,
     })
-    yield* publishCompleted({ ctx, result })
+    yield* publishCompleted({ ctx, toolCall, tool: Option.none(), result })
     return result
   })
 

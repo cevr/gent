@@ -1,5 +1,6 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { RpcClient, RpcTest } from "effect/unstable/rpc"
+import { SqlClient, type SqlError } from "effect/unstable/sql"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
 import type { BranchId, SessionId } from "../../src/domain/ids"
@@ -161,7 +162,7 @@ export const createActiveSessionFixture = Effect.fn("createActiveSessionFixture"
     yield* input.branches.createBranch(
       new Branch({ id: input.branchId, sessionId: input.sessionId, createdAt: input.now }),
     )
-    yield* input.sessions.updateSession(new Session({ ...session, activeBranchId: input.branchId }))
+    yield* input.sessions.setActiveBranch(input.sessionId, input.branchId, input.now)
   },
 )
 
@@ -318,6 +319,53 @@ export const racySessionMutationsLayer = (params: {
     storageLayer,
     racingSessionStorageLayer,
     sessionRuntimeProbeLayer(params.runtimeTerminated),
+    sessionGovernanceProbeLayer(),
+    EventStore.Memory,
+    EventPublisher.Test(),
+    LanguageModelLayers.debug(),
+    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    GentPlatform.Test(),
+    ExtensionRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionMutationsLive, deps)
+}
+
+/**
+ * Session mutations whose first read of `sessionId` is followed at once by a
+ * racing writer's committed change (`racingWrite`, raw SQL). It stands for a
+ * `/model` switch or a rename tool call that lands between a mutation's read
+ * and its write.
+ */
+export const interleavedSessionMutationsLayer = (params: {
+  readonly sessionId: SessionId
+  readonly racingWrite: (sql: SqlClient.SqlClient) => Effect.Effect<unknown, SqlError.SqlError>
+}) => {
+  const storageLayer = SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
+  const interleavedSessionStorageLayer = Layer.effect(
+    SessionStorage,
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const sql = yield* SqlClient.SqlClient
+      let fired = false
+      return SessionStorage.of({
+        ...sessions,
+        getSession: (id: SessionId) =>
+          Effect.gen(function* () {
+            const found = yield* sessions.getSession(id)
+            if (fired || id !== params.sessionId) return found
+            fired = true
+            yield* params.racingWrite(sql).pipe(Effect.orDie)
+            return found
+          }),
+      })
+    }),
+  ).pipe(Layer.provide(storageLayer))
+  const deps = Layer.mergeAll(
+    storageLayer,
+    interleavedSessionStorageLayer,
+    sessionRuntimeLayer(),
     sessionGovernanceProbeLayer(),
     EventStore.Memory,
     EventPublisher.Test(),

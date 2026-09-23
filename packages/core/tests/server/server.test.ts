@@ -61,6 +61,7 @@ import {
   failingDeleteSessionMutationsLayerWithMachineProbe,
   failingSessionMutationsLayer,
   FIXED_NOW,
+  interleavedSessionMutationsLayer,
   makeClient,
   makeRpcHandlersClient,
   racySessionMutationsLayer,
@@ -716,6 +717,77 @@ describe("session command persistence", () => {
       expect((yield* sessions.getSession(sessionId))?.name).toBe("before")
     }).pipe(Effect.provide(failingSessionMutationsLayer), Effect.timeout("4 seconds")),
   )
+
+  it.live("a rename keeps a model change that lands between its read and its write", () => {
+    const sessionId = SessionId.make("session-rename-race")
+    const branchId = BranchId.make("branch-rename-race")
+    return Effect.gen(function* () {
+      const mutations = yield* SessionMutations
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now: FIXED_NOW,
+        name: "before",
+      })
+
+      yield* mutations.renameSession({ sessionId, name: "after" })
+
+      const stored = yield* sessions.getSession(sessionId)
+      expect(stored?.name).toBe("after")
+      expect(stored?.modelId).toBe(ModelId.make("racer/model"))
+    }).pipe(
+      Effect.provide(
+        interleavedSessionMutationsLayer({
+          sessionId,
+          racingWrite: (sql) =>
+            sql`UPDATE sessions SET model_id = ${"racer/model"} WHERE id = ${sessionId}`,
+        }),
+      ),
+      Effect.timeout("4 seconds"),
+    )
+  })
+
+  it.live("a settings change keeps a rename that lands between its read and its write", () => {
+    const sessionId = SessionId.make("session-settings-race")
+    const branchId = BranchId.make("branch-settings-race")
+    return Effect.gen(function* () {
+      const mutations = yield* SessionMutations
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now: FIXED_NOW,
+        name: "before",
+      })
+
+      yield* mutations.updateSettings({
+        sessionId,
+        modelId: ModelId.make("chosen/model"),
+        reasoningLevel: "high",
+      })
+
+      const stored = yield* sessions.getSession(sessionId)
+      expect(stored?.name).toBe("renamed meanwhile")
+      expect(stored?.modelId).toBe(ModelId.make("chosen/model"))
+      expect(stored?.reasoningLevel).toBe("high")
+    }).pipe(
+      Effect.provide(
+        interleavedSessionMutationsLayer({
+          sessionId,
+          racingWrite: (sql) =>
+            sql`UPDATE sessions SET name = ${"renamed meanwhile"} WHERE id = ${sessionId}`,
+        }),
+      ),
+      Effect.timeout("4 seconds"),
+    )
+  })
 
   it.live("rolls back active branch switch when event publication fails", () =>
     Effect.gen(function* () {

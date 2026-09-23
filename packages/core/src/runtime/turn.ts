@@ -44,6 +44,7 @@ import {
   ToolCallId,
 } from "../domain/ids.js"
 import {
+  Cause,
   Context,
   DateTime,
   Deferred,
@@ -60,6 +61,7 @@ import {
 } from "effect"
 import type { ExtensionHostContext, TurnProjection } from "../domain/extension.js"
 import {
+  ApprovalService,
   CurrentExtensionHostContext,
   ExtensionRegistry,
   type ExtensionRegistryService,
@@ -2983,12 +2985,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
         .pipe(provideTurnContext)
         .pipe(
-          Effect.ensuring(
+          Effect.onExit((exit) =>
             Effect.gen(function* () {
-              if (!preserveReplayBindings) {
-                yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
-                yield* clearProcessLocalToolResultsForTurn(state.message.id)
-              }
+              if (preserveReplayBindings) return
+              yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
+              yield* clearProcessLocalToolResultsForTurn(state.message.id)
+              // A request lives no longer than its turn. A turn stopped by
+              // shutdown has not ended: it runs again after the restart.
+              if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return
+              const approval = yield* Effect.serviceOption(ApprovalService)
+              if (Option.isSome(approval))
+                yield* approval.value.endTurn({
+                  sessionId: scope.sessionId,
+                  branchId: scope.branchId,
+                })
             }),
           ),
         )

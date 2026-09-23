@@ -154,7 +154,8 @@ const RenameSessionTool = tool({
 /**
  * One message from this session to another. Every session has it: a parent
  * corrects a child, a child asks its parent, two siblings hand off a fact.
- * The text lands on the target's active branch as an interjection. A running
+ * The text lands as an interjection on the target's active branch; a child's
+ * message to its parent lands on the branch that owns the child. A running
  * turn reads it at its next step; an idle branch wakes and answers it.
  */
 
@@ -226,9 +227,18 @@ const senderLine = (from: SessionMessageSender): string => {
   return `Message from ${who}${name} (session ${from.sessionId}):`
 }
 
-/** A child's message arrives mid-turn; its completion is a separate message. */
+/**
+ * A child's message is never its completion. It can arrive mid-turn or after
+ * the completion (a later wake turn), so the line holds in both cases.
+ */
 const CHILD_STATUS_LINE =
-  "Your child is still running. This is not its completion; that arrives as a separate message."
+  "A child's completion arrives as its own child-completion message; this message is not one."
+
+/** Stored rows written before the line above carry this one. */
+const STORED_CHILD_STATUS_LINES = [
+  CHILD_STATUS_LINE,
+  "Your child is still running. This is not its completion; that arrives as a separate message.",
+]
 
 export const sessionMessageText = (input: {
   readonly from: SessionMessageSender
@@ -252,8 +262,10 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
       Option.map((value) => value.slice(senderLine(from).length)),
     )
   const afterStatus = (text: string) =>
-    Option.liftPredicate(text, (value) => value.startsWith(`\n${CHILD_STATUS_LINE}`)).pipe(
-      Option.map((value) => value.slice(CHILD_STATUS_LINE.length + 1)),
+    Option.fromUndefinedOr(
+      STORED_CHILD_STATUS_LINES.find((line) => text.startsWith(`\n${line}`)),
+    ).pipe(
+      Option.map((line) => text.slice(line.length + 1)),
       Option.getOrElse(() => text),
     )
   return afterSender(content).pipe(
@@ -306,6 +318,12 @@ const SendSessionTool = tool({
     if (Predicate.isUndefined(receiver) || Predicate.isUndefined(receiver.activeBranchId)) {
       return yield* new SendSessionError({ message: `No session ${targetId}` })
     }
+    // A child reports to the branch that owns it, not to whichever branch
+    // the person has open on the parent now.
+    const branchId = Option.fromUndefinedOr(sender.parentBranchId).pipe(
+      Option.filter(() => params.to === "parent"),
+      Option.getOrElse(() => receiver.activeBranchId),
+    )
     const relation = relationOf(sender, receiver)
     const from = {
       sessionId: sender.id,
@@ -319,7 +337,7 @@ const SendSessionTool = tool({
     yield* ctx.Session.send({
       delivery: "steer",
       sessionId: receiver.id,
-      branchId: receiver.activeBranchId,
+      branchId,
       requestId: RequestId.make(`session-send:${ctx.toolCallId}`),
       content: sessionMessageText({ from, message }),
       metadata: {

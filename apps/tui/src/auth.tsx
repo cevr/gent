@@ -661,6 +661,7 @@ export function Auth(props: AuthProps) {
   }
   const authLabel = (provider: AuthProviderInfo) => {
     if (!provider.hasKey) return "[none]"
+    if (provider.source === "env") return "[env]"
     return `[${Option.getOrElse(Option.fromNullishOr(provider.authType), () => "stored")}]`
   }
   const requiredLabel = (provider: AuthProviderInfo) => {

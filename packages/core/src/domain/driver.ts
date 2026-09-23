@@ -215,6 +215,13 @@ export interface ModelDriverContribution {
   ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
   /** Auth configuration — OAuth + API key methods + handlers. */
   readonly auth?: ProviderAuthContribution
+  /**
+   * The environment variable the driver reads a credential from when nothing
+   * is stored (e.g. `ANTHROPIC_API_KEY`). The auth listing reports a set one
+   * as `source: "env"`, so a user with only that variable is not asked to
+   * sign in.
+   */
+  readonly envCredential?: string
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
   readonly retry?: RetryPolicy
 }

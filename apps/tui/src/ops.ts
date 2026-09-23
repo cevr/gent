@@ -305,6 +305,8 @@ const formatIssue = (issue: ExtensionHealthIssue): string =>
   Match.value(issue).pipe(
     Match.tagsExhaustive({
       ActivationFailed: (issue) => `activation failed during ${issue.phase}: ${issue.error}`,
+      ModelCatalogFailed: (issue) =>
+        `model driver ${issue.driverId} could not list its models: ${issue.error}`,
     }),
   )
 

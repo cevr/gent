@@ -48,6 +48,7 @@ import {
   SqliteStorage,
 } from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
+import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
 import { maximumModelToolResultChars } from "@gent/core/extensions/api"
@@ -88,6 +89,10 @@ describe("splitCdCommand", () => {
     }
   })
 
+  test("cd - stays in the command for bash", () => {
+    expect(Option.isNone(splitCdCommand("cd - && ls"))).toBe(true)
+  })
+
   test("a single-quoted directory is literal and still splits", () => {
     expect(splitCdCommand("cd '$x' && ls")).toEqual(Option.some({ cwd: "$x", command: "ls" }))
   })
@@ -98,6 +103,27 @@ describe("injectGitTrailers", () => {
     const result = injectGitTrailers('git commit -m "fix bug"', SessionId.make("sess-123"))
     expect(result).toContain('--trailer "Session-Id: sess-123"')
     expect(result).toContain("git commit")
+  })
+
+  test("a commit after git global options gets the trailer", () => {
+    expect(injectGitTrailers("git -C sub commit -m a", SessionId.make("s1"))).toBe(
+      'git -C sub commit --trailer "Session-Id: s1" -m a',
+    )
+  })
+
+  test("a commit that passes its own trailer keeps it; the other commits get one", () => {
+    expect(
+      injectGitTrailers(
+        'git commit --trailer "X: 1" -m a && git commit -m b',
+        SessionId.make("s1"),
+      ),
+    ).toBe('git commit --trailer "X: 1" -m a && git commit --trailer "Session-Id: s1" -m b')
+  })
+
+  test("every commit in a chained command gets the trailer", () => {
+    expect(injectGitTrailers("git commit -m a && git commit -m b", SessionId.make("s1"))).toBe(
+      'git commit --trailer "Session-Id: s1" -m a && git commit --trailer "Session-Id: s1" -m b',
+    )
   })
 
   test("git push → unchanged", () => {
@@ -223,6 +249,83 @@ describe("classifyBashCommand", () => {
       "git push -u origin main",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("external")
+    }
+  })
+
+  test("a git command that discards uncommitted changes is destructive", () => {
+    for (const command of [
+      "git checkout .",
+      "git checkout -- src/a.ts",
+      "git checkout -f main",
+      "git checkout --force main",
+      "git checkout -p src/a.ts",
+      "git restore src/a.ts",
+      "git restore .",
+      "git restore --worktree .",
+      "git restore -W src/a.ts",
+      "git restore --staged --worktree src/a.ts",
+      "git restore -SW src/a.ts",
+      "git switch -f main",
+      "git switch --discard-changes main",
+      "git branch -D feature",
+      "git branch --delete --force feature",
+      "git branch -f main HEAD~3",
+      "git stash drop",
+      "git stash clear",
+      "git checkout HEAD src/a.ts",
+      "git checkout HEAD~1 src/a.ts src/b.ts",
+      "git checkout --theirs src/a.ts",
+      "git checkout --ours src/a.ts",
+      "git checkout -m main",
+      "git checkout --merge main",
+      "git restore --staged src/a.ts",
+      "git restore -S src/a.ts",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git command that keeps file content is safe", () => {
+    for (const command of [
+      "git checkout main",
+      "git checkout -b feature origin/main",
+      "git checkout main >/dev/null 2>&1",
+      "git checkout main 2>/dev/null",
+      "git checkout -b feature",
+      "git switch -c feature",
+      "git branch -d feature",
+      "git branch feature",
+      "git stash",
+      "git stash pop",
+      "git stash list",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a redirection joined to a word does not hide a flag", () => {
+    expect(classifyBashCommand("git reset --hard>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git add --all>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git push -f>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git push -f</dev/null").level).toBe("destructive")
+  })
+
+  test("ANSI-C quoting and the attr-source option do not hide a git command", () => {
+    expect(classifyBashCommand("git reset $'--hard'").level).toBe("destructive")
+    expect(classifyBashCommand("git --attr-source HEAD reset --hard").level).toBe("destructive")
+  })
+
+  test("a push that deletes remote refs names the deletion", () => {
+    for (const command of [
+      "git push --delete origin feature",
+      "git push -d origin feature",
+      "git push origin :feature",
+      "git push --mirror",
+      "git push --prune origin",
+    ]) {
+      const risk = classifyBashCommand(command)
+      expect(risk.level, command).toBe("destructive")
+      expect(risk.reason, command).toContain("delete")
     }
   })
 
@@ -453,6 +556,20 @@ const onQueue =
     return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
   }
 const now = dateFromMillis(0)
+
+describe("BashTool summary", () => {
+  test("names the exit code and the printed line count", () => {
+    const summary = (stdout: string, stderr: string, exitCode: number) =>
+      toolResultSummary(
+        Option.some(BashTool),
+        { command: "make" },
+        { isFailure: false, result: { stdout, stderr, exitCode } },
+      )
+    expect(summary("a\nb\n", "warn\n", 0)).toBe("exit 0 · 3 lines")
+    expect(summary("", "", 2)).toBe("exit 2 · 0 lines")
+    expect(summary("one", "", 0)).toBe("exit 0 · 1 line")
+  })
+})
 
 describe("BashTool execution", () => {
   it.live(

@@ -1895,7 +1895,44 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
       expect(frame).toContain("failed extensions")
-      expect(frame).toContain("@gent/memory")
+      // The reason, not only the id: a broken config names its parse error.
+      expect(frame).toContain("@gent/memory: startup boom")
+    }),
+  )
+  it.live("ConnectionWidget names a model catalog that did not load", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ConnectionWidget />, {
+          client: createMockClient({
+            extension: {
+              listStatus: () =>
+                Effect.succeed({
+                  _tag: "Degraded",
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    {
+                      manifest: { id: "@user/local-models" },
+                      scope: "user",
+                      sourcePath: "/home/.gent/extensions/local-models.ts",
+                      _tag: "Degraded",
+                      issues: [
+                        {
+                          _tag: "ModelCatalogFailed",
+                          driverId: "ollama",
+                          error: "connect ECONNREFUSED",
+                        },
+                      ],
+                    },
+                  ],
+                }),
+            },
+          }),
+        }),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("some models unavailable")
+      expect(frame).toContain("ollama: connect ECONNREFUSED")
+      expect(frame).not.toContain("failed extensions")
     }),
   )
   it.live("ConnectionWidget surfaces failed extensions for the active session", () =>

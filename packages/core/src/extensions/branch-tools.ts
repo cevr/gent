@@ -64,7 +64,7 @@ export { CurrentDispatchingCall } from "../runtime/tools.js"
 export { CurrentToolCall } from "../runtime/tools.js"
 export { type ResolvedToolCapability, ToolRunner } from "../runtime/tools.js"
 export { getToolMetadata } from "../domain/capability.js"
-export { summarizeOutput } from "../domain/message.js"
+export { toolResultSummary } from "../domain/capability.js"
 
 // Running a turn's worth of work, and stopping when the turn is interrupted.
 export {

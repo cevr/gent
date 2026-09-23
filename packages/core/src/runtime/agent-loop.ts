@@ -115,6 +115,7 @@ import { Entity, Sharding, ShardingConfig } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
+  ApprovalService,
   buildResourceLayer,
   type CurrentExtensionHostContext,
   ExtensionRegistry,
@@ -887,6 +888,8 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
   /** The agent the session runs as; it names the actor of each turn's wide event. */
   readonly sessionAgent: Effect.Effect<AgentName, AgentLoopError | E, R>
+  /** True when this request already has an answer waiting for its owner. */
+  readonly interactionAnswered: (requestId: InteractionRequestId) => Effect.Effect<boolean>
 }
 
 /**
@@ -976,6 +979,9 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           pendingRequestId: outcome.pendingRequestId,
         })
         yield* scope.inbox.moveToPhase(next)
+        // An answer that came while a sibling call still ran found no parked
+        // loop to wake. It is stored, so the turn goes on at once.
+        if (yield* scope.interactionAnswered(outcome.pendingRequestId)) yield* resumeWaiting(next)
         return
       }
 
@@ -1082,20 +1088,30 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       const snap = yield* scope.inbox.phase
       if (snap._tag === "Idle") return false
       if (Predicate.isNotUndefined(messageId) && snap.message.id !== messageId) return false
-      if (snap._tag === "WaitingForInteraction") return true
+      // The latch is set before anything can resume the parked turn, so an
+      // answer that wins the resume still runs a turn that stops at once.
       yield* scope.turnInterruption.interrupt
+      if (snap._tag === "WaitingForInteraction") return true
       yield* interruptActiveStream(scope.activeStreamRef)
       yield* scope.interruptToolWork
       return false
     }).pipe(scope.interruptSemaphore.withPermits(1))
     if (!waiting) return
-    yield* Effect.gen(function* () {
+    // Resume the parked turn so it ends as interrupted, unless something
+    // else resumes it first; then the latch already stops it, and the
+    // interrupt does not wait for the permit that turn holds.
+    const resume = Effect.gen(function* () {
       const state = yield* scope.inbox.phase
       if (state._tag !== "WaitingForInteraction") return
       if (Predicate.isNotUndefined(messageId) && state.message.id !== messageId) return
-      yield* scope.turnInterruption.interrupt
       yield* resumeWaiting(state)
-    }).pipe(scope.sideMutationSemaphore.withPermits(1))
+    }).pipe(Effect.uninterruptible, scope.sideMutationSemaphore.withPermits(1))
+    const resumedElsewhere = scope.inbox.changes.pipe(
+      Stream.filter((loop) => loop.state._tag !== "WaitingForInteraction"),
+      Stream.runHead,
+      Effect.asVoid,
+    )
+    yield* Effect.raceFirst(resume, resumedElsewhere)
   })
 
   const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
@@ -1125,7 +1141,8 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           )
           return
         }
-        yield* scope.turnInterruption.beginTurn
+        // The same turn goes on: an interrupt that came while it was parked
+        // still stops it.
         yield* resumeWaiting(state)
       }).pipe(scope.sideMutationSemaphore.withPermits(1)),
   )
@@ -1283,6 +1300,7 @@ const makeAgentLoopBehavior = (
   | ToolCallBindingStorage
   | TurnRecordStorage
   | InteractionStorage
+  | ApprovalService
   | SqlClient.SqlClient
   | ModelResolver
   | ExtensionRegistry
@@ -1306,6 +1324,7 @@ const makeAgentLoopBehavior = (
     yield* TurnRecordStorage
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
+    const approval = yield* ApprovalService
     const messageStorage = yield* MessageStorage
     const recoveryEvents = yield* EventStorage
     const host = yield* makeExtensionHostPlatform
@@ -1475,6 +1494,7 @@ const makeAgentLoopBehavior = (
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
       publishEvent,
+      interactionAnswered: approval.answered,
       runTurn: (state) =>
         Effect.acquireUseRelease(
           keepAlive(true),

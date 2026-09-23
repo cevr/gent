@@ -1,4 +1,5 @@
-import { Effect, FileSystem, Option, Path, Random, Schema, Semaphore } from "effect"
+import { Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect"
+import { writeFileAtomic } from "@gent/core/host"
 import type { AutocompleteItem } from "./extensions/client-facets.js"
 
 // ── autocomplete frecency model ─────────────────────────────────────────────
@@ -250,21 +251,10 @@ export const writeFrecencyStore = (
     const fs = yield* FileSystem.FileSystem
     const paths = yield* frecencyPaths(home)
     yield* fs.makeDirectory(paths.directory, { recursive: true })
-    // Write beside the target, then rename onto it. `rename` within one
-    // directory is atomic on every filesystem the TUI runs on, so a reader
-    // opening the file sees either the whole previous store or the whole new
-    // one — never the half-written JSON that a direct overwrite exposes. A
-    // random suffix names the temp file because a second `gent` may be
-    // writing its own at the same instant, and two writers sharing one temp
-    // path would corrupt each other rather than merely race. The default
-    // `Random` draws from `Math.random`, so two processes do not share a
-    // sequence, and the store keeps its `FileSystem | Path` requirements.
-    const suffix = yield* Random.nextIntBetween(0, Number.MAX_SAFE_INTEGER)
-    const temp = `${paths.file}.${suffix.toString(36)}.tmp`
-    yield* fs.writeFileString(temp, encodeStore(store))
-    yield* Effect.onError(fs.rename(temp, paths.file), () =>
-      fs.remove(temp, { force: true }).pipe(Effect.ignoreCause),
-    )
+    // A reader sees the whole previous store or the whole new one, never
+    // half-written JSON. Each write stages its own uniquely named temp file,
+    // so a second `gent` writing at the same instant races, never corrupts.
+    yield* writeFileAtomic(paths.file, encodeStore(store))
   }).pipe(Effect.ignoreCause)
 
 /**
