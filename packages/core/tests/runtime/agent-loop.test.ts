@@ -434,8 +434,7 @@ describe("concurrency", () => {
                 maxRunning = Math.max(maxRunning, running)
                 events.push(`start:${name}`)
               })
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-              if (running > 1) yield* Deferred.succeed(bothStarted, undefined)
+              if (running > 1) yield* Deferred.succeed(bothStarted, void 0)
               yield* Deferred.await(bothStarted).pipe(Effect.timeout("1 second"))
               yield* Effect.sync(() => {
                 events.push(`end:${name}`)
@@ -2987,8 +2986,7 @@ describe("agent-loop recovery race", () => {
                   commandId: ActorCommandId.make(yield* platform.randomId),
                 }),
               )
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-              .pipe(Effect.andThen(Deferred.succeed(op2Done, undefined)), Effect.forkChild)
+              .pipe(Effect.andThen(Deferred.succeed(op2Done, void 0)), Effect.forkChild)
 
             // Sanity: Op2 should not have completed yet. With the wide
             // semaphore, Op2 is parked on `startupSemaphore.withPermits`.
@@ -3006,8 +3004,7 @@ describe("agent-loop recovery race", () => {
             expect(op2DoneEarly).toBe(false)
 
             // Release Op1's gate. Both ops should now drain.
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            yield* Deferred.succeed(gate, undefined)
+            yield* Deferred.succeed(gate, void 0)
             yield* Fiber.join(op1)
             yield* Fiber.join(op2)
             yield* Deferred.await(op2Done)
@@ -4335,8 +4332,7 @@ describe("agent-loop actor commands", () => {
           Effect.gen(function* () {
             entered++
             if (entered === 1) {
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-              yield* Deferred.succeed(firstEntered, undefined)
+              yield* Deferred.succeed(firstEntered, void 0)
               yield* Deferred.await(releaseFirst)
             }
             completed++
@@ -4363,8 +4359,7 @@ describe("agent-loop actor commands", () => {
         expect(earlySecond._tag).toBe("None")
         expect(entered).toBe(1)
         expect(completed).toBe(0)
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(releaseFirst, undefined)
+        yield* Deferred.succeed(releaseFirst, void 0)
         yield* Fiber.join(firstFiber)
         yield* Fiber.join(secondFiber)
         expect(entered).toBe(2)
@@ -4379,8 +4374,7 @@ describe("agent-loop actor commands", () => {
       const streamReleased = yield* Deferred.make<void>()
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(streamStarted, undefined)
+          yield* Deferred.succeed(streamStarted, void 0)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
             textDeltaPart("done"),
@@ -4425,8 +4419,7 @@ describe("agent-loop actor commands", () => {
         const earlyRequest = yield* Fiber.join(requestFiber).pipe(Effect.timeoutOption("1 millis"))
         expect(earlyRequest._tag).toBe("None")
         expect(executed).toBe(false)
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(streamReleased, undefined)
+        yield* Deferred.succeed(streamReleased, void 0)
         yield* Fiber.join(submitFiber)
         const result = yield* Fiber.join(requestFiber)
         expect(executed).toBe(true)
@@ -4441,8 +4434,7 @@ describe("agent-loop actor commands", () => {
       const streamReleased = yield* Deferred.make<void>()
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(streamStarted, undefined)
+          yield* Deferred.succeed(streamStarted, void 0)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
             textDeltaPart("done"),
@@ -4478,8 +4470,7 @@ describe("agent-loop actor commands", () => {
           input: "mid-turn",
         }).pipe(Effect.timeout("2 seconds"))
         expect(result).toEqual("read mid-turn")
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(streamReleased, undefined)
+        yield* Deferred.succeed(streamReleased, void 0)
         yield* Fiber.join(submitFiber)
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
@@ -4491,8 +4482,7 @@ describe("agent-loop actor commands", () => {
       const streamReleased = yield* Deferred.make<void>()
       const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.gen(function* () {
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(streamStarted, undefined)
+          yield* Deferred.succeed(streamStarted, void 0)
           yield* Deferred.await(streamReleased)
           return Stream.fromIterable([
             textDeltaPart("done"),
@@ -4534,8 +4524,7 @@ describe("agent-loop actor commands", () => {
         yield* Fiber.join(recordFiber).pipe(Effect.ignore)
         const afterTerminate = yield* Effect.exit(getActorState({ sessionId, branchId }))
         expect(afterTerminate._tag).toBe("Failure")
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
+        yield* Deferred.succeed(streamReleased, void 0).pipe(Effect.ignore)
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -4882,8 +4871,7 @@ describe("queue drain regression", () => {
                 }
                 yield* Ref.set(storedQueueRef, queue)
                 if (queuedFollowUps === 2) {
-                  // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                  yield* Deferred.succeed(secondFollowUpStored, undefined).pipe(
+                  yield* Deferred.succeed(secondFollowUpStored, void 0).pipe(
                     Effect.catchEager(() => Effect.void),
                   )
                 }
@@ -4923,8 +4911,7 @@ describe("queue drain regression", () => {
             expect(recovered.followUp.map((item) => item.content)).toEqual(["second", "third"])
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
         )
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
+        yield* Deferred.succeed(activeTurnReleased, void 0).pipe(
           Effect.catchEager(() => Effect.void),
         )
       }),
@@ -4942,8 +4929,7 @@ describe("queue drain regression", () => {
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
             yield* Ref.update(providerCalls, (n) => n + 1)
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
             return Stream.fromIterable([
               textDeltaPart("recovered"),
               finishPart({ finishReason: "stop" }),
@@ -4989,8 +4975,7 @@ describe("queue drain regression", () => {
         const providerCalled = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
             return Stream.fromIterable([
               textDeltaPart("replayed"),
               finishPart({ finishReason: "stop" }),
@@ -5054,8 +5039,7 @@ describe("queue drain regression", () => {
         const providerCalled = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
             return Stream.fromIterable([
               textDeltaPart("replayed"),
               finishPart({ finishReason: "stop" }),
@@ -5126,8 +5110,7 @@ describe("queue drain regression", () => {
         const providerCalled = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
             return Stream.fromIterable([
               textDeltaPart("replayed"),
               finishPart({ finishReason: "stop" }),
@@ -5192,8 +5175,7 @@ describe("queue drain regression", () => {
         const providerCalled = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
             return Stream.fromIterable([
               textDeltaPart("replayed"),
               finishPart({ finishReason: "stop" }),
@@ -5390,8 +5372,7 @@ describe("queue drain regression", () => {
             expect((yield* Ref.get(storedQueueRef)).followUp).toEqual([])
           }).pipe(Effect.provide(layer)),
         )
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(activeTurnReleased, undefined).pipe(
+        yield* Deferred.succeed(activeTurnReleased, void 0).pipe(
           Effect.catchEager(() => Effect.void),
         )
       }),
@@ -6907,8 +6888,7 @@ describe("streaming", () => {
         return Effect.succeed(
           Stream.fromEffect(
             Effect.gen(function* () {
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.succeed(firstStarted, void 0)
               yield* Deferred.await(gate)
             }),
           ).pipe(Stream.flatMap(() => parts)),
@@ -6948,8 +6928,7 @@ describe("streaming", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
           "second message queued",
         )
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(gate, undefined)
+        yield* Deferred.succeed(gate, void 0)
         const firstExit = yield* Fiber.join(firstFiber)
         const secondExit = yield* Fiber.join(secondFiber)
         expect(firstExit._tag).toBe("Failure")
@@ -7029,8 +7008,7 @@ describe("streaming", () => {
         return Effect.succeed(
           Stream.fromEffect(
             Effect.gen(function* () {
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.succeed(firstStarted, void 0)
               yield* Deferred.await(gate)
             }),
           ).pipe(Stream.flatMap(() => parts)),
@@ -7076,8 +7054,7 @@ describe("streaming", () => {
               .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 2))),
           "third message queued",
         )
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(gate, undefined)
+        yield* Deferred.succeed(gate, void 0)
         expect((yield* Fiber.join(firstFiber))._tag).toBe("Success")
         expect((yield* Fiber.join(secondFiber))._tag).toBe("Failure")
         expect((yield* Fiber.join(thirdFiber))._tag).toBe("Success")
@@ -7145,8 +7122,7 @@ describe("streaming", () => {
         branchId,
         x,
         y,
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        release: Deferred.succeed(params.gate, undefined).pipe(Effect.asVoid),
+        release: Deferred.succeed(params.gate, void 0).pipe(Effect.asVoid),
         streamCalls: params.streamCalls,
         promptTails: params.promptTails,
         settled: settled.pipe(Effect.asVoid),
@@ -7186,8 +7162,7 @@ describe("streaming", () => {
         return Effect.succeed(
           Stream.fromEffect(
             Effect.gen(function* () {
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-              yield* Deferred.succeed(aStarted, undefined)
+              yield* Deferred.succeed(aStarted, void 0)
               yield* Deferred.await(gate)
             }),
           ).pipe(Stream.flatMap(() => parts)),
@@ -7315,8 +7290,7 @@ describe("streaming", () => {
           Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                yield* Deferred.succeed(started, undefined)
+                yield* Deferred.succeed(started, void 0)
                 yield* hold
               }),
             ).pipe(Stream.flatMap(parts)),
@@ -7348,8 +7322,7 @@ describe("streaming", () => {
                 yield* submitAgentLoop(agentLoop, x)
                 yield* submitAgentLoop(agentLoop, y)
                 yield* submitAgentLoop(agentLoop, z)
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                yield* Deferred.succeed(aGate, undefined)
+                yield* Deferred.succeed(aGate, void 0)
                 yield* Deferred.await(xStarted)
               }).pipe(Effect.provide(processLayer(firstProvider))),
             )
@@ -7617,8 +7590,7 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                yield* Deferred.succeed(firstStarted, undefined)
+                yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return
               }),
@@ -7659,8 +7631,7 @@ describe("streaming", () => {
           expect(snapshotWhileRunning.followUp).toEqual([
             expect.objectContaining({ _tag: "FollowUp", content: "queued after failure" }),
           ])
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(gate, undefined)
+          yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber).pipe(Effect.exit)
           yield* waitForPhase(
             agentLoop,

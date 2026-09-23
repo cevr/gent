@@ -32,6 +32,7 @@ import {
   PACKAGE_SURFACE_MANIFESTS,
   type PackageJson,
 } from "./guards"
+import gentRules from "./gent-rules"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
@@ -81,7 +82,7 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
-    ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, rootRules),
+    ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
 })
 
@@ -123,6 +124,66 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
   return findPackageSurfaceFindings(packageJsonByPath, tsconfigJson)
 })
 
+/** One tracked file the scan reads: its path and its text. */
+export interface TrackedText {
+  readonly file: string
+  readonly text: string
+}
+
+/** A manifest: its `scripts` can set a `GENT_*` variable, the way an operator's shell does. */
+const isManifest = (file: string): boolean => /(?:^|\/)package\.json$/.test(file)
+
+/**
+ * Route every scanned file to the finders that read it, then run the scans
+ * that need the whole tree. The lint config and the package surfaces read
+ * their own files; everything else answers from `files`.
+ */
+export const scanTrackedTexts = (
+  files: ReadonlyArray<TrackedText>,
+  trackedFiles: ReadonlyArray<string>,
+) => {
+  const findings: Array<Finding> = []
+
+  // Export-consumer scan needs the whole tree: collect every declared export
+  // in the scanned surfaces, then count which names any other file reaches.
+  const exportFacts = new Map<string, ExportFacts>()
+  // Seam scan needs the whole tree too: the declarations live in core, the
+  // adapters that fill them live in the shipped extensions and the apps.
+  const sourceTexts = new Map<string, string>()
+  const adaptedSeams = new Set<string>()
+  // A package script is a writer of the variables it sets.
+  const manifestTexts = new Map<string, string>()
+
+  /**
+   * Facts the cross-file scans need, gathered in the single pass over the
+   * tree. Each of these is answerable only once every file has been read:
+   * whether an export is consumed, and whether a seam has an adapter.
+   */
+  const collectWholeTreeFacts = (file: string, text: string): void => {
+    exportFacts.set(file, collectExportFacts(file, text))
+    sourceTexts.set(file, text)
+    for (const seam of adaptedSeamsIn(file, text)) adaptedSeams.add(seam)
+  }
+
+  for (const { file, text } of files) {
+    for (const finder of ANY_FILE_FINDERS) findings.push(...finder(file, text))
+    findings.push(...findSteeringFilePaths(file, text, trackedFiles))
+    if (isManifest(file)) manifestTexts.set(file, text)
+    if (!isSourceFile(file)) continue
+    for (const finder of SOURCE_FILE_FINDERS) findings.push(...finder(file, text))
+    collectWholeTreeFacts(file, text)
+  }
+
+  findings.push(
+    ...findUnusedSuppressionApprovals(sourceTexts),
+    ...findUnconsumedExports(exportFacts),
+    ...findUnadaptedSeams(sourceTexts, adaptedSeams),
+    // A GENT_* variable whose writer left: its reader is a branch nothing takes.
+    ...findReadersWithoutWriters(new Map([...sourceTexts, ...manifestTexts])),
+  )
+  return { findings, sourceTexts }
+}
+
 const program = Effect.gen(function* () {
   const trackedFiles = yield* trackedFileNames
   const symlinks = yield* trackedSymlinks
@@ -139,47 +200,16 @@ const program = Effect.gen(function* () {
     { concurrency: 32 },
   )
 
-  const findings: Array<Finding> = []
-
-  // Export-consumer scan needs the whole tree: collect every declared export
-  // in the scanned surfaces, then count which names any other file reaches.
-  const exportFacts = new Map<string, ExportFacts>()
-  // Seam scan needs the whole tree too: the declarations live in core, the
-  // adapters that fill them live in the shipped extensions and the apps.
-  const sourceTexts = new Map<string, string>()
-  const adaptedSeams = new Set<string>()
-
-  /**
-   * Facts the cross-file scans need, gathered in the single pass over the
-   * tree. Each of these is answerable only once every file has been read:
-   * whether an export is consumed, and whether a seam has an adapter.
-   */
-  const collectWholeTreeFacts = (file: string, text: string): void => {
-    exportFacts.set(file, collectExportFacts(file, text))
-    sourceTexts.set(file, text)
-    for (const seam of adaptedSeamsIn(file, text)) adaptedSeams.add(seam)
-  }
-
-  for (const maybeEntry of textFiles) {
-    if (Option.isNone(maybeEntry)) continue
-    const { file, text } = maybeEntry.value
-    for (const finder of ANY_FILE_FINDERS) findings.push(...finder(file, text))
-    findings.push(...findSteeringFilePaths(file, text, trackedFiles))
-    if (!isSourceFile(file)) continue
-    for (const finder of SOURCE_FILE_FINDERS) findings.push(...finder(file, text))
-    collectWholeTreeFacts(file, text)
-  }
-
-  findings.push(
-    ...findUnusedSuppressionApprovals(sourceTexts),
-    ...findUnconsumedExports(exportFacts),
-    ...findUnadaptedSeams(sourceTexts, adaptedSeams),
-    // A GENT_* variable whose writer left: its reader is a branch nothing takes.
-    ...findReadersWithoutWriters(sourceTexts),
+  const { findings: treeFindings, sourceTexts } = scanTrackedTexts(
+    textFiles.flatMap(Option.toArray),
+    trackedFiles,
+  )
+  const findings: Array<Finding> = [
+    ...treeFindings,
     // The lint config must not name a file or a rule that is gone.
     ...(yield* lintConfigFindings(trackedFiles, sourceTexts)),
     ...(yield* packageSurfaceFindings()),
-  )
+  ]
 
   // Two finders may report one line with one message; say it once.
   const failures = [
@@ -191,4 +221,4 @@ const program = Effect.gen(function* () {
   return yield* Effect.fail("Gent guardrails failed")
 })
 
-BunRuntime.runMain(program)
+if (import.meta.main) BunRuntime.runMain(program)

@@ -7,6 +7,12 @@ test("promise catch is banned", () => work().catch(() => "fallback"))
 
 test("promise finally is banned", () => work().finally(cleanup))
 
+// A capitalised name is not a module namespace unless an import binds it.
+test("a capitalised promise variable is still a promise", () => {
+  const PromiseResult = work()
+  return PromiseResult.catch(() => "fallback")
+})
+
 test("effect runPromise is banned", () => Effect.runPromise(Effect.succeed("work")))
 
 test("effect runPromise in pipe is banned", () => Effect.succeed("work").pipe(Effect.runPromise))
