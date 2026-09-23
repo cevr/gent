@@ -17,9 +17,10 @@ import {
 } from "solid-js"
 import {
   type AutocompleteState,
-  type BorderLabelItem,
+  type StatusRowLabel,
   ComposerEvent,
   ComposerInteractionEvent,
+  overlayHoldsComposer,
   usePromptHistory,
   useSessionController,
 } from "./session"
@@ -150,7 +151,7 @@ const runCommand = (
 // ── composer frame ──────────────────────────────────────────────────────────
 
 interface ComposerFrameProps {
-  labels: readonly BorderLabelItem[]
+  labels: readonly StatusRowLabel[]
   /**
    * How many of `labels`, counted from the end, are laid out from the right
    * edge inward instead of after the left group.
@@ -168,8 +169,8 @@ interface ComposerFrameProps {
 const SEPARATOR_WIDTH = 3
 
 /** Joins labels with the separator, measuring the columns they occupy. */
-const layout = (labels: readonly BorderLabelItem[], budget: number) => {
-  const shown: BorderLabelItem[] = []
+const layout = (labels: readonly StatusRowLabel[], budget: number) => {
+  const shown: StatusRowLabel[] = []
   let used = 0
   for (const label of labels) {
     if (label.text.length === 0) continue
@@ -1023,7 +1024,7 @@ function useComposerController(): ComposerController {
       !command.paletteOpen() &&
       !sc.promptSearch.isOpen() &&
       effectiveMode() !== "interaction" &&
-      sc.uiState().overlay._tag === "none",
+      !overlayHoldsComposer(sc.uiState().overlay),
     attachTextarea: (renderable) => {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {

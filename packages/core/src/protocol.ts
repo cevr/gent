@@ -65,7 +65,11 @@ export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/mess
 export { type ModelContextMetrics, type SessionRuntimeState } from "./domain/agent-loop.js"
 export { DriverError, DriverFailureId } from "./domain/driver.js"
 export { SessionRuntimeError } from "./runtime/session.js"
-export { CONTEXT_WINDOW_MESSAGE_TYPE, windowDetails } from "./runtime/model-context.js"
+export {
+  CONTEXT_WINDOW_MESSAGE_TYPE,
+  MODEL_CHANGE_MESSAGE_TYPE,
+  windowDetails,
+} from "./runtime/model-context.js"
 export { NotFoundError, ProviderError, StorageError } from "./domain/errors.js"
 export { GentRpcError } from "./server/rpc.js"
 export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpc.js"

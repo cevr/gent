@@ -595,7 +595,6 @@ describe("docked panes", () => {
                 loading: () => false,
                 refresh: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onClose={() => {}}
@@ -682,7 +681,6 @@ describe("docked pane column budget", () => {
                 loading: () => false,
                 refresh: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onClose={() => {}}

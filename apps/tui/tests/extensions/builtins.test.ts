@@ -31,6 +31,7 @@ import {
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
   makeClientTestTransport,
+  makePaneSlot,
   runClientExtensionSetupWithRuntime,
 } from "../extension-test-harness-boundary"
 import { createSignal } from "solid-js"
@@ -158,7 +159,7 @@ const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
   makeClientContextLayer({
     transport: makeClientTestTransport({ currentSession: () => Option.none() }),
     workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
-    shell: { cast: createMockRuntime().cast },
+    shell: { cast: createMockRuntime().cast, pane: makePaneSlot() },
     ...deps,
   })
 

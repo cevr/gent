@@ -10,8 +10,7 @@ import {
   type AnyExtensionClientModule,
   type AutocompleteContribution,
   type AutocompleteItem,
-  type BorderLabelItem,
-  type BorderLabelPosition,
+  type StatusLabelItem,
   type ClientContributions,
   type ClientRuntime,
   type ClientRuntimeServices,
@@ -19,6 +18,7 @@ import {
   type MessageRenderer,
   type WidgetComponent,
   type WidgetSlot,
+  unknownContributionKey,
 } from "./client-facets.js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -123,7 +123,7 @@ const discoverTuiExtensions = (opts: {
  * Keyed buckets (renderers by tool name, message renderers by custom type,
  * widgets by id, interaction renderers by metadata type) go through `resolveKeyed`. Commands
  * are passed on as sources: the host adds the session's and the server's and
- * resolves them all under `resolveCommands`. Border labels and autocomplete
+ * resolves them all under `resolveCommands`. Status labels and autocomplete
  * sources are collected in scope order.
  */
 
@@ -148,10 +148,9 @@ export interface ResolvedWidget {
   readonly component: WidgetComponent
 }
 
-export interface ResolvedBorderLabel {
-  readonly position: BorderLabelPosition
+export interface ResolvedStatusLabel {
   readonly priority: number
-  readonly produce: () => ReadonlyArray<BorderLabelItem>
+  readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
 
 export interface ResolvedTuiExtensions {
@@ -162,7 +161,7 @@ export interface ResolvedTuiExtensions {
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
   readonly interactionRenderers: Map<string, InteractionRendererComponent>
-  readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
+  readonly statusLabels: ReadonlyArray<ResolvedStatusLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
@@ -408,9 +407,8 @@ export const resolveTuiExtensions = (
       commands: itemsOrEmpty(ext.contributions.commands),
     })),
     interactionRenderers,
-    borderLabels: byPriority(
-      collected((contributions) => contributions.borderLabels).map((contribution) => ({
-        position: contribution.position,
+    statusLabels: byPriority(
+      collected((contributions) => contributions.statusLabels).map((contribution) => ({
         priority: priorityOrDefault(contribution.priority),
         produce: contribution.produce,
       })),
@@ -488,18 +486,25 @@ const withinLoadTimeout =
       }),
     )
 
+/**
+ * What is wrong with a setup's result, if anything. A key outside the known
+ * buckets fails by name, so a renamed bucket never drops its items silently.
+ */
+// eslint-disable-next-line effect/noUnknownParameters -- a user setup's result is parsed at this module boundary.
+const contributionsProblem = (value: unknown): Option.Option<string> => {
+  if (!Predicate.isObject(value)) return Option.some("setup must return contributions")
+  return Option.map(
+    unknownContributionKey(Object.keys(value)),
+    (key) => `unknown contribution "${key}"`,
+  )
+}
+
 /** Run one extension's setup; any failure, defect or timeout becomes a recorded failure. */
 const setupExtension = (
   ext: ImportedExtension,
   timeout: Duration.Input,
 ): Effect.Effect<LoadedTuiExtension, ClientExtensionFailure, ClientRuntimeServices> =>
   ext.module.setup.pipe(
-    Effect.map((contributions) => ({
-      id: ext.module.id,
-      scope: ext.scope,
-      filePath: ext.filePath,
-      contributions,
-    })),
     Effect.catchCause((cause) =>
       Effect.logWarning("tui-ext.setup.failed").pipe(
         Effect.annotateLogs({ filePath: ext.filePath, error: Cause.pretty(cause) }),
@@ -507,6 +512,18 @@ const setupExtension = (
           Effect.fail({ id: ext.module.id, reason: `setup failed: ${Cause.squash(cause)}` }),
         ),
       ),
+    ),
+    Effect.flatMap((contributions) =>
+      Option.match(contributionsProblem(contributions), {
+        onSome: (reason) => Effect.fail({ id: ext.module.id, reason }),
+        onNone: () =>
+          Effect.succeed({
+            id: ext.module.id,
+            scope: ext.scope,
+            filePath: ext.filePath,
+            contributions,
+          }),
+      }),
     ),
     withinLoadTimeout(ext.module.id, "setup", timeout),
   )

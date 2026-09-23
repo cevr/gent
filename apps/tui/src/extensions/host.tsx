@@ -9,6 +9,7 @@ import {
   type InteractionRendererComponent,
   makeClientContextLayer,
   type MessageRenderer,
+  type PaneOwner,
 } from "./client-facets.js"
 import {
   type Accessor,
@@ -22,14 +23,14 @@ import {
 } from "solid-js"
 import { useRequiredContext } from "../utils"
 import { builtinClientModules } from "./builtins"
-import type { ToolRenderer } from "../tool-renderers"
+import { ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
 import {
   type ClientExtensionFailure,
   type CommandSource,
   loadExtensionUi,
   resolveCommands,
-  type ResolvedBorderLabel,
+  type ResolvedStatusLabel,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
 } from "./loader-boundary"
@@ -71,7 +72,11 @@ interface ExtensionUIContextValue {
    */
   readonly loaded: Accessor<boolean>
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
-  readonly renderers: Accessor<Map<string, ToolRenderer>>
+  /**
+   * The session view installs its overlay as the pane owner while it is
+   * mounted; with no session mounted, no pane opens.
+   */
+  readonly setPaneOwner: (owner: Option.Option<PaneOwner>) => void
   /** Message-row renderers by `metadata.customType`. */
   readonly messageRenderers: Accessor<Map<string, MessageRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
@@ -83,7 +88,7 @@ interface ExtensionUIContextValue {
   /** The session view supplies its own commands; they resolve at builtin scope. */
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
-  readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
+  readonly statusLabels: Accessor<ReadonlyArray<ResolvedStatusLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
@@ -100,7 +105,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   widgets: [],
   commandSources: [],
   interactionRenderers: new Map(),
-  borderLabels: [],
+  statusLabels: [],
   autocompleteItems: [],
   failures: [],
 }
@@ -119,6 +124,8 @@ export function ExtensionUIProvider(props: {
   const [activityProvider, setActivityProvider] = createSignal<() => ClientActivitySnapshot>(
     () => ({ state: "unknown" }),
   )
+
+  const [paneOwner, setPaneOwner] = createSignal<Option.Option<PaneOwner>>(Option.none())
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loaded, setLoaded] = createSignal(false)
@@ -157,31 +164,39 @@ export function ExtensionUIProvider(props: {
       notify: (message) => client.setNotice(message),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
+      pane: {
+        open: (id) => Option.map(paneOwner(), (owner) => owner.open(id)),
+        close: (id) => Option.map(paneOwner(), (owner) => owner.close(id)),
+        isOpen: (id) => Option.exists(paneOwner(), (owner) => owner.isOpen(id)),
+      },
     },
     activity: () => activityProvider()(),
     lifecycle: { addCleanup },
   })
 
-  if (props.scope) {
-    Effect.runSync(
-      Scope.addFinalizer(
-        props.scope,
-        Effect.promise(() => clientRuntime.dispose()),
-      ),
-    )
-  }
-
-  // Run widget-registered cleanups (Solid root disposers, pulse
-  // unsubscribes) FIRST, then dispose the per-provider runtime so layer
-  // finalizers run and any in-flight Effects are interrupted. Without
-  // this ordering, runtime disposal would yank `ClientContext` out
-  // from under widget cleanups that still need it.
-  onCleanup(() => {
+  // One disposer for both owners: the provider unmount and the UI scope at
+  // shutdown. It runs widget-registered cleanups (Solid root disposers, pulse
+  // unsubscribes) FIRST, then disposes the per-provider runtime so layer
+  // finalizers run and in-flight Effects are interrupted. Without this
+  // ordering, runtime disposal would yank `ClientContext` out from under
+  // widget cleanups that still need it. The first caller wins.
+  let disposed: Option.Option<Promise<void>> = Option.none()
+  const dispose = (): Promise<void> => {
+    if (Option.isSome(disposed)) return disposed.value
     for (const fn of cleanups) {
       Effect.runSync(Effect.ignore(Effect.try(fn)))
     }
     cleanups.length = 0
-    void clientRuntime.dispose()
+    const done = clientRuntime.dispose()
+    disposed = Option.some(done)
+    return done
+  }
+
+  if (props.scope) {
+    Effect.runSync(Scope.addFinalizer(props.scope, Effect.promise(dispose)))
+  }
+  onCleanup(() => {
+    void dispose()
   })
 
   onMount(() => {
@@ -307,21 +322,23 @@ export function ExtensionUIProvider(props: {
     <ExtensionUIContext.Provider
       value={{
         loaded,
-        renderers: () => resolved().renderers,
         messageRenderers: () => resolved().messageRenderers,
         widgets: () => resolved().widgets,
         commands: () => resolvedCommands().commands,
         setSessionCommands,
         interactionRenderers: () => resolved().interactionRenderers,
-        borderLabels: () => resolved().borderLabels,
+        statusLabels: () => resolved().statusLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
+        setPaneOwner: (owner) => setPaneOwner(() => owner),
         clientRuntime,
       }}
     >
-      {props.children}
+      <ToolRenderersProvider value={() => resolved().renderers}>
+        {props.children}
+      </ToolRenderersProvider>
     </ExtensionUIContext.Provider>
   )
 }

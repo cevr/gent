@@ -15,7 +15,6 @@ import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 import {
   type AnyExtensionClientModule,
   autocompleteContribution,
-  borderLabelContribution,
   type ClientActivitySnapshot,
   clientCommandContribution,
   clientContributions,
@@ -25,7 +24,7 @@ import {
   messageRendererContribution,
   rendererContribution,
   sessionQuery,
-  widgetContribution,
+  statusLabelContribution,
 } from "./client-facets.js"
 import { truncate, truncatePath } from "../utils"
 import { CollapsedRow, UserRow } from "../ui"
@@ -46,13 +45,11 @@ import {
   sessionMessageBody,
   SkillsRpc,
 } from "@gent/extensions/client.js"
-import { useTheme } from "../theme"
-import { useClient } from "../client"
-import { useExtensionUI } from "./host"
 import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
 import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../interaction-renderers"
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
+import builtinDelegate from "./delegate.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
 import {
@@ -556,8 +553,8 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
  * Goal status label — transport-only.
  *
  * Reads the branch goal through `GoalRpc.Get` and refreshes on
- * `ExtensionStateChanged` pulses for `@gent/goal`. Renders one bottom-right
- * border label while a goal is pending on the current branch, and collapses
+ * `ExtensionStateChanged` pulses for `@gent/goal`. Renders one
+ * status label while a goal is pending on the current branch, and collapses
  * each goal continuation message to one line.
  */
 
@@ -580,8 +577,7 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
       messageRendererContribution(GOAL_CONTEXT_MESSAGE_TYPE, () => (
         <CollapsedRow label="↻ goal continuation" />
       )),
-      borderLabelContribution({
-        position: "bottom-right",
+      statusLabelContribution({
         priority: 40,
         produce: () => {
           const goal = snapshot.value().pipe(
@@ -662,77 +658,6 @@ const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID,
   ),
 })
 
-// ── connection widget ───────────────────────────────────────────────────────
-
-export function ConnectionWidget() {
-  const client = useClient()
-  const ext = useExtensionUI()
-  const { theme } = useTheme()
-  const disconnectedReason = () => {
-    const state = Option.fromNullishOr(client.connectionState())
-    if (Option.isNone(state)) return Option.none<string>()
-    if (state.value._tag !== "Disconnected" || state.value.reason === "stopped") {
-      return Option.none<string>()
-    }
-    return Option.some(state.value.reason)
-  }
-  const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
-  const degradedExtensions = () => {
-    const health = client.extensionHealth()
-    if (health._tag === "Degraded") return health.degradedExtensions
-    return []
-  }
-  const failedExtensions = () => [
-    ...degradedExtensions()
-      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
-      .map((extension) => extension.manifest.id),
-    ...ext.failures().map((failure) => failure.id),
-  ]
-  const hasFailedExtensions = () => failedExtensions().length > 0
-  // Reconnecting and the restart count belong to the top-left border label;
-  // this widget draws what the label cannot: issues and failed extensions.
-  const visible = () =>
-    Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()
-  const accent = () => {
-    if (hasFailedExtensions()) return theme.warning
-    return theme.error
-  }
-  const subtitle = () => {
-    if (hasFailedExtensions()) return "extension activation degraded"
-    if (Option.isSome(disconnectedReason())) return "runtime unavailable"
-    return Option.getOrElse(connectionIssue(), () => "")
-  }
-  return (
-    <Show when={visible()}>
-      <box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
-        <text>
-          <span style={{ fg: accent(), bold: true }}>• connection</span>
-          <span style={{ fg: theme.textMuted }}> · {subtitle()}</span>
-        </text>
-        <box flexDirection="column" paddingLeft={2}>
-          <Show when={Option.isSome(connectionIssue())}>
-            <text>
-              <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
-            </text>
-          </Show>
-          <Show when={Option.isSome(disconnectedReason())}>
-            <text>
-              <span style={{ fg: theme.text }}>{Option.getOrUndefined(disconnectedReason())}</span>
-            </text>
-          </Show>
-          <Show when={hasFailedExtensions()}>
-            <text>
-              <span style={{ fg: theme.text }}>
-                failed extensions: {failedExtensions().join(", ")}
-              </span>
-            </text>
-          </Show>
-        </box>
-      </box>
-    </Show>
-  )
-}
-
 // ── tool renderer extensions ────────────────────────────────────────────────
 
 /**
@@ -760,17 +685,6 @@ const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
 })
 
 // ── builtin module registry ─────────────────────────────────────────────────
-
-const builtinConnection = defineClientExtension("@gent/connection", {
-  setup: Effect.succeed(
-    widgetContribution({
-      id: "connection",
-      slot: "below-messages",
-      priority: 30,
-      component: ConnectionWidget,
-    }),
-  ),
-})
 
 const builtinSkills = defineClientExtension("@gent/skills-ui", {
   setup: Effect.gen(function* () {
@@ -835,7 +749,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,
-  builtinConnection,
+  builtinDelegate,
   builtinDriver,
   builtinFiles,
   builtinGoal,

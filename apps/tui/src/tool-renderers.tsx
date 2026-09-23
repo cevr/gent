@@ -1,12 +1,10 @@
 import type { JSX } from "@opentui/solid"
-import { type ChildSessionEntry, useClient } from "./client"
 import { createPatch } from "diff"
 import { Match, Option, Schema } from "effect"
-import { createMemo, createResource, For, type JSX as SolidJSX, Show } from "solid-js"
+import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
-import { formatUsageStats, toolArgSummary } from "./utils.js"
-import { GutterText, ToolFrame, useSpinnerClock } from "./ui"
-import { BranchId, formatHeadTail, headTail } from "@gent/core/protocol"
+import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
+import { formatHeadTail, headTail } from "@gent/core/protocol"
 import {
   decodeToolOutput,
   decodeToolOutputOption,
@@ -45,10 +43,41 @@ export interface ToolCall {
 export interface ToolRendererProps {
   toolCall: ToolCall
   expanded: boolean
-  childSessions?: ChildSessionEntry[]
 }
 
 export type ToolRenderer = (props: ToolRendererProps) => JSX.Element
+
+// ── registered renderer lookup ──────────────────────────────────────────────
+
+/** The registered tool renderers by tool name. The extension host provides them. */
+const ToolRenderersContext = createContext<() => ReadonlyMap<string, ToolRenderer>>(() => new Map())
+export const ToolRenderersProvider = ToolRenderersContext.Provider
+export const useToolRenderers = () => useContext(ToolRenderersContext)
+
+/**
+ * The one renderer lookup, for a transcript call and for an op a cell admitted:
+ * the renderer registered for the call's tool name, else `fallback`.
+ */
+export function RegisteredToolCall(props: {
+  toolCall: ToolCall
+  expanded: boolean
+  fallback: JSX.Element
+}) {
+  const renderers = useToolRenderers()
+  const renderer = () => renderers().get(props.toolCall.toolName.toLowerCase())
+  return (
+    <Show when={renderer()} fallback={props.fallback}>
+      {(Renderer) => {
+        const Component = Renderer()
+        return (
+          <ToolCallIdentityProvider id={props.toolCall.id}>
+            <Component toolCall={props.toolCall} expanded={props.expanded} />
+          </ToolCallIdentityProvider>
+        )
+      }}
+    </Show>
+  )
+}
 
 // ── diff helpers ────────────────────────────────────────────────────────────
 
@@ -138,358 +167,6 @@ export function getEditUnifiedDiff(input: EditInput) {
     return { diff, filetype, added, removed } satisfies EditDiffResult
   })
   return Option.getOrNull(result)
-}
-
-// ── tool call tree ──────────────────────────────────────────────────────────
-
-interface ToolCallInfo {
-  toolName: string
-  args: Schema.JsonObject
-  isError: boolean
-  status?: "running" | "completed" | "error"
-}
-
-const SPINNER_FRAMES = ["·", "•", "*"]
-
-function ToolCallTree(props: { toolCalls: ReadonlyArray<ToolCallInfo>; collapsed?: boolean }) {
-  const { theme } = useTheme()
-  const tick = useSpinnerClock()
-
-  const hiddenCount = () => {
-    if (!props.collapsed) return 0
-    return Math.max(0, props.toolCalls.length - 10)
-  }
-
-  const visible = () => {
-    const calls = props.toolCalls
-    if (hiddenCount() > 0) return calls.slice(calls.length - 10)
-    return calls
-  }
-
-  return (
-    <box flexDirection="column" paddingLeft={2}>
-      <Show when={hiddenCount() > 0}>
-        <text style={{ fg: theme.textMuted }}>├── … {hiddenCount()} earlier calls</text>
-      </Show>
-      <For each={[...visible()]}>
-        {(call, index) => {
-          const isLast = () => index() === visible().length - 1
-          const connector = () => {
-            if (isLast()) return "╰──"
-            return "├──"
-          }
-          const icon = () => {
-            if (call.status === "running") {
-              return Option.getOrElse(
-                Option.fromNullishOr(SPINNER_FRAMES[tick() % SPINNER_FRAMES.length]),
-                () => "·",
-              )
-            }
-            if (call.isError || call.status === "error") return "✕"
-            return "✓"
-          }
-          const iconColor = () => {
-            if (call.status === "running") return theme.warning
-            if (call.isError || call.status === "error") return theme.error
-            return theme.textMuted
-          }
-          const summary = () => toolArgSummary(call.toolName, call.args)
-          const summaryText = () => {
-            if (summary().length > 0) return ` ${summary()}`
-            return ""
-          }
-
-          return (
-            <text style={{ fg: theme.textMuted }}>
-              {connector()} <span style={{ fg: iconColor() }}>{icon()}</span> {call.toolName}
-              {summaryText()}
-            </text>
-          )
-        }}
-      </For>
-    </box>
-  )
-}
-
-// ── live child tree ─────────────────────────────────────────────────────────
-
-function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
-  const { theme } = useTheme()
-
-  const statusColor = (status: ChildSessionEntry["status"]) => {
-    if (status === "running") return theme.warning
-    if (status === "error") return theme.error
-    return theme.success
-  }
-
-  const statusIcon = (status: ChildSessionEntry["status"]) => {
-    if (status === "running") return "⋯"
-    if (status === "error") return "✕"
-    return "✓"
-  }
-
-  return (
-    <For each={props.childSessions}>
-      {(entry) => {
-        const decodeInput = Schema.decodeUnknownOption(Schema.JsonObject)
-        const items = () =>
-          entry.toolCalls.map((tc) => ({
-            toolName: tc.toolName,
-            args: Option.getOrElse(decodeInput(tc.input), () => ({})),
-            isError: tc.status === "error",
-            status: tc.status,
-          }))
-
-        return (
-          <box flexDirection="column">
-            <text style={{ fg: theme.textMuted }}>
-              <span
-                style={{
-                  fg: statusColor(entry.status),
-                }}
-              >
-                {statusIcon(entry.status)}
-              </span>{" "}
-              {entry.agentName}
-            </text>
-            <ToolCallTree toolCalls={items()} />
-          </box>
-        )
-      }}
-    </For>
-  )
-}
-
-// ── subagent renderer ───────────────────────────────────────────────────────
-
-/**
- * The `delegate.start` renderer.
- *
- * Collapsed: tool call tree (last 10) + usage stats
- * Expanded:
- *   - Running: live tool calls + streaming text
- *   - Completed: full tool call tree + usage + thinking + message text
- *   - Fallback: toolCall.output/preview when message fetch unavailable
- */
-
-const decodeDelegateInput = Schema.decodeUnknownOption(
-  Schema.Struct({
-    todo: Schema.optional(Schema.String),
-  }),
-)
-
-/** The delegated task, cut to 60 columns, as the header subtitle. */
-const delegateSubtitle = (input: ToolInput): Option.Option<string> => {
-  const todo = decodeDelegateInput(input).pipe(
-    Option.flatMap((inp) => Option.fromNullishOr(inp.todo)),
-  )
-  if (Option.isNone(todo)) return Option.none()
-  if (todo.value.length > 60) return Option.some(todo.value.slice(0, 60) + "…")
-  return todo
-}
-
-interface ChildContent {
-  readonly reasoning: string[]
-  readonly text: string[]
-}
-
-/** Extract reasoning + text parts from child session messages */
-function extractChildContent(
-  messages: ReadonlyArray<{
-    role: string
-    parts: ReadonlyArray<{ type: string; text?: string }>
-  }>,
-): ChildContent {
-  const reasoning: string[] = []
-  const text: string[] = []
-  for (const msg of messages) {
-    if (msg.role !== "assistant") continue
-    for (const part of msg.parts) {
-      const partText = Option.fromNullishOr(part.text)
-      if (part.type === "reasoning" && Option.isSome(partText)) reasoning.push(partText.value)
-      else if (part.type === "text" && Option.isSome(partText)) text.push(partText.value)
-    }
-  }
-  return { reasoning, text }
-}
-
-function SubagentToolRenderer(props: ToolRendererProps) {
-  const { theme } = useTheme()
-  const clientCtx = useClient()
-
-  const children = () => props.childSessions ?? []
-  const hasChildren = () => children().length > 0
-  const completedChild = (): Option.Option<ChildSessionEntry> => {
-    const c = children()
-    if (c.length !== 1) return Option.none()
-    return Option.fromNullishOr(c[0])
-  }
-
-  // Aggregate tool calls from all child sessions for the tree view
-  const allToolCalls = createMemo(() =>
-    children().flatMap((child) =>
-      child.toolCalls.map((tc) => ({
-        toolName: tc.toolName,
-        args: Option.getOrElse(Schema.decodeUnknownOption(Schema.JsonObject)(tc.input), () => ({})),
-        isError: tc.status === "error",
-        status: tc.status,
-      })),
-    ),
-  )
-
-  // Aggregate usage across all children
-  const totalUsage = createMemo(() => {
-    const c = children()
-    if (c.length === 0)
-      return Option.none<{
-        input: number
-        output: number
-        // eslint-disable-next-line effect/noNullish -- usage formatting accepts an absent cost.
-        cost: number | undefined
-      }>()
-    let input = 0
-    let output = 0
-    let cost = 0
-    let hasUsage = false
-    for (const child of c) {
-      const usage = Option.fromNullishOr(child.usage)
-      if (Option.isSome(usage)) {
-        hasUsage = true
-        input += usage.value.input
-        output += usage.value.output
-        const childCost = Option.getOrElse(Option.fromNullishOr(usage.value.cost), () => 0)
-        cost += childCost
-      }
-    }
-    if (!hasUsage) return Option.none()
-    let costValue = Option.none<number>()
-    if (cost > 0) costValue = Option.some(cost)
-    return Option.some({ input, output, cost: Option.getOrUndefined(costValue) })
-  })
-
-  // Live stream text — bounded tail from all children
-  const liveText = createMemo(() => {
-    const c = children()
-    const parts: string[] = []
-    for (const child of c) {
-      if (child.streamText.length > 0) parts.push(child.streamText)
-    }
-    return parts.join("\n")
-  })
-
-  // Fetch structured messages (reasoning + text) on completion
-  const childBranchId = () =>
-    Option.flatMap(completedChild(), (child) =>
-      Option.map(Option.fromNullishOr(child.childBranchId), (id) => BranchId.make(id)),
-    )
-  const fetchKey = () => {
-    if (props.toolCall.status === "running") return Option.getOrUndefined(Option.none<BranchId>())
-    return Option.getOrUndefined(childBranchId())
-  }
-
-  const [childMessages] = createResource(fetchKey, (branchId) =>
-    clientCtx.runtime
-      .run(clientCtx.client.message.list({ branchId }))
-      .then((messages) => extractChildContent(messages))
-      .catch(() => Option.getOrUndefined(Option.none<ChildContent>())),
-  )
-
-  // Fallback text from toolCall.output or child preview
-  const fallbackText = () => {
-    const cm = Option.fromNullishOr(childMessages())
-    if (Option.isSome(cm) && (cm.value.reasoning.length > 0 || cm.value.text.length > 0)) {
-      return Option.none<string>()
-    }
-    // Try preview from completed child
-    const preview = Option.flatMap(completedChild(), (child) => Option.fromNullishOr(child.preview))
-    if (Option.isSome(preview)) return preview
-    // Try toolCall.output or summary
-    return Option.orElse(Option.fromNullishOr(props.toolCall.output), () =>
-      Option.fromNullishOr(props.toolCall.summary),
-    )
-  }
-
-  const usageLine = () => {
-    const u = totalUsage()
-    if (Option.isNone(u)) return Option.none<string>()
-    return Option.some(formatUsageStats(u.value))
-  }
-
-  return (
-    <ToolFrame
-      title="delegate"
-      subtitle={Option.getOrUndefined(delegateSubtitle(props.toolCall.input))}
-      status={props.toolCall.status}
-      expanded={props.expanded}
-      collapsedContent={
-        <box flexDirection="column">
-          <Show when={hasChildren()}>
-            <ToolCallTree toolCalls={allToolCalls()} collapsed />
-          </Show>
-          <Show when={Option.getOrUndefined(usageLine())}>
-            {(line) => <text style={{ fg: theme.textMuted }}>{line()}</text>}
-          </Show>
-        </box>
-      }
-    >
-      {/* Running: live tool calls + streaming text */}
-      <Show when={props.toolCall.status === "running" && hasChildren()}>
-        <box flexDirection="column">
-          <LiveChildTree childSessions={children()} />
-          <Show when={liveText().length > 0}>
-            <text style={{ fg: theme.textMuted }}>
-              <i>{liveText()}</i>
-            </text>
-          </Show>
-        </box>
-      </Show>
-
-      <Show when={props.toolCall.status === "running" && !hasChildren()}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>⋯</span> Running…
-        </text>
-      </Show>
-
-      {/* Completed: tool tree + usage + messages */}
-      <Show when={props.toolCall.status !== "running" && hasChildren()}>
-        <box flexDirection="column">
-          <ToolCallTree toolCalls={allToolCalls()} />
-          <Show when={Option.getOrUndefined(usageLine())}>
-            {(line) => <text style={{ fg: theme.textMuted }}>{line()}</text>}
-          </Show>
-        </box>
-      </Show>
-
-      {/* Structured messages from child session (fetched on completion) */}
-      <Show when={childMessages()}>
-        {(content) => (
-          <Show when={content().reasoning.length > 0 || content().text.length > 0}>
-            <box flexDirection="column" marginTop={1}>
-              <For each={content().reasoning}>
-                {(r) => (
-                  <text>
-                    <span style={{ fg: theme.textMuted }}>
-                      <i>{r}</i>
-                    </span>
-                  </text>
-                )}
-              </For>
-              <For each={content().text}>{(t) => <text style={{ fg: theme.text }}>{t}</text>}</For>
-            </box>
-          </Show>
-        )}
-      </Show>
-
-      {/* Fallback: preview/output when message fetch unavailable */}
-      <Show when={props.toolCall.status !== "running" && Option.getOrUndefined(fallbackText())}>
-        {(text) => (
-          <text style={{ fg: theme.textMuted }} marginTop={1}>
-            {text()}
-          </text>
-        )}
-      </Show>
-    </ToolFrame>
-  )
 }
 
 // ── generic renderer ────────────────────────────────────────────────────────
@@ -701,17 +378,13 @@ function CellToolRenderer(props: ToolRendererProps) {
     return first
   })
 
-  // Live operations come from nested events; saved results carry receipts.
-  const operations = createMemo((): ReadonlyArray<OperationLine> => {
-    const live = Option.fromNullishOr(props.toolCall.operations)
-    if (Option.isSome(live) && live.value.length > 0) {
-      return live.value.map((call) => ({
-        tool: call.toolName,
-        outcome: liveOutcome(call.status),
-        summary: call.summary ?? "",
-      }))
-    }
-    return Option.match(
+  // Live operations are the calls the cell admitted, with their input and output;
+  // a saved result carries only receipts.
+  const liveOperations = createMemo((): ReadonlyArray<ToolCall> =>
+    Option.getOrElse(Option.fromNullishOr(props.toolCall.operations), () => []),
+  )
+  const receipts = createMemo((): ReadonlyArray<OperationLine> =>
+    Option.match(
       decodeToolOutputOption(
         Schema.Struct({ operations: Schema.optional(Schema.Array(OperationReceipt)) }),
         props.toolCall.output,
@@ -720,8 +393,8 @@ function CellToolRenderer(props: ToolRendererProps) {
         onNone: () => [],
         onSome: (value) => value.operations ?? [],
       },
-    )
-  })
+    ),
+  )
 
   const failure = createMemo(() =>
     data().pipe(
@@ -758,20 +431,42 @@ function CellToolRenderer(props: ToolRendererProps) {
     return theme.error
   }
 
+  const OperationRow = (line: OperationLine) => (
+    <text>
+      <span style={{ fg: outcomeColor(line.outcome) }}>{outcomeGlyph(line.outcome)} </span>
+      <span style={{ fg: theme.text, bold: true }}>{line.tool}</span>
+      <Show when={line.summary.length > 0}>
+        <span style={{ fg: theme.textMuted }}> {line.summary}</span>
+      </Show>
+    </text>
+  )
+
+  // Each live op draws through the renderer registered for its tool, as a
+  // collapsed sub-row: its header and its summary, never its full body. An op
+  // with no renderer keeps its one-line receipt.
   const Operations = () => (
-    <Show when={operations().length > 0}>
+    <Show
+      when={liveOperations().length > 0}
+      fallback={
+        <Show when={receipts().length > 0}>
+          <box flexDirection="column">
+            <For each={receipts()}>{(line) => OperationRow(line)}</For>
+          </box>
+        </Show>
+      }
+    >
       <box flexDirection="column">
-        <For each={operations()}>
-          {(operation) => (
-            <text>
-              <span style={{ fg: outcomeColor(operation.outcome) }}>
-                {outcomeGlyph(operation.outcome)}{" "}
-              </span>
-              <span style={{ fg: theme.text, bold: true }}>{operation.tool}</span>
-              <Show when={operation.summary.length > 0}>
-                <span style={{ fg: theme.textMuted }}> {operation.summary}</span>
-              </Show>
-            </text>
+        <For each={liveOperations()}>
+          {(call) => (
+            <RegisteredToolCall
+              toolCall={call}
+              expanded={false}
+              fallback={OperationRow({
+                tool: call.toolName,
+                outcome: liveOutcome(call.status),
+                summary: call.summary ?? "",
+              })}
+            />
           )}
         </For>
       </box>
@@ -1418,7 +1113,6 @@ export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["cell"], component: CellToolRenderer },
   { toolNames: ["write"], component: WriteToolRenderer },
   { toolNames: ["grep"], component: GrepToolRenderer },
-  { toolNames: ["delegate.start"], component: SubagentToolRenderer },
   {
     toolNames: ["read_session"],
     component: ReadSessionToolRenderer,

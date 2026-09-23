@@ -7,7 +7,7 @@ import {
   parseSlashCommand,
   useCommand,
 } from "../src/commands"
-import { createEffect, For, onMount } from "solid-js"
+import { createEffect, For, onCleanup, onMount } from "solid-js"
 import { resolveCommands } from "../src/extensions/loader-boundary"
 import { Effect, Option } from "effect"
 import { BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
@@ -16,6 +16,7 @@ import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
+import { makePaneSlot } from "./extension-test-harness-boundary"
 
 // ── slash-commands.test ─────────────────────────────────────────────────────
 
@@ -252,9 +253,12 @@ function ExtensionProbe(props: {
   return <box />
 }
 
-/** The agents extension's docked pane, as the session view mounts it below the composer. */
+/** The agents extension's docked pane, as the session view mounts it below the composer
+ * and owns its one pane slot. */
 function AgentsPaneWidget() {
   const ext = useExtensionUI()
+  ext.setPaneOwner(Option.some(makePaneSlot()))
+  onCleanup(() => ext.setPaneOwner(Option.none()))
   return (
     <For each={ext.widgets().filter((widget) => widget.id === "agents.pane")}>
       {(widget) => {

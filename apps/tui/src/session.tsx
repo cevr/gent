@@ -62,7 +62,6 @@ import {
   type SessionMetrics,
   shutdownLog,
   SteerCommandInput,
-  useChildSessions,
   useClient,
   useRuntime,
 } from "./client"
@@ -186,8 +185,8 @@ function useSessionShell(): SessionShellValue {
 
 // ── session labels ──────────────────────────────────────────────────────────
 
-/** One colored label on the composer frame rule. */
-export interface BorderLabelItem {
+/** One colored label on the composer's status row, its color resolved. */
+export interface StatusRowLabel {
   text: string
   color: RGBA
 }
@@ -206,7 +205,7 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
 }
 
 /** `ctx 42%`: percent of the model's input budget. What the projection dropped is in the thread pane. */
-const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): BorderLabelItem => {
+const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): StatusRowLabel => {
   const pct = Math.min(
     100,
     Math.round((context.estimatedTokens / context.contextLimitTokens) * 100),
@@ -217,7 +216,7 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
 /**
  * The context gauge alone, for the labels anchored to the right edge.
  *
- * It is split from {@link buildTopRightLabels} because the two halves sit at
+ * It is split from {@link buildModelLabels} because the two halves sit at
  * opposite ends of the row: effort belongs beside the model name, while the
  * gauge belongs with the running total a reader checks at a glance.
  */
@@ -226,7 +225,7 @@ export function buildContextLabels(input: {
   // eslint-disable-next-line effect/noNullish -- this mirrors the optional client snapshot field.
   readonly contextLength: number | undefined
   readonly theme: ThemeColors
-}): BorderLabelItem[] {
+}): StatusRowLabel[] {
   const projection = input.metrics.context
   if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
     // The projection is what the model saw; it beats the provider's last usage report.
@@ -249,12 +248,12 @@ export function buildContextLabels(input: {
  * configured, the gauge reports what the session has spent, and the two
  * belong at opposite ends.
  */
-export function buildTopRightLabels(input: {
+export function buildModelLabels(input: {
   readonly reasoningLevel: Option.Option<string>
   readonly theme: ThemeColors
   readonly debugMode: boolean
-}): BorderLabelItem[] {
-  const items: BorderLabelItem[] = []
+}): StatusRowLabel[] {
+  const items: StatusRowLabel[] = []
 
   if (Option.isSome(input.reasoningLevel)) {
     items.push({ text: input.reasoningLevel.value, color: input.theme.info })
@@ -559,6 +558,16 @@ type SessionOverlayState =
    */
   | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
   | PromptSearchOverlayState
+  /**
+   * A client extension's docked pane, by the name the extension gave it. It
+   * shares this union so one pane or picker is open at a time; unlike the
+   * session's own overlays it leaves the composer focused and its keys live.
+   */
+  | { readonly _tag: "pane"; readonly id: string }
+
+/** Whether the overlay takes the composer and the session's keys; an extension pane does not. */
+export const overlayHoldsComposer = (overlay: SessionOverlayState): boolean =>
+  overlay._tag !== "none" && overlay._tag !== "pane"
 
 /** How much of each tool group the inline transcript shows. `ctrl+o` cycles; `esc` collapses. */
 export type DisclosureLevel = "collapsed" | "preview" | "full"
@@ -602,6 +611,9 @@ const SessionUiEvent = Schema.TaggedUnion({
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenBranches: { branches: Schema.Array(Branch) },
+  OpenPane: { id: Schema.String },
+  /** Closes the named pane only, so a late close never shuts the pane that replaced it. */
+  ClosePane: { id: Schema.String },
   CloseOverlay: {},
   PromptSearch: { event: PromptSearchEventSchema },
 })
@@ -671,6 +683,16 @@ export function transitionSessionUi(
         },
         effects: [],
       }),
+      OpenPane: (event): SessionUiTransitionResult => ({
+        state: { ...state, overlay: { _tag: "pane", id: event.id } },
+        effects: [],
+      }),
+      ClosePane: (event): SessionUiTransitionResult => {
+        if (state.overlay._tag !== "pane" || state.overlay.id !== event.id) {
+          return { state, effects: [] }
+        }
+        return { state: { ...state, overlay: { _tag: "none" } }, effects: [] }
+      },
       CloseOverlay: (): SessionUiTransitionResult => ({
         state: {
           ...state,
@@ -2301,7 +2323,6 @@ export interface SessionController {
     | { phase: "tool"; turn: number; toolInfo: string }
   phaseLabel: () => string
   elapsed: () => number
-  getChildren: ReturnType<typeof useChildSessions>["getChildren"]
   onComposerInteraction: (event: ComposerInteractionEvent) => void
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
@@ -2464,7 +2485,6 @@ export function createSessionController(props: {
 
   const authGatePending = () =>
     !props.debugMode && (authGateState() !== "closed" || validatedAgent() !== client.agent())
-  const { getChildren } = useChildSessions(client)
 
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const drafts = useComposerDrafts()
@@ -2513,6 +2533,20 @@ export function createSessionController(props: {
       dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: true }))
     }
   })
+
+  // The session's overlay is the one pane owner; client extensions open and
+  // close their panes through the host, which forwards here.
+  ext.setPaneOwner(
+    Option.some({
+      open: (id) => dispatchSessionUi(SessionUiEvent.cases.OpenPane.make({ id })),
+      close: (id) => dispatchSessionUi(SessionUiEvent.cases.ClosePane.make({ id })),
+      isOpen: (id) => {
+        const overlay = uiState().overlay
+        return overlay._tag === "pane" && overlay.id === id
+      },
+    }),
+  )
+  onCleanup(() => ext.setPaneOwner(Option.none()))
 
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())
@@ -2810,7 +2844,7 @@ export function createSessionController(props: {
 
   const handleInterrupt = () => {
     disarmQuit()
-    if (uiState().overlay._tag !== "none") {
+    if (overlayHoldsComposer(uiState().overlay)) {
       exit()
       return
     }
@@ -2839,7 +2873,7 @@ export function createSessionController(props: {
       handleInterrupt()
       return true
     }
-    if (uiState().overlay._tag !== "none") return false
+    if (overlayHoldsComposer(uiState().overlay)) return false
 
     if (event.name === "escape") {
       if (uiState().transcriptExpanded && !command.paletteOpen()) {
@@ -2904,7 +2938,6 @@ export function createSessionController(props: {
     activity,
     phaseLabel,
     elapsed,
-    getChildren,
     onComposerInteraction,
     onSubmit,
     onSlashCommand,
