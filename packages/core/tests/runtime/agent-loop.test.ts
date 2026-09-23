@@ -1816,6 +1816,73 @@ describe("native model compaction integration", () => {
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
 
+  it.live("the driver learns from the catalog whether the model reasons", () => {
+    const sessionId = SessionId.make("catalog-reasoning-session")
+    const branchId = BranchId.make("catalog-reasoning-branch")
+    const observedHints: Array<ProviderHints> = []
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      ),
+    )
+    const driver: ModelDriverContribution = {
+      id: "catalog-driver",
+      name: "Catalog driver",
+      resolveModel: (_modelName, _authInfo, hints) =>
+        Effect.sync(() => {
+          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
+          return AiModel.make("catalog-driver", "model", providerLayer)
+        }),
+    }
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("catalog-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: ModelId.make("catalog-driver/plain"),
+          name: "Plain model",
+          provider: ProviderId.make("catalog-driver"),
+          contextLength: 128_000,
+          reasoning: false,
+        }),
+        Model.make({
+          id: ModelId.make("catalog-driver/unlisted"),
+          name: "Model the catalog says nothing about",
+          provider: ProviderId.make("catalog-driver"),
+          contextLength: 128_000,
+        }),
+      ],
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        for (const modelId of ["catalog-driver/plain", "catalog-driver/unlisted"]) {
+          const admission: SessionAdmission = {
+            runSpec: { overrides: { modelId: ModelId.make(modelId), reasoningEffort: "high" } },
+          }
+          const name = modelId.split("/")[1]
+          const session = SessionId.make(`${sessionId}-${name}`)
+          const branch = BranchId.make(`${branchId}-${name}`)
+          yield* ensureStorageParents({ sessionId: session, branchId: branch, admission })
+          yield* runAgentLoop(agentLoop, makeMessage(session, branch, "hello"), admission)
+        }
+        expect(
+          observedHints.map((hints) => Option.fromUndefinedOr(hints.supportsReasoning)),
+        ).toEqual([Option.some(false), Option.none()])
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
+  })
+
   it.live("a smaller agent context window hands off history the catalog window would keep", () => {
     const sessionId = SessionId.make("small-window-session")
     const branchId = BranchId.make("small-window-branch")

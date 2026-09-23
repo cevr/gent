@@ -2,6 +2,7 @@ import {
   Context,
   type Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Option,
@@ -312,24 +313,71 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   )
   // Staged as a sibling file, not in a temp directory: a crash that skips the
   // cleanup leaves one hidden file beside the target, never a directory.
-  const suffix = (yield* Random.nextIntBetween(0, 0xffffffff)).toString(16)
+  const suffix = (yield* Random.nextIntBetween(0, 0xffffffff)).toString(16).padStart(8, "0")
   const staging = pathService.join(
     pathService.dirname(target),
-    `.${pathService.basename(target)}.gent-write-${suffix}`,
+    stagingName(pathService.basename(target), suffix),
   )
-  yield* Effect.gen(function* () {
-    // `wx` never reuses an existing file. A mode is set before the content
-    // lands, so a secret is never readable under the default mode, even staged.
-    yield* fs.writeFileString(
-      staging,
-      "",
-      Option.match(mode, {
-        onNone: () => ({ flag: "wx" }),
-        onSome: () => ({ flag: "wx", mode: 0o600 }),
+  // `wx` never reuses an existing file. A create that fails because the file
+  // exists found another writer's staging file, which stays; any other failed
+  // create may have left the file it opened, which is this write's. A mode is
+  // set before the content lands, so a secret is never readable under the
+  // default mode, even staged.
+  const removeStaging = fs.remove(staging).pipe(Effect.ignore)
+  yield* Effect.acquireUseRelease(
+    fs
+      .writeFileString(
+        staging,
+        "",
+        Option.match(mode, {
+          onNone: () => ({ flag: "wx" }),
+          onSome: () => ({ flag: "wx", mode: 0o600 }),
+        }),
+      )
+      .pipe(
+        Effect.tapError((error) => {
+          if (error.reason._tag === "AlreadyExists") return Effect.void
+          return removeStaging
+        }),
+      ),
+    () =>
+      Effect.gen(function* () {
+        if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
+        yield* fs.writeFileString(staging, content)
+        yield* fs.rename(staging, target)
       }),
-    )
-    if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
-    yield* fs.writeFileString(staging, content)
-    yield* fs.rename(staging, target)
-  }).pipe(Effect.onError(() => fs.remove(staging).pipe(Effect.ignore)))
+    (_, exit) => {
+      if (Exit.isSuccess(exit)) return Effect.void
+      return removeStaging
+    },
+  )
 })
+
+/** The longest file name, in bytes, that the file systems gent runs on accept. */
+const NAME_MAX_BYTES = 255
+const STAGING_TAG = ".gent-write-"
+
+/** The UTF-8 length of one code point. */
+const utf8Bytes = (codePoint: number): number => {
+  if (codePoint < 0x80) return 1
+  if (codePoint < 0x800) return 2
+  if (codePoint < 0x10000) return 3
+  return 4
+}
+
+/**
+ * `.<basename>.gent-write-<suffix>`, with the basename clipped at a code point
+ * so the whole name fits in NAME_MAX: a name a plain write accepts must not
+ * fail only because it is staged.
+ */
+const stagingName = (basename: string, suffix: string): string => {
+  let room = NAME_MAX_BYTES - 1 - STAGING_TAG.length - suffix.length
+  let clipped = ""
+  for (const char of basename) {
+    const bytes = utf8Bytes(char.codePointAt(0) ?? 0)
+    if (bytes > room) break
+    room -= bytes
+    clipped += char
+  }
+  return `.${clipped}${STAGING_TAG}${suffix}`
+}

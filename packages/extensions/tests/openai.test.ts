@@ -2045,6 +2045,7 @@ describe("OpenAI reasoning hints", () => {
     authInfo: ProviderAuthInfo,
     models: ReadonlyArray<string>,
     reasoning: ProviderHints["reasoning"] = "none",
+    catalog: ProviderHints = {},
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
@@ -2064,6 +2065,7 @@ describe("OpenAI reasoning hints", () => {
       const fetchState = makeFakeFetchState()
       for (const modelName of models) {
         const model = yield* driver.resolveModel(modelName, authInfo, {
+          ...catalog,
           reasoning,
           maxTokens: 768,
         })
@@ -2099,11 +2101,23 @@ describe("OpenAI reasoning hints", () => {
         expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), ["gpt-5-pro"])).toEqual([
           Option.some("high"),
         ])
-        // A model without reasoning gets no effort at all.
-        expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), ["gpt-4.1"])).toEqual([
-          Option.none(),
-        ])
       }),
+  )
+
+  it.live("the catalog's reasoning flag, not the model name, decides whether effort is sent", () =>
+    Effect.gen(function* () {
+      const auth = makeApiAuthInfo("hint-test-key")
+      // A model the catalog says does not reason gets no effort at all.
+      expect(
+        yield* effortsFor(auth, ["gpt-4.1", "o4-mini"], "high", { supportsReasoning: false }),
+      ).toEqual([Option.none(), Option.none()])
+      // A reasoning model gets its effort whatever its name looks like.
+      expect(
+        yield* effortsFor(auth, ["gpt-4.1-reasoner", "chatgpt-5-latest"], "high", {
+          supportsReasoning: true,
+        }),
+      ).toEqual([Option.some("high"), Option.some("high")])
+    }),
   )
 
   it.live("an effort the model does not accept becomes the nearest one it does", () =>

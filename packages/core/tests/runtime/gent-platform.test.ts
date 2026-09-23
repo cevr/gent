@@ -315,6 +315,54 @@ describe("writeFileAtomic", () => {
     }).pipe(Effect.provide(recordingFs)),
   )
 
+  /**
+   * The platform file system, where another writer creates the same staging
+   * file just before this write's exclusive create, as a suffix collision does.
+   */
+  const collidingFs = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) =>
+      FileSystem.FileSystem.of({
+        ...fs,
+        writeFileString: (file, data, options) => {
+          if (options?.flag !== "wx") return fs.writeFileString(file, data, options)
+          return fs
+            .writeFileString(file, "the other writer's text")
+            .pipe(Effect.andThen(fs.writeFileString(file, data, options)))
+        },
+      }),
+    ),
+  )
+
+  atomicTest("a staging name another writer holds is left to that writer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${dir}/state.json`, "before")
+      const failed = yield* writeFileAtomic(`${dir}/state.json`, "mine").pipe(Effect.flip)
+      expect(failed._tag).toBe("PlatformError")
+      // The exclusive create failed, so the staged file is the other writer's.
+      const staged = (yield* fs.readDirectory(dir)).filter((name) => name !== "state.json")
+      expect(staged).toHaveLength(1)
+      expect(yield* fs.readFileString(`${dir}/${staged[0]}`)).toBe("the other writer's text")
+      expect(yield* fs.readFileString(`${dir}/state.json`)).toBe("before")
+    }).pipe(Effect.provide(collidingFs)),
+  )
+
+  // A file name takes at most 255 bytes; the staging name adds its own tag and suffix.
+  atomicTest("a file whose name is near the length limit is still replaced", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      for (const name of ["a".repeat(250), `${"ü".repeat(120)}.json`]) {
+        yield* fs.writeFileString(`${dir}/${name}`, "before")
+        yield* writeFileAtomic(`${dir}/${name}`, "after")
+        expect(yield* fs.readFileString(`${dir}/${name}`)).toBe("after")
+      }
+      expect(yield* fs.readDirectory(dir)).toHaveLength(2)
+    }),
+  )
+
   const modeOf = (fs: FileSystem.FileSystem, file: string) =>
     fs.stat(file).pipe(Effect.map((info) => info.mode & 0o777))
 

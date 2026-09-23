@@ -2,6 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Deferred,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
@@ -407,6 +408,65 @@ describe("user configuration", () => {
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // The last decoded user config stands in for a user file that stops
+    // decoding; a read that raced a write must not put the older one back.
+    it.scopedLive("a read that finishes after a write never restores the older config", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const armed = yield* Ref.make(false)
+        const held = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        // The armed read of the user file holds its text until the test releases it.
+        const heldRead = Layer.effect(
+          FileSystem.FileSystem,
+          Effect.gen(function* () {
+            const realFs = yield* FileSystem.FileSystem
+            return FileSystem.makeNoop({
+              ...realFs,
+              readFileString: (target, encoding) =>
+                realFs.readFileString(target, encoding).pipe(
+                  Effect.tap(() =>
+                    Effect.gen(function* () {
+                      if (target !== userConfigPath) return
+                      if (!(yield* Ref.getAndSet(armed, false))) return
+                      // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+                      yield* Deferred.succeed(held, undefined)
+                      yield* Deferred.await(release)
+                    }),
+                  ),
+                ),
+            })
+          }),
+        ).pipe(Layer.provide(BunServices.layer))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects: ["/old"] }))
+          yield* Ref.set(armed, true)
+          const reader = yield* Effect.forkChild(cfg.get())
+          yield* Deferred.await(held)
+          const writer = yield* Effect.forkChild(
+            cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" })),
+          )
+          // A writer that does not wait for the held read finishes here.
+          yield* Fiber.await(writer).pipe(Effect.timeoutOption("200 millis"))
+          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(reader)
+          yield* Fiber.join(writer)
+          yield* fs.writeFileString(userConfigPath, "{ broken")
+          const fallback = yield* cfg.get()
+          expect(fallback.driverOverrides?.[AgentName.make("main")]).toEqual(
+            DriverRef.make({ id: "anthropic" }),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home, heldRead)))
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
     )
 
     // A newer build (a rift binary) can add a key this build does not know;
