@@ -14,6 +14,7 @@ export {
   ensureStorageParents,
   plantInFlightTurn,
   plantToolCallBinding,
+  provideToolDispatch,
   recordInteractionDecision,
   runtimeHostContext,
   runToolWithCtx,

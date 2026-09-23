@@ -499,6 +499,8 @@ const plugin: Plugin = {
      * - Product code (anything that is not a test file, `packages/e2e/`, or the
      *   harness in `packages/core/src/test-utils/`) never reads `test-utils`,
      *   by package specifier or by a relative path that resolves into it.
+     * - Nothing outside `packages/core/`, tests included, reads core source by
+     *   a relative path; it goes through the entry that publishes the name.
      *
      * Exempt: the two authoring entries themselves, which assemble the public
      * API from core internals, and the TUI's client extension loader, which is
@@ -510,7 +512,8 @@ const plugin: Plugin = {
         const extensionFile = isExtensionFilename(filename)
         const productFile =
           !isTestFilename(filename) && !/\/packages\/(?:e2e|core\/src\/test-utils)\//.test(filename)
-        if (!extensionFile && !productFile) return {}
+        const outsideCore = !/\/packages\/core\//.test(filename)
+        if (!extensionFile && !productFile && !outsideCore) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
 
         const extensionMessage = (
@@ -537,6 +540,14 @@ const plugin: Plugin = {
           if (extensionFile) message = extensionMessage(source, resolved)
           if (message === undefined && productFile && readsTestUtils) {
             message = `Product code must not import the test entry. Forbidden: "${source}"`
+          }
+          if (
+            message === undefined &&
+            outsideCore &&
+            resolved !== undefined &&
+            CORE_SOURCE_PATH.test(resolved)
+          ) {
+            message = `Code outside core reads it through "@gent/core/<entry>", not its source. Forbidden: "${source}"`
           }
           if (message !== undefined) context.report({ message, node })
         }

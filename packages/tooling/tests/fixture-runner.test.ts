@@ -130,6 +130,14 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 3,
   },
   {
+    // A test outside core reads core through its entries, never its source.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/extensions/tests/core-entry-boundary.invalid.ts",
+    valid: "packages/extensions/tests/core-entry-boundary.valid.ts",
+    // an import and a re-export that resolve into core source
+    expectedCount: 2,
+  },
+  {
     // Core product code reaches the harness by relative path; still rejected.
     rule: "gent/core-entry-boundary",
     invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",

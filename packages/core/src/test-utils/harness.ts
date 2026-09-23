@@ -52,7 +52,10 @@ import {
 import { defineExtension } from "../extensions/api.js"
 import {
   ApprovalService,
+  ExtensionRegistry,
   makeExtensionHostContextProvider,
+  provideCurrentHostCtx,
+  resolveExtensions,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { ConfigService } from "../runtime/config.js"
@@ -535,6 +538,23 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
   })
   return provider.forRun(run)
 })
+
+/**
+ * Run a leaf's dispatch outside a turn: the registry holds exactly these
+ * extensions, and `host` is the host context the leaf reads.
+ */
+export const provideToolDispatch = (input: {
+  readonly extensions: ReadonlyArray<LoadedExtension>
+  readonly host: ExtensionHostContext
+}) => {
+  const resolved = resolveExtensions(input.extensions)
+  const registry = ExtensionRegistry.of({ getResolved: () => resolved })
+  return <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      provideCurrentHostCtx(input.host),
+      Effect.provideService(ExtensionRegistry, registry),
+    )
+}
 
 /** A build-owned binding identity: it replays across processes. */
 export const staticToolBinding = (input: {

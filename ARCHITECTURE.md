@@ -942,7 +942,11 @@ internals, nor the `@gent/core/host` and `@gent/core/test-utils` entries. The
 `core-entry-boundary` oxlint rule enforces this for shipped and reference
 extensions, and the same rule defines the contract for user/project
 extensions. The same rule keeps `@gent/core/test-utils` out of product code:
-only tests, `packages/e2e/`, and the harness itself read it. "Builtin" means "included in the default distribution", not
+only tests, `packages/e2e/`, and the harness itself read it, by package
+specifier or by a relative path that resolves into it. Nothing outside
+`packages/core/`, tests included, reads core source by relative path. A test
+that needs host state arranges it through a `test-utils` operation. A `host`
+name needs a product caller. "Builtin" means "included in the default distribution", not
 privileged.
 
 TUI client extensions may also import shared client data from `@gent/core/protocol`. This exception does not apply to server extension implementations or to nested protocol paths.

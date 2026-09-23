@@ -24,6 +24,7 @@ import {
   createE2ELayer,
   plantInFlightTurn,
   plantToolCallBinding,
+  provideToolDispatch,
   recordInteractionDecision,
   runtimeHostContext,
   staticToolBinding,
@@ -133,11 +134,6 @@ import {
   CellRequest,
   CellResponse,
 } from "../src/cell-protocol.js"
-import {
-  ExtensionRegistry,
-  provideCurrentHostCtx,
-  resolveExtensions,
-} from "../../core/src/runtime/extension-host.js"
 import { shippedPreset } from "./helpers/test-preset.js"
 import {
   ChildAgentHandle,
@@ -1545,21 +1541,21 @@ it.scopedLive("uses the exact selected capability and still enforces the input s
       output: Schema.String,
       execute: () => Effect.die("Must not resolve the replacement by name"),
     })
-    const registry = ExtensionRegistry.fromResolved(
-      resolveExtensions([
+    const dispatch = provideToolDispatch({
+      extensions: [
         {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "cell-test",
           contributions: { tools: [replacement] },
         },
-      ]),
-    )
+      ],
+      host,
+    })
     const binding: Option.Option<ResolvedToolCapability> = Option.some({
       extensionId,
       capability: selected,
     })
-    const layer = Layer.mergeAll(base, registry)
     yield* Effect.gen(function* () {
       expect(yield* runCellToolCall({ request: requestToolCall, toolCallId, binding })).toBe(
         "selected:hello",
@@ -1584,7 +1580,7 @@ it.scopedLive("uses the exact selected capability and still enforces the input s
       expect(missing._tag).toBe("CellEvaluationError")
       if (missing._tag === "CellEvaluationError") expect(missing.message).toContain("Unknown tool")
       expect(yield* Ref.get(calls)).toBe(1)
-    }).pipe(provideCurrentHostCtx(host), Effect.provideContext(yield* Layer.build(layer)))
+    }).pipe(dispatch, Effect.provideContext(yield* Layer.build(base)))
   }),
 )
 
@@ -1602,25 +1598,22 @@ it.scopedLive("preserves the pending request and host operation identity", () =>
       output: Schema.String,
       execute: () => Effect.fail(pending),
     })
-    const registry = ExtensionRegistry.fromResolved(
-      resolveExtensions([
+    const dispatch = provideToolDispatch({
+      extensions: [
         {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "cell-test",
           contributions: { tools: [selected] },
         },
-      ]),
-    )
+      ],
+      host,
+    })
     const result = yield* runCellToolCall({
       request: requestToolCall,
       toolCallId,
       binding: Option.some({ extensionId, capability: selected }),
-    }).pipe(
-      provideCurrentHostCtx(host),
-      Effect.provideContext(yield* Layer.build(Layer.mergeAll(base, registry))),
-      Effect.flip,
-    )
+    }).pipe(dispatch, Effect.provideContext(yield* Layer.build(base)), Effect.flip)
     expect(result).toMatchObject({
       _tag: "CellToolCallSuspended",
       operationId: requestToolCall.operationId,
