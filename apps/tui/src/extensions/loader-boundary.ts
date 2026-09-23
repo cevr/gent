@@ -161,8 +161,7 @@ export interface ResolvedTuiExtensions {
   readonly widgets: ReadonlyArray<ResolvedWidget>
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
-  // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
-  readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
+  readonly interactionRenderers: Map<string, InteractionRendererComponent>
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
@@ -395,7 +394,7 @@ export const resolveTuiExtensions = (
       itemsOrEmpty(contributions.interactionRenderers).map((contribution) => ({
         key: contribution.metadataType,
         value: contribution.component,
-        name: Option.getOrElse(Option.fromNullishOr(contribution.metadataType), () => "(default)"),
+        name: contribution.metadataType,
       })),
   )
   return {

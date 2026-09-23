@@ -214,7 +214,11 @@ describe("resolveTuiExtensions", () => {
 
   test("interaction renderers resolve by metadata type with scope precedence", () => {
     const resolved = resolveTuiExtensions([
-      make("builtin-default", "builtin", interactionRendererContribution(widget("default"))),
+      make(
+        "builtin-prompt",
+        "builtin",
+        interactionRendererContribution(widget("prompt"), "prompt"),
+      ),
       make("builtin-ask", "builtin", interactionRendererContribution(widget("ask"), "ask-user")),
       make(
         "project-ask",
@@ -223,12 +227,12 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get(absent))
+    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("prompt"))
     const askRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("ask-user"))
     expect(Option.isSome(defaultRenderer)).toBe(true)
     expect(Option.isSome(askRenderer)).toBe(true)
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
-    expect(defaultRenderer.value(interactionProps)).toBe("default")
+    expect(defaultRenderer.value(interactionProps)).toBe("prompt")
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
   })
 

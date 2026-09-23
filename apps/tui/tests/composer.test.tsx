@@ -10,11 +10,14 @@ import {
   isLargePaste,
   shellOutputDirectory,
 } from "../src/composer"
-import { Effect, FileSystem, Layer, Option } from "effect"
+import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
+import { type ActiveInteraction, BranchId, SessionId } from "@gent/core/protocol"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
 import {
   type BorderLabelItem,
+  type ComposerEvent,
   ComposerInteractionState,
   ComposerState,
   type SessionController,
@@ -28,7 +31,12 @@ import { PromptSearchState } from "../src/pickers"
 import { useExtensionUI } from "../src/extensions/host"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
-import type { AutocompleteItem } from "../src/extensions/client-facets"
+import {
+  type AutocompleteItem,
+  clientContributions,
+  defineClientExtension,
+} from "../src/extensions/client-facets"
+import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
 
 // ── shell.test ──────────────────────────────────────────────────────────────
@@ -427,6 +435,8 @@ function TestComposer(props: {
   readonly suspended?: boolean
   readonly onSubmit: (content: string, mode?: "queue" | "interject") => void
   readonly children?: JSX.Element
+  readonly composerState?: () => ComposerState
+  readonly dispatchComposer?: (event: ComposerEvent) => void
 }) {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const ext = useExtensionUI()
@@ -438,7 +448,7 @@ function TestComposer(props: {
     interactionState,
     saveDraft: () => {},
     uiState: SessionUiState.initial,
-    composerState: () => ComposerState.idle(),
+    composerState: props.composerState ?? (() => ComposerState.idle()),
     promptSearch: {
       state: PromptSearchState.closed,
       entries: () => [],
@@ -460,7 +470,7 @@ function TestComposer(props: {
     onSubmit: props.onSubmit,
     onSlashCommand: (_cmd: string, _args: string) => Effect.void,
     onRestoreQueue: () => {},
-    dispatchComposer: () => {},
+    dispatchComposer: props.dispatchComposer ?? (() => {}),
     resolveAuthGate: () => {},
     closeOverlay: () => {},
     onForkSelect: () => {},
@@ -478,6 +488,47 @@ function TestComposer(props: {
   )
 }
 describe("Composer renderer", () => {
+  it.live("a pending interaction waits for client extensions instead of being denied", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>()
+      const held = defineClientExtension("@test/held-load", {
+        setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
+      })
+      const dispatched: Array<ComposerEvent["_tag"]> = []
+      const interaction = {
+        _tag: "InteractionPresented",
+        sessionId: SessionId.make("s"),
+        branchId: BranchId.make("b"),
+        requestId: InteractionRequestId.make("req-pending"),
+        text: "Ship the release?",
+        metadata: { type: "ask-user", questions: [{ question: "Ship the release?" }] },
+      } satisfies ActiveInteraction
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer
+              onSubmit={() => {}}
+              composerState={() => ({ _tag: "interaction", interaction })}
+              dispatchComposer={(event) => {
+                dispatched.push(event._tag)
+              }}
+            />
+          ),
+          { builtins: [...builtinClientModules, held] },
+        ),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(dispatched).toEqual([])
+      expect(renderFrame(setup)).not.toContain("Ship the release?")
+
+      yield* Deferred.complete(release, Effect.void)
+      yield* Effect.promise(() =>
+        // "Other:" is the ask-user renderer's free-text row: the fallback prompt has none.
+        waitForRenderedFrame(setup, (frame) => frame.includes("Other:"), "ask-user"),
+      )
+      expect(dispatched).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("plain enter submits and clears the composer", () =>
     Effect.gen(function* () {
       const submitted: Array<{

@@ -674,8 +674,8 @@ interface WidgetContribution {
 }
 
 interface InteractionRendererContribution {
-  /** Matches against metadata.type. undefined = default fallback renderer. */
-  readonly metadataType?: string
+  /** Matches `metadata.type`; the host's prompt renderer draws an unmatched interaction. */
+  readonly metadataType: string
   readonly component: InteractionRendererComponent
 }
 
@@ -797,14 +797,8 @@ export const clientCommandContribution = (opts: Command): ClientContributions =>
  */
 export const interactionRendererContribution = (
   component: InteractionRendererComponent,
-  metadataType?: string,
-): ClientContributions => {
-  const renderer = Option.match(Option.fromNullishOr(metadataType), {
-    onNone: () => ({ component }),
-    onSome: (value) => ({ metadataType: value, component }),
-  })
-  return { interactionRenderers: [renderer] }
-}
+  metadataType: string,
+): ClientContributions => ({ interactionRenderers: [{ metadataType, component }] })
 
 export const borderLabelContribution = (opts: BorderLabelContribution): ClientContributions => ({
   borderLabels: [opts],

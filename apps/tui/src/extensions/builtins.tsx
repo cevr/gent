@@ -752,7 +752,6 @@ const builtinTools = defineClientExtension("@gent/tools", {
 const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
   setup: Effect.succeed(
     clientContributions(
-      interactionRendererContribution(PromptRenderer),
       interactionRendererContribution(PromptRenderer, "prompt"),
       interactionRendererContribution(AskUserRenderer, "ask-user"),
       interactionRendererContribution(HandoffRenderer, "handoff"),

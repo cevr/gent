@@ -82,8 +82,7 @@ interface ExtensionUIContextValue {
   readonly commands: Accessor<ReadonlyArray<Command>>
   /** The session view supplies its own commands; they resolve at builtin scope. */
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
-  // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
-  readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
+  readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   /** Client extensions, or contributions, that did not load. */
