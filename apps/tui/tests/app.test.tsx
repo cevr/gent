@@ -302,6 +302,24 @@ describe("resolveInitialState", () => {
     }),
   )
 
+  // The composer sends nothing for a blank draft; headless holds the same line.
+  it.live("a whitespace-only headless prompt is a missing prompt", () =>
+    Effect.gen(function* () {
+      const error = yield* expectAppBootstrapFailure(
+        resolveInitialState({
+          client: createMockClient(),
+          cwd: "/tmp",
+          session: Option.none(),
+          continue_: false,
+          headless: true,
+          prompt: Option.none(),
+          promptArg: Option.some(" \n\t "),
+        }),
+      )
+      expect(error.reason).toBe("headless-missing-prompt")
+    }),
+  )
+
   it.live("a new headless session is created as the requested agent and run spec", () =>
     Effect.gen(function* () {
       const created: Array<{ readonly admission?: unknown }> = []
