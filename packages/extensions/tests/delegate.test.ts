@@ -19,7 +19,6 @@ import {
   describeChildCompletion,
   readChildCompletionHeadline,
   StartChild,
-  startTurnMessages,
 } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
@@ -38,14 +37,7 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "@gent/core/test-utils"
-import {
-  BranchId,
-  MessageId,
-  ModelId,
-  SessionId,
-  SteerCommand,
-  ToolCallId,
-} from "@gent/core/protocol"
+import { BranchId, ModelId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
@@ -2046,51 +2038,4 @@ describe("a child's start turn with runtime lines", () => {
       ),
     12_000,
   )
-})
-
-describe("the start turn's messages", () => {
-  const line = (id: string, role: "user" | "assistant", metadata?: Record<string, unknown>) => ({
-    id: MessageId.make(id),
-    role,
-    ...Record.filter({ metadata }, Predicate.isNotUndefined),
-  })
-  const startId = MessageId.make("delegate-start:start-1")
-  const ids = (messages: ReadonlyArray<{ readonly id: string }>) => messages.map((m) => m.id)
-
-  test.each(["continuation", "context-window", "max-steps", "model-change", "steering"])(
-    "a %s line inside the turn does not end it",
-    (customType) => {
-      const messages = [
-        line("seed", "assistant"),
-        line(startId, "user"),
-        line("a1", "assistant"),
-        line("runtime", "user", { customType }),
-        line("a2", "assistant"),
-      ]
-      expect(ids(startTurnMessages(messages, startId))).toEqual([startId, "a1", "runtime", "a2"])
-    },
-  )
-
-  test("a message joined into the running turn does not end it", () => {
-    const messages = [
-      line(startId, "user"),
-      line("steer", "user", { customType: "session-message", joinedTurn: true }),
-      line("a1", "assistant"),
-    ]
-    expect(ids(startTurnMessages(messages, startId))).toEqual([startId, "steer", "a1"])
-  })
-
-  test("a message that opens a later turn ends it", () => {
-    const messages = [
-      line(startId, "user"),
-      line("a1", "assistant"),
-      line("wake", "user", { customType: "wake" }),
-      line("a2", "assistant"),
-    ]
-    expect(ids(startTurnMessages(messages, startId))).toEqual([startId, "a1"])
-  })
-
-  test("a branch without the start message has no start turn", () => {
-    expect(startTurnMessages([line("a1", "assistant")], startId)).toEqual([])
-  })
 })

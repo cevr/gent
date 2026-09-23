@@ -16,7 +16,6 @@ import {
   renderSessionTree,
   sessionMessageBody,
   sessionMessageText,
-  SendSessionTool,
   SessionToolsExtension,
 } from "../src/session-tools.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
@@ -84,15 +83,22 @@ describe("SessionToolsExtension", () => {
 // ── session-tools/read-session.test ─────────────────────────────────────────
 
 describe("session.send summary", () => {
-  test("a sent message reads as who got it and what it said, not JSON", () => {
-    expect(
-      toolResultSummary(
-        Option.some(SendSessionTool),
-        { to: "parent", message: "  CI is green  " },
-        { isFailure: false, result: { sessionId: "parent-1", relation: "parent" } },
-      ),
-    ).toBe("to parent · CI is green")
-  })
+  it.live("a sent message reads as who got it and what it said, not JSON", () =>
+    Effect.gen(function* () {
+      const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
+      const send = Option.fromUndefinedOr(
+        contributions.tools?.find((candidate) => candidate.id === "session.send"),
+      )
+      expect(Option.isSome(send)).toBe(true)
+      expect(
+        toolResultSummary(
+          send,
+          { to: "parent", message: "  CI is green  " },
+          { isFailure: false, result: { sessionId: "parent-1", relation: "parent" } },
+        ),
+      ).toBe("to parent · CI is green")
+    }),
+  )
 })
 
 describe("messagePartsDisplayText", () => {

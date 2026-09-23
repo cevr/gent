@@ -87,8 +87,6 @@ interface ModelOverride {
   readonly exclude?: ReadonlyArray<string>
   /** Beta flags to add for this model on top of the base list. */
   readonly add?: ReadonlyArray<string>
-  /** Whether the model rejects `output_config.effort` (Anthropic answers 400). */
-  readonly disableEffort?: boolean
 }
 
 interface ModelConfig {
@@ -117,7 +115,6 @@ export const MODEL_CONFIG: ModelConfig = {
   modelOverrides: {
     haiku: {
       exclude: ["interleaved-thinking-2025-05-14"],
-      disableEffort: true,
     },
     "4-6": {
       add: ["effort-2025-11-24"],
@@ -1149,7 +1146,7 @@ export const makeAnthropicCredentialCache = (
  * - mcp_ tool name prefix on outgoing payloads
  * - mcp_ tool name strip on incoming responses
  * - System identity injection
- * - Cache control on system messages
+ * - Prompt-cache markers (`markCacheBreakpoints`)
  *
  * This keeps all Claude Code keychain conventions in the extension,
  * out of the generic provider boundary.
@@ -1532,8 +1529,125 @@ export const transformPayload = (
     result["messages"] = messagesAfterRelocate
     result["system"] = yield* buildSystemArray(messagesAfterRelocate)
 
-    return result
+    return markCacheBreakpoints(result, "first-user")
   })
+
+// ── Prompt caching ──
+
+/**
+ * Anthropic caches a prompt prefix only up to a block that carries
+ * `cache_control`, and the SDK sets one only from a per-part
+ * `options.anthropic.cacheControl`. The prefix renders `tools` →
+ * `system` → `messages`, and a request takes at most 4 markers.
+ *
+ * Markers, in priority order, while the limit allows:
+ *   1. the end of the stable prefix: the last system block, or on the
+ *      Claude Code path the first user message (the system prompt moves
+ *      there, and the billing and identity blocks take no marker);
+ *   2. the last cacheable block of the last message, so each step reads
+ *      the previous step's conversation back from the cache;
+ *   3. the last tool, so the tool list stays cached when the system
+ *      prompt changes.
+ *
+ * Markers already on the payload count toward the limit. A marker does
+ * not change the cached bytes, so the tail marker moves forward each
+ * step, which is the documented multi-turn pattern.
+ */
+type CachePrefixEnd = "system" | "first-user"
+
+const CACHE_BREAKPOINT_LIMIT = 4
+const EPHEMERAL_CACHE: JsonRecord = { type: "ephemeral" }
+/** Content block types that take `cache_control`. Thinking blocks and empty text do not. */
+const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
+  "text",
+  "image",
+  "document",
+  "search_result",
+  "tool_use",
+  "tool_result",
+])
+
+const hasCacheMarker = (block: JsonRecord): boolean => isRecord(block["cache_control"])
+
+const isCacheableBlock = (block: JsonRecord): boolean =>
+  CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
+
+const countCacheMarkers = (payload: JsonRecord): number => {
+  let count = 0
+  const countBlocks = (blocks: JsonValue) => {
+    if (!isRecordArray(blocks)) return
+    for (const block of blocks) if (hasCacheMarker(block)) count += 1
+  }
+  countBlocks(payload["tools"])
+  countBlocks(payload["system"])
+  if (isRecordArray(payload["messages"])) {
+    for (const message of payload["messages"]) countBlocks(message["content"])
+  }
+  return count
+}
+
+/** The blocks with `index` marked; `None` when there is no such block or it has a marker already. */
+const markBlockAt = (
+  blocks: ReadonlyArray<JsonRecord>,
+  index: number,
+): Option.Option<ReadonlyArray<JsonRecord>> =>
+  Option.fromUndefinedOr(blocks[index]).pipe(
+    Option.filter((block) => !hasCacheMarker(block)),
+    Option.map((block) => {
+      const next = blocks.slice()
+      next[index] = { ...block, cache_control: EPHEMERAL_CACHE }
+      return next
+    }),
+  )
+
+const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>) =>
+  markBlockAt(blocks, blocks.findLastIndex(isCacheableBlock))
+
+/** The payload with `cache_control` on the stable prefix, the conversation tail and the tool list. */
+const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): JsonRecord => {
+  const result = { ...payload }
+  let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
+  const messages: Array<JsonRecord> = []
+  if (isRecordArray(payload["messages"])) messages.push(...payload["messages"])
+
+  const spend = (
+    marked: Option.Option<ReadonlyArray<JsonRecord>>,
+    set: (blocks: ReadonlyArray<JsonRecord>) => void,
+  ) => {
+    if (budget <= 0 || Option.isNone(marked)) return
+    set(marked.value)
+    budget -= 1
+  }
+  const markMessage = (index: number) => {
+    const message = Option.fromUndefinedOr(messages[index])
+    if (Option.isNone(message)) return
+    // The SDK always sends block arrays; a string content takes no marker.
+    const content = message.value["content"]
+    if (!isRecordArray(content)) return
+    spend(markLastCacheable(content), (marked) => {
+      messages[index] = { ...message.value, content: marked }
+    })
+  }
+
+  if (prefixEnd === "system") {
+    if (isRecordArray(payload["system"])) {
+      spend(markLastCacheable(payload["system"]), (system) => {
+        result["system"] = system
+      })
+    }
+  } else {
+    markMessage(messages.findIndex((message) => message["role"] === "user"))
+  }
+  markMessage(messages.length - 1)
+  if (isRecordArray(payload["tools"])) {
+    const tools = payload["tools"]
+    spend(markBlockAt(tools, tools.length - 1), (marked) => {
+      result["tools"] = marked
+    })
+  }
+  if (isRecordArray(payload["messages"])) result["messages"] = messages
+  return result
+}
 
 // ── Response Transforms (incoming) ──
 
@@ -1650,6 +1764,40 @@ const makeKeychainClientLayer = (
       return service
     }),
   )
+
+/**
+ * Wraps an AnthropicClient so each API-key request carries prompt-cache
+ * markers. The Claude Code path marks its payload in `transformPayload`.
+ */
+const promptCacheClientLayer: Layer.Layer<
+  AnthropicClient.AnthropicClient,
+  never,
+  AnthropicClient.AnthropicClient
+> = Layer.effect(
+  AnthropicClient.AnthropicClient,
+  Effect.gen(function* () {
+    const inner = yield* AnthropicClient.AnthropicClient
+    const withMarkers = <Options extends { readonly payload: CreateMessageOptions["payload"] }>(
+      options: Options,
+    ) =>
+      Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+        Effect.orDie,
+        Effect.map((payload) => ({
+          ...options,
+          payload: encodeMessagePayload(
+            decodeMessagePayload(markCacheBreakpoints(payload, "system")),
+          ),
+        })),
+      )
+    return AnthropicClient.AnthropicClient.of({
+      client: inner.client,
+      streamRequest: inner.streamRequest,
+      createMessage: (options) => Effect.flatMap(withMarkers(options), inner.createMessage),
+      createMessageStream: (options) =>
+        Effect.flatMap(withMarkers(options), inner.createMessageStream),
+    })
+  }),
+)
 
 // ── keychain transform ──────────────────────────────────────────────────────
 
@@ -1893,27 +2041,82 @@ export const buildKeychainTransformClient =
 // The OAuth path hands the cache to the keychain transform middleware,
 // which reads it per request via `mapRequestEffect`.
 
-// Maps gent reasoning level to Anthropic effort.
-//
-// The Anthropic API accepts `max` (and Sonnet 5 also accepts `xhigh`), but the
-// installed `@effect/ai-anthropic` config type is narrower than the wire
-// schema: `AnthropicLanguageModel.layer`'s `output_config.effort` is
-// `"low" | "medium" | "high"`, while `Generated.ts` `EffortLevel` is
-// `"low" | "medium" | "high" | "max"`. Passing `max` here fails typecheck
-// (TS2322). So `xhigh` and `max` clamp to `high` until that config type widens.
-// Verified against @effect/ai-anthropic@4.0.0-rc.112 on 2026-09-09.
-const ANTHROPIC_EFFORT = new Map<string, "low" | "medium" | "high">([
+/** Anthropic `output_config.effort` levels, lowest first. */
+const AnthropicEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"])
+type AnthropicEffort = typeof AnthropicEffort.Type
+const ANTHROPIC_EFFORT_ORDER = AnthropicEffort.literals
+
+/**
+ * The effort levels each model family accepts, lowest first; first match
+ * wins, by substring of the lowercased id. From the model table at
+ * platform.claude.com/docs/en/build-with-claude/effort (read 2026-09-23).
+ * A model no row matches takes no effort: Sonnet 4.5, Haiku 4.5 and older
+ * models answer HTTP 400 when a request names one, so a new family stays
+ * effort-free until it is added here.
+ */
+const ANTHROPIC_ACCEPTED_EFFORTS: ReadonlyArray<{
+  readonly pattern: RegExp
+  readonly accepts: ReadonlyArray<AnthropicEffort>
+}> = [
+  {
+    pattern: /(fable-5|mythos|opus-5|opus-4-[78]|sonnet-5)(-|$)/,
+    accepts: ["low", "medium", "high", "xhigh", "max"],
+  },
+  { pattern: /(opus|sonnet)-4-6(-|$)/, accepts: ["low", "medium", "high", "max"] },
+  { pattern: /opus-4-5(-|$)/, accepts: ["low", "medium", "high"] },
+]
+
+/** The level a gent reasoning hint asks for; `none` asks for no effort, so the model runs at its default. */
+const HINT_EFFORT = new Map<string, AnthropicEffort>([
   ["minimal", "low"],
   ["low", "low"],
   ["medium", "medium"],
   ["high", "high"],
-  ["xhigh", "high"],
-  ["max", "high"],
+  ["xhigh", "xhigh"],
+  ["max", "max"],
 ])
+
+/**
+ * The installed `@effect/ai-anthropic` config type is narrower than the wire
+ * schema: `output_config.effort` is `"low" | "medium" | "high"`, so `xhigh`
+ * and `max` send `high` until that type widens (verified against
+ * @effect/ai-anthropic@4.0.0-rc.112).
+ */
+const SDK_EFFORT = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+  max: "high",
+} satisfies Record<AnthropicEffort, "low" | "medium" | "high">
+
+/** The effort a request sends: the lowest level the model accepts at or above the hint, else its highest. */
+const anthropicEffort = (
+  modelName: string,
+  hint: ProviderHints["reasoning"],
+): Option.Option<"low" | "medium" | "high"> => {
+  const lower = modelName.toLowerCase()
+  return Option.fromUndefinedOr(
+    ANTHROPIC_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(lower)),
+  ).pipe(
+    Option.flatMap((family) =>
+      Option.fromUndefinedOr(hint).pipe(
+        Option.flatMap((level) => Option.fromUndefinedOr(HINT_EFFORT.get(level))),
+        Option.flatMap((effort) => {
+          const rank = ANTHROPIC_EFFORT_ORDER.indexOf(effort)
+          return Option.fromUndefinedOr(
+            family.accepts.find((level) => ANTHROPIC_EFFORT_ORDER.indexOf(level) >= rank),
+          ).pipe(Option.orElse(() => Option.fromUndefinedOr(family.accepts.at(-1))))
+        }),
+      ),
+    ),
+    Option.map((effort) => SDK_EFFORT[effort]),
+  )
+}
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
 
-/** Sampling limits and effort for one model; a model that rejects effort gets none. */
+/** Sampling limits and effort for one model; a model outside the effort table gets none. */
 const buildAnthropicConfig = (
   modelName: string,
   hints: Option.Option<ProviderHints>,
@@ -1924,15 +2127,8 @@ const buildAnthropicConfig = (
     if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const reasoning = Option.fromNullishOr(hints.value.reasoning)
-    const takesEffort = Option.match(getModelOverride(modelName), {
-      onNone: () => true,
-      onSome: (override) => override.disableEffort !== true,
-    })
-    if (takesEffort && Option.isSome(reasoning) && reasoning.value !== "none") {
-      const effort = Option.fromNullishOr(ANTHROPIC_EFFORT.get(reasoning.value))
-      if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
-    }
+    const effort = anthropicEffort(modelName, hints.value.reasoning)
+    if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
   }
   return config
 }
@@ -1946,9 +2142,10 @@ const buildAnthropicConfig = (
  * are not on the hook for.
  */
 const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, apiKey: string) => {
-  const clientLayer = AnthropicClient.layer({
-    apiKey: Redacted.make(apiKey),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
+  const clientLayer = promptCacheClientLayer.pipe(
+    Layer.provide(AnthropicClient.layer({ apiKey: Redacted.make(apiKey) })),
+    Layer.provide(FetchHttpClient.layer),
+  )
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
 }
 

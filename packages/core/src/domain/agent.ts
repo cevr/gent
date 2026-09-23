@@ -19,6 +19,10 @@ export type ProviderId = typeof ProviderId.Type
 export const ModelPricing = Schema.Struct({
   input: Schema.Finite,
   output: Schema.Finite,
+  /** Input read from the prompt cache; priced as `input` when absent. */
+  cacheRead: Schema.optional(Schema.Finite),
+  /** Input written to the prompt cache; priced as `input` when absent. */
+  cacheWrite: Schema.optional(Schema.Finite),
 })
 export type ModelPricing = typeof ModelPricing.Type
 
@@ -53,14 +57,30 @@ export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
 
 // Calculate cost from token usage
 
+/**
+ * The USD cost of one step. `inputTokens` counts every input token, cached or
+ * not; the tokens read from or written to the prompt cache take their own
+ * price when the catalog has one.
+ */
 export const calculateCost = (
-  usage: { inputTokens: number; outputTokens: number },
+  usage: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly cacheReadTokens?: number
+    readonly cacheWriteTokens?: number
+  },
   pricing: Option.Option<ModelPricing>,
 ): number => {
   if (Option.isNone(pricing)) return 0
-  const inputCost = (usage.inputTokens / 1_000_000) * pricing.value.input
-  const outputCost = (usage.outputTokens / 1_000_000) * pricing.value.output
-  return inputCost + outputCost
+  const price = pricing.value
+  const cacheRead = usage.cacheReadTokens ?? 0
+  const cacheWrite = usage.cacheWriteTokens ?? 0
+  const uncached = Math.max(0, usage.inputTokens - cacheRead - cacheWrite)
+  const inputCost =
+    uncached * price.input +
+    cacheRead * (price.cacheRead ?? price.input) +
+    cacheWrite * (price.cacheWrite ?? price.input)
+  return (inputCost + usage.outputTokens * price.output) / 1_000_000
 }
 
 export const parseModelProvider = (modelId: string): Option.Option<ProviderId> => {
