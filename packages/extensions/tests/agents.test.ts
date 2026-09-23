@@ -1,21 +1,19 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
-import { compileSystemPrompt } from "@gent/core-internal/domain/capability.js"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import {
+  compileSystemPrompt,
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textDeltaPart,
   toolCallStep,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model.js"
-import {
   createRpcHarness,
   testLeafContext,
   testToolContext,
-} from "@gent/core-internal/test-utils/index.js"
+} from "@gent/core/test-utils"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,

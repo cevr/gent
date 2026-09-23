@@ -3,27 +3,30 @@ import { Effect, Exit, Layer, Option, Predicate, Random, Schema, Scope, Stream }
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getToolId } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
-import { setupExtension } from "@gent/core-internal/runtime/extension-host"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
+import { setupExtension, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
+import {
+  GentPlatform,
+  WORKSPACE_ID_HEADER,
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+} from "@gent/core/host"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Gent, makeNamespacedClient } from "../src/client"
 import type { Message as DomainMessage } from "../src/index"
-import { type GentRpcClient, GentRpcs } from "@gent/core-internal/server/rpc"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
+  type GentRpcClient,
+  GentRpcs,
+  BranchId,
+  MessageId,
+  SessionId,
+  ToolCallId,
   dateFromMillis,
   Message,
   messagePartsText,
   projectMessagesWithToolInteractions,
-} from "@gent/core-internal/domain/message"
-import {
-  WORKSPACE_ID_HEADER,
-  workspaceHeadersForCwd,
-  workspaceIdForCwd,
-} from "@gent/core-internal/server/workspace-rpc"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/language-model"
+} from "@gent/core/protocol"
 
 // ── client.test ─────────────────────────────────────────────────────────────
 

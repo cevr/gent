@@ -2,12 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
-import {
-  LanguageModelLayers,
-  textStep,
-  waitFor,
-} from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/index"
+import { LanguageModelLayers, textStep, waitFor, createRpcHarness } from "@gent/core/test-utils"
 import { BranchId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { BTW_EXTENSION_ID, ForkProgress } from "../src/btw.js"

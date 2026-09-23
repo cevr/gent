@@ -6,7 +6,7 @@ import { createMemo, createResource, For, type JSX as SolidJSX, Show } from "sol
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { formatUsageStats, toolArgSummary } from "./utils.js"
 import { GutterText, ToolFrame, useSpinnerClock } from "./ui"
-import { BranchId } from "@gent/core/protocol"
+import { BranchId, formatHeadTail, headTail } from "@gent/core/protocol"
 import {
   decodeToolOutput,
   decodeToolOutputOption,
@@ -21,7 +21,6 @@ import {
   type ToolInput,
   truncatePath,
 } from "./utils"
-import { formatHeadTail, headTail } from "@gent/core-internal/domain/message.js"
 
 // ── renderer types ──────────────────────────────────────────────────────────
 

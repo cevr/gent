@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { describeChildCompletion } from "../src/delegate.js"
-import { AgentName } from "@gent/core-internal/domain/agent"
-import { BranchId, RequestId, SessionId } from "@gent/core-internal/domain/ids"
+import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
+import { RequestId } from "@gent/core/extensions/api"
 
 // ── delegate/completion-message ─────────────────────────────────────────────
 

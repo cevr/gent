@@ -17,36 +17,99 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess } from "effect/unstable/process"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config.js"
-import { SessionRuntime } from "@gent/core-internal/runtime/session.js"
+import {
+  GentPlatform,
+  RuntimeEnvironment,
+  BunGentPlatformLive,
+  AgentLoopQueueStorage,
+  BranchStorage,
+  EventStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+  ToolCallBindingStorage,
+  EventPublisherLive,
+  EventStore,
+  CurrentWorkspaceId,
+  WorkspaceId,
+} from "@gent/core/host"
+import {
+  SessionRuntime,
+  encodeInteractionDecision,
+  messageSingleText,
+  type LoadedExtension,
+  createE2ELayer,
+  createRpcHarness,
+  ensureStorageParents,
+  runToolWithCtx,
+  testHostFacts,
+  testToolContext,
+  finishPart,
+  LanguageModelLayers,
+  multiToolCallStep,
+  type SequenceStep,
+  textDeltaPart,
+  textStep,
+  toolCallPart,
+  toolCallStep,
+  waitFor,
+  captureCurrentToolBinding,
+  ApprovalService,
+  makeExtensionHostContextProvider,
+  SessionProfileCache,
+  CONTEXT_WINDOW_MESSAGE_TYPE,
+  windowDetails,
+  buildTurnPromptSections,
+  toolResultMessageIdForTurn,
+  ExternalToolRunner,
+  ToolBindingSource,
+  ToolSchemaRevision,
+  ToolSourceRevision,
+} from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   BranchId,
-  ExtensionId,
-  InteractionRequestId,
   MessageId,
-  RequestId,
   SessionId,
   ToolCallId,
-  ToolId,
-} from "@gent/core-internal/domain/ids.js"
-import {
-  CurrentInteractionOwner,
-  encodeInteractionDecision,
-  InteractionPendingError,
-  InteractionRequestRecord,
-} from "@gent/core-internal/domain/interaction.js"
-import {
   assistantMessageIdForTurn,
   Branch,
   dateFromMillis,
   Message,
-  messageSingleText,
   Session,
   SteerCommand,
-} from "@gent/core-internal/domain/message.js"
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  ExternalDriverRef,
+} from "@gent/core/protocol"
+import {
+  ExtensionId,
+  RequestId,
+  InteractionPendingError,
+  defineExtension,
+  ExtensionContext,
+  ExtensionHost,
+  tool,
+  type ToolCapability,
+  LoadedArtifactIdentity,
+  type TurnExecutor,
+} from "@gent/core/extensions/api"
+import {
+  InteractionRequestId,
+  ToolId,
+  CurrentInteractionOwner,
+  InteractionRequestRecord,
+  InteractionStorage,
+  CurrentToolCall,
+  type ResolvedToolCapability,
+  ToolRunner,
+  ModelContextLedger,
+  runAgentLoopTurnProfile,
+  StorageError,
+  ToolBindingIdentity,
+} from "@gent/core/extensions/branch-tools"
 import {
   CellBranchTools,
   CellExecution,
@@ -83,82 +146,12 @@ import {
   CellRequest,
   CellResponse,
 } from "../src/cell-protocol.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import {
-  AgentLoopQueueStorage,
-  BranchStorage,
-  EventStorage,
-  InteractionStorage,
-  MessageStorage,
-  SessionStorage,
-  SqliteStorage,
-  ToolCallBindingStorage,
-} from "@gent/core-internal/storage/storage.js"
-import {
-  defineExtension,
-  ExtensionContext,
-  ExtensionHost,
-  tool,
-  type ToolCapability,
-} from "@gent/core/extensions/api"
-import {
-  AgentDefinition,
-  AgentName,
-  DEFAULT_AGENT_NAME,
-  ExternalDriverRef,
-} from "@gent/core-internal/domain/agent.js"
-import {
-  LoadedArtifactIdentity,
-  type LoadedExtension,
-} from "@gent/core-internal/domain/extension.js"
-import {
-  createE2ELayer,
-  createRpcHarness,
-  ensureStorageParents,
-  runToolWithCtx,
-  testHostFacts,
-  testToolContext,
-} from "@gent/core-internal/test-utils/index.js"
-import {
-  finishPart,
-  LanguageModelLayers,
-  multiToolCallStep,
-  type SequenceStep,
-  textDeltaPart,
-  textStep,
-  toolCallPart,
-  toolCallStep,
-  waitFor,
-} from "@gent/core-internal/test-utils/language-model.js"
-import { EventPublisherLive, EventStore } from "@gent/core-internal/domain/event.js"
-import {
-  captureCurrentToolBinding,
-  CurrentToolCall,
-  type ResolvedToolCapability,
-  ToolRunner,
-} from "@gent/core-internal/runtime/tools.js"
 import {
   ExtensionRegistry,
   provideCurrentHostCtx,
   resolveExtensions,
 } from "../../core/src/runtime/extension-host.js"
-import {
-  ApprovalService,
-  makeExtensionHostContextProvider,
-  SessionProfileCache,
-} from "@gent/core-internal/runtime/extension-host.js"
-import {
-  CONTEXT_WINDOW_MESSAGE_TYPE,
-  ModelContextLedger,
-  windowDetails,
-} from "@gent/core-internal/runtime/model-context.js"
-import {
-  buildTurnPromptSections,
-  runAgentLoopTurnProfile,
-  toolResultMessageIdForTurn,
-} from "@gent/core-internal/runtime/turn.js"
 import { shippedPreset } from "./helpers/test-preset.js"
-import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver.js"
 import {
   ChildAgentHandle,
   CancelChild,
@@ -169,14 +162,6 @@ import {
 } from "../src/delegate.js"
 import { Gent } from "@gent/sdk"
 import { SqlClient } from "effect/unstable/sql"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
-import { StorageError } from "@gent/core-internal/domain/errors.js"
-import {
-  ToolBindingIdentity,
-  ToolBindingSource,
-  ToolSchemaRevision,
-  ToolSourceRevision,
-} from "@gent/core-internal/domain/capability.js"
 import { CompactionExtension } from "../src/compaction.js"
 
 // ── cell/cell-worker-fixture ────────────────────────────────────────────────

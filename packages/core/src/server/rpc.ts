@@ -82,7 +82,6 @@ export type GentRpcError = typeof GentRpcError.Type
 // ── transport-contract ──────────────────────────────────────────────────────
 
 export { Branch, BranchTreeNode, Session }
-export type { SessionRuntimeState } from "../domain/agent-loop.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),

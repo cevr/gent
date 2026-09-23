@@ -2,8 +2,13 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
 import { AgentsExtension } from "../src/agents.js"
 import { getBuiltinAgent } from "./helpers/builtin-agents.js"
-import type { SystemPromptInput } from "@gent/core/extensions/api"
-import { collectTestContributions, createRpcHarness } from "@gent/core-internal/test-utils/index"
+import { type SystemPromptInput, messagePartsDisplayText } from "@gent/core/extensions/api"
+import {
+  collectTestContributions,
+  createRpcHarness,
+  LanguageModelLayers,
+  toolCallStep,
+} from "@gent/core/test-utils"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   renderMessageParts,
@@ -15,11 +20,12 @@ import {
   dateFromMillis,
   Message,
   type MessagePart,
-  messagePartsDisplayText,
-} from "@gent/core-internal/domain/message"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import type { EventEnvelope } from "@gent/core-internal/domain/event"
-import { LanguageModelLayers, toolCallStep } from "@gent/core-internal/test-utils/language-model"
+  BranchId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+  type EventEnvelope,
+} from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolEventFor } from "./helpers/tool-event.js"
 

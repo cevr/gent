@@ -63,17 +63,22 @@ import {
   ensureStorageParents,
   RecordingEventStore,
   SequenceRecorder,
-} from "../../src/test-utils/index"
+} from "../../src/test-utils/harness"
 import {
   finishPart,
-  LanguageModelLayers,
   type LanguageModelStreamPart,
-  makeTempDirectoryScoped,
-  multiToolCallStep,
   reasoningDeltaPart,
   textDeltaPart,
-  textStep,
   toolCallPart,
+  Auth,
+  ModelRegistry,
+  ModelResolver,
+} from "../../src/runtime/provider"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  multiToolCallStep,
+  textStep,
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
@@ -163,7 +168,6 @@ import { windowDetails, windowMarkerMessage } from "../../src/runtime/model-cont
 import { e2ePreset, ModelContextCompactorLive } from "../../../extensions/tests/helpers/test-preset"
 import * as AiModel from "effect/unstable/ai/Model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
-import { Auth, ModelRegistry, ModelResolver } from "../../src/runtime/provider"
 import {
   ExternalToolRunner,
   type ModelDriverContribution,

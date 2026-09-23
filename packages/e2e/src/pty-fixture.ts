@@ -1,9 +1,9 @@
-import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/language-model"
+import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import { Terminal } from "@xterm/headless"
 import { Clock, Context, Effect, Layer, Predicate, Schema } from "effect"
 import { spawn, type IPty } from "zigpty"
 import { BunServices } from "@effect/platform-bun"
-import { Auth, AuthApi } from "@gent/core-internal/runtime/provider"
+import { Auth, AuthApi } from "@gent/core/host"
 import { waitForProcessExit } from "./server-process-fixture"
 
 const CTRL_C = "\x03"

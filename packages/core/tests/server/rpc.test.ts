@@ -28,11 +28,10 @@ import {
   workspaceIdForCwd,
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
+import { finishPart, textDeltaPart, Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
 import {
-  finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  textDeltaPart,
   textStep,
   toolCallStep,
   waitFor,
@@ -45,7 +44,7 @@ import {
   ModelDriverRef,
 } from "../../src/domain/agent"
 import { Gent } from "@gent/sdk"
-import { createE2ELayer, createRpcHarness } from "../../src/test-utils/index"
+import { createE2ELayer, createRpcHarness } from "../../src/test-utils/harness"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   BranchId,
@@ -57,7 +56,6 @@ import {
 } from "../../src/domain/ids"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import {
   defineResource,

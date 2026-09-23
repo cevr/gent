@@ -5,7 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
-import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
+import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   killProcess,
   spawnServer,

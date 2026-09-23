@@ -12,11 +12,10 @@ import {
   type Scope,
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
-import { dateFromMillis } from "@gent/core-internal/domain/message.js"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { dateFromMillis } from "@gent/core/protocol"
+import { GentPlatform, BunGentPlatformLive } from "@gent/core/host"
 import { BuildFingerprint, LaunchConfig, serverLock, ServerLockEntry } from "../src/server"
 import { BunServices } from "@effect/platform-bun"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
 

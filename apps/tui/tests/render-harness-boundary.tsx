@@ -11,13 +11,23 @@ import { ThemeProvider } from "../src/theme"
 import { CommandProvider } from "../src/commands"
 import { EnvProvider, WorkspaceProvider } from "../src/workspace"
 import { type ClientLog, ClientProvider, type Session } from "../src/client"
-import type { Session as DomainSession, GentNamespacedClient, GentRuntime } from "@gent/sdk"
+import {
+  type Session as DomainSession,
+  type GentNamespacedClient,
+  type GentRuntime,
+  ConnectionState,
+  emptyQueueSnapshot,
+} from "@gent/sdk"
 import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
 import { ComposerDraftsProvider, SessionShellProvider } from "../src/session"
-import { ConnectionState, emptyQueueSnapshot } from "@gent/sdk"
-import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
-import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
+import {
+  type SessionRuntimeState,
+  AgentName,
+  BranchId,
+  ModelId,
+  SessionId,
+} from "@gent/core/protocol"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 
 const noop = () => {}

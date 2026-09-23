@@ -13,8 +13,8 @@ import {
 } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { describe, expect, it, yieldFibers } from "effect-bun-test"
-import { setupExtensions } from "@gent/core-internal/runtime/extension-host.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { setupExtensions } from "@gent/core/test-utils"
+import { BunGentPlatformLive } from "@gent/core/host"
 import {
   ACP_PROTOCOL_AGENTS,
   AcpAgentsExtension,

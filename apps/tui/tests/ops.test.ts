@@ -32,7 +32,7 @@ import {
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/unstable/sql"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
+import { GentPlatform } from "@gent/core/host"
 import { ExtensionHealth, ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 
 // ── client-logs.test ────────────────────────────────────────────────────────

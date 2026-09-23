@@ -2,22 +2,20 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Schema, Stream } from "effect"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import {
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
-} from "@gent/core-internal/test-utils/index"
-import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textStep,
   toolCallStep,
-} from "@gent/core-internal/test-utils/language-model"
+  type ApprovalDecision,
+} from "@gent/core/test-utils"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { ApprovalDecision } from "@gent/core-internal/domain/interaction.js"
 import type { ExtensionContextService } from "@gent/core/extensions/api"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
+import { RuntimeEnvironment } from "@gent/core/host"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 

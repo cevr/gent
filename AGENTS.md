@@ -43,15 +43,15 @@ bun run --cwd apps/tui dev sessions
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
 - **No `any` casts** - ESLint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
-- **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Host and test consumers still use `@gent/core-internal/*` while their supported contracts are added. Core implementation tests import their owning `packages/core/src/` modules by relative path. Files inside `packages/core/src/` and `packages/core-internal/src/` also use relative imports.
-- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Agent`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/extensions/src/fs-tools.ts`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core-internal Tags such as `FileLockService` or `ExtensionStatePublisher` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send` with its `delivery` mode `turn`/`queue`/`steer`, `stop`, `events`, `delete`, `dequeueFollowUp`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (`bannedShippedExtensionPatterns` in `packages/tooling/src/guards.ts` enforces the import side).
+- **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Use `@gent/core/host` for what a host composes (platform, config loader, storage, auth, workspace headers, server root, the scripted model). Use `@gent/core/test-utils` in tests only; product code never imports it. Each entry re-exports only names with a real consumer. Core implementation tests import their owning `packages/core/src/` modules by relative path. Files inside `packages/core/src/` also use relative imports.
+- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Agent`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/extensions/src/fs-tools.ts`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService` or `ExtensionStatePublisher` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send` with its `delivery` mode `turn`/`queue`/`steer`, `stop`, `events`, `delete`, `dequeueFollowUp`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `lint/no-direct-env.ts` enforces the import side).
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Import `WideEvent`, `WideEventBoundary`, and `withWideEvent` from `effect-wide-event` directly.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
 - **A failed extension fails the test** - Test roots stop with `Extensions failed to load: <id> (<scope>, <phase>): <reason>`. Fix the extension; set `allowFailedExtensions: true` only in a test about the failure report.
-- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core-internal/test-utils/index.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
+- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
 - **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **`LanguageModelLayers.debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
@@ -110,7 +110,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 - **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `SqliteStorage.TestWithSql()` for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
-- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core-internal/test-utils/language-model`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live there too.
+- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` and the step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `packages/core/src/test-utils/language-model.ts`. The stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) and the scripted model behind `LanguageModelLayers.debug()` and `Gent.provider.mock()` (`ScriptedLanguageModel`) live in `packages/core/src/runtime/provider.ts`. Tests outside core import them from `@gent/core/test-utils`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -133,22 +133,15 @@ const { layer: providerLayer, controls } =
   yield * LanguageModelLayers.sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
 // Full in-process stack (AppServicesLive + real event store + real storage)
-import { baseLocalLayer } from "@gent/core-internal/test-utils/index"
+import { baseLocalLayer } from "@gent/core/test-utils"
 const layer = baseLocalLayer()
 
 // RPC acceptance harness (real per-request scopes)
-import { createRpcHarness } from "@gent/core-internal/test-utils/index"
+import { createRpcHarness } from "@gent/core/test-utils"
 const { client, sessionId, branchId } = yield * createRpcHarness({ providerLayer, extensions })
 
-// Sequence recording for event assertions
-import {
-  SequenceRecorder,
-  RecordingEventStore,
-  assertSequence,
-} from "@gent/core-internal/test-utils/index"
-assertSequence(calls, [
-  { service: "EventStore", method: "publish", match: { _tag: "TurnCompleted" } },
-])
+// Sequence recording for event assertions (core tests, relative import)
+import { RecordingEventStore, SequenceRecorder } from "../../src/test-utils/harness"
 ```
 
 ## Key Files
@@ -157,7 +150,7 @@ assertSequence(calls, [
 | ------------------------------------------------ | --------------------------------------------------- |
 | `packages/core/src/storage/storage.ts`           | SQLite layer composition for focused storage tags   |
 | `packages/core/src/storage/schema.ts`            | SQLite schema, migration, and initialization logic  |
-| `packages/core/src/test-utils/index.ts`          | recorders, harnesses, and the in-process layers     |
+| `packages/core/src/test-utils/harness.ts`        | recorders, harnesses, and the in-process layers     |
 | `packages/core/src/server/server.ts`             | startup wiring + dependency graph                   |
 | `packages/core/src/server/rpc.ts`                | shared client contract                              |
 | `packages/core/src/domain/agent-loop.ts`         | loop state, entity id, and the actor protocol       |

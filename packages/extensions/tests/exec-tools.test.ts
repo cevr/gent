@@ -26,28 +26,29 @@ import {
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import {
+  BranchId,
+  SessionId,
+  ToolCallId,
+  Branch,
+  dateFromMillis,
+  Session,
+} from "@gent/core/protocol"
 import {
   LanguageModelLayers,
   textStep,
   toolCallStep,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model"
-import {
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
   type TestToolContext,
-} from "@gent/core-internal/test-utils/index"
+  boundToolResultForModel,
+} from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { SqliteStorage } from "@gent/core-internal/storage/storage"
-import {
-  boundToolResultForModel,
-  maximumModelToolResultChars,
-} from "@gent/core-internal/runtime/model-context"
+import { BunPlatformLive, SqliteStorage } from "@gent/core/host"
+import { maximumModelToolResultChars } from "@gent/core/extensions/api"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"

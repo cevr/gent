@@ -1,5 +1,5 @@
 import { Predicate } from "effect"
-import type { AgentEvent, EventEnvelope } from "@gent/core-internal/domain/event"
+import type { AgentEvent, EventEnvelope } from "@gent/core/protocol"
 
 type ToolLifecycleEvent = Extract<
   AgentEvent,

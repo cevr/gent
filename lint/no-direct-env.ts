@@ -3,9 +3,9 @@
  *
  * Rules:
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
- * - no-extension-internal-imports: keeps extension code on the public
- *   @gent/core/extensions/api surface and off @gent/core internals, with
- *   narrow builtin platform exceptions.
+ * - core-entry-boundary: extensions read only the authoring entries of
+ *   @gent/core (plus protocol for TUI client extensions), and product code
+ *   never reads @gent/core/test-utils.
  * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`,
  *   `await`, and Promise chains in test files.
  *   Test resources should live in Effect scopes (`Effect.scoped`,
@@ -105,6 +105,27 @@ const isTestFilename = (filename: string): boolean =>
   /\.test\.tsx?$/.test(filename) || /\/tests\/.*\.[cm]?tsx?$/.test(filename)
 
 const isTestBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
+
+const isExtensionFilename = (filename: string): boolean => {
+  if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
+  if (filename.endsWith("apps/tui/src/extensions/loader-boundary.ts")) return false
+  return /(?:packages\/core\/src\/extensions|packages\/extensions\/src|apps\/tui\/src\/extensions|examples\/extensions)\//.test(
+    filename,
+  )
+}
+
+/** A relative path that escapes into core internals. */
+const INTERNAL_RELATIVE = /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
+const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
+const PROTOCOL_ENTRY = /^@gent\/core\/protocol(?:\.js)?$/
+const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
+
+/** The module specifier of an import, re-export, or dynamic import. */
+const importSourceOf = (node: AstNode): string | undefined => {
+  const source = getNodeField(node, "source")
+  if (source === undefined) return undefined
+  return getStringField(source, "value")
+}
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
 const PROMISE_STATIC_METHODS = new Set(["all", "allSettled", "any", "race", "resolve", "reject"])
@@ -298,119 +319,61 @@ const plugin: Plugin = {
   },
   rules: {
     /**
-     * Enforces the extension boundary contract.
+     * States who may read which `@gent/core` entry point.
      *
-     * Public extension-facing code may import from:
-     *   - `./api.js` or `../api.js` (relative to extension file in core)
-     *   - `@gent/core/extensions/api` (package path, for extracted extensions)
-     *   - `effect-machine`, `effect`, `@effect/*` (peer deps)
-     *   - Sibling extension files (relative `./` or `../` within extensions/src/)
+     * Core exposes one entry per audience: `extensions/api` and
+     * `extensions/branch-tools` for extensions, `protocol` for clients,
+     * `host` for the processes that compose a server, and `test-utils` for
+     * tests. Two boundaries follow:
      *
-     * Public-looking @gent/core internals are always forbidden:
-     *   - `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`,
-     *     `@gent/core/server/*`, `@gent/core/providers/*`
-     *   - Relative paths that escape into domain/, runtime/, storage/, etc.
+     * - An extension (`packages/extensions/src/`, `packages/core/src/extensions/`,
+     *   `examples/extensions/`, and the TUI's `apps/tui/src/extensions/`) reads
+     *   only the two authoring entries; a TUI client extension also reads
+     *   `protocol`. A shipped extension is never more privileged than a user
+     *   extension, so `host`, `test-utils`, any other `@gent/core` path, and a
+     *   relative path into core internals are all rejected.
+     * - Product code (anything that is not a test file, `packages/e2e/`, or the
+     *   harness in `packages/core/src/test-utils/`) never reads `test-utils`.
      *
-     * `@gent/core-internal/*` is forbidden for public extension implementations,
-     * except the narrow builtin platform boundary imports. Builtins are just the
-     * starting extension set, not a privileged API lane for domain/runtime
-     * services.
-     *
-     * Applies to: packages/core/src/extensions/**, packages/extensions/src/**,
-     * and apps/tui/src/extensions/**
-     * Exempt: extensions/api.ts (the builder implementation)
+     * Exempt: the two authoring entries themselves, which assemble the public
+     * API from core internals, and the TUI's client extension loader, which is
+     * host code that reads the user's disabled list and trust settings.
      */
-    "no-extension-internal-imports": {
+    "core-entry-boundary": {
       create(context) {
         const filename = context.filename
+        const extensionFile = isExtensionFilename(filename)
+        const productFile =
+          !isTestFilename(filename) && !/\/packages\/(?:e2e|core\/src\/test-utils)\//.test(filename)
+        if (!extensionFile && !productFile) return {}
+        const tuiExtension = filename.includes("apps/tui/src/extensions/")
 
-        // Scope: only extension implementation files
-        const inCoreExtensions = filename.includes("packages/core/src/extensions/")
-        const inExtensionsPackage = filename.includes("packages/extensions/src/")
-        const inTuiExtensions = filename.includes("apps/tui/src/extensions/")
-        if (!inCoreExtensions && !inExtensionsPackage && !inTuiExtensions) return {}
-
-        // Exempt: the public bridge implementations. They live inside
-        // `packages/core/src/extensions/` but ARE the re-export surfaces other
-        // extensions consume, so they need to reach into core internals to
-        // assemble the public API. `api.ts` serves extensions that use the
-        // loop; `branch-tools.ts` serves the feature that implements a loop
-        // seam.
-        if (
-          filename.endsWith("/extensions/api.ts") ||
-          filename.endsWith("/extensions/branch-tools.ts")
-        ) {
-          return {}
-        }
-
-        // Relative imports that escape into core internals
-        const INTERNAL_RELATIVE =
-          /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
-
-        // Allowed @gent/core subpaths (everything else is forbidden).
-        // Two authoring entry points: `api` for extensions that use the loop,
-        // `branch-tools` for the rarer feature that implements a loop seam.
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
-        const ALLOWED_CLIENT_PROTOCOL = /^@gent\/core\/protocol(?:\.js)?$/
-        const ALLOWED_BUILTIN_INTERNAL_PACKAGE =
-          /^@gent\/core-internal\/runtime\/gent-platform(?:-bun)?(?:\.js)?$/
-
-        const reportForbiddenSource = (node: AstNode, source: string) => {
+        const extensionMessage = (source: string): string | undefined => {
           if (INTERNAL_RELATIVE.test(source)) {
-            context.report({
-              message: `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`,
-              node,
-            })
-            return
+            return `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`
           }
-
-          if (
-            source.startsWith("@gent/core-internal") &&
-            (inCoreExtensions || inExtensionsPackage) &&
-            !(inExtensionsPackage && ALLOWED_BUILTIN_INTERNAL_PACKAGE.test(source))
-          ) {
-            context.report({
-              message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
-              node,
-            })
-            return
-          }
-
-          if (
-            source.startsWith("@gent/core/") &&
-            !ALLOWED_PACKAGE.test(source) &&
-            !(inTuiExtensions && ALLOWED_CLIENT_PROTOCOL.test(source))
-          ) {
-            context.report({
-              message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
-              node,
-            })
-          }
+          if (!source.startsWith("@gent/core/")) return undefined
+          if (AUTHORING_ENTRY.test(source)) return undefined
+          if (tuiExtension && PROTOCOL_ENTRY.test(source)) return undefined
+          return `Extensions must import from "@gent/core/extensions/api" or "@gent/core/extensions/branch-tools". Forbidden: "${source}"`
         }
 
-        const sourceValue = (node: AstNode): string | undefined => {
-          const source = getNodeField(node, "source")
-          if (source === undefined) return undefined
-          return getStringField(source, "value")
+        const report = (node: AstNode) => {
+          const source = importSourceOf(node)
+          if (source === undefined) return
+          let message: string | undefined
+          if (extensionFile) message = extensionMessage(source)
+          if (message === undefined && productFile && TEST_UTILS_ENTRY.test(source)) {
+            message = `Product code must not import the test entry. Forbidden: "${source}"`
+          }
+          if (message !== undefined) context.report({ message, node })
         }
 
         return {
-          ImportDeclaration(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
-          ExportNamedDeclaration(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
-          ExportAllDeclaration(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
-          ImportExpression(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
+          ImportDeclaration: report,
+          ExportNamedDeclaration: report,
+          ExportAllDeclaration: report,
+          ImportExpression: report,
         }
       },
     },

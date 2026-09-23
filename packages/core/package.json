@@ -7,15 +7,16 @@
     "./extensions/api.js": "./src/extensions/api.ts",
     "./extensions/branch-tools": "./src/extensions/branch-tools.ts",
     "./extensions/branch-tools.js": "./src/extensions/branch-tools.ts",
+    "./host": "./src/host.ts",
     "./protocol": "./src/protocol.ts",
-    "./protocol.js": "./src/protocol.ts"
+    "./protocol.js": "./src/protocol.ts",
+    "./test-utils": "./src/test-utils/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.locks.json",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots --parallel=3 tests"
   },
   "dependencies": {
-    "@gent/core-internal": "workspace:*",
     "effect-encore": "catalog:",
     "effect-machine": "catalog:",
     "effect-wide-event": "catalog:"

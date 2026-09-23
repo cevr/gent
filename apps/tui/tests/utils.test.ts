@@ -29,11 +29,16 @@ import {
   workingIconFrame,
 } from "../src/utils"
 import { BunServices } from "@effect/platform-bun"
-import { ProviderError, StorageError } from "@gent/core-internal/domain/errors"
-import { EventStoreError } from "@gent/core-internal/domain/event"
-import { DriverError, DriverFailureId, ProviderAuthError } from "@gent/core-internal/domain/driver"
-import { NotFoundError } from "@gent/core-internal/server/rpc"
-import { SessionRuntimeError } from "@gent/core-internal/runtime/session"
+import {
+  DriverError,
+  DriverFailureId,
+  EventStoreError,
+  NotFoundError,
+  ProviderError,
+  SessionRuntimeError,
+  StorageError,
+} from "@gent/core/protocol"
+import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
 
 // ── context-window.test ─────────────────────────────────────────────────────

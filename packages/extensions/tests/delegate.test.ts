@@ -12,15 +12,13 @@ import {
   Struct,
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { ConfigService, RuntimeEnvironment, UserConfig } from "@gent/core-internal/runtime/config"
+import { ConfigService, RuntimeEnvironment, UserConfig } from "@gent/core/host"
 import { childTaskText, DELEGATE_AGENT_NAME, DelegateEntry, StartChild } from "../src/delegate.js"
-import { DEFAULT_AGENT_NAME } from "@gent/core/extensions/api"
+import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
-} from "@gent/core-internal/test-utils/index"
-import {
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -29,12 +27,10 @@ import {
   textStep,
   toolCallPart,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model"
-import { type BranchId, RequestId, ToolCallId } from "@gent/core-internal/domain/ids"
+} from "@gent/core/test-utils"
+import { type BranchId, ToolCallId, ModelId, SteerCommand } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
-import { ModelId } from "@gent/core-internal/domain/agent"
-import { SteerCommand } from "@gent/core-internal/domain/message"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
 // ── delegate/harness ────────────────────────────────────────────────────────

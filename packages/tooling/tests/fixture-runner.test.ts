@@ -95,16 +95,37 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
-    rule: "gent/no-extension-internal-imports",
-    invalid: "packages/extensions/src/no-extension-internal-imports.invalid.ts",
-    valid: "packages/extensions/src/no-extension-internal-imports.valid.ts",
+    // A shipped extension reads only the two authoring entries.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
+    valid: "packages/extensions/src/core-entry-boundary.valid.ts",
+    // protocol, host, test-utils, a core path, a relative escape, a re-export,
+    // an export-all of host, and a dynamic import
     expectedCount: 8,
   },
   {
-    rule: "gent/no-extension-internal-imports",
-    invalid: "apps/tui/src/extensions/protocol-imports.invalid.ts",
-    valid: "apps/tui/src/extensions/protocol-imports.valid.ts",
+    // A client extension also reads protocol; the loader is host code.
+    rule: "gent/core-entry-boundary",
+    invalid: "apps/tui/src/extensions/core-entry-boundary.invalid.ts",
+    valid: "apps/tui/src/extensions/loader-boundary.ts",
+    // a protocol subpath, host, test-utils, a core re-export, a dynamic import
+    expectedCount: 5,
+  },
+  {
+    // A reference extension is held to the same two entries.
+    rule: "gent/core-entry-boundary",
+    invalid: "examples/extensions/core-entry-boundary.invalid.ts",
+    valid: "examples/extensions/core-entry-boundary.valid.ts",
+    // core source, host, test-utils
     expectedCount: 3,
+  },
+  {
+    // Product code never reads the test entry; tests may.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/sdk/src/core-entry-boundary.invalid.ts",
+    valid: "packages/sdk/tests/core-entry-boundary.valid.ts",
+    // an import and a re-export of test-utils; the host import is allowed
+    expectedCount: 2,
   },
   {
     rule: "gent/no-define-extension-throw",

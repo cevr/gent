@@ -16,9 +16,9 @@ import {
   WriteTool,
   writeFileAtomic,
 } from "../src/fs-tools.js"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
-import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import { RuntimeEnvironment } from "@gent/core/host"
+import { runToolWithCtx, testToolContext } from "@gent/core/test-utils"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { narrowR } from "../../core/tests/helpers/effect"
 
 // ── fs-tools/read.test ──────────────────────────────────────────────────────

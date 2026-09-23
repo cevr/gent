@@ -137,12 +137,10 @@ apps/
 └── server/    # HTTP + RPC adapter over the same app services
 
 packages/
-├── core/          # explicit extension authoring and client protocol entry points
-├── core-internal/ # temporary private alias for remaining host/test consumers
+├── core/          # entries: extensions/api, extensions/branch-tools, protocol, host, test-utils
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
 │   ├── storage/   # Storage tags, schema ownership, SQLite assembler, focused repositories
-│   ├── providers/ # Effect AI provider stack: model resolution, auth, debug/sequence drivers
-│   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
+│   ├── runtime/   # SessionRuntime, agent-loop internals, provider stack and scripted model
 │   ├── extensions/# api.ts public extension surface
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
@@ -940,10 +938,11 @@ Extensions may import from:
 - `effect`, `@effect/*` — as peer deps
 
 Extensions may NOT import Gent domain, runtime, storage, server, or provider
-internals through either `@gent/core` or `@gent/core-internal`. The
-`no-extension-internal-imports` oxlint rule enforces this for shipped
+internals, nor the `@gent/core/host` and `@gent/core/test-utils` entries. The
+`core-entry-boundary` oxlint rule enforces this for shipped and reference
 extensions, and the same rule defines the contract for user/project
-extensions. "Builtin" means "included in the default distribution", not
+extensions. The same rule keeps `@gent/core/test-utils` out of product code:
+only tests, `packages/e2e/`, and the harness itself read it. "Builtin" means "included in the default distribution", not
 privileged.
 
 TUI client extensions may also import shared client data from `@gent/core/protocol`. This exception does not apply to server extension implementations or to nested protocol paths.
@@ -1071,7 +1070,7 @@ Use the smallest honest boundary:
 - TUI render/capture: OpenTUI renderer tests
 - runtime ordering/turn semantics: recording layers + runtime tests
 
-**Banned test primitives**: `Provider.Test`, provider-wrapper statics, and `EventStore.Test` are deleted. Use `LanguageModelLayers.debug()` / `LanguageModelLayers.sequence([...])` from `@gent/core-internal/test-utils/language-model` for model mocking and `EventStore.Memory` for in-memory event stores.
+**Banned test primitives**: `Provider.Test`, provider-wrapper statics, and `EventStore.Test` are deleted. Use `LanguageModelLayers.debug()` / `LanguageModelLayers.sequence([...])` from `@gent/core/test-utils` for model mocking and `EventStore.Memory` for in-memory event stores.
 
 **Banned test control flow**: test files do not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive` and scoped Effect resources so finalizers run under the test runtime.
 
@@ -1087,7 +1086,7 @@ Use the smallest honest boundary:
 
 ### Test structure
 
-`packages/core/tests/` mirrors `packages/core/src/`. Implementation tests use relative imports into that source tree. They do not depend on the private core-internal package alias:
+`packages/core/tests/` mirrors `packages/core/src/`. Implementation tests use relative imports into that source tree. They do not depend on the package entries:
 
 ```text
 tests/

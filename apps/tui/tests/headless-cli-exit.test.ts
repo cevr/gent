@@ -1,8 +1,8 @@
 import { it, describe, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Layer, Path } from "effect"
-import { Auth, AuthApi } from "@gent/core-internal/runtime/provider"
-import { createWorkerEnv } from "@gent/core-internal/test-utils/language-model.js"
+import { Auth, AuthApi } from "@gent/core/host"
+import { createWorkerEnv } from "@gent/core/test-utils"
 const makeTempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.makeTempDirectoryScoped({ prefix: "gent-headless-exit-" })

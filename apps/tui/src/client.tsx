@@ -51,6 +51,8 @@ import {
   ReasoningEffort,
   SessionId,
   type ToolCallId,
+  DEFAULT_MODEL_ID,
+  resolveAgentModel,
 } from "@gent/core/protocol"
 import {
   createContext,
@@ -63,10 +65,8 @@ import {
   type ParentProps,
 } from "solid-js"
 import { createStore } from "solid-js/store"
-import { DEFAULT_MODEL_ID, resolveAgentModel } from "@gent/core-internal/domain/agent.js"
-import { omitUndefined } from "@gent/core-internal/domain/guards.js"
+import { omitUndefined, ref } from "@gent/core/extensions/api"
 import { DelegateChild, DelegateRpc } from "@gent/extensions/client.js"
-import { ref } from "@gent/core/extensions/api"
 import {
   formatConnectionIssue,
   formatError,

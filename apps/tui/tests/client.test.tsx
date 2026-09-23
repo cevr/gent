@@ -18,15 +18,35 @@ import {
 import {
   ErrorOccurred,
   EventId,
-  EventStore,
-  type EventStoreService,
   MessageReceived,
   StreamEnded,
   StreamStarted,
   TurnCompleted,
-} from "@gent/core-internal/domain/event"
+  type ActiveInteraction,
+  AgentEvent,
+  AgentName,
+  assistantMessageIdForTurn,
+  BranchId,
+  dateFromMillis,
+  EventEnvelope,
+  Message,
+  MessageId,
+  ModelId,
+  projectMessage,
+  SessionId,
+  type SessionSnapshot,
+  ToolCallId,
+  ToolInteraction,
+  type SessionRuntimeState,
+} from "@gent/core/protocol"
+import {
+  EventStore,
+  type EventStoreService,
+  CurrentWorkspaceId,
+  WorkspaceId,
+} from "@gent/core/host"
 import { DelegateChild, DelegateRpc } from "@gent/extensions/client"
-import { ref } from "@gent/core/extensions/api"
+import { ref, ExtensionId, RequestId } from "@gent/core/extensions/api"
 import {
   AgentStatus,
   type ChildSessionEntry,
@@ -43,32 +63,13 @@ import {
   useChildSessions,
   useClient,
 } from "../src/client"
-import {
-  type ActiveInteraction,
-  AgentEvent,
-  AgentName,
-  assistantMessageIdForTurn,
-  BranchId,
-  dateFromMillis,
-  EventEnvelope,
-  Message,
-  MessageId,
-  ModelId,
-  projectMessage,
-  SessionId,
-  type SessionSnapshot,
-  ToolCallId,
-  ToolInteraction,
-} from "@gent/core/protocol"
 import { emptyQueueSnapshot, Gent } from "@gent/sdk"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc"
-import { baseLocalLayer } from "@gent/core-internal/test-utils/index"
+import { baseLocalLayer } from "@gent/core/test-utils"
 import { createMemo, createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary, runRuntimeEffectBoundary } from "./run-effect-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { ExtensionId, InteractionRequestId, RequestId } from "@gent/core-internal/domain/ids"
-import type { SessionRuntimeState } from "@gent/core-internal/server/rpc"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"

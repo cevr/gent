@@ -16,36 +16,40 @@ import {
 } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import { Branch, dateFromMillis, Message, Session } from "@gent/core-internal/domain/message.js"
-import { GentPlatform, runProcess } from "@gent/core-internal/runtime/gent-platform.js"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import {
+  Branch,
+  dateFromMillis,
+  Message,
+  Session,
+  BranchId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+  GentConnectionError,
+} from "@gent/core/protocol"
+import {
+  GentPlatform,
   BranchStorage,
   MessageStorage,
   SessionStorage,
-} from "@gent/core-internal/storage/storage.js"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids.js"
-import { BunHttpServer } from "@effect/platform-bun"
-import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
-import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
-import type { BranchToolFeature } from "@gent/core-internal/runtime/tools.js"
-import type { GentExtension } from "@gent/core/extensions/api"
-import type { RpcHandlersLive } from "@gent/core-internal/server/server.js"
-import {
+  type RpcHandlersLive,
   provideWorkspaceIdHeader,
   type WorkspaceHeaders,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
-} from "@gent/core-internal/server/workspace-rpc.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
-import type { LanguageModel } from "effect/unstable/ai"
-import { GentObservability } from "./logger.js"
-import { GentConnectionError } from "@gent/core/protocol"
-import {
   buildServerRoot,
+  ScriptedLanguageModel,
   ServerRootPlatformLayer,
   StateLocation,
-} from "@gent/core-internal/server/server-root.js"
+} from "@gent/core/host"
+import { runProcess, type GentExtension } from "@gent/core/extensions/api"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { BunHttpServer } from "@effect/platform-bun"
+import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
+import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
+import type { LanguageModel } from "effect/unstable/ai"
+import { GentObservability } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
 
@@ -850,8 +854,8 @@ const resolveLanguageModelLayer = (
     Match.tagsExhaustive({
       Live: () => Option.none(),
       Mock: (mockSpec) => {
-        if (mockSpec.empty === true) return Option.some(LanguageModelLayers.empty)
-        return Option.some(LanguageModelLayers.debug())
+        if (mockSpec.empty === true) return Option.some(ScriptedLanguageModel.empty)
+        return Option.some(ScriptedLanguageModel.debug())
       },
     }),
   )

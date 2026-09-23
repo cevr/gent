@@ -2,18 +2,19 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Option } from "effect"
 import { Session } from "../src/app"
-import type { GentRuntime } from "@gent/sdk"
+import { type GentRuntime, Gent } from "@gent/sdk"
 import {
   createMockClient,
   createMockRuntime,
   destroyRenderSetup,
   renderWithProviders,
 } from "../tests/render-harness-boundary"
-import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/index.js"
+import {
+  baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
+  LanguageModelLayers,
+} from "@gent/core/test-utils"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 const absentReasoningLevel = Option.getOrUndefined(Option.none())
 const absentModelId = Option.getOrUndefined(Option.none())

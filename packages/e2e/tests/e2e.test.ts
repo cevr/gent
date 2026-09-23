@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option } from "effect"
-import { waitFor } from "@gent/core-internal/test-utils/language-model"
+import { waitFor } from "@gent/core/test-utils"
 import {
   ptyWaitFor,
   seedAndSpawn,

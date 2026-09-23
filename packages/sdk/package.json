@@ -13,7 +13,6 @@
     "@effect/opentelemetry": "4.0.0-rc.112",
     "@effect/platform-bun": "catalog:",
     "@gent/core": "workspace:*",
-    "@gent/core-internal": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@opentelemetry/api": "^1.9",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",

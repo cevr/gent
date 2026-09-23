@@ -8,7 +8,7 @@ import {
   type CreateSessionInput,
   SessionId,
 } from "@gent/core/protocol"
-import { InteractionRequestId } from "@gent/core-internal/domain/ids"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../src/interaction-renderers"
 import {
   createMockClient,

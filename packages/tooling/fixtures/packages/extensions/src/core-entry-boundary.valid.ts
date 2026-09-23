@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { defineExtension, ExtensionHost, SessionId } from "@gent/core/extensions/api"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { MessageStorage } from "@gent/core/extensions/branch-tools"
 import { localHelper } from "./support/local-helper"
 
 export const extension = defineExtension({
@@ -11,4 +11,4 @@ export const extension = defineExtension({
   }),
 })
 
-export const values = [SessionId, GentPlatform, localHelper]
+export const values = [SessionId, MessageStorage, localHelper]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/unstable/cli"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { BunPlatformLive } from "@gent/core/host"
 import {
   Cause,
   Config,

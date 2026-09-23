@@ -20,7 +20,7 @@ import {
   compileExtensionHooks,
   CurrentExtensionHostContext,
 } from "../../src/runtime/extension-host"
-import { testExtensionHostContext } from "../../src/test-utils"
+import { testExtensionHostContext } from "../../src/test-utils/harness"
 
 const turnCtx: ExtensionTurnContext = {
   sessionId: SessionId.make("s"),

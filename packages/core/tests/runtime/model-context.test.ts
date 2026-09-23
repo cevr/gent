@@ -57,7 +57,7 @@ import {
   MessageStorage,
   SessionStorage,
 } from "../../src/storage/storage"
-import { baseLocalLayerWithProvider } from "../../src/test-utils/index"
+import { baseLocalLayerWithProvider } from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventPublisher } from "../../src/domain/event"
 import * as Response from "effect/unstable/ai/Response"
 

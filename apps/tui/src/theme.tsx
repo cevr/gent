@@ -1,7 +1,7 @@
 import { RGBA, SyntaxStyle, type TerminalColors } from "@opentui/core"
 import { Config, Effect, Option, Predicate, Record } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import { GentPlatform } from "@gent/core/host"
 import { createContext, createMemo, type JSX, onCleanup, onMount, untrack } from "solid-js"
 import { useRequiredContext } from "./utils"
 import { createStore } from "solid-js/store"
