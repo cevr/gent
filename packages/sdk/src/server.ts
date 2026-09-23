@@ -895,8 +895,6 @@ export interface GentServerOptions {
    * its clients use, so there is nothing to discover.
    */
   readonly port?: number
-  /** Server identity to publish instead of a freshly minted one. */
-  readonly serverId?: string
   /** Login shell for extension process launches. */
   readonly shell?: string
   /**
@@ -1093,10 +1091,7 @@ const buildOwnedServer = (
     const url = `http://127.0.0.1:${port}/rpc`
     const workspaceHeaders = workspaceHeadersForCwd(options.cwd)
     const home = resolveHome(stateSpec, homeDirectory)
-    const serverId = yield* Option.match(Option.fromNullishOr(options.serverId), {
-      onNone: () => platform.randomId,
-      onSome: Effect.succeed,
-    })
+    const serverId = yield* platform.randomId
     const buildFingerprint = yield* (yield* BuildFingerprint).current
 
     const languageModelLayer = resolveLanguageModelLayer(providerSpec)
