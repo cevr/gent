@@ -19,6 +19,7 @@ import {
   writeFileAtomic,
 } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
+import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 
 // ── fs-tools/read.test ──────────────────────────────────────────────────────
@@ -323,6 +324,13 @@ describe("findMatch", () => {
   test("no match returns none", () => {
     expect(Option.isNone(findMatch("hello world", "xyz"))).toBe(true)
   })
+  test("a whitespace-only oldString does not match blank lines", () => {
+    expect(Option.isNone(findMatch("a\n\nb", "   "))).toBe(true)
+    expect(Option.isNone(findMatch("a\n\n\nb", " \n "))).toBe(true)
+  })
+  test("a whitespace run that exists in the file still matches exactly", () => {
+    expect(Option.getOrThrow(findMatch("a\tb", "\t")).strategy).toBe("exact")
+  })
 })
 // ============================================================================
 // Integration — real file editing
@@ -616,6 +624,28 @@ describe("GrepTool", () => {
       expect(over.matches.length).toBe(2)
       expect(over.truncated).toBe(true)
     }).pipe(Effect.provide(ToolLayerGrep)),
+  )
+
+  it.scopedLive("finds matches in a gitignored directory under the session cwd", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", tmpDir])
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "dist/\n")
+      yield* fs.makeDirectory(`${tmpDir}/dist/sub`, { recursive: true })
+      yield* fs.writeFileString(`${tmpDir}/src.ts`, "const foo = 0")
+      yield* fs.writeFileString(`${tmpDir}/dist/sub/b.js`, "const foo = 1")
+
+      const ctxRepo = testToolContext({ cwd: tmpDir })
+      const whole = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctxRepo)
+      expect(whole.matches.map((match) => match.file)).toEqual([`${tmpDir}/src.ts`])
+      const ignored = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: `${tmpDir}/dist` },
+        ctxRepo,
+      )
+      expect(ignored.matches.map((match) => match.file)).toEqual([`${tmpDir}/dist/sub/b.js`])
+    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("searches single file directly", () =>
